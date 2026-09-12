@@ -11,7 +11,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # renovate: datasource=github-releases depName=stephrobert/feint extractVersion=^v(?<version>.*)$
-FEINT_VERSION="0.12.0"
+FEINT_VERSION="0.13.0"
 FEINT_ENDPOINT="${FEINT_ENDPOINT:-http://127.0.0.1:4599}"
 BIN_DIR="${FEINT_BIN_DIR:-$HOME/.local/bin}"
 # Off (metadata-only machines) unless a caller asks for a real one — the
