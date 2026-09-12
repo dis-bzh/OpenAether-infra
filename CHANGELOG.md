@@ -576,6 +576,23 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **`fluxcd/flux-schema` 0.12.1 → 0.13.0** in `.github/workflows/ci.yml` and
+  `scripts/setup.sh`, probed green by Cléa (issue #91). `task lint` (including
+  a real re-install of the `schema@0.13.0` plugin and a re-run of
+  `check-flux-schema.sh` against it, not just the cached 0.12.1 already on
+  this sandbox), `task render-check`, `task test-scripts`, `task validate`
+  (both roots), `task test` (61/61), checkov (32/0) + custom checks, and a
+  default-rules gitleaks dir scan all green on the bump. Left out of this
+  batch, all `❌ probe failed` or `not probed` in the same report: `flux2`
+  (3 anchors, probe container missing `xz`, see #174), `helm` 4.2.4 → 4.3.0
+  (not probed), `plumber` v0.4.51 → v0.4.60 (2 anchors — the `security.yml`
+  one is `action-sha`-pinned and `clea bump` correctly refuses it, same as
+  the v0.4.51 bump above), `talos`/`kubernetes` (blocked on the Kubernetes
+  support-matrix range for Talos 1.14, tracked in draft PR #149), and `feint`
+  0.12.0 → 0.13.0 (probe fails on stale doc version references).
+  `task security`'s `trivy` step could not run in this sandbox (no
+  network) — relies on CI.
+
 - **`getplumber/plumber` v0.4.48 → v0.4.51** in `.github/workflows/security.yml`
   and `scripts/internal/install-plumber.sh`, bumped by hand rather than by
   Cléa: the `security.yml` anchor is `action-sha`-pinned
