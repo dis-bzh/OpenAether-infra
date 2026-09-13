@@ -35,7 +35,7 @@ fi
 # renovate: datasource=github-releases depName=opentofu/opentofu extractVersion=^v(?<version>.*)$
 TOFU_VERSION="1.12.6"
 # renovate: datasource=github-releases depName=fluxcd/flux2 extractVersion=^v(?<version>.*)$
-FLUX_VERSION="2.9.3"
+FLUX_VERSION="2.9.5"
 # The flux-schema plugin `task lint`'s check-flux-schema.sh needs (#114). Same
 # pin as ci.yml's lint job, installed through `flux plugin install`, which
 # does its own checksum verification (fluxcd/flux2 RFC 0013).
