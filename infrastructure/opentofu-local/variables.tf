@@ -18,13 +18,13 @@ variable "environment" {
 variable "talos_version" {
   type = string
   # renovate: datasource=github-releases depName=siderolabs/talos
-  default = "v1.13.9"
+  default = "v1.14.0"
 }
 
 variable "kubernetes_version" {
   type = string
   # renovate: datasource=github-releases depName=kubernetes/kubernetes
-  default = "v1.36.3"
+  default = "v1.37.0"
 }
 
 variable "talos_bootstrap" {
