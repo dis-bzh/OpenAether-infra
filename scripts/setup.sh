@@ -42,7 +42,7 @@ FLUX_VERSION="2.9.3"
 # renovate: datasource=github-releases depName=fluxcd/flux-schema extractVersion=^v(?<version>.*)$
 FLUX_SCHEMA_VERSION="0.13.0"
 # renovate: datasource=github-releases depName=helm/helm extractVersion=^v(?<version>.*)$
-HELM_VERSION="4.2.4"
+HELM_VERSION="4.3.0"
 
 # check_cmd <tool> [pinned-version]
 #

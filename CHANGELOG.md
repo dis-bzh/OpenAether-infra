@@ -582,12 +582,29 @@ in git. 0.1.0 is the first entry describing something proven.
   `check-flux-schema.sh` against it, not just the cached 0.12.1 already on
   this sandbox), `task render-check`, `task test-scripts`, `task validate`
   (both roots), `task test` (61/61), checkov (32/0) + custom checks, and a
-  default-rules gitleaks dir scan all green on the bump. Left out of this
-  batch, all `❌ probe failed` or `not probed` in the same report: `flux2`
-  (3 anchors, probe container missing `xz`, see #174), `helm` 4.2.4 → 4.3.0
-  (not probed), `plumber` v0.4.51 → v0.4.60 (2 anchors — the `security.yml`
-  one is `action-sha`-pinned and `clea bump` correctly refuses it, same as
-  the v0.4.51 bump above), `talos`/`kubernetes` (blocked on the Kubernetes
+  default-rules gitleaks dir scan all green on the bump.
+
+- **`helm/helm` 4.2.4 → 4.3.0** in `.github/workflows/ci.yml` and
+  `scripts/setup.sh`, probed green by Cléa in a later refresh of the same
+  issue #91 report and added to this same branch/PR (this routine keeps at
+  most one open `claude/clea-bump-*` PR at a time). Major stays 4, so
+  `HELM_MAJOR_EXPECTED` in `scripts/bootstrap/render-bootstrap-manifests.sh`
+  needs no change. Proven against the real binary, not just the sandbox's
+  cached 4.2.4: downloaded `helm-v4.3.0-linux-amd64.tar.gz`, verified its
+  sha256 against the upstream checksum file, installed it, then re-ran
+  `task render-check` (cilium.yaml + flux-install.yaml regeneration) against
+  it — green. Full gate set green: `task lint`, `task render-check`,
+  `task test-scripts`, `task validate` (both roots), `task test` (61/61),
+  `check-version-drift.sh`, checkov (32/0) + custom checks (6/0), and
+  gitleaks (matching `task security`'s own tracked-files-only invocation,
+  not a raw `gitleaks dir .` — the sandbox's own untracked, gitignored Feint
+  state file flagged a false positive under the naive form).
+
+  Left out of this batch, all `❌ probe failed` or `not probed` in the same
+  report: `flux2` (3 anchors, probe container missing `xz`, see #174),
+  `plumber` v0.4.51 → v0.4.62 (2 anchors — the `security.yml` one is
+  `action-sha`-pinned and `clea bump` correctly refuses it, same as the
+  v0.4.51 bump above), `talos`/`kubernetes` (blocked on the Kubernetes
   support-matrix range for Talos 1.14, tracked in draft PR #149), and `feint`
   0.12.0 → 0.13.0 (probe fails on stale doc version references).
   `task security`'s `trivy` step could not run in this sandbox (no
