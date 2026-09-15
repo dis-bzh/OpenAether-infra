@@ -600,6 +600,17 @@ in git. 0.1.0 is the first entry describing something proven.
   not a raw `gitleaks dir .` — the sandbox's own untracked, gitignored Feint
   state file flagged a false positive under the naive form).
 
+- **`commitizen` 4.18.0 → 4.18.1** in `.github/workflows/ci.yml`'s single
+  `pip install` anchor, probed green by Cléa in a further refresh of the same
+  issue #91 report and added to this same branch/PR. Proven against the real
+  package, not just the sandbox's absent install: `pip install
+  commitizen==4.18.1`, then `cz check --rev-range origin/main..HEAD` — the
+  exact command CI runs — passed against this branch's own commits. Full gate
+  set green: `task lint`, `task render-check`, `task test-scripts`,
+  `task validate` (both roots), `task test` (61/61), `check-version-drift.sh`,
+  checkov (32/0) + custom checks (6/0), and gitleaks (same tracked-files-only
+  invocation as above).
+
   Left out of this batch, all `❌ probe failed` or `not probed` in the same
   report: `flux2` (3 anchors, probe container missing `xz`, see #174),
   `plumber` v0.4.51 → v0.4.62 (2 anchors — the `security.yml` one is
