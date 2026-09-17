@@ -621,6 +621,21 @@ in git. 0.1.0 is the first entry describing something proven.
   `task security`'s `trivy` step could not run in this sandbox (no
   network) — relies on CI.
 
+- **`cilium` 1.20.1 → 1.20.2** in `scripts/bootstrap/render-bootstrap-manifests.sh`,
+  probed green by Cléa in a later refresh of the same issue #91 report and
+  added to this same branch/PR. Manifest re-rendered immediately after the
+  bump (`bootstrap-manifests/cilium.yaml` and `upstream-artifacts.lock`
+  regenerated), per the routine's own rule for a cilium version change. The
+  `README.md`/`README.fr.md` "Layer status" tables, which stated the old
+  1.20.1 as the current CNI version, are updated together. Full gate set
+  green: `task lint` (including `check-upstream-artifacts-lock.sh` against
+  the regenerated lock), `task render-check` (including
+  `check-cilium-effective-config.py`), `task test-scripts`, `task validate`
+  (both roots), `task test` (61/61), checkov (32/0, `--config-file
+  .checkov.yaml`) + custom checks (6/0), and gitleaks (same tracked-files-only
+  invocation as above, plus `check-gitleaks-rules.sh`). `trivy` again not run
+  in this sandbox — relies on CI.
+
 - **`getplumber/plumber` v0.4.48 → v0.4.51** in `.github/workflows/security.yml`
   and `scripts/internal/install-plumber.sh`, bumped by hand rather than by
   Cléa: the `security.yml` anchor is `action-sha`-pinned
