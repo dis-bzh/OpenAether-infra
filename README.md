@@ -82,7 +82,7 @@ resources of which only 3 are compute instances. It is an optional overlay and
 |-------|------------|--------|
 | **IaC** | OpenTofu 1.12.x | ✅ |
 | **OS** | Talos Linux v1.13.x (immutable) | ✅ |
-| **CNI** | Cilium 1.20.1 (WireGuard) | ✅ shipped, inline manifest — the whole of 0.1.0's platform |
+| **CNI** | Cilium 1.20.2 (WireGuard) | ✅ shipped, inline manifest — the whole of 0.1.0's platform |
 | **GitOps** | Flux v2.9.3 | ⬜ code present, `deploy_flux = false` — returns as a choice in a later release |
 
 Everything else — secrets, PKI, mesh, database, storage, identity, observability,

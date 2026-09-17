@@ -576,6 +576,66 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **`fluxcd/flux-schema` 0.12.1 → 0.13.0** in `.github/workflows/ci.yml` and
+  `scripts/setup.sh`, probed green by Cléa (issue #91). `task lint` (including
+  a real re-install of the `schema@0.13.0` plugin and a re-run of
+  `check-flux-schema.sh` against it, not just the cached 0.12.1 already on
+  this sandbox), `task render-check`, `task test-scripts`, `task validate`
+  (both roots), `task test` (61/61), checkov (32/0) + custom checks, and a
+  default-rules gitleaks dir scan all green on the bump.
+
+- **`helm/helm` 4.2.4 → 4.3.0** in `.github/workflows/ci.yml` and
+  `scripts/setup.sh`, probed green by Cléa in a later refresh of the same
+  issue #91 report and added to this same branch/PR (this routine keeps at
+  most one open `claude/clea-bump-*` PR at a time). Major stays 4, so
+  `HELM_MAJOR_EXPECTED` in `scripts/bootstrap/render-bootstrap-manifests.sh`
+  needs no change. Proven against the real binary, not just the sandbox's
+  cached 4.2.4: downloaded `helm-v4.3.0-linux-amd64.tar.gz`, verified its
+  sha256 against the upstream checksum file, installed it, then re-ran
+  `task render-check` (cilium.yaml + flux-install.yaml regeneration) against
+  it — green. Full gate set green: `task lint`, `task render-check`,
+  `task test-scripts`, `task validate` (both roots), `task test` (61/61),
+  `check-version-drift.sh`, checkov (32/0) + custom checks (6/0), and
+  gitleaks (matching `task security`'s own tracked-files-only invocation,
+  not a raw `gitleaks dir .` — the sandbox's own untracked, gitignored Feint
+  state file flagged a false positive under the naive form).
+
+- **`commitizen` 4.18.0 → 4.18.1** in `.github/workflows/ci.yml`'s single
+  `pip install` anchor, probed green by Cléa in a further refresh of the same
+  issue #91 report and added to this same branch/PR. Proven against the real
+  package, not just the sandbox's absent install: `pip install
+  commitizen==4.18.1`, then `cz check --rev-range origin/main..HEAD` — the
+  exact command CI runs — passed against this branch's own commits. Full gate
+  set green: `task lint`, `task render-check`, `task test-scripts`,
+  `task validate` (both roots), `task test` (61/61), `check-version-drift.sh`,
+  checkov (32/0) + custom checks (6/0), and gitleaks (same tracked-files-only
+  invocation as above).
+
+  Left out of this batch, all `❌ probe failed` or `not probed` in the same
+  report: `flux2` (3 anchors, probe container missing `xz`, see #174),
+  `plumber` v0.4.51 → v0.4.62 (2 anchors — the `security.yml` one is
+  `action-sha`-pinned and `clea bump` correctly refuses it, same as the
+  v0.4.51 bump above), `talos`/`kubernetes` (blocked on the Kubernetes
+  support-matrix range for Talos 1.14, tracked in draft PR #149), and `feint`
+  0.12.0 → 0.13.0 (probe fails on stale doc version references).
+  `task security`'s `trivy` step could not run in this sandbox (no
+  network) — relies on CI.
+
+- **`cilium` 1.20.1 → 1.20.2** in `scripts/bootstrap/render-bootstrap-manifests.sh`,
+  probed green by Cléa in a later refresh of the same issue #91 report and
+  added to this same branch/PR. Manifest re-rendered immediately after the
+  bump (`bootstrap-manifests/cilium.yaml` and `upstream-artifacts.lock`
+  regenerated), per the routine's own rule for a cilium version change. The
+  `README.md`/`README.fr.md` "Layer status" tables, which stated the old
+  1.20.1 as the current CNI version, are updated together. Full gate set
+  green: `task lint` (including `check-upstream-artifacts-lock.sh` against
+  the regenerated lock), `task render-check` (including
+  `check-cilium-effective-config.py`), `task test-scripts`, `task validate`
+  (both roots), `task test` (61/61), checkov (32/0, `--config-file
+  .checkov.yaml`) + custom checks (6/0), and gitleaks (same tracked-files-only
+  invocation as above, plus `check-gitleaks-rules.sh`). `trivy` again not run
+  in this sandbox — relies on CI.
+
 - **`getplumber/plumber` v0.4.48 → v0.4.51** in `.github/workflows/security.yml`
   and `scripts/internal/install-plumber.sh`, bumped by hand rather than by
   Cléa: the `security.yml` anchor is `action-sha`-pinned

@@ -95,7 +95,7 @@ jobs:
 
       - name: Install commitizen
         # renovate: datasource=pypi depName=commitizen
-        run: pip install commitizen==4.18.0
+        run: pip install commitizen==4.18.1
 
       - name: Conventional Commits
         run: cz check --rev-range origin/${{ github.base_ref }}..HEAD
@@ -237,7 +237,7 @@ jobs:
       - name: Install flux-schema plugin
         env:
           # renovate: datasource=github-releases depName=fluxcd/flux-schema extractVersion=^v(?<version>.*)$
-          FLUX_SCHEMA_VERSION: "0.12.1"
+          FLUX_SCHEMA_VERSION: "0.13.0"
         run: flux plugin install "schema@${FLUX_SCHEMA_VERSION}"
 
       # One-time per-runner setup task itself doesn't need — tflint plugin init
@@ -272,7 +272,7 @@ jobs:
       - name: Install Helm (pinned + checksum-verified)
         env:
           # renovate: datasource=github-releases depName=helm/helm extractVersion=^v(?<version>.*)$
-          HELM_VERSION: "4.2.4"
+          HELM_VERSION: "4.3.0"
         run: |
           set -euo pipefail
           asset="helm-v${HELM_VERSION}-linux-amd64.tar.gz"
