@@ -272,7 +272,7 @@ jobs:
       - name: Install Helm (pinned + checksum-verified)
         env:
           # renovate: datasource=github-releases depName=helm/helm extractVersion=^v(?<version>.*)$
-          HELM_VERSION: "4.2.4"
+          HELM_VERSION: "4.3.0"
         run: |
           set -euo pipefail
           asset="helm-v${HELM_VERSION}-linux-amd64.tar.gz"
