@@ -220,7 +220,7 @@ jobs:
       - name: Install Flux CLI (pinned + checksum-verified)
         env:
           # renovate: datasource=github-releases depName=fluxcd/flux2 extractVersion=^v(?<version>.*)$
-          FLUX_VERSION: "2.9.3"
+          FLUX_VERSION: "2.9.5"
         run: |
           set -euo pipefail
           asset="flux_${FLUX_VERSION}_linux_amd64.tar.gz"
