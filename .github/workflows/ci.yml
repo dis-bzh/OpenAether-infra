@@ -237,7 +237,7 @@ jobs:
       - name: Install flux-schema plugin
         env:
           # renovate: datasource=github-releases depName=fluxcd/flux-schema extractVersion=^v(?<version>.*)$
-          FLUX_SCHEMA_VERSION: "0.12.1"
+          FLUX_SCHEMA_VERSION: "0.13.0"
         run: flux plugin install "schema@${FLUX_SCHEMA_VERSION}"
 
       # One-time per-runner setup task itself doesn't need — tflint plugin init
