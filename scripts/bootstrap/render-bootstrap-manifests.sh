@@ -37,7 +37,7 @@ fi
 # for it and nothing reporting it. It is also what --check compares the
 # committed flux-install.yaml against, so bump the pin and the artifact together.
 # renovate: datasource=helm depName=cilium registryUrl=https://helm.cilium.io/
-CILIUM_VERSION="${CILIUM_VERSION:-1.20.1}"
+CILIUM_VERSION="${CILIUM_VERSION:-1.20.2}"
 # renovate: datasource=github-releases depName=fluxcd/flux2
 FLUX_VERSION="${FLUX_VERSION:-v2.9.3}"
 FLUX_URL="https://github.com/fluxcd/flux2/releases/download/${FLUX_VERSION}/install.yaml"
