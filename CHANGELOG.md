@@ -636,6 +636,17 @@ in git. 0.1.0 is the first entry describing something proven.
   invocation as above, plus `check-gitleaks-rules.sh`). `trivy` again not run
   in this sandbox — relies on CI.
 
+- **`commitizen` 4.18.1 → 4.19.0** in `.github/workflows/ci.yml`'s single
+  `pip install` anchor, probed green by Cléa in a further refresh of the same
+  issue #91 report and added to this same branch/PR. Proven against the real
+  package, not just the sandbox's absent install: `pip install
+  commitizen==4.19.0`, then `cz check --rev-range origin/main..HEAD` — the
+  exact command CI runs — passed against this branch's own commits. Full gate
+  set green: `task lint`, `task render-check`, `task test-scripts`,
+  `task validate` (both roots), `task test` (61/61), checkov (32/0) + custom
+  checks (6/0), and gitleaks (same tracked-files-only invocation as above).
+  `trivy` again not run in this sandbox — relies on CI.
+
 - **`getplumber/plumber` v0.4.48 → v0.4.51** in `.github/workflows/security.yml`
   and `scripts/internal/install-plumber.sh`, bumped by hand rather than by
   Cléa: the `security.yml` anchor is `action-sha`-pinned

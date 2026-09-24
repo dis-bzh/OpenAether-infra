@@ -95,7 +95,7 @@ jobs:
 
       - name: Install commitizen
         # renovate: datasource=pypi depName=commitizen
-        run: pip install commitizen==4.18.1
+        run: pip install commitizen==4.19.0
 
       - name: Conventional Commits
         run: cz check --rev-range origin/${{ github.base_ref }}..HEAD
