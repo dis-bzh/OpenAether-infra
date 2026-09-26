@@ -4,10 +4,11 @@ terraform {
   required_providers {
     talos = {
       source = "siderolabs/talos"
-      # Bounded ceiling so a consumer with a loose root can't drift onto the
-      # 0.12.x pre-release line. Lower bound stays wide enough to satisfy both
-      # the cluster root (~> 0.11.0) and the local stack (pinned 0.10.1).
-      version = ">= 0.7.0, < 0.12.0"
+      # Ceiling below the next minor: 0.12 swapped the Talos SDK and the default
+      # installer, so a new minor gets read before a loose root can select it.
+      # Both roots select 0.12.x, the first stable line with the
+      # siderolabs/terraform-provider-talos#352 fix.
+      version = ">= 0.7.0, < 0.13.0"
     }
     random = {
       source  = "hashicorp/random"

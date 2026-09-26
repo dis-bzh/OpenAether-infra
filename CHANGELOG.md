@@ -35,6 +35,20 @@ in git. 0.1.0 is the first entry describing something proven.
   it stays out of `task lint`. Proven by mutating one recorded digest: the
   check went red naming the drift, then green again once restored.
 
+### Changed
+
+- **`siderolabs/talos` provider 0.11.0 → 0.12.0, as a spike (#83, #44).**
+  0.12.0 is the first stable release carrying the
+  siderolabs/terraform-provider-talos#352 fix; the module's ceiling moves to
+  `< 0.13.0`. 16 configs, each rendered with 0.11.0 and 0.12.0 (32 renders):
+  all pass `talosctl validate` v1.13.9, and the 10 cloud configs are
+  byte-identical across versions. Both cloud shapes set `installer_schematic_id`,
+  so the ghcr fallback was not rendered. The 6 container-mode configs change
+  their default `install.image`, and `modules/providers/local` hashes each
+  config into `triggers_replace`: the first apply after the bump replaces every
+  local Docker node, volumes included, so run `task local-down` first. The
+  `replace_triggered_by` workaround stays until #83's real-cloud run.
+
 ### Fixed
 
 - **The Scaleway emulated lanes went red on any PR once scaleway provider

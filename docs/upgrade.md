@@ -188,11 +188,17 @@ kubectl delete pod <targetPrimary> -n <ns>
 pins, it exits 0, prints "will be promoted" and leaves `targetPrimary`
 untouched. Open as an issue.
 
-⚠️ **The first apply after a `talos_version` bump fails on OVH and Outscale**
-with "Provider produced inconsistent final plan", once per machine config.
-Nothing is left half-applied; re-run it. This is upstream
-`siderolabs/terraform-provider-talos` #352, fixed only in the 0.12.0 pre-release
-line — details and the decision still open as an issue.
+⚠️ **The first apply after a `talos_version` bump has failed** with "Provider
+produced inconsistent final plan", once per machine config
+(siderolabs/terraform-provider-talos#352). Nothing is left half-applied; re-run
+it once, and never add a retry. Whether it still fails is unsettled:
+`modules/talos/main.tf` has carried a `replace_triggered_by` workaround since
+0.1.0, and the records made since conflict. One has a Talos bump applying in
+one pass on Scaleway and OVH (commit 1afa629 in PR #26); the 0.1.0
+[release checklist](release-checklist.md) §7 ticks that it reproduces on OVH.
+Nothing covers Outscale with the workaround, nor provider 0.12.0, the first
+stable release with the upstream fix, which the roots now select. #83's
+real-cloud run measures it.
 
 ## What to check, beyond "it came back"
 
