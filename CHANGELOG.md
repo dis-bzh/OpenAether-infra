@@ -16,6 +16,13 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
+- **`docs/capacity.md`: what a cluster needs, per provider (refs #72).** The
+  sizing floor and its evidence (the 2026-08-15 drain measurement), what each
+  module creates (instances, disks, public IPs, LBs, security groups), and the
+  totals and `preflight-quotas` flags for every shipped example. Derived figures
+  are marked apart from measured ones. It flags, without changing them, the
+  Scaleway and Outscale examples that sit below the floor.
+
 - **`task cluster-up` refuses, before it spends, a `prod` cluster never applied
   before whose replica shares the primary's cloud (#57).** Until now only
   `infra-verify.sh` said so, after the apply. `ensure-buckets.sh --preflight`,
