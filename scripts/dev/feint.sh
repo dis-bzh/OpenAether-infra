@@ -73,10 +73,12 @@ require_emulator() {
 
 # emulator_log_hint prints the emulator's own log so "why" survives past the
 # process that could have answered it directly. Shared by require_emulator and
-# reset_emulator's failure path.
+# reset_emulator's failure path. Same lookup as feint's own: XDG_RUNTIME_DIR,
+# else XDG_STATE_HOME, else ~/.local/state; the address flattened as it does.
 emulator_log_hint() {
-  local log="${XDG_RUNTIME_DIR:-/tmp}/feint/${FEINT_ENDPOINT#http://}/feint.log"
-  log="${log//:/_}"
+  local addr log
+  addr="$(addr_of "$FEINT_ENDPOINT")"; addr="${addr//[:\/]/_}"; addr="${addr//[\[\]]/}"
+  log="${XDG_RUNTIME_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}}/feint/$addr/feint.log"
   if [ -r "$log" ]; then
     echo "  Last lines of ${log}:" >&2
     tail -20 "$log" | sed 's/^/    /' >&2

@@ -51,6 +51,10 @@ in git. 0.1.0 is the first entry describing something proven.
   caps the provider `< 2.83.0`, and parks the root's lock file for the run so
   the cap never reaches a real init. Green on 0.13.0 with 2.82.0: 27 created,
   empty re-plan, 26 destroyed, lock file restored byte-identical.
+- **`feint.sh` said "no log" on machines without `XDG_RUNTIME_DIR`.** It looked
+  under `/tmp`, while feint then writes to `XDG_STATE_HOME` or
+  `~/.local/state`. It now uses feint's own lookup; a new
+  `test-feint-restart.sh` case is red with the old path, green with the new.
 - **The Scaleway emulated lanes went red on any PR once scaleway provider
   2.83.0 shipped (#179).** No lock file is committed, so CI resolved the newest
   `~> 2.68`; from 2.83.0, destroying `scaleway_instance_private_nic` first calls

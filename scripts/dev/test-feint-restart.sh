@@ -90,6 +90,12 @@ ELAPSED=$(( $(date +%s) - START ))
 grep -qi "did not come up" <<<"$OUT" && ok "names the failure" || bad "$OUT"
 grep -qi "no log at\|Last lines of" <<<"$OUT" && ok "and points at the emulator's own log" || bad "$OUT"
 
+echo "--- no XDG_RUNTIME_DIR (env -i): the log is read where feint writes it then ---"
+mkdir -p "$SB/.local/state/feint/127.0.0.1_4599"
+echo "oa-stub-log-line" >"$SB/.local/state/feint/127.0.0.1_4599/feint.log"
+OUT="$(run 0 999 1)"
+grep -q "oa-stub-log-line" <<<"$OUT" && ok "prints the log from ~/.local/state/feint" || bad "$OUT"
+
 already_running() { # [OA_STUB_CHATTY]
   : >"$LOG"; date +%s >"$STATE"
   env -i PATH="$SB:$PATH" HOME="$SB" OA_STUB_VERSION="$PIN" OA_STUB_LOG="$LOG" OA_STUB_STATE="$STATE" \
