@@ -6,9 +6,10 @@ terraform {
   required_providers {
     scaleway = {
       source = "scaleway/scaleway"
-      # Same constraint as the real lanes on purpose: a divergence here means the
-      # emulated lane stops testing the provider the clusters actually run.
-      version = "~> 2.68"
+      # Tracks the real lanes (~> 2.68), capped below 2.83.0: from that release
+      # destroying a private NIC calls instance/v2alpha1 detach-private-network-interface,
+      # which Feint 0.12.0 answers 501 (#179). Drop the cap once Feint serves it.
+      version = "~> 2.68, < 2.83.0"
     }
     outscale = {
       source  = "outscale/outscale"

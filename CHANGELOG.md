@@ -29,6 +29,14 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **The Scaleway emulated lanes went red on any PR once scaleway provider
+  2.83.0 shipped (#179).** No lock file is committed, so CI resolved the newest
+  `~> 2.68`; from 2.83.0, destroying `scaleway_instance_private_nic` first calls
+  `instance/v2alpha1/.../detach-private-network-interface`, which Feint 0.12.0
+  answers 501. Bisected on the fixture root: 2.82.0 applies and destroys clean,
+  2.83.0 reproduces the 501. `opentofu-feint` is capped `< 2.83.0` until Feint
+  serves the route; the real roots keep 2.83's detach-before-delete fix.
+
 - **`install-shellcheck.sh` died extracting its own download on a bare box,
   which Cléa's probe misreported as a `fluxcd/flux2` bump failure (#174).**
   ShellCheck's release asset is a `.tar.xz`; a bare `ubuntu:24.04` (Cléa's
