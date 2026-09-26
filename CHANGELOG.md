@@ -16,6 +16,16 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
+- **`task cluster-upgrade` also measures a Service, not just the apiserver
+  (#41).** For the whole roll a 2-replica workload behind a Service (with a PDB
+  when two nodes can take it) is polled through the apiserver proxy; its FAIL
+  count and longest outage are reported next to the apiserver's, samples taken
+  while the apiserver is down count apart as BLIND, and the workload is deleted
+  on success, failure or interrupt. Reported, not gated. Mocked rung:
+  `test-cluster-checks.sh` covers all three exits, the single-node case and the
+  summary arithmetic. No real roll has produced the number yet, so #41 stays
+  open.
+
 - **`task cluster-up` refuses, before it spends, a `prod` cluster never applied
   before whose replica shares the primary's cloud (#57).** Until now only
   `infra-verify.sh` said so, after the apply. `ensure-buckets.sh --preflight`,
