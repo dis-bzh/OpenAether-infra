@@ -205,6 +205,11 @@ kubectl get nodes
 The file is already there, written by the bootstrap. If it is not, or you are in
 a fresh shell: `task kubeconfig PROVIDER=scaleway`.
 
+To see what OpenTofu holds for the cluster: `task state PROVIDER=scaleway`, or
+`ADDR=<address>` for one resource. It needs `.env.sh` sourced (S3 keys,
+`TF_VAR_encryption_passphrase`) and the cluster file from step 3. It only reads
+the state, but like `kubeconfig` it re-inits the local `.terraform-*` data dir.
+
 The apiserver is the public load balancer, ACL'd to your `admin_ip`, so plain
 `kubectl` works with no tunnel.
 
