@@ -328,7 +328,8 @@ EOT
   # secrets carry prevent_destroy, and excluding them alone is not enough —
   # module.talos depends_on module.<provider>, so excluding the secrets
   # cascades to keeping the whole provider module too (0 destroyed).
-  tofu state rm module.talos.talos_machine_secrets.this[0]
+  # -backup: its default lands in the cluster root, not in the lane's temp dir.
+  tofu state rm -backup="$work/state-rm.backup" module.talos.talos_machine_secrets.this[0]
   tofu destroy -no-color -auto-approve "${args[@]}" -var talos_bootstrap=false
   echo "✓ ${provider}: the real cluster root applied / empty re-plan / destroyed, no credentials"
 }
