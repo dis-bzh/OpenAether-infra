@@ -121,7 +121,7 @@ carry, all recorded in [the open issues](https://github.com/dis-bzh/OpenAether-i
 
 | Not exercised | Why |
 |---|---|
-| Scaleway private NIC destroy, provider ≥ 2.83.0 | The provider then calls `instance/v2alpha1/.../detach-private-network-interface`, which Feint answers 501 (still on 0.13.0). The fixture caps the provider below 2.83.0; the cluster root does not, so `feint-apply-root PROVIDER=scaleway` fails at destroy (#179). |
+| Scaleway private NIC destroy, provider ≥ 2.83.0 | The provider then calls `instance/v2alpha1/.../detach-private-network-interface`, which Feint answers 501 (still on 0.13.0). The lanes that destroy (the fixture, and `feint-apply-root` through its override) cap the provider below 2.83.0; the real root does not (#179). |
 | Outscale image name resolution | The Outscale tfvars point `image_name` at a fixed catalogue entry, which exercises the lookup mechanism without resolving a name our own pipeline published — see #150 for what it would take. |
 
 Three things left this list first. `outscale_volume_link` in 0.6.0, which

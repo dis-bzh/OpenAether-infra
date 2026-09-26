@@ -45,6 +45,12 @@ in git. 0.1.0 is the first entry describing something proven.
   "no emulator". `running` now reads the whole output; a stub `status` that
   keeps printing in `test-feint-restart.sh` is red with the old code, green
   with the new.
+- **`task feint-apply-root PROVIDER=scaleway` was red at destroy (#179).**
+  The cluster root resolves scaleway 2.83.x, whose private NIC destroy calls a
+  route Feint still answers 501 on 0.13.0. The lane's backend override now also
+  caps the provider `< 2.83.0`, and parks the root's lock file for the run so
+  the cap never reaches a real init. Green on 0.13.0 with 2.82.0: 27 created,
+  empty re-plan, 26 destroyed, lock file restored byte-identical.
 - **The Scaleway emulated lanes went red on any PR once scaleway provider
   2.83.0 shipped (#179).** No lock file is committed, so CI resolved the newest
   `~> 2.68`; from 2.83.0, destroying `scaleway_instance_private_nic` first calls

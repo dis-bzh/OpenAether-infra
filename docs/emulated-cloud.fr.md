@@ -126,7 +126,7 @@ toujours pas porter, tout consigné dans [les issues ouvertes](https://github.co
 
 | Non exercé | Pourquoi |
 |---|---|
-| Destroy d'une NIC privée Scaleway, provider ≥ 2.83.0 | Le provider appelle alors `instance/v2alpha1/.../detach-private-network-interface`, auquel Feint répond 501 (toujours en 0.13.0). La fixture plafonne le provider sous 2.83.0 ; le root cluster non, donc `feint-apply-root PROVIDER=scaleway` échoue au destroy (#179). |
+| Destroy d'une NIC privée Scaleway, provider ≥ 2.83.0 | Le provider appelle alors `instance/v2alpha1/.../detach-private-network-interface`, auquel Feint répond 501 (toujours en 0.13.0). Les voies qui détruisent (la fixture, et `feint-apply-root` via son override) plafonnent le provider sous 2.83.0 ; le vrai root non (#179). |
 | Résolution d'image par nom, Outscale | Les tfvars Outscale pointent `image_name` sur une entrée fixe du catalogue, ce qui exerce le mécanisme de recherche sans résoudre un nom publié par notre propre pipeline — voir #150 pour ce qu'il faudrait. |
 
 Trois choses ont quitté cette liste en premier. `outscale_volume_link` en
