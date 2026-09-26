@@ -16,6 +16,14 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
+- **`version-support.json` knows Talos 1.14: Kubernetes 1.32–1.37.** Read
+  from `MinimumKubernetesVersion` / `MaximumKubernetesVersion` in
+  `siderolabs/talos` `pkg/machinery/compatibility/talos114/` at v1.14.1 (the
+  docs site is unreachable from the sandbox; the same file gives 1.31–1.36 for
+  1.13, matching the existing entry). The floor moves up, so 1.14 + 1.31 is
+  refused. Defaults are unchanged: this only lets the guard accept a Talos 1.14
+  pair, the prerequisite for bumping Talos and Kubernetes together (#149).
+
 - **`task check-flux-digests`: the network half of #119.** `flux-install.yaml`
   pins its seven controller images by tag only — a tag force-moved upstream
   changes not one byte of the committed YAML, so `task render-check` sees
