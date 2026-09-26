@@ -58,6 +58,13 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **`rolling-replace` applies the plan it counted (#55, still open).** Its two
+  per-node applies were `-auto-approve` re-plans, so the "one node at a time"
+  count guarded a plan nobody applied. Each apply now plans with `-out`, counts
+  deletes from `tofu show -json` of that file and applies that file; `--dry-run`
+  prints the same. Also fixes a loop that overwrote `replace_node`'s `$t`,
+  which skipped the etcd gate after a control-plane replacement. Mocked rung:
+  `test-rolling-replace.sh`, red on the old code; a real roll is still due.
 - **`feint.sh` could report a live emulator as down, intermittently.**
   `running` piped the eight lines of `feint status` into `grep -q`, which
   exits on the first; `status` then dies on SIGPIPE and `pipefail` reads
