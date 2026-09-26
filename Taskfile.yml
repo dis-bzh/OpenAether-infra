@@ -992,10 +992,11 @@ tasks:
   cluster-roll:
     aliases: [rolling-replace]
     desc: >-
-      Replace nodes one at a time (drain→targeted apply→wait) with NO downtime. Use after a ForceNew change
-      (instance_type / Talos image) instead of infra, which replaces all nodes in parallel and breaks etcd
-      quorum. Targets are derived from `tofu state list` — provider-agnostic; --upgrade exercised live on
-      Scaleway, OVH and Outscale. ROLE picks the env file and the state, and defaults to management.
+      Replace nodes one at a time (drain→targeted apply→wait) with NO downtime. Use for a node size or image
+      change (instance_type / flavor_name / cpu / memory / Talos image) instead of infra, which applies it to
+      all nodes in parallel and breaks etcd quorum. Targets are derived from `tofu state list` —
+      provider-agnostic; --upgrade exercised live on Scaleway, OVH and Outscale. ROLE picks the env file and
+      the state, and defaults to management.
       Usage: task cluster-roll PROVIDER=… [ROLE=management|workload] [KEY=~/.ssh/key] [APPROVE=auto]
       [-- --workers-only|--cp-only|--dry-run|--upgrade]
     dir: infrastructure/opentofu/cluster

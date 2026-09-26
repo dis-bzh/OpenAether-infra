@@ -266,11 +266,32 @@ no supported path. The roll now reads the schematic off the node
 (`talosctl get extensions` publishes it) and rolls a node whose version matches
 but whose image does not.
 
-⚠️ **A flavour change is not one of them on OpenStack, and that is worse.** OVH
-resizes the instance in place, so `task infra-apply` plans it as an update rather than
-a replacement and applies it to **every node at once** — measured 2026-08-15,
-where six nodes went into `VERIFY_RESIZE` together and the apiserver was
-unreachable for several minutes. `rolling-replace`'s "one node at a time" guard
-does not catch it either: that guard counts what a plan would DESTROY, and a
-resize destroys nothing. Change `flavor_name` one node at a time with
-`-target`, or accept the outage knowingly.
+### A node size change is an in-place update, on every provider
+
+⚠️ `instance_type` (Scaleway, Outscale), `flavor_name` (OVH) and
+`cpu_cores`/`memory_mb` (Proxmox) are not replacements: the provider stops,
+resizes or reboots the instance and keeps its disk. So `task infra-apply` plans
+N updates and 0 destroys, and applies them to **every node at once**. Measured
+on OVH only, on 2026-08-15: six nodes went into `VERIFY_RESIZE` together and the
+apiserver was unreachable for several minutes. For the other three, the verdict
+comes from the provider source at the versions resolved on 2026-09-26 and from
+an offline plan with the real provider binaries, not from a live bump (#51). `rolling-replace`'s "one node at a time"
+guard does not catch it either: that guard counts what a plan would DESTROY, and
+a resize destroys nothing.
+
+**Route it through the roll.** Edit the size in the tfvars, **do not run
+`infra-apply`**, then run `task cluster-roll PROVIDER=<p>` without `--upgrade`.
+Each node is drained, replaced by `-replace` at the new size and gated before
+the next one. Until the roll ends, any plain apply resizes the remaining nodes
+all at once. Replacement mode skips nothing: a re-run replaces every node in
+scope again, and `--workers-only` or `--cp-only` narrows it. It has run live
+only on Scaleway. It has never run on Proxmox, where a replaced worker loses its
+inline data disk. The fallback is an in-place resize one node at a time with
+`-target`, which gets no drain and no gates.
+
+Two cases would turn a size change into a replacement: Scaleway's
+`replace_on_type_change`, and on OpenStack a node whose recorded flavour is
+empty (for example because the flavour was deleted). A replacement would be
+worse, since every node would be destroyed at once.
+[`tests/node-size-change.tftest.hcl`](../infrastructure/opentofu/cluster/tests/node-size-change.tftest.hcl)
+checks that Scaleway's flag stays unset.

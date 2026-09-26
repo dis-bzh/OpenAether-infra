@@ -68,6 +68,24 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **A node size change resizes every node at once, on all four providers
+  (#51, mocked part).** The Scaleway and Proxmox modules said `type` and
+  `cpu`/`memory` were ForceNew. They are not: at scaleway 2.83.1,
+  openstack 3.4.0, outscale 1.8.0 and bpg/proxmox 0.114.0, the provider stops
+  and resizes the instance in place (or reboots it). A plain apply therefore
+  plans updates, destroys nothing, and slips past `rolling-replace`'s destroy
+  count. This comes from reading the provider source. It was confirmed offline
+  by planning each size change with the real provider binaries against a seeded
+  state (Scaleway's plan-time API calls answered by a local stub): every one
+  came out `update`. Positive controls on a ForceNew attribute came out
+  `delete, create`. `docs/upgrade.md` now sends a size change through
+  `task cluster-roll`. `node-size-change.tftest.hcl` checks that the size
+  reaches each node and that nothing turns it into a replacement: Scaleway's
+  `replace_on_type_change` stays unset and Proxmox's `reboot_after_update` is
+  not false. Setting either one turned its run red. A mock cannot tell
+  replace from update, since it planned a ForceNew change as an update, so the
+  provider verdict itself is not pinned. No live bump yet; #51 stays open.
+
 - **`rolling-replace` applies the plan it counted (#55, still open).** Its two
   per-node applies were `-auto-approve` re-plans, so the "one node at a time"
   count guarded a plan nobody applied. Each apply now plans with `-out`, counts
