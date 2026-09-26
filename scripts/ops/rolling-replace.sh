@@ -1093,6 +1093,36 @@ node_targets() { # <tf_t> <index>
   '
 }
 
+# Plan to a file, count what THAT file destroys, apply THAT file. An
+# `apply -auto-approve` re-plans, so the count guarded a plan nobody applied, and
+# OpenTofu cannot refuse a plan whose state moved unless it is handed the file.
+saved_plan_apply() { # <label> <max-destroy> <on-apply-failure> <tofu plan args…>
+  local label="$1" max="$2" fail="$3"; shift 3
+  local dir pf doomed
+  dir="$(mktemp -d)"; pf="${dir}/${label}.tfplan"   # 0700: a plan holds secrets
+  # `if !`, not `x="$(…)" || …` alone: under set -e a failed plan must reach die.
+  if ! tofu plan -out="$pf" "$@" -var-file="$TFVARS" -var talos_bootstrap=true \
+       -no-color >/dev/null 2>&1; then
+    rm -rf "$dir"; die "could not plan ${label} — refusing to apply blind"
+  fi
+  doomed="$(tofu show -json "$pf" 2>/dev/null \
+    | jq '[.resource_changes[]? | select(.change.actions | index("delete"))] | length' 2>/dev/null)" \
+    || doomed=""
+  if [[ ! "$doomed" =~ ^[0-9]+$ ]]; then
+    rm -rf "$dir"; die "could not read the saved plan for ${label} — refusing to apply blind"
+  fi
+  if (( doomed > max )); then
+    rm -rf "$dir"
+    die "plan ${label} destroys ${doomed} resources (at most ${max} expected) — refusing.
+  Something outside this node is being pulled in; a module-level depends_on has
+  done exactly that before. Inspect with:
+    tofu plan $* -var-file='${TFVARS}' -var talos_bootstrap=true"
+  fi
+  ok "plan ${label} destroys ${doomed} resource(s), at most ${max} expected — applying that plan"
+  tofu apply "$pf" || { rm -rf "$dir"; die "$fail"; }
+  rm -rf "$dir"
+}
+
 # stop_here answers "was a stop asked for?" and says so once, at the only place
 # it is safe to obey: before touching the next node.
 stop_here() {
@@ -1165,6 +1195,16 @@ replace_node() { # <type: cp|worker> <index>
     targets+=("-target=${guard_addr}")
   fi
 
+  # Split for the two applies below: the instance alone, then the config.
+  local -a infra_targets=() cfg_targets=(-target="$cfg_addr" -replace="$cfg_addr")
+  local cfg_max=1 tgt
+  for tgt in "${targets[@]}"; do
+    [[ "$tgt" == "-target=${cfg_addr}" || "$tgt" == "-target=${guard_addr}" ]] || infra_targets+=("$tgt")
+  done
+  if [[ -n "$guard_addr" ]]; then
+    cfg_targets+=(-target="$guard_addr" -replace="$guard_addr"); cfg_max=2
+  fi
+
   hr
   info "Node ${node_name}  (ip ${node_ip}, talos ${ep})"
 
@@ -1178,9 +1218,12 @@ replace_node() { # <type: cp|worker> <index>
     echo "  would: kubectl cordon ${node_name}"
     echo "  would: kubectl drain ${node_name} --ignore-daemonsets --delete-emptydir-data --timeout=${DRAIN_TIMEOUT}"
     [[ $t == cp ]] && echo "  would: talosctl etcd remove-member ${node_name} (via a healthy peer CP)"
-    echo "  would: tofu apply ${targets[*]} \\"
-    echo "                    -replace='${inst_addr}' -replace='${cfg_addr}'${guard_addr:+ -replace=\'${guard_addr}\'} \\"
-    echo "                    -var-file='${TFVARS}' -var talos_bootstrap=true -auto-approve"
+    echo "  would: tofu plan -out=<instance.tfplan> ${infra_targets[*]} -replace='${inst_addr}' \\"
+    echo "                    -var-file='${TFVARS}' -var talos_bootstrap=true"
+    echo "         count its deletes from 'tofu show -json', then: tofu apply <instance.tfplan>"
+    echo "  would: tofu plan -out=<config.tfplan> ${cfg_targets[*]} \\"
+    echo "                    -var-file='${TFVARS}' -var talos_bootstrap=true"
+    echo "         count its deletes from 'tofu show -json', then: tofu apply <config.tfplan>"
     echo "  would: wait Talos health @ ${ep}, node Ready, $( [[ $t == cp ]] && echo 'etcd 3/3, ' )Longhorn healthy"
     echo "  would: kubectl uncordon ${node_name}"
     return 0
@@ -1299,27 +1342,7 @@ replace_node() { # <type: cp|worker> <index>
     etcd_remove_member "$node_name" "$node_ip" "$i"
   fi
 
-  # 2. Count the blast radius BEFORE applying. "One node at a time" was an
-  # intention this script never checked: on 2026-08-12 a single extra -target
-  # pulled the whole provider module into the plan and one "per-node" apply
-  # replaced all three control planes together, taking etcd down. A targeted
-  # plan must not destroy more than the resources it targets.
-  info "Planning ${node_name} and counting what it would destroy…"
-  local doomed
-  doomed="$(tofu plan "${targets[@]}" -replace="$inst_addr" -replace="$cfg_addr" \
-              ${guard_addr:+-replace="$guard_addr"} \
-              -var-file="$TFVARS" -var talos_bootstrap=true -no-color 2>/dev/null \
-            | sed -nE 's/^Plan: [0-9]+ to add, [0-9]+ to change, ([0-9]+) to destroy\./\1/p' | tail -1)"
-  [[ -n "$doomed" ]] || die "could not read a plan for ${node_name} — refusing to apply blind"
-  if (( doomed > ${#targets[@]} )); then
-    die "plan destroys ${doomed} resources for ONE node (it targets ${#targets[@]}) — refusing.
-  Something outside this node is being pulled in; a module-level depends_on has
-  done exactly that before. Inspect with:
-    tofu plan ${targets[*]} -replace='${inst_addr}' -replace='${cfg_addr}' -var-file='${TFVARS}' -var talos_bootstrap=true"
-  fi
-  ok "plan destroys ${doomed} resource(s), targets ${#targets[@]} — proceeding"
-
-  # 3. TWO applies, and the split is the whole point.
+  # 2. TWO applies, and the split is the whole point.
   #
   # modules/talos takes each node's address from the provider module's IPAM
   # resource, never from its instance, so nothing in the graph says "configure
@@ -1330,31 +1353,23 @@ replace_node() { # <type: cp|worker> <index>
   # "kubelet not healthy after 600s" of the last two days actually was.
   #
   # The ordering has to come from here. First the instance, alone. Then the
-  # guard and the config, against a node that now exists.
-  local -a infra_targets=()
-  local t
-  for t in "${targets[@]}"; do
-    [[ "$t" == "-target=${cfg_addr}" || "$t" == "-target=${guard_addr}" ]] || infra_targets+=("$t")
-  done
-
-  info "tofu apply 1/2 — recreate ${node_name} (instance, NIC/IP)…"
+  # guard and the config, against a node that now exists. The second plan is
+  # made after the first apply: a saved plan goes stale once the state moves.
+  #
+  # Each plan's blast radius is counted before it applies. "One node at a time"
+  # was an intention this script never checked: on 2026-08-12 a single extra
+  # -target pulled the whole provider module into the plan and one "per-node"
+  # apply replaced all three control planes together, taking etcd down.
+  info "tofu 1/2 — recreate ${node_name} (instance, NIC/IP)…"
   info "targets: ${infra_targets[*]#-target=}"
-  tofu apply \
-    "${infra_targets[@]}" \
-    -replace="$inst_addr" \
-    -var-file="$TFVARS" \
-    -var talos_bootstrap=true \
-    -auto-approve \
-    || die "tofu apply (instance) failed for ${node_name} — cluster left with ${node_name} cordoned; investigate before retrying"
+  saved_plan_apply "${node_name}-instance" "${#infra_targets[@]}" \
+    "tofu apply (instance) failed for ${node_name} — cluster left with ${node_name} cordoned; investigate before retrying" \
+    "${infra_targets[@]}" -replace="$inst_addr"
 
-  info "tofu apply 2/2 — wait for the new node, then apply its Talos config…"
-  tofu apply \
-    -target="$cfg_addr" ${guard_addr:+-target="$guard_addr"} \
-    -replace="$cfg_addr" ${guard_addr:+-replace="$guard_addr"} \
-    -var-file="$TFVARS" \
-    -var talos_bootstrap=true \
-    -auto-approve \
-    || die "tofu apply (config) failed for ${node_name} — the VM exists but is unconfigured (maintenance mode); re-run to resume"
+  info "tofu 2/2 — wait for the new node, then apply its Talos config…"
+  saved_plan_apply "${node_name}-config" "$cfg_max" \
+    "tofu apply (config) failed for ${node_name} — the VM exists but is unconfigured (maintenance mode); re-run to resume" \
+    "${cfg_targets[@]}"
 
   fi  # end of the replacement path
 
