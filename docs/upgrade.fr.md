@@ -276,11 +276,34 @@ système n'était livrable par aucun chemin. Le roulement lit désormais le
 schematic sur le nœud (`talosctl get extensions` le publie) et fait rouler un
 nœud dont la version correspond mais pas l'image.
 
-⚠️ **Le gabarit n'en fait pas partie sur OpenStack, et c'est pire.** OVH
-redimensionne l'instance en place : `task infra-apply` le planifie donc comme une mise
-à jour et non un remplacement, et l'applique à **tous les nœuds en même temps** —
-mesuré le 2026-08-15, six nœuds passés ensemble en `VERIFY_RESIZE` et l'apiserver
-injoignable plusieurs minutes. La garde « un nœud à la fois » de
+### Changer la taille d'un nœud est une mise à jour en place, chez tous les providers
+
+⚠️ `instance_type` (Scaleway, Outscale), `flavor_name` (OVH) et
+`cpu_cores`/`memory_mb` (Proxmox) ne provoquent pas de remplacement : le
+provider arrête, redimensionne ou redémarre l'instance et garde son disque.
+`task infra-apply` planifie donc N mises à jour et 0 destruction, et les
+applique à **tous les nœuds en même temps**. Mesuré sur OVH seulement, le
+2026-08-15 : six nœuds passés ensemble en `VERIFY_RESIZE` et l'apiserver
+injoignable plusieurs minutes. Pour les trois autres, le verdict vient du source
+des providers aux versions résolues le 2026-09-26 et d'un plan hors ligne avec
+les vrais binaires provider, pas d'un changement de taille en réel (#51). La garde « un nœud à la fois » de
 `rolling-replace` ne l'attrape pas non plus : elle compte ce qu'un plan
-DÉTRUIRAIT, et un redimensionnement ne détruit rien. Changer `flavor_name` un
-nœud à la fois avec `-target`, ou accepter la coupure en connaissance de cause.
+DÉTRUIRAIT, et un redimensionnement ne détruit rien.
+
+**Le faire passer par le roulement.** Modifier la taille dans le tfvars, **ne
+pas lancer `infra-apply`**, puis lancer `task cluster-roll PROVIDER=<p>` sans
+`--upgrade`. Chaque nœud est drainé, remplacé par `-replace` à la nouvelle
+taille, et contrôlé avant le suivant. Tant que le roulement n'est pas fini, tout
+apply ordinaire redimensionne les nœuds restants tous ensemble. Le mode
+remplacement ne saute aucun nœud : le relancer remplace à nouveau tous les
+nœuds de sa portée, que `--workers-only` ou `--cp-only` restreignent. Il n'a
+tourné en réel que sur Scaleway, jamais sur Proxmox, où un worker remplacé perd
+son disque de données intégré. À défaut, redimensionner en place un nœud à la
+fois avec `-target`, sans drain ni contrôle.
+
+Deux cas transformeraient un changement de taille en remplacement : le
+`replace_on_type_change` de Scaleway et, sur OpenStack, un nœud dont le gabarit
+enregistré est vide (par exemple parce que le gabarit a été supprimé). Ce serait
+pire, puisque tous les nœuds seraient détruits en même temps.
+[`tests/node-size-change.tftest.hcl`](../infrastructure/opentofu/cluster/tests/node-size-change.tftest.hcl)
+vérifie que le drapeau de Scaleway reste désactivé.
