@@ -5,8 +5,8 @@
 # upgrade afterwards, in silence, on every machine that had run the script once.
 # Measured 2026-08-23 by the Cléa probe: a cold install reached helm 4.2.4 while
 # upgrading over 4.2.3 left 4.2.3. The same shape had been found and fixed for
-# feint two days earlier (scripts/dev/feint.sh:310), which is why it gets a
-# harness rather than a comment.
+# feint two days earlier (install_feint in scripts/dev/feint.sh), which is why
+# it gets a harness rather than a comment.
 #
 # The function is extracted and driven against stub binaries: setup.sh runs its
 # whole bootstrap when sourced, so there is nothing to import.
