@@ -59,8 +59,8 @@ then 486, each one stale before the next edit — the last of those from a
 branch that, while fixing the same symptom, kept writing a number here; see
 [#111](https://github.com/dis-bzh/OpenAether-infra/issues/111)). Measure it
 instead: `task test-scripts 2>&1 | grep -oE '^[0-9]+ passed' | awk '{s+=$1;
-n++} END {print s, n}'`. The emulated lane runs feint 0.10.0 against Scaleway
-provider 2.81.0, the version the clusters run.
+n++} END {print s, n}'`. The emulated lane's Feint pin, and what it proves:
+[`emulated-cloud.md`](emulated-cloud.md).
 
 **The root cause behind a week of upgrade failures is fixed**, and it was ours:
 the shared schematic shipped `siderolabs/qemu-guest-agent`, which never starts on

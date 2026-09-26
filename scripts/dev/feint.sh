@@ -11,7 +11,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # renovate: datasource=github-releases depName=stephrobert/feint extractVersion=^v(?<version>.*)$
-FEINT_VERSION="0.12.0"
+FEINT_VERSION="0.13.0"
 FEINT_ENDPOINT="${FEINT_ENDPOINT:-http://127.0.0.1:4599}"
 BIN_DIR="${FEINT_BIN_DIR:-$HOME/.local/bin}"
 # Off (metadata-only machines) unless a caller asks for a real one — the
@@ -159,45 +159,61 @@ install_feint() {
   echo "installed feint v${FEINT_VERSION} → $BIN_DIR/feint"
 }
 
-# The Terraform provider resolves `image_name` through a real name lookup —
-# `data.scaleway_instance_image.talos` in modules/providers/scw/main.tf, whose
-# `count` is 0 whenever `image_id` is set. Every feint tfvars used to pin
-# `image_id` instead, so that data source never actually ran. Feint 0.7.0
-# declined `instance/v1 ListImages` outright (501); 0.12.0 serves it, along with
-# CreateSnapshot and CreateImage — none declined, and CreateImage enforces a
-# real dependency (a made-up snapshot id gets a genuine 404, not a rubber
-# stamp). So a name can now be made to resolve to something real: create a
-# throwaway volume, snapshot it, and register an image under the name
-# `envs/feint-scaleway.tfvars.example` asks for. See issue #150.
+# An image under the name envs/feint-scaleway.tfvars.example asks for, so that
+# `data.scaleway_instance_image.talos` (modules/providers/scw) resolves a real
+# name instead of being skipped by a pinned image_id (#150).
 SCW_FEINT_IMAGE_NAME="talos-openaether-feint"
 # The fixed project the emulated `scaleway` provider block pins
 # (infrastructure/opentofu/cluster/main.tf, local.emulator_creds.scw_project_id).
 SCW_FEINT_PROJECT_ID="11111111-1111-1111-1111-111111111111"
 
+# scw_call <method> <url> [json] prints the answer's body, or fails naming the
+# call and what the emulator said: a bare JSON traceback once hid the cause (#177).
+scw_call() {
+  local out code args=(-sS -X "$1" -H 'Content-Type: application/json' -w '\n%{http_code}')
+  [ -n "${3:-}" ] && args+=(-d "$3")
+  out="$(curl "${args[@]}" "$2")" || { echo "✗ $1 $2: no answer from the emulator" >&2; exit 1; }
+  code="${out##*$'\n'}"
+  out="${out%$'\n'*}"
+  case "$code" in
+    2??) printf '%s' "$out" ;;
+    *) echo "✗ $1 ${2#"$FEINT_ENDPOINT"} answered $code: $out" >&2; exit 1 ;;
+  esac
+}
+
+# json_get <key>... reads one field out of the JSON on stdin.
+json_get() {
+  python3 -c 'import json, sys
+v = json.load(sys.stdin)
+for k in sys.argv[1:]: v = v[k]
+print(v)' "$@"
+}
+
 register_scaleway_image() {
-  local endpoint="$1" zone="fr-par-1" images_url vol_id snap_id
-  images_url="$endpoint/instance/v1/zones/$zone/images"
+  local base="$1/instance/v1/zones/fr-par-1" server server_id root_id snap snap_id rc=0
+  local project="\"project\":\"$SCW_FEINT_PROJECT_ID\""
 
   # Idempotent: a second call against an emulator that already served the
   # first one must not mint a duplicate image under the same name.
-  if curl -sf "$images_url?name=$SCW_FEINT_IMAGE_NAME" \
-    | grep -q "\"name\":\"$SCW_FEINT_IMAGE_NAME\""; then
+  if grep -q "\"name\":\"$SCW_FEINT_IMAGE_NAME\"" <<<"$(curl -sf "$base/images?name=$SCW_FEINT_IMAGE_NAME")"; then
     return 0
   fi
 
-  vol_id="$(curl -sf -X POST "$endpoint/instance/v1/zones/$zone/volumes" \
-    -H 'Content-Type: application/json' \
-    -d "{\"name\":\"${SCW_FEINT_IMAGE_NAME}-src\",\"volume_type\":\"l_ssd\",\"size\":10000000000,\"project_id\":\"$SCW_FEINT_PROJECT_ID\"}" \
-    | python3 -c 'import json,sys; print(json.load(sys.stdin)["volume"]["id"])')"
-
-  snap_id="$(curl -sf -X POST "$endpoint/instance/v1/zones/$zone/snapshots" \
-    -H 'Content-Type: application/json' \
-    -d "{\"name\":\"${SCW_FEINT_IMAGE_NAME}-snap\",\"volume_id\":\"$vol_id\",\"project_id\":\"$SCW_FEINT_PROJECT_ID\"}" \
-    | python3 -c 'import json,sys; print(json.load(sys.stdin)["snapshot"]["id"])')"
-
-  curl -sf -X POST "$images_url" -H 'Content-Type: application/json' \
-    -d "{\"name\":\"$SCW_FEINT_IMAGE_NAME\",\"root_volume\":\"$snap_id\",\"arch\":\"x86_64\",\"project_id\":\"$SCW_FEINT_PROJECT_ID\"}" \
-    >/dev/null
+  # Cut from a never-started server's root disk: like fr-par, Feint 0.13.0
+  # refuses to snapshot a volume nothing was ever attached to (#177). l_ssd,
+  # because an instance snapshot of the default block root answers 404.
+  server="$(scw_call POST "$base/servers" "{\"name\":\"${SCW_FEINT_IMAGE_NAME}-src\",\"commercial_type\":\"DEV1-S\",$project,\"volumes\":{\"0\":{\"volume_type\":\"l_ssd\",\"size\":10000000000}}}")"
+  server_id="$(json_get server id <<<"$server")"
+  root_id="$(json_get server volumes 0 id <<<"$server")"
+  # Subshells, so a refused call ends only this chain and the cleanup below runs.
+  { snap="$(scw_call POST "$base/snapshots" "{\"name\":\"${SCW_FEINT_IMAGE_NAME}-snap\",\"volume_id\":\"$root_id\",$project}")" &&
+    snap_id="$(json_get snapshot id <<<"$snap")" &&
+    (scw_call POST "$base/images" "{\"name\":\"$SCW_FEINT_IMAGE_NAME\",\"root_volume\":\"$snap_id\",\"arch\":\"x86_64\",$project}" >/dev/null); } || rc=$?
+  # The helper and its disk go even on failure: plan lanes keep the store, so
+  # each retry would add one. The snapshot stays only once an image is cut from it.
+  scw_call DELETE "$base/servers/$server_id" >/dev/null
+  scw_call DELETE "$base/volumes/$root_id" >/dev/null
+  [ "$rc" -eq 0 ] || { [ -z "${snap_id:-}" ] || scw_call DELETE "$base/snapshots/$snap_id" >/dev/null; exit "$rc"; }
 
   echo "  registered image '$SCW_FEINT_IMAGE_NAME' — image_name now resolves to something the emulator actually created"
 }

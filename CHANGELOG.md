@@ -600,6 +600,13 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **`stephrobert/feint` 0.12.0 → 0.13.0; the Scaleway image is now cut from
+  a never-started server's root disk (#177).** 0.13.0 refuses, like fr-par,
+  to snapshot a volume nothing was ever attached to, so `feint.sh` died on its
+  bare volume. It now snapshots a helper server's `l_ssd` root, then deletes
+  the helper and its disk, on failure too. 0.13.0 also refuses `b_ssd`, so the
+  fixture's data volume is `l_ssd`. Proof on 0.13.0: `task feint-test` green,
+  both providers.
 - **`fluxcd/flux-schema` 0.12.1 → 0.13.0** in `.github/workflows/ci.yml` and
   `scripts/setup.sh`, probed green by Cléa (issue #91). `task lint` (including
   a real re-install of the `schema@0.13.0` plugin and a re-run of

@@ -121,16 +121,16 @@ régressions de câblage avant de dépenser.
 
 ## Manques connus
 
-Épinglé sur **Feint 0.12.0** (`scripts/dev/feint.sh`). Ce que cette voie ne peut
+Épinglé sur **Feint 0.13.0** (`scripts/dev/feint.sh`). Ce que cette voie ne peut
 toujours pas porter, tout consigné dans [les issues ouvertes](https://github.com/dis-bzh/OpenAether-infra/issues) :
 
 | Non exercé | Pourquoi |
 |---|---|
-| Type de volume racine Scaleway | Aucun `root_volume { volume_type }` n'est écrivable : le provider 2.79+ refuse `b_ssd`, et `sbs_volume` planifie éternellement car l'émulateur l'écrase. L'honorer enverrait le provider sur `block/v1`, non monté. Mesuré ici, c'est devenu la limite documentée en amont et son issue #8. Non re-vérifié sous 0.12.0. |
+| Destroy d'une NIC privée Scaleway, provider ≥ 2.83.0 | Le provider appelle alors `instance/v2alpha1/.../detach-private-network-interface`, auquel Feint répond 501 (toujours en 0.13.0). La fixture plafonne le provider sous 2.83.0 ; le root cluster non, donc `feint-apply-root PROVIDER=scaleway` échoue au destroy (#179). |
 | Résolution d'image par nom, Outscale | Les tfvars Outscale pointent `image_name` sur une entrée fixe du catalogue, ce qui exerce le mécanisme de recherche sans résoudre un nom publié par notre propre pipeline — voir #150 pour ce qu'il faudrait. |
 
-Six choses ont quitté cette liste. `outscale_volume_link` en 0.6.0, qui a monté
-le filtre `LinkVolumeVmIds` dont dépend son attente. `data.outscale_images` en
+Trois choses ont quitté cette liste en premier. `outscale_volume_link` en
+0.6.0, qui a monté le filtre `LinkVolumeVmIds` dont dépend son attente. `data.outscale_images` en
 0.7.0, qui ne fait plus segfaulter le provider — la voie Outscale résout donc son
 image par la data source plutôt que par un id épinglé, ce qui exerce la forme
 `images[0]` que le module portait comme une hypothèse non vérifiée. Et
@@ -165,3 +165,10 @@ désormais une image sous le nom que demande
 appelant `instance/v1/API.ListImages` et `GetImage` pour la première fois
 (#150). Outscale non : ses tfvars pointent toujours `image_name` sur une
 entrée du catalogue plutôt que sur quelque chose que cette voie a créé.
+
+La ligne du type de volume racine Scaleway était périmée bien avant de partir :
+le root cluster applique le `root_volume { volume_type = "sbs_volume" }` du
+module, donc le passage `feint-apply-root` du 2026-08-31 ci-dessus (0.12.0)
+l'avait déjà appliqué et re-planifié à vide, là où la ligne disait que
+`sbs_volume` planifiait éternellement. Elle est partie le 2026-09-26, après le
+même résultat en 0.13.0 avec le provider 2.82.0.
