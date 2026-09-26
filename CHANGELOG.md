@@ -37,6 +37,24 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **`feint.sh` could report a live emulator as down, intermittently.**
+  `running` piped the eight lines of `feint status` into `grep -q`, which
+  exits on the first; `status` then dies on SIGPIPE and `pipefail` reads
+  "not running". Observed on the real binary, one machine, varying by run:
+  6/100, 6/300 and 3/300 false negatives. It failed one `feint-test` with
+  "no emulator". `running` now reads the whole output; a stub `status` that
+  keeps printing in `test-feint-restart.sh` is red with the old code, green
+  with the new.
+- **`task feint-apply-root PROVIDER=scaleway` was red at destroy (#179).**
+  The cluster root resolves scaleway 2.83.x, whose private NIC destroy calls a
+  route Feint still answers 501 on 0.13.0. The lane's backend override now also
+  caps the provider `< 2.83.0`, and parks the root's lock file for the run so
+  the cap never reaches a real init. Green on 0.13.0 with 2.82.0: 27 created,
+  empty re-plan, 26 destroyed, lock file restored byte-identical.
+- **`feint.sh` said "no log" on machines without `XDG_RUNTIME_DIR`.** It looked
+  under `/tmp`, while feint then writes to `XDG_STATE_HOME` or
+  `~/.local/state`. It now uses feint's own lookup; a new
+  `test-feint-restart.sh` case is red with the old path, green with the new.
 - **The Scaleway emulated lanes went red on any PR once scaleway provider
   2.83.0 shipped (#179).** No lock file is committed, so CI resolved the newest
   `~> 2.68`; from 2.83.0, destroying `scaleway_instance_private_nic` first calls
@@ -592,6 +610,13 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **`stephrobert/feint` 0.12.0 → 0.13.0; the Scaleway image is now cut from
+  a never-started server's root disk (#177).** 0.13.0 refuses, like fr-par,
+  to snapshot a volume nothing was ever attached to, so `feint.sh` died on its
+  bare volume. It now snapshots a helper server's `l_ssd` root, then deletes
+  the helper and its disk, on failure too. 0.13.0 also refuses `b_ssd`, so the
+  fixture's data volume is `l_ssd`. Proof on 0.13.0: `task feint-test` green,
+  both providers.
 - **`fluxcd/flux-schema` 0.12.1 → 0.13.0** in `.github/workflows/ci.yml` and
   `scripts/setup.sh`, probed green by Cléa (issue #91). `task lint` (including
   a real re-install of the `schema@0.13.0` plugin and a re-run of

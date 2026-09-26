@@ -11,7 +11,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # renovate: datasource=github-releases depName=stephrobert/feint extractVersion=^v(?<version>.*)$
-FEINT_VERSION="0.12.0"
+FEINT_VERSION="0.13.0"
 FEINT_ENDPOINT="${FEINT_ENDPOINT:-http://127.0.0.1:4599}"
 BIN_DIR="${FEINT_BIN_DIR:-$HOME/.local/bin}"
 # Off (metadata-only machines) unless a caller asks for a real one — the
@@ -49,8 +49,9 @@ guard_local() {
 addr_of() { printf '%s' "${1#http://}"; }
 
 # running answers whether the emulator is actually listening. `feint status`
-# exits 0 whether or not it is, so the output is the only signal.
-running() { feint_cli status 2>/dev/null | grep -q '^running on'; }
+# exits 0 whether or not it is, so the output is the only signal. Read whole:
+# piped into `grep -q` it dies on SIGPIPE, which pipefail reports as "not running".
+running() { grep -q '^running on' <<<"$(feint_cli status 2>/dev/null)"; }
 
 # require_emulator fails a lane that has nothing to talk to.
 #
@@ -72,10 +73,12 @@ require_emulator() {
 
 # emulator_log_hint prints the emulator's own log so "why" survives past the
 # process that could have answered it directly. Shared by require_emulator and
-# reset_emulator's failure path.
+# reset_emulator's failure path. Same lookup as feint's own: XDG_RUNTIME_DIR,
+# else XDG_STATE_HOME, else ~/.local/state; the address flattened as it does.
 emulator_log_hint() {
-  local log="${XDG_RUNTIME_DIR:-/tmp}/feint/${FEINT_ENDPOINT#http://}/feint.log"
-  log="${log//:/_}"
+  local addr log
+  addr="$(addr_of "$FEINT_ENDPOINT")"; addr="${addr//[:\/]/_}"; addr="${addr//[\[\]]/}"
+  log="${XDG_RUNTIME_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}}/feint/$addr/feint.log"
   if [ -r "$log" ]; then
     echo "  Last lines of ${log}:" >&2
     tail -20 "$log" | sed 's/^/    /' >&2
@@ -158,45 +161,61 @@ install_feint() {
   echo "installed feint v${FEINT_VERSION} → $BIN_DIR/feint"
 }
 
-# The Terraform provider resolves `image_name` through a real name lookup —
-# `data.scaleway_instance_image.talos` in modules/providers/scw/main.tf, whose
-# `count` is 0 whenever `image_id` is set. Every feint tfvars used to pin
-# `image_id` instead, so that data source never actually ran. Feint 0.7.0
-# declined `instance/v1 ListImages` outright (501); 0.12.0 serves it, along with
-# CreateSnapshot and CreateImage — none declined, and CreateImage enforces a
-# real dependency (a made-up snapshot id gets a genuine 404, not a rubber
-# stamp). So a name can now be made to resolve to something real: create a
-# throwaway volume, snapshot it, and register an image under the name
-# `envs/feint-scaleway.tfvars.example` asks for. See issue #150.
+# An image under the name envs/feint-scaleway.tfvars.example asks for, so that
+# `data.scaleway_instance_image.talos` (modules/providers/scw) resolves a real
+# name instead of being skipped by a pinned image_id (#150).
 SCW_FEINT_IMAGE_NAME="talos-openaether-feint"
 # The fixed project the emulated `scaleway` provider block pins
 # (infrastructure/opentofu/cluster/main.tf, local.emulator_creds.scw_project_id).
 SCW_FEINT_PROJECT_ID="11111111-1111-1111-1111-111111111111"
 
+# scw_call <method> <url> [json] prints the answer's body, or fails naming the
+# call and what the emulator said: a bare JSON traceback once hid the cause (#177).
+scw_call() {
+  local out code args=(-sS -X "$1" -H 'Content-Type: application/json' -w '\n%{http_code}')
+  [ -n "${3:-}" ] && args+=(-d "$3")
+  out="$(curl "${args[@]}" "$2")" || { echo "✗ $1 $2: no answer from the emulator" >&2; exit 1; }
+  code="${out##*$'\n'}"
+  out="${out%$'\n'*}"
+  case "$code" in
+    2??) printf '%s' "$out" ;;
+    *) echo "✗ $1 ${2#"$FEINT_ENDPOINT"} answered $code: $out" >&2; exit 1 ;;
+  esac
+}
+
+# json_get <key>... reads one field out of the JSON on stdin.
+json_get() {
+  python3 -c 'import json, sys
+v = json.load(sys.stdin)
+for k in sys.argv[1:]: v = v[k]
+print(v)' "$@"
+}
+
 register_scaleway_image() {
-  local endpoint="$1" zone="fr-par-1" images_url vol_id snap_id
-  images_url="$endpoint/instance/v1/zones/$zone/images"
+  local base="$1/instance/v1/zones/fr-par-1" server server_id root_id snap snap_id rc=0
+  local project="\"project\":\"$SCW_FEINT_PROJECT_ID\""
 
   # Idempotent: a second call against an emulator that already served the
   # first one must not mint a duplicate image under the same name.
-  if curl -sf "$images_url?name=$SCW_FEINT_IMAGE_NAME" \
-    | grep -q "\"name\":\"$SCW_FEINT_IMAGE_NAME\""; then
+  if grep -q "\"name\":\"$SCW_FEINT_IMAGE_NAME\"" <<<"$(curl -sf "$base/images?name=$SCW_FEINT_IMAGE_NAME")"; then
     return 0
   fi
 
-  vol_id="$(curl -sf -X POST "$endpoint/instance/v1/zones/$zone/volumes" \
-    -H 'Content-Type: application/json' \
-    -d "{\"name\":\"${SCW_FEINT_IMAGE_NAME}-src\",\"volume_type\":\"l_ssd\",\"size\":10000000000,\"project_id\":\"$SCW_FEINT_PROJECT_ID\"}" \
-    | python3 -c 'import json,sys; print(json.load(sys.stdin)["volume"]["id"])')"
-
-  snap_id="$(curl -sf -X POST "$endpoint/instance/v1/zones/$zone/snapshots" \
-    -H 'Content-Type: application/json' \
-    -d "{\"name\":\"${SCW_FEINT_IMAGE_NAME}-snap\",\"volume_id\":\"$vol_id\",\"project_id\":\"$SCW_FEINT_PROJECT_ID\"}" \
-    | python3 -c 'import json,sys; print(json.load(sys.stdin)["snapshot"]["id"])')"
-
-  curl -sf -X POST "$images_url" -H 'Content-Type: application/json' \
-    -d "{\"name\":\"$SCW_FEINT_IMAGE_NAME\",\"root_volume\":\"$snap_id\",\"arch\":\"x86_64\",\"project_id\":\"$SCW_FEINT_PROJECT_ID\"}" \
-    >/dev/null
+  # Cut from a never-started server's root disk: like fr-par, Feint 0.13.0
+  # refuses to snapshot a volume nothing was ever attached to (#177). l_ssd,
+  # because an instance snapshot of the default block root answers 404.
+  server="$(scw_call POST "$base/servers" "{\"name\":\"${SCW_FEINT_IMAGE_NAME}-src\",\"commercial_type\":\"DEV1-S\",$project,\"volumes\":{\"0\":{\"volume_type\":\"l_ssd\",\"size\":10000000000}}}")"
+  server_id="$(json_get server id <<<"$server")"
+  root_id="$(json_get server volumes 0 id <<<"$server")"
+  # Subshells, so a refused call ends only this chain and the cleanup below runs.
+  { snap="$(scw_call POST "$base/snapshots" "{\"name\":\"${SCW_FEINT_IMAGE_NAME}-snap\",\"volume_id\":\"$root_id\",$project}")" &&
+    snap_id="$(json_get snapshot id <<<"$snap")" &&
+    (scw_call POST "$base/images" "{\"name\":\"$SCW_FEINT_IMAGE_NAME\",\"root_volume\":\"$snap_id\",\"arch\":\"x86_64\",$project}" >/dev/null); } || rc=$?
+  # The helper and its disk go even on failure: plan lanes keep the store, so
+  # each retry would add one. The snapshot stays only once an image is cut from it.
+  scw_call DELETE "$base/servers/$server_id" >/dev/null
+  scw_call DELETE "$base/volumes/$root_id" >/dev/null
+  [ "$rc" -eq 0 ] || { [ -z "${snap_id:-}" ] || scw_call DELETE "$base/snapshots/$snap_id" >/dev/null; exit "$rc"; }
 
   echo "  registered image '$SCW_FEINT_IMAGE_NAME' — image_name now resolves to something the emulator actually created"
 }
@@ -264,14 +283,26 @@ apply_root() {
   # the first create, same reason apply_fixture and record_root reset first.
   reset_emulator
   [ "$provider" = scaleway ] && register_scaleway_image "$FEINT_ENDPOINT"
-  trap 'rm -f "${override:-}" || true; rm -rf "${work:-}" || true' EXIT
+  # The cap below must not outlive the lane in the root's lock file, which a
+  # real init there would keep: park that lock and put it back on exit.
+  lock="$root/.terraform.lock.hcl"
+  [ -e "$lock" ] && mv "$lock" "$work/lock.hcl"
+  trap 'rm -f "${override:-}" "${lock:-}" || true; [ ! -e "${work:-}/lock.hcl" ] || mv "$work/lock.hcl" "$lock" || true; rm -rf "${work:-}" || true' EXIT
 
+  # scaleway < 2.83.0: from 2.83.0 a private NIC destroy calls a detach route
+  # Feint answers 501 (#179). This lane only; the real root stays uncapped.
   cat > "$override" <<EOT
 # Generated by scripts/dev/feint.sh, removed when it exits. If you are reading
 # this in a working tree, a run died hard — delete it.
 terraform {
   backend "local" {
     path = "$work/apply.tfstate"
+  }
+  required_providers {
+    scaleway = {
+      source  = "scaleway/scaleway"
+      version = "< 2.83.0"
+    }
   }
 }
 EOT
@@ -297,7 +328,8 @@ EOT
   # secrets carry prevent_destroy, and excluding them alone is not enough —
   # module.talos depends_on module.<provider>, so excluding the secrets
   # cascades to keeping the whole provider module too (0 destroyed).
-  tofu state rm module.talos.talos_machine_secrets.this[0]
+  # -backup: its default lands in the cluster root, not in the lane's temp dir.
+  tofu state rm -backup="$work/state-rm.backup" module.talos.talos_machine_secrets.this[0]
   tofu destroy -no-color -auto-approve "${args[@]}" -var talos_bootstrap=false
   echo "✓ ${provider}: the real cluster root applied / empty re-plan / destroyed, no credentials"
 }

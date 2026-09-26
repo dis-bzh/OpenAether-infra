@@ -116,16 +116,16 @@ the only proof of a deployment; this catches wiring regressions before spending.
 
 ## Known gaps
 
-Pinned to **Feint 0.12.0** (`scripts/dev/feint.sh`). What this lane still cannot
+Pinned to **Feint 0.13.0** (`scripts/dev/feint.sh`). What this lane still cannot
 carry, all recorded in [the open issues](https://github.com/dis-bzh/OpenAether-infra/issues):
 
 | Not exercised | Why |
 |---|---|
-| Scaleway root volume type | No `root_volume { volume_type }` is writable: provider 2.79+ refuses `b_ssd`, and `sbs_volume` plans for ever because the emulator overrides it. Honouring it would send the provider to `block/v1`, unmounted. Measured here, now upstream's stated limit and its issue #8. Not re-verified against 0.12.0. |
+| Scaleway private NIC destroy, provider ≥ 2.83.0 | The provider then calls `instance/v2alpha1/.../detach-private-network-interface`, which Feint answers 501 (still on 0.13.0). The lanes that destroy (the fixture, and `feint-apply-root` through its override) cap the provider below 2.83.0; the real root does not (#179). |
 | Outscale image name resolution | The Outscale tfvars point `image_name` at a fixed catalogue entry, which exercises the lookup mechanism without resolving a name our own pipeline published — see #150 for what it would take. |
 
-Six things left this list. `outscale_volume_link` in 0.6.0, which mounted the
-`LinkVolumeVmIds` filter its wait depends on. `data.outscale_images` in 0.7.0,
+Three things left this list first. `outscale_volume_link` in 0.6.0, which
+mounted the `LinkVolumeVmIds` filter its wait depends on. `data.outscale_images` in 0.7.0,
 which stopped segfaulting the provider — so the Outscale lane now resolves its
 image through the data source rather than a pinned id, exercising the
 `images[0]` shape the module had carried as an unverified assumption. And
@@ -157,3 +157,9 @@ applying: `data.scaleway_instance_image.talos`, dead code behind a pinned
 `instance/v1/API.ListImages` and `GetImage` for the first time (#150).
 Outscale is not: its tfvars still point `image_name` at a catalogue entry
 rather than something this lane created.
+
+The Scaleway root volume type row was stale well before it left: the cluster
+root applies the module's `root_volume { volume_type = "sbs_volume" }`, so the
+2026-08-31 `feint-apply-root` run above (0.12.0) had already applied it and
+re-planned empty, where the row said `sbs_volume` planned for ever. The row
+went on 2026-09-26, after the same result on 0.13.0 with provider 2.82.0.

@@ -52,7 +52,7 @@ HELM_VERSION="4.3.0"
 # silence, on every machine that had run it once. Measured 2026-08-23 by the
 # Cléa probe — cold install reached helm 4.2.4, upgrading over 4.2.3 left 4.2.3.
 # The same shape was found and fixed for feint on 2026-08-21
-# (scripts/dev/feint.sh:310).
+# (scripts/dev/feint.sh, the comment above its install_feint call).
 #
 # Only the tools this file PINS get the second argument. For the others there is
 # no version to compare against, and inventing one would be a check that cannot

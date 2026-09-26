@@ -1,11 +1,7 @@
-# Scaleway fixture — the shapes modules/providers/scw builds, minus what the
-# emulator does not serve (LB, public gateway, IPAM reservations, block volumes).
-#
-# root_volume declares no volume_type on purpose, and it is the one production
-# attribute this lane cannot carry: the module asks for sbs_volume, the emulator
-# answers b_ssd whatever was requested (its catalogue is fixed), and provider
-# 2.80 refuses an explicit b_ssd outright. Declaring either is a permanent diff
-# or an error, so the type is left to the API and stays unexercised here.
+# Scaleway fixture: modules/providers/scw's shapes, reduced so the operations
+# .feint-evidence-scaleway.json pins hold. LB, public gateway, IPAM reservations,
+# SBS data volumes and an explicit root volume_type are served but left out;
+# feint-apply-root applies all of them except the data volumes (no disks in its tfvars).
 
 resource "scaleway_vpc_private_network" "this" {
   count = local.scaleway_active
@@ -49,10 +45,12 @@ resource "scaleway_instance_security_group" "this" {
   }
 }
 
+# l_ssd: Feint refuses b_ssd from 0.13.0, as the real API does. Still an
+# instance volume, so the pinned evidence baseline's operations are unchanged.
 resource "scaleway_instance_volume" "worker_data" {
   count      = local.scaleway_active
   name       = "${var.cluster_name}-worker-data"
-  type       = "b_ssd"
+  type       = "l_ssd"
   size_in_gb = 10
 }
 
