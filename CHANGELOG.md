@@ -37,6 +37,14 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **`feint.sh` could report a live emulator as down, intermittently.**
+  `running` piped the eight lines of `feint status` into `grep -q`, which
+  exits on the first; `status` then dies on SIGPIPE and `pipefail` reads
+  "not running". Observed on the real binary, one machine, varying by run:
+  6/100, 6/300 and 3/300 false negatives. It failed one `feint-test` with
+  "no emulator". `running` now reads the whole output; a stub `status` that
+  keeps printing in `test-feint-restart.sh` is red with the old code, green
+  with the new.
 - **The Scaleway emulated lanes went red on any PR once scaleway provider
   2.83.0 shipped (#179).** No lock file is committed, so CI resolved the newest
   `~> 2.68`; from 2.83.0, destroying `scaleway_instance_private_nic` first calls

@@ -49,8 +49,9 @@ guard_local() {
 addr_of() { printf '%s' "${1#http://}"; }
 
 # running answers whether the emulator is actually listening. `feint status`
-# exits 0 whether or not it is, so the output is the only signal.
-running() { feint_cli status 2>/dev/null | grep -q '^running on'; }
+# exits 0 whether or not it is, so the output is the only signal. Read whole:
+# piped into `grep -q` it dies on SIGPIPE, which pipefail reports as "not running".
+running() { grep -q '^running on' <<<"$(feint_cli status 2>/dev/null)"; }
 
 # require_emulator fails a lane that has nothing to talk to.
 #

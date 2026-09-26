@@ -8,6 +8,8 @@
 #
 # A stub `feint` puts the delay under our control: `status` reports
 # "running on ..." only OA_STUB_DELAY seconds after `start` was called.
+# OA_STUB_CHATTY keeps printing after that line, as the real `status` does: a
+# reader that stops early kills it on SIGPIPE, and pipefail then reads "down".
 # FEINT_RESTART_TIMEOUT=0 reproduces the EXACT pre-fix behavior — a single
 # immediate check, no retry — through the real code path, not a diff revert.
 #
@@ -20,7 +22,11 @@ ok()  { printf '  \033[32m✓\033[0m %s\n' "$*"; PASS=$((PASS + 1)); }
 bad() { printf '  \033[31m✗\033[0m %s\n' "$*"; FAIL=$((FAIL + 1)); }
 
 SB="$(mktemp -d)"; LOG="$SB/calls.log"; STATE="$SB/state"
+# The pin itself: a stub reporting any other version makes install_feint
+# download the real binary, and this test is offline.
+PIN="$(sed -nE 's/^FEINT_VERSION="([^"]+)".*/\1/p' scripts/dev/feint.sh)"
 trap 'rm -rf "$SB"' EXIT
+[ -n "$PIN" ] || { echo "✗ no FEINT_VERSION=\"x.y.z\" line found in scripts/dev/feint.sh; the stub cannot report the pin" >&2; exit 1; }
 
 # start: records when it was called. status: "running on ..." only once
 # OA_STUB_DELAY seconds have elapsed since — or never, if OA_STUB_NEVER_READY.
@@ -28,7 +34,7 @@ cat >"$SB/feint" <<'STUB'
 #!/usr/bin/env bash
 printf 'feint:%s\n' "$*" >>"$OA_STUB_LOG"
 case "$1" in
-  version) printf 'v0.12.0\n'; exit 0 ;;
+  version) printf 'v%s\n' "$OA_STUB_VERSION"; exit 0 ;;
   start) date +%s >"$OA_STUB_STATE"; exit 0 ;;
   stop)  rm -f "$OA_STUB_STATE"; exit 0 ;;
   status)
@@ -38,6 +44,10 @@ case "$1" in
     started="$(cat "$OA_STUB_STATE")"; now="$(date +%s)"
     if [ $((now - started)) -ge "${OA_STUB_DELAY:-0}" ]; then
       echo "running on 127.0.0.1:4599 (pid 1, since $(date -u +%FT%TZ))"
+      if [ "${OA_STUB_CHATTY:-0}" = 1 ]; then
+        sleep 1
+        printf '  resources  0\n' || exit 141
+      fi
     else
       echo "not running yet"
     fi
@@ -49,7 +59,7 @@ chmod +x "$SB/feint"
 
 run() { # <FEINT_RESTART_TIMEOUT> <OA_STUB_DELAY> [OA_STUB_NEVER_READY]
   : >"$LOG"; rm -f "$STATE"
-  env -i PATH="$SB:$PATH" HOME="$SB" \
+  env -i PATH="$SB:$PATH" HOME="$SB" OA_STUB_VERSION="$PIN" \
       OA_STUB_LOG="$LOG" OA_STUB_STATE="$STATE" OA_STUB_DELAY="$2" OA_STUB_NEVER_READY="${3:-0}" \
       FEINT_RESTART_TIMEOUT="$1" FEINT_ENDPOINT="http://127.0.0.1:4599" \
       ./scripts/dev/feint.sh start </dev/null 2>&1
@@ -80,13 +90,23 @@ ELAPSED=$(( $(date +%s) - START ))
 grep -qi "did not come up" <<<"$OUT" && ok "names the failure" || bad "$OUT"
 grep -qi "no log at\|Last lines of" <<<"$OUT" && ok "and points at the emulator's own log" || bad "$OUT"
 
+already_running() { # [OA_STUB_CHATTY]
+  : >"$LOG"; date +%s >"$STATE"
+  env -i PATH="$SB:$PATH" HOME="$SB" OA_STUB_VERSION="$PIN" OA_STUB_LOG="$LOG" OA_STUB_STATE="$STATE" \
+      OA_STUB_DELAY=0 OA_STUB_CHATTY="${1:-0}" FEINT_RESTART_TIMEOUT=2 FEINT_ENDPOINT="http://127.0.0.1:4599" \
+      ./scripts/dev/feint.sh start </dev/null 2>&1
+}
+
 echo "--- already running: no restart is attempted at all ---"
-: >"$LOG"; date +%s >"$STATE"
-OUT="$(env -i PATH="$SB:$PATH" HOME="$SB" OA_STUB_LOG="$LOG" OA_STUB_STATE="$STATE" OA_STUB_DELAY=0 \
-       FEINT_RESTART_TIMEOUT=5 FEINT_ENDPOINT="http://127.0.0.1:4599" \
-       ./scripts/dev/feint.sh start </dev/null 2>&1)"; RC=$?
+OUT="$(already_running)"; RC=$?
 [ "$RC" -eq 0 ] && ok "start on an already-running emulator succeeds" || bad "$OUT"
 [ "$(calls start)" = 0 ] && ok "…and 'feint start' was never called" || bad "feint start was called: $(grep '^feint:start' "$LOG")"
+
+echo "--- already running, status keeps printing after its first line: still running ---"
+OUT="$(already_running 1)"; RC=$?
+[ "$RC" -eq 0 ] && ok "start succeeds (rc=$RC)" || bad "$OUT"
+[ "$(calls start)" = 0 ] && ok "…without restarting an emulator that was up" \
+  || bad "running() reported a live emulator as down, and 'feint start' was called"
 
 echo
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
