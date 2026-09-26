@@ -49,6 +49,7 @@ tasks:
 
         When you need them:
           task kubeconfig        PROVIDER=…   get access back
+          task state             PROVIDER=…   what the cluster's state holds (ADDR=… for one resource)
           task restore-artifacts PROVIDER=…   recover access from the encrypted backups
           task tunnels-up        PROVIDER=…   open the Talos API tunnels
 
@@ -378,6 +379,9 @@ tasks:
       # with the first provider's. Only the ENDPOINTS can say a backup was meant
       # to be elsewhere, which is what these assert.
       - ./scripts/dev/test-backup-creds.sh
+      # `task state` promises it never writes a state. Real task + real tofu on
+      # a local-backend fixture; the state's bytes are compared before and after.
+      - ./scripts/dev/test-state-task.sh
       # The three scripts between a cluster and a lost tfstate or etcd, and the
       # Day-1 seeder whose one rule is never to rotate what exists. Writing
       # these found a retention slice that deleted 28 of 29 snapshots and two
@@ -1340,6 +1344,53 @@ tasks:
       - tofu output -raw kubeconfig > kubeconfig
       - tofu output -raw talosconfig > talosconfig
       - echo "KUBECONFIG and TALOSCONFIG written to infrastructure/opentofu/cluster/"
+
+  state:
+    desc: >-
+      List what a cluster's OpenTofu state holds, or show one resource with ADDR=. It only reads
+      the state; like `kubeconfig` it re-inits the local data dir, so a fresh shell works once
+      .env.sh is sourced.
+      Usage: task state PROVIDER=… [ROLE=management] [ADDR='module.x.type.name["key"]']
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER]
+    preconditions: *refuse-local
+    silent: true
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+      ADDR: '{{.ADDR | default ""}}'
+    env: *provider-env
+    # go-task lets an AWS_* or TF_DATA_DIR already exported in the shell win over env:, so the cmd
+    # exports again what its guard checked. Read-only: init, state list and state show are its tofu
+    # verbs; test-state-task.sh fails on any other written here (not on an indirect call).
+    cmds:
+      - |
+        set -eu
+        # An exported TF_WORKSPACE picks another workspace: the wrong state, which tofu may even create.
+        unset TF_WORKSPACE
+        AK="$(../../../scripts/internal/resolve-s3-cred.sh {{.PROVIDER}} ak)" || AK=""
+        SK="$(../../../scripts/internal/resolve-s3-cred.sh {{.PROVIDER}} sk)" || SK=""
+        [ -n "$AK" ] || { echo "✗ no S3 access key for '{{.PROVIDER}}'. Did you 'source .env.sh'?" >&2; exit 1; }
+        [ -n "$SK" ] || { echo "✗ no S3 secret key for '{{.PROVIDER}}'. Did you 'source .env.sh'?" >&2; exit 1; }
+        export AWS_ACCESS_KEY_ID="$AK" AWS_SECRET_ACCESS_KEY="$SK" TF_DATA_DIR='.terraform-{{.ROLE}}-{{.PROVIDER}}'
+        [ -n "${TF_VAR_encryption_passphrase:-}" ] || {
+          echo "✗ TF_VAR_encryption_passphrase is not set, and the state is encrypted with it." >&2; exit 1; }
+        # Captured first, under set -e: inside `tofu init $(...)` a failure is lost and init runs bare.
+        BACKEND="$(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)"
+        # init's progress goes to stderr, so stdout is the answer alone and pipes into grep.
+        tofu init -reconfigure -input=false $BACKEND >&2
+        echo "→ state at ${BACKEND//-backend-config=/}" >&2
+        # Listed with ADDR= too: by hand, a wrong directory, data dir or key answers "No state file
+        # was found", which reads as an empty state or a mistyped address.
+        OUT="$(tofu state list)" || {
+          echo "✗ if tofu said 'No state file was found', nothing is stored at that key: the env" >&2
+          echo "  file's cluster_name, environment or bucket_suffix is not what was deployed." >&2
+          exit 1; }
+        {{if .ADDR}}
+        tofu state show {{shellQuote .ADDR}}
+        {{else}}
+        if [ -n "$OUT" ]; then printf '%s\n' "$OUT"; else echo "✓ the state exists and holds no resources." >&2; fi
+        {{end}}
 
   restore-artifacts:
     desc: >-
