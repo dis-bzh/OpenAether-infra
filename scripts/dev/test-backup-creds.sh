@@ -88,16 +88,22 @@ echo "--- the three shapes ensure-buckets.sh must tell apart ---"
 # A stub `aws` stands in for the object stores: no account, no bill, and it can
 # be made to refuse one endpoint, which is the case that matters.
 SB="$(mktemp -d)"; trap 'rm -rf "$SB"' EXIT
-mk_stub() { # <endpoint-that-succeeds, or "all">
-  if [ "$1" = all ]; then printf '#!/usr/bin/env bash\nexit 0\n' >"$SB/aws"
-  else
-    printf '#!/usr/bin/env bash\nfor a in "$@"; do case "$a" in %s*) exit 0 ;; esac; done\n' "$1" >"$SB/aws"
-    printf 'for a in "$@"; do case "$a" in https://*) exit 255 ;; esac; done\nexit 0\n' >>"$SB/aws"
-  fi
-  chmod +x "$SB/aws"
+mk_stub() { # <endpoint-that-succeeds, or "all"> [no-state] — every call is logged
+  {
+    printf '#!/usr/bin/env bash\necho "$*" >>%q\n' "$SB/aws.log"
+    # no-state: the cluster's tfstate object is absent, i.e. it was never applied.
+    [ "${2:-}" = no-state ] && printf 'case " $* " in *" head-object "*) exit 254 ;; esac\n'
+    if [ "$1" != all ]; then
+      printf 'for a in "$@"; do case "$a" in %s*) exit 0 ;; esac; done\n' "$1"
+      printf 'for a in "$@"; do case "$a" in https://*) exit 255 ;; esac; done\n'
+    fi
+    printf 'exit 0\n'
+  } >"$SB/aws"
+  chmod +x "$SB/aws"; : >"$SB/aws.log"
 }
-mk_tfvars() { # <replica-endpoint> → path
-  sed -E "s#^s3_primary_endpoint.*#s3_primary_endpoint = \"https://primary.example\"#;
+mk_tfvars() { # <replica-endpoint> [primary-endpoint] [environment] → path
+  sed -E "s#^environment[[:space:]].*#environment = \"${3:-dev}\"#;
+          s#^s3_primary_endpoint.*#s3_primary_endpoint = \"${2:-https://primary.example}\"#;
           s#^s3_primary_region.*#s3_primary_region = \"r1\"#;
           s#^s3_replica_endpoint.*#s3_replica_endpoint = \"$1\"#;
           s#^s3_replica_region.*#s3_replica_region = \"r2\"#" \
@@ -106,7 +112,7 @@ mk_tfvars() { # <replica-endpoint> → path
 }
 run_ensure() { env -u SCW_BACKUP_AWS_ACCESS_KEY_ID -u SCW_BACKUP_AWS_SECRET_ACCESS_KEY \
   PATH="$SB:$PATH" SCW_AWS_ACCESS_KEY_ID=A SCW_AWS_SECRET_ACCESS_KEY=A \
-  ./scripts/internal/ensure-buckets.sh "$1" 2>&1; }
+  ./scripts/internal/ensure-buckets.sh "$@" 2>&1; }
 
 mk_stub "https://primary.example"; TF="$(mk_tfvars https://replica.example)"
 OUT="$(run_ensure "$TF")"; RC=$?
@@ -116,6 +122,14 @@ OUT="$(run_ensure "$TF")"; RC=$?
 grep -q 'SCW_BACKUP_AWS_ACCESS_KEY_ID' <<<"$OUT" \
   && ok "and it names the variable to set, not just the failure" \
   || bad "the refusal does not say what to do about it"
+grep -q 'back at https://primary.example' <<<"$OUT" \
+  && ok "dev: it offers the single-cloud way out, replica back on the primary" \
+  || bad "dev: the refusal no longer offers pointing the replica back at the primary"
+TF="$(mk_tfvars https://replica.example https://primary.example prod)"
+OUT="$(run_ensure "$TF")"
+! grep -q 'back at' <<<"$OUT" && grep -q 'environment = "dev"' <<<"$OUT" \
+  && ok "prod: it offers environment = \"dev\" instead of the shape prod refuses" \
+  || bad "prod: the refusal still advises putting the replica back on the primary"
 
 TF="$(mk_tfvars https://primary.example)"
 OUT="$(run_ensure "$TF")"; RC=$?
@@ -128,6 +142,54 @@ OUT="$(run_ensure "$TF")"; RC=$?
 [ "$RC" -eq 0 ] && grep -q 'DIFFERENT provider' <<<"$OUT" \
   && ok "a cross-provider backup that works: allowed, and reported as elsewhere" \
   || bad "a working cross-provider backup was refused (exit ${RC}) — the guard fires on the normal case"
+
+echo "--- prod's replica must leave the primary's cloud: cluster-up's --preflight ---"
+SCW_A=https://s3.fr-par.scw.cloud SCW_B=https://s3.nl-ams.scw.cloud OVH_A=https://s3.gra.io.cloud.ovh.net
+touched() { grep -qE '(^| )(mb|head-bucket)( |$)' "$SB/aws.log"; }
+expect() { # <refused|passes> <label> <env> <primary> <replica> [stub-state] [flag]
+  mk_stub all "${6:-no-state}"
+  OUT="$(run_ensure "$(mk_tfvars "$5" "$4" "$3")" "${7---preflight}")"; RC=$?
+  if [ "$1" = refused ]; then
+    [ "$RC" -ne 0 ] && grep -q 'No state was found at' <<<"$OUT" && ! touched \
+      && ok "$2: refused before any bucket is touched" \
+      || bad "$2: exit ${RC}, or a bucket was touched first — a new prod cluster would deploy with it"
+  else
+    [ "$RC" -eq 0 ] && ok "$2: passes" || bad "$2: refused (exit ${RC}): $(tail -3 <<<"$OUT")"
+  fi
+}
+expect refused "prod, replica on the primary's endpoint"            prod "$SCW_A" "$SCW_A"
+expect refused "prod, a self-hosted replica spelled differently"     prod https://minio.example.internal "HTTPS://MINIO.example.internal/"
+expect refused "prod, same provider in another region"               prod "$SCW_A" "$SCW_B"
+grep -q 'both endpoints are on scaleway' <<<"$OUT" \
+  && ok "and it says why: one cloud, whatever the region" || bad "the same-provider refusal does not name the provider"
+expect passes  "prod, replica on another provider"                   prod "$SCW_A" "$OVH_A"
+expect passes  "prod, self-hosted S3 (no provider to name), another endpoint" prod https://minio-a.example.internal https://minio-b.example.internal
+expect passes  "dev, replica on the primary's endpoint"              dev  "$SCW_A" "$SCW_A"
+# The two ways it must NOT reach a deployed cluster, which has to stay
+# plannable, upgradable and destroyable whatever its replica. A state object
+# also survives a teardown, so the warning must cover a rebuild too.
+expect passes  "prod shared, but a state object exists"              prod "$SCW_A" "$SCW_A" state-present
+grep -q 'applied' <<<"$OUT" && grep -q 'torn down, this is a rebuild' <<<"$OUT" \
+  && ok "and it still warns, for a live cluster and for a rebuild after a teardown" \
+  || bad "the warning does not cover both a live prod cluster and one rebuilt after a teardown"
+expect passes  "prod shared, called without --preflight (infra-apply)" prod "$SCW_A" "$SCW_A" no-state ""
+is "the empty replica gets a reason too (infra-verify reads it)" \
+   "s3_replica_endpoint is empty" "$(oa_replica_colocated "$SCW_A" "")"
+# The prod examples are copied as-is; one that broke the rule would fail a first deploy.
+N=0; BROKEN=""
+for f in infrastructure/opentofu/cluster/envs/*.tfvars.example; do
+  [ "$(tfv "$f" environment)" = prod ] || continue
+  N=$((N + 1))
+  W="$(oa_replica_colocated "$(tfv "$f" s3_primary_endpoint)" "$(tfv "$f" s3_replica_endpoint)")"
+  [ -z "$W" ] || BROKEN="$BROKEN ${f##*/} ($W)"
+done
+[ "$N" -gt 0 ] && [ -z "$BROKEN" ] && ok "all $N prod examples keep the replica off the primary's cloud" \
+  || bad "prod examples cluster-up would refuse (of $N):${BROKEN}"
+# Only cluster-up may arm it: infra-apply is what cluster-upgrade and
+# converge-versions call, and no destroy path reaches ensure-buckets at all.
+CALLERS="$(awk '/^  [a-z0-9_-]+:$/ {t=$1} /ensure-buckets\.sh/ && !/^[[:space:]]*#/ {print t, (/--preflight/ ? "armed" : "plain")}' Taskfile.yml)"
+is "Taskfile.yml: --preflight is passed by cluster-up alone" \
+   "cluster-up: armed|infra-apply: plain" "$(paste -sd'|' <<<"$CALLERS")"
 
 
 SCW_EP=https://s3.fr-par.scw.cloud

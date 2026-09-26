@@ -119,7 +119,7 @@ $EDITOR management-scaleway.tfvars
 |---|---|
 | `cluster_name` | yours. **It has a default, so no checker will tell you to change it** — and its first segment names all four cluster buckets |
 | `bucket_suffix` | **set it unless you are the original author.** S3 bucket names are unique across a whole provider, not per account — Scaleway documents them unique "in our whole platform", OVH "within OVHcloud". Without one you will collide with names somebody already took. `task bucket-suffix` prints one; pick it once, changing it later orphans every bucket you have |
-| `environment` | `dev` or `prod`, nothing else. It does not *require* anything: nothing validates the replica before you spend. `prod` with the replica on the primary's endpoint deploys fine and `task cluster-verify` calls it red afterwards |
+| `environment` | `dev` or `prod`, nothing else. Pick it once: it names the state bucket. `prod` needs the replica on another provider: `task cluster-up` refuses before spending when `s3_replica_endpoint` is the primary's endpoint or the same cloud (an S3 it cannot name only has to be another endpoint). A cluster name that already has a state object is only warned, and `task cluster-verify` calls it red; that includes one torn down by `task cluster-down`, which keeps the state bucket. `dev` may share the primary's store |
 | `admin_ip` | `curl -s ifconfig.me` as a `/32`. It is both the SSH allow-list and the apiserver LB ACL |
 | `s3_primary_endpoint` / `_region` | S3 on the same provider as the cluster |
 | `s3_replica_endpoint` / `_region` | S3 for the backup copy. In production, **a different provider** — a state you can only read from the cloud that just failed is not a backup. That store is opened with ITS OWN cloud's keys (`OUTSCALE_AWS_*` for an Outscale replica) — see step 2. `task cluster-up` refuses before it builds anything if the `-backup` buckets cannot be created there |
@@ -230,13 +230,13 @@ number of control planes matches what you asked for, Cilium runs on each of
 them, CoreDNS serves, there is no `flux-system`, no application load balancer, a
 state replica exists in the backup store — and the first 4 KB of that object is
 opened and must be an OpenTofu `encrypted_data` envelope rather than readable
-state. Outside `dev`, the replica must also be a different endpoint from the
-primary.
+state. Outside `dev`, the replica must also be off the primary's cloud (for an
+S3 it cannot name, another endpoint).
 
 Four outcomes, not two. `✓` passed. `✗` failed, and the run is red. `~` is a
 warning — a fact you must read that does not certify anything and does not turn
-the run red: a control plane that is not HA, or a `dev` replica sharing the
-primary's endpoint. And `?` means the verifier could not perform the check at
+the run red: a control plane that is not HA, or a `dev` replica on the
+primary's cloud. And `?` means the verifier could not perform the check at
 all, which IS fatal — nothing is certified on a question nobody could ask, and
 that is usually missing S3 credentials.
 

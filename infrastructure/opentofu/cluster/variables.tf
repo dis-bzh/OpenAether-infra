@@ -438,8 +438,10 @@ variable "s3_primary_region" {
 }
 
 variable "s3_replica_endpoint" {
-  description = "S3 endpoint of the REPLICA/backup store. Prod: a different provider (e.g. OVH https://s3.gra.io.cloud.ovh.net); dev: reuse the primary endpoint."
+  description = "S3 endpoint of the REPLICA/backup store. Prod: a different provider (e.g. OVH https://s3.gra.io.cloud.ovh.net); task cluster-up refuses before spending when a prod cluster with no state object yet has its replica on the primary's endpoint or cloud (scripts/internal/ensure-buckets.sh --preflight). Dev: may reuse the primary endpoint."
   type        = string
+  # No validation block on purpose: it also runs on every plan and destroy, so
+  # a deployed cluster that breaks the rule could no longer be torn down.
 }
 
 variable "s3_replica_region" {

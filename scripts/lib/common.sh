@@ -112,6 +112,22 @@ provider_of_endpoint() {
   esac
 }
 
+# Why the replica would go down with the primary's cloud, or nothing. Prod's
+# contract is "a different provider"; an endpoint provider_of_endpoint cannot
+# name (self-hosted S3) only has to be a different endpoint.
+# Usage: oa_replica_colocated <primary-endpoint> <replica-endpoint>
+oa_replica_colocated() {
+  local p r pp
+  p="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]' | sed -E 's#^[[:space:]]+##; s#[[:space:]/]+$##')"
+  r="$(printf '%s' "${2:-}" | tr '[:upper:]' '[:lower:]' | sed -E 's#^[[:space:]]+##; s#[[:space:]/]+$##')"
+  if [ -z "$r" ]; then printf 's3_replica_endpoint is empty'; return 0; fi
+  if [ "$r" = "$p" ]; then printf 's3_replica_endpoint is the primary endpoint'; return 0; fi
+  pp="$(provider_of_endpoint "$p")"
+  if [ -n "$pp" ] && [ "$pp" = "$(provider_of_endpoint "$r")" ]; then
+    printf 'both endpoints are on %s' "$pp"
+  fi
+}
+
 # Picks the credential AND names the variable it came from, tab-separated, so a
 # failure can say "OUTSCALE_BACKUP_AWS_ACCESS_KEY_ID is rejected" instead of
 # leaving the operator to guess which of six pairs was tried.

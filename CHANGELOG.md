@@ -16,6 +16,19 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
+- **`task cluster-up` refuses, before it spends, a `prod` cluster never applied
+  before whose replica shares the primary's cloud (#57).** Until now only
+  `infra-verify.sh` said so, after the apply. `ensure-buckets.sh --preflight`,
+  passed by `cluster-up` alone, refuses when `s3_replica_endpoint` is the
+  primary's endpoint (case and trailing `/` ignored) or the same provider; a
+  self-hosted S3 only has to be another endpoint. A cluster name with a state
+  object is only warned: it may be live, or rebuilt after `cluster-down`, which
+  keeps the state bucket. No plan, upgrade, roll or destroy runs the rule, which
+  is why it is not a variable validation. `infra-verify.sh` shares the
+  predicate: a prod replica in another region of the same cloud is now red
+  there too. Proven in `test-backup-creds.sh`, which also holds the eight prod
+  examples to the rule; eleven mutations each turn it red.
+
 - **`version-support.json` knows Talos 1.14: Kubernetes 1.32–1.37.** Read
   from `MinimumKubernetesVersion` / `MaximumKubernetesVersion` in
   `siderolabs/talos` `pkg/machinery/compatibility/talos114/` at v1.14.1 (the
