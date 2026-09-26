@@ -212,3 +212,31 @@ run "climb_trap_v1_13_9_v1_30_0_is_refused" {
   }
   expect_failures = [terraform_data.version_pair_guard]
 }
+
+# Talos 1.14 raises the floor to 1.32: the next climb (v1.13.9, v1.36.3) ->
+# (v1.14.1, v1.37.0) moves Talos first, and 1.31 must no longer pass.
+
+run "talos_1_14_step_v1_14_1_v1_36_3_passes" {
+  command = plan
+  variables {
+    talos_version      = "v1.14.1"
+    kubernetes_version = "v1.36.3"
+  }
+}
+
+run "talos_1_14_pair_v1_14_1_v1_37_0_passes" {
+  command = plan
+  variables {
+    talos_version      = "v1.14.1"
+    kubernetes_version = "v1.37.0"
+  }
+}
+
+run "talos_1_14_floor_v1_14_1_v1_31_0_is_refused" {
+  command = plan
+  variables {
+    talos_version      = "v1.14.1"
+    kubernetes_version = "v1.31.0"
+  }
+  expect_failures = [terraform_data.version_pair_guard]
+}

@@ -10,10 +10,15 @@
     "fails on purpose rather than passing silently, so adding one forces a look at",
     "the matrix rather than a guess."
   ],
-  "_source": "https://docs.siderolabs.com/talos/v1.13/getting-started/support-matrix",
+  "_source": [
+    "https://docs.siderolabs.com/talos/v<minor>/getting-started/support-matrix, or, when",
+    "that is unreachable, Minimum/MaximumKubernetesVersion in siderolabs/talos",
+    "pkg/machinery/compatibility/talos<NNN>/ at the release tag (1.14 read from v1.14.1)."
+  ],
   "_rule": "Talos supports the current Kubernetes minor and the five before it (n-5).",
   "talos_minors": {
     "1.12": { "k8s_min": 30, "k8s_max": 35 },
-    "1.13": { "k8s_min": 31, "k8s_max": 36 }
+    "1.13": { "k8s_min": 31, "k8s_max": 36 },
+    "1.14": { "k8s_min": 32, "k8s_max": 37 }
   }
 }
