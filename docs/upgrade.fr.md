@@ -64,6 +64,15 @@ que d'autres backends servaient encore, donc deux vraies fenêtres de 2 s plutô
 qu'une longue. L'expérience qui trancherait est le même upgrade Talos-seul avec
 l'ordre leader-en-dernier désactivé : une exécution, une variable.
 
+**Ces chiffres sont ceux du control plane, pas d'un service.** `task
+cluster-upgrade` lance aussi une seconde sonde pendant tout le roulement : une
+charge à 2 réplicas derrière un Service (avec un PDB quand deux nœuds peuvent
+l'accueillir), interrogée via le proxy de l'apiserver, rapportée en nombre de
+FAIL et plus longue coupure, puis supprimée. Les échantillons pris pendant que
+l'apiserver est lui-même tombé sont comptés à part, en BLIND. Elle est rapportée,
+pas bloquante, et aucun roulement réel n'a encore produit son chiffre (#41).
+Fonctionnement : [`cluster-upgrade.sh` § The service probe](../scripts/dev/cluster-upgrade.sh).
+
 ## Kubernetes d'abord
 
 Elle ne redémarre rien, ce qui isole le roulement du control plane de celui des

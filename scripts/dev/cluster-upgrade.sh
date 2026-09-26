@@ -295,6 +295,121 @@ if [ "${DRY_RUN:-}" = "1" ]; then
   exit 0
 fi
 
+# --- The service probe (#41) ---------------------------------------------------
+# The apiserver probe below measures the control plane; this one measures a
+# workload behind a Service while its pods are drained off node after node.
+# It goes through the apiserver's service proxy, so a sample taken while the
+# apiserver is down says nothing about the Service: it is logged BLIND, not FAIL.
+SVC_NS=upgrade-probe
+SVC_PATH="/api/v1/namespaces/${SVC_NS}/services/http:upgrade-probe:80/proxy/hostname"
+SVC_LOG="$(mktemp)"
+SVC_REPORTED=0
+
+# Reported, never gated: nobody has measured this yet, so there is no ceiling to
+# hold it to. BLIND samples neither extend nor break an outage.
+report_svc_probe() {
+  local fails blind total longest keep elapsed=$(( SECONDS - ${SVC_STARTED:-$SECONDS} ))
+  SVC_REPORTED=1
+  # One snapshot: the probe is still appending, and four reads of a growing file
+  # disagree with each other.
+  keep="${ROOT}/.upgrade-probe-${PROVIDER}-${ROLE}.service.log"
+  cp "$SVC_LOG" "$keep" 2>/dev/null || keep="$SVC_LOG"
+  fails="$(grep -c ' FAIL$' "$keep" || true)"
+  blind="$(grep -c ' BLIND$' "$keep" || true)"
+  total="$(wc -l <"$keep")"
+  longest="$(awk '$2=="FAIL"{r++; if (r>m) m=r; next} $2=="ok"{r=0} END{print m+0}' "$keep")"
+  echo "  service probe: ${fails} FAIL, ${blind} BLIND in ${total} samples, longest outage ${longest}s, total downtime ~${fails}s (samples in ${keep})"
+  # Up to two requests per sample, so half the apiserver probe's floor.
+  if [ "$elapsed" -ge 30 ] && [ "$total" -lt $(( elapsed / 8 )) ]; then
+    fail "the service probe wrote ${total} sample(s) in ${elapsed}s — it is not measuring, so no claim about the service can be made"
+  fi
+}
+
+cleanup() { # every exit — success, failure, interrupt
+  kill "${PROBE_PID:-}" "${SVC_PROBE_PID:-}" 2>/dev/null || true
+  # A subshell: `fail` inside it must not skip the namespace deletion below.
+  [ "$SVC_REPORTED" = 1 ] || ( report_svc_probe ) || true
+  kubectl delete namespace "$SVC_NS" --ignore-not-found --wait=false >/dev/null 2>&1 ||
+    echo "  ⚠ could not delete namespace ${SVC_NS} — remove it by hand" >&2
+  rm -f "${PROBE_LOG:-}" "$SVC_LOG"
+}
+# bash runs the EXIT trap on a TERM as well, so no INT/TERM trap is needed: the
+# stub harness interrupts a run mid-step and checks the workload is deleted.
+trap cleanup EXIT
+
+# The PDB only where a drain can honour it: on a single schedulable node both
+# replicas sit there, and the budget would hold that node's drain to its timeout.
+SCHEDULABLE="$(kubectl get nodes -o jsonpath='{range .items[*]}{.spec.taints[*].effect}{"\n"}{end}' 2>/dev/null |
+  grep -cv NoSchedule || true)"
+SVC_PDB=""
+if [ "${SCHEDULABLE:-0}" -ge 2 ]; then
+  SVC_PDB="---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: upgrade-probe, namespace: ${SVC_NS}}
+spec:
+  maxUnavailable: 1
+  selector: {matchLabels: {app: upgrade-probe}}"
+else
+  echo "  ⚠ ${SCHEDULABLE:-0} schedulable node(s): no PDB, the service probe measures a non-HA outage"
+fi
+
+# agnhost netexec is the Kubernetes e2e test server; /hostname names the pod
+# that answered, so the samples show traffic moving between replicas.
+kubectl apply -f - >/dev/null <<EOF || fail "could not create the service probe in namespace ${SVC_NS}"
+apiVersion: v1
+kind: Namespace
+metadata: {name: ${SVC_NS}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: upgrade-probe, namespace: ${SVC_NS}}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: upgrade-probe}}
+  template:
+    metadata: {labels: {app: upgrade-probe}}
+    spec:
+      topologySpreadConstraints:
+        - {maxSkew: 1, topologyKey: kubernetes.io/hostname, whenUnsatisfiable: ScheduleAnyway,
+           labelSelector: {matchLabels: {app: upgrade-probe}}}
+      securityContext: {runAsNonRoot: true, runAsUser: 65534, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: netexec
+          image: registry.k8s.io/e2e-test-images/agnhost:2.66.1@sha256:6e2eef87d0dc77e070a7549bc5fdfa290c0fefe3359eb33c2ad1eda692fe66a4
+          args: [netexec, --http-port=8080]
+          ports: [{containerPort: 8080}]
+          readinessProbe: {httpGet: {path: /healthz, port: 8080}, periodSeconds: 2}
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: upgrade-probe, namespace: ${SVC_NS}}
+spec:
+  selector: {app: upgrade-probe}
+  ports: [{name: http, port: 80, targetPort: 8080}]
+${SVC_PDB}
+EOF
+kubectl -n "$SVC_NS" rollout status deployment/upgrade-probe --timeout=180s >/dev/null ||
+  fail "the service probe's pods never became ready — nothing could be measured, so nothing was upgraded"
+
+svc_probe() {
+  local out
+  while :; do
+    if out="$(kubectl get --raw="$SVC_PATH" --request-timeout=2s 2>/dev/null)"; then
+      printf '%s ok %s\n' "$(date +%H:%M:%S)" "$out"
+    elif kubectl get --raw=/readyz --request-timeout=2s >/dev/null 2>&1; then
+      printf '%s FAIL\n' "$(date +%H:%M:%S)"
+    else
+      printf '%s BLIND\n' "$(date +%H:%M:%S)"
+    fi
+    sleep 1
+  done >>"$SVC_LOG"
+}
+svc_probe &
+SVC_PROBE_PID=$!
+SVC_STARTED=$SECONDS
+
 # --- The probe ----------------------------------------------------------------
 # One second apart, against the endpoint in the kubeconfig — never a tunnel to a
 # single node, which measures the node we are deliberately taking away.
@@ -320,8 +435,6 @@ PROBE_PID=$!
 # When the sampling started, so report_probe can tell "few samples because the
 # step was quick" from "few samples because the probe is dead".
 PROBE_STARTED=$SECONDS
-# shellcheck disable=SC2064  # PROBE_PID must expand now, not at trap time
-trap "kill $PROBE_PID 2>/dev/null || true; rm -f '$PROBE_LOG'" EXIT
 
 # The assertion is about the LONGEST CONSECUTIVE outage, not the total number of
 # failed samples — those are different claims and only the first matches the
@@ -498,4 +611,5 @@ ok "verifying against the infrastructure floor"
 task cluster-verify PROVIDER="$PROVIDER" ROLE="$ROLE"
 
 report_probe
+report_svc_probe
 echo "✓ ${PROVIDER}/${ROLE}: upgraded ${TALOS_FROM}→${TALOS_TO} / ${K8S_FROM}→${K8S_TO}, in place"

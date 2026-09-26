@@ -60,6 +60,14 @@ backends still served, so there were two real 2 s windows rather than one long
 one. The experiment that would settle it is the same Talos-only upgrade with the
 leader-last order disabled: one run, one variable.
 
+**Those numbers are the control plane, not a service.** `task cluster-upgrade`
+also runs a second probe for the whole roll: a 2-replica workload behind a
+Service (with a PDB when two nodes can take it), polled through the apiserver
+proxy, reported as FAIL count and longest outage, then deleted. Samples taken
+while the apiserver is down are counted apart as BLIND. It is reported, not
+gated, and no real roll has produced its number yet (#41). How it works:
+[`cluster-upgrade.sh` § The service probe](../scripts/dev/cluster-upgrade.sh).
+
 ## Kubernetes first
 
 It reboots nothing, so it isolates the control-plane roll from the node roll.
