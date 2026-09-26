@@ -601,7 +601,10 @@ tasks:
           echo "  else in this shell will tell you it is missing until it costs time." >&2
           exit 1
         fi
-        ./scripts/internal/ensure-buckets.sh "$TFVARS" || exit 1
+        # --preflight adds prod's replica-on-another-cloud rule, for a cluster
+        # with no state object yet. Only here: infra-apply, which cluster-upgrade
+        # and converge-versions call, must keep working on a deployed cluster.
+        ./scripts/internal/ensure-buckets.sh "$TFVARS" --preflight || exit 1
         # The passphrase encrypts the state and both access artifacts, and NOTHING
         # else checks it: without it `tofu` stops to prompt, and with the shipped
         # placeholder — long enough to pass the only validation there is — it

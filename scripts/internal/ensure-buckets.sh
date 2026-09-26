@@ -9,11 +9,19 @@
 # create its own bucket) — that one is FATAL. The other three are used later and
 # may live on another provider, so they are best-effort and never block a deploy.
 #
-# Usage: ensure-buckets.sh <path/to/cluster.tfvars>
+# --preflight (cluster-up only) also refuses a prod cluster with no state object
+# yet whose replica shares the primary's cloud. One with a state object is only
+# warned: a live cluster must stay plannable, upgradable and destroyable.
+#
+# Usage: ensure-buckets.sh <path/to/cluster.tfvars> [--preflight]
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
 
-TFVARS="${1:?usage: ensure-buckets.sh <cluster.tfvars>}"
+TFVARS="${1:?usage: ensure-buckets.sh <cluster.tfvars> [--preflight]}"
+case "${2:-}" in
+  "" | --preflight) PREFLIGHT="${2:-}" ;;
+  *) echo "✗ unknown argument: $2 (usage: ensure-buckets.sh <cluster.tfvars> [--preflight])"; exit 1 ;;
+esac
 [ -f "$TFVARS" ] || { echo "✗ tfvars not found: $TFVARS"; exit 1; }
 command -v aws >/dev/null 2>&1 || { echo "✗ aws CLI required"; exit 1; }
 oa_aws_compat
@@ -60,6 +68,32 @@ ensure_bucket() { # name  endpoint  region  access_key  secret_key
       && echo "  + $1 (created)"
   fi
 }
+
+# Before the first bucket, and before cluster-up's image build can spend. A state
+# object (same key as tf-backend.sh) means the cluster was applied at least once,
+# even if since destroyed with its bucket kept: warn only.
+WHY=""
+if [ -n "$PREFLIGHT" ] && [ "$ENVN" = prod ]; then WHY="$(oa_replica_colocated "$PRIMARY_EP" "$REPLICA_EP")"; fi
+if [ -n "$WHY" ]; then
+  if AWS_ACCESS_KEY_ID="$PRIMARY_AK" AWS_SECRET_ACCESS_KEY="$PRIMARY_SK" \
+       aws s3api head-object --bucket "$STATE_PRIMARY" --key "${CLUSTER}.tfstate" \
+         --endpoint-url "$PRIMARY_EP" --region "$PRIMARY_REGION" >/dev/null 2>&1; then
+    echo "  ⚠ environment = \"prod\", and ${WHY}."
+    echo "    s3://${STATE_PRIMARY}/${CLUSTER}.tfstate exists: the cluster was applied"
+    echo "    at least once, so this is not refused, and cluster-verify reports it red."
+    echo "    If it was torn down, this is a rebuild: stop and fix s3_replica_endpoint"
+    echo "    before the image build spends. If it is live, move s3_replica_endpoint to"
+    echo "    another provider; do not switch it to \"dev\" (that renames its state bucket)."
+  else
+    echo "✗ environment = \"prod\", and ${WHY}." >&2
+    echo "  A copy on the cloud that just failed is not a backup. No state was found at" >&2
+    echo "    s3://${STATE_PRIMARY}/${CLUSTER}.tfstate" >&2
+    echo "  so this is a new cluster, and it stops before anything is built. Point" >&2
+    echo "  s3_replica_endpoint at another provider's S3 (that cloud's <PU>_AWS_* keys" >&2
+    echo "  go in .env.sh), or use environment = \"dev\" to stay on one cloud." >&2
+    exit 1
+  fi
+fi
 
 echo "▶ Ensuring buckets for ${PROJECT} (${PU}/${ROLE}/${ENVN})"
 
@@ -113,7 +147,13 @@ else
     echo "  clouds this repo knows, so it cannot be named for you:" >&2
     echo "    ${PU}_BACKUP_AWS_ACCESS_KEY_ID + ${PU}_BACKUP_AWS_SECRET_ACCESS_KEY" >&2
   fi
-  echo "  Or point s3_replica_endpoint back at ${PRIMARY_EP} to keep one cloud." >&2
+  # Prod refuses a replica on the primary's cloud, so that cannot be the advice.
+  if [ "$ENVN" = prod ]; then
+    echo "  Or, for a NEW cluster that stays on one cloud: environment = \"dev\" with" >&2
+    echo "  s3_replica_endpoint = ${PRIMARY_EP} (environment names the state bucket)." >&2
+  else
+    echo "  Or point s3_replica_endpoint back at ${PRIMARY_EP} to keep one cloud." >&2
+  fi
   exit 1
 fi
 

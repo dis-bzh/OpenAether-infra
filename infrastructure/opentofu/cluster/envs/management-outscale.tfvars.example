@@ -17,10 +17,10 @@ cluster_name    = "openaether"
 # inherit whichever names are still free. `task bucket-suffix` prints one.
 # Pick it ONCE — changing it later orphans every bucket you already have.
 # bucket_suffix = "a1b2c3"
-# dev, not prod: `prod` makes the replica store a HARD requirement — scripts/dev/
-# infra-verify.sh fails a prod cluster whose s3_replica_endpoint equals its primary,
-# and every example below ships them equal. Switch to "prod" in the same edit as
-# pointing s3_replica_endpoint at ANOTHER provider.
+# dev, not prod: `task cluster-up` refuses, before spending, a prod cluster with
+# no state object yet whose s3_replica_endpoint is on the primary's endpoint or
+# cloud, and every example below ships them equal. Switch to "prod" in the same edit as pointing
+# s3_replica_endpoint at ANOTHER provider.
 environment     = "dev"
 cluster_role    = "management"
 talos_bootstrap = true

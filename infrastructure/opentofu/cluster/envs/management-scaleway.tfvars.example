@@ -12,10 +12,10 @@ cluster_name    = "openaether"
 # inherit whichever names are still free. `task bucket-suffix` prints one.
 # Pick it ONCE — changing it later orphans every bucket you already have.
 # bucket_suffix = "a1b2c3"
-# dev, not prod: `prod` makes the replica store a HARD requirement — scripts/dev/
-# infra-verify.sh fails a prod cluster whose s3_replica_endpoint equals its primary,
-# and every example below ships them equal. Switch to "prod" in the same edit as
-# pointing s3_replica_endpoint at ANOTHER provider.
+# dev, not prod: `task cluster-up` refuses, before spending, a prod cluster with
+# no state object yet whose s3_replica_endpoint is on the primary's endpoint or
+# cloud, and every example below ships them equal. Switch to "prod" in the same edit as pointing
+# s3_replica_endpoint at ANOTHER provider.
 environment     = "dev"
 cluster_role    = "management"
 talos_bootstrap = true
@@ -74,7 +74,7 @@ git_ref          = "refs/heads/main"
 # backing up to Outscale needs OUTSCALE_AWS_* in .env.sh — and no SCW_BACKUP_*.
 # Leaving the replica equal to the primary is the single-provider shape: legal,
 # stated out loud at deploy, and it survives a deleted bucket but not a lost
-# provider. `prod` refuses that shape (scripts/dev/infra-verify.sh).
+# provider. `prod` refuses that shape (task cluster-up, before it spends).
 s3_primary_endpoint = "https://s3.fr-par.scw.cloud"
 s3_primary_region   = "fr-par"
 s3_replica_endpoint = "https://s3.fr-par.scw.cloud" # prod: e.g. OVH https://s3.gra.io.cloud.ovh.net

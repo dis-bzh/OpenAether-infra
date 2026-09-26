@@ -176,7 +176,7 @@ else in the example already has a working value.
 
 | field | what to put in it |
 |---|---|
-| `environment` | `dev` or `prod` — nothing else is accepted. It names the buckets and the resources, and `prod` additionally requires `s3_replica_endpoint` to be a **different** provider |
+| `environment` | `dev` or `prod` — nothing else is accepted. It names the buckets and the resources, and `prod` additionally requires `s3_replica_endpoint` to be a **different** provider: `task cluster-up` refuses before spending when it is the primary's endpoint or cloud, unless the cluster name already has a state object (then it only warns) |
 | `admin_ip` | your public IP as a CIDR. It is the SSH allow-list AND the apiserver LB ACL |
 | `s3_primary_endpoint` / `s3_primary_region` | S3 for the encrypted tfstate, on the **same** provider as the cluster (e.g. `https://s3.fr-par.scw.cloud` / `fr-par`) |
 | `s3_replica_endpoint` / `s3_replica_region` | S3 for the **backup copy**. In production put it on a **different provider** — a state you can only read from the cloud that just failed is not a backup. It is opened with THAT cloud's `<PU>_AWS_*` keys, so an Outscale replica reads `OUTSCALE_AWS_*` |
