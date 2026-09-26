@@ -29,6 +29,14 @@ in git. 0.1.0 is the first entry describing something proven.
   there too. Proven in `test-backup-creds.sh`, which also holds the eight prod
   examples to the rule; eleven mutations each turn it red.
 
+- **`task state PROVIDER=…` lists what a cluster's state holds; `ADDR=` shows
+  one resource (#53).** By hand, a wrong directory, data dir or key answers "No
+  state file was found", which reads as an empty state. The target refuses a
+  missing env file, key or passphrase by name and tells an absent state from an
+  empty one. It only reads the state. Mocked rung: `test-state-task.sh` runs it
+  under the real go-task and tofu on a local-backend fixture. A real S3 backend
+  is still to come.
+
 - **`version-support.json` knows Talos 1.14: Kubernetes 1.32–1.37.** Read
   from `MinimumKubernetesVersion` / `MaximumKubernetesVersion` in
   `siderolabs/talos` `pkg/machinery/compatibility/talos114/` at v1.14.1 (the
