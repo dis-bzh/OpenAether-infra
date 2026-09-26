@@ -52,8 +52,9 @@ Not a sign you did something wrong, and no longer a mystery: upstream
 `siderolabs/terraform-provider-talos` #352. When `machine_configuration_input` is
 unknown at plan time, the provider keeps the old `machine_configuration_hash` in
 the plan and recomputes it at apply. The second run works because the first
-resolved whatever was unknown. Fixed upstream in the 0.12.0 pre-release line
-only — we pin 0.11.0, the newest stable. **Do not "fix" it locally without
+resolved whatever was unknown. 0.12.0 is the first stable release with the
+upstream fix, and the roots now select it; whether it ends the first-apply
+failure is unproven on a real cloud (#83). **Do not "fix" it locally without
 proving the fix on a real cloud**, and do not add a retry: `cluster-upgrade.sh`
 deliberately has none, because a retry turns the defect green.
 
