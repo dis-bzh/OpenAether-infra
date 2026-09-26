@@ -90,7 +90,8 @@ task preflight-quotas PROVIDER=outscale -- --add-vms 7 --add-cores 14 --add-ram-
 Exits non-zero if the topology overflows. It matters: Outscale caps at 40 GB RAM
 while an HA management needs 44, and the overrun is tolerated at creation before
 every later VM is silently refused. OVH caps at 10 instances — management (7)
-plus one child (2). See `docs/status.md`.
+plus one child (2). See `docs/status.md`; the flags for each shipped example
+are in [`capacity.md`](capacity.md).
 
 ## 5. Schedule the etcd snapshot
 

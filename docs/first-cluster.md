@@ -26,7 +26,9 @@ anything else runs.
 - A Scaleway account, and the quota to run **5 instances** of the type in your
   tfvars. A new account may be capped at 1 — Console → Quotas. There is no
   preflight script for Scaleway (`preflight-quotas.py` covers OVH and Outscale
-  only), so this check is yours to make.
+  only), so this check is yours to make. The bastion adds one `DEV1-S`; what
+  each provider consumes, and whether its example meets the sizing floor:
+  [`capacity.md`](capacity.md).
 - An SSH keypair you already have, or `ssh-keygen -t ed25519`.
 - Somewhere to keep a passphrase you cannot afford to lose: it encrypts the
   state, the kubeconfig and the talosconfig, and nothing can decrypt them

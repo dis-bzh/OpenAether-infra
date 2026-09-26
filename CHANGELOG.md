@@ -16,6 +16,13 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
+- **`docs/capacity.md`: what a cluster needs, per provider (refs #72).** The
+  sizing floor and its evidence (the 2026-08-15 drain measurement), what each
+  module creates (instances, disks, public IPs, LBs, security groups), and the
+  totals and `preflight-quotas` flags for every shipped example. Derived figures
+  are marked apart from measured ones. It flags, without changing them, the
+  Scaleway and Outscale examples that sit below the floor.
+
 - **`task cluster-upgrade` also measures a Service, not just the apiserver
   (#41).** For the whole roll a 2-replica workload behind a Service (with a PDB
   when two nodes can take it) is polled through the apiserver proxy; its FAIL
