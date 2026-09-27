@@ -16,6 +16,44 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
+- **`docs/capacity.md`: what a cluster needs, per provider (refs #72).** The
+  sizing floor and its evidence (the 2026-08-15 drain measurement), what each
+  module creates (instances, disks, public IPs, LBs, security groups), and the
+  totals and `preflight-quotas` flags for every shipped example. Derived figures
+  are marked apart from measured ones. It flags, without changing them, the
+  Scaleway and Outscale examples that sit below the floor.
+
+- **`task cluster-upgrade` also measures a Service, not just the apiserver
+  (#41).** For the whole roll a 2-replica workload behind a Service (with a PDB
+  when two nodes can take it) is polled through the apiserver proxy; its FAIL
+  count and longest outage are reported next to the apiserver's, samples taken
+  while the apiserver is down count apart as BLIND, and the workload is deleted
+  on success, failure or interrupt. Reported, not gated. Mocked rung:
+  `test-cluster-checks.sh` covers all three exits, the single-node case and the
+  summary arithmetic. No real roll has produced the number yet, so #41 stays
+  open.
+
+- **`task cluster-up` refuses, before it spends, a `prod` cluster never applied
+  before whose replica shares the primary's cloud (#57).** Until now only
+  `infra-verify.sh` said so, after the apply. `ensure-buckets.sh --preflight`,
+  passed by `cluster-up` alone, refuses when `s3_replica_endpoint` is the
+  primary's endpoint (case and trailing `/` ignored) or the same provider; a
+  self-hosted S3 only has to be another endpoint. A cluster name with a state
+  object is only warned: it may be live, or rebuilt after `cluster-down`, which
+  keeps the state bucket. No plan, upgrade, roll or destroy runs the rule, which
+  is why it is not a variable validation. `infra-verify.sh` shares the
+  predicate: a prod replica in another region of the same cloud is now red
+  there too. Proven in `test-backup-creds.sh`, which also holds the eight prod
+  examples to the rule; eleven mutations each turn it red.
+
+- **`task state PROVIDER=…` lists what a cluster's state holds; `ADDR=` shows
+  one resource (#53).** By hand, a wrong directory, data dir or key answers "No
+  state file was found", which reads as an empty state. The target refuses a
+  missing env file, key or passphrase by name and tells an absent state from an
+  empty one. It only reads the state. Mocked rung: `test-state-task.sh` runs it
+  under the real go-task and tofu on a local-backend fixture. A real S3 backend
+  is still to come.
+
 - **`version-support.json` knows Talos 1.14: Kubernetes 1.32–1.37.** Read
   from `MinimumKubernetesVersion` / `MaximumKubernetesVersion` in
   `siderolabs/talos` `pkg/machinery/compatibility/talos114/` at v1.14.1 (the
@@ -51,6 +89,49 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **A node size change resizes every node at once, on all four providers
+  (#51, mocked part).** The Scaleway and Proxmox modules said `type` and
+  `cpu`/`memory` were ForceNew. They are not: at scaleway 2.83.1,
+  openstack 3.4.0, outscale 1.8.0 and bpg/proxmox 0.114.0, the provider stops
+  and resizes the instance in place (or reboots it). A plain apply therefore
+  plans updates, destroys nothing, and slips past `rolling-replace`'s destroy
+  count. This comes from reading the provider source. It was confirmed offline
+  by planning each size change with the real provider binaries against a seeded
+  state (Scaleway's plan-time API calls answered by a local stub): every one
+  came out `update`. Positive controls on a ForceNew attribute came out
+  `delete, create`. `docs/upgrade.md` now sends a size change through
+  `task cluster-roll`. `node-size-change.tftest.hcl` checks that the size
+  reaches each node and that nothing turns it into a replacement: Scaleway's
+  `replace_on_type_change` stays unset and Proxmox's `reboot_after_update` is
+  not false. Setting either one turned its run red. A mock cannot tell
+  replace from update, since it planned a ForceNew change as an update, so the
+  provider verdict itself is not pinned. No live bump yet; #51 stays open.
+
+- **`rolling-replace` applies the plan it counted (#55, still open).** Its two
+  per-node applies were `-auto-approve` re-plans, so the "one node at a time"
+  count guarded a plan nobody applied. Each apply now plans with `-out`, counts
+  deletes from `tofu show -json` of that file and applies that file; `--dry-run`
+  prints the same. Also fixes a loop that overwrote `replace_node`'s `$t`,
+  which skipped the etcd gate after a control-plane replacement. Mocked rung:
+  `test-rolling-replace.sh`, red on the old code; a real roll is still due.
+- **`feint.sh` could report a live emulator as down, intermittently.**
+  `running` piped the eight lines of `feint status` into `grep -q`, which
+  exits on the first; `status` then dies on SIGPIPE and `pipefail` reads
+  "not running". Observed on the real binary, one machine, varying by run:
+  6/100, 6/300 and 3/300 false negatives. It failed one `feint-test` with
+  "no emulator". `running` now reads the whole output; a stub `status` that
+  keeps printing in `test-feint-restart.sh` is red with the old code, green
+  with the new.
+- **`task feint-apply-root PROVIDER=scaleway` was red at destroy (#179).**
+  The cluster root resolves scaleway 2.83.x, whose private NIC destroy calls a
+  route Feint still answers 501 on 0.13.0. The lane's backend override now also
+  caps the provider `< 2.83.0`, and parks the root's lock file for the run so
+  the cap never reaches a real init. Green on 0.13.0 with 2.82.0: 27 created,
+  empty re-plan, 26 destroyed, lock file restored byte-identical.
+- **`feint.sh` said "no log" on machines without `XDG_RUNTIME_DIR`.** It looked
+  under `/tmp`, while feint then writes to `XDG_STATE_HOME` or
+  `~/.local/state`. It now uses feint's own lookup; a new
+  `test-feint-restart.sh` case is red with the old path, green with the new.
 - **The Scaleway emulated lanes went red on any PR once scaleway provider
   2.83.0 shipped (#179).** No lock file is committed, so CI resolved the newest
   `~> 2.68`; from 2.83.0, destroying `scaleway_instance_private_nic` first calls
@@ -606,6 +687,13 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **`stephrobert/feint` 0.12.0 → 0.13.0; the Scaleway image is now cut from
+  a never-started server's root disk (#177).** 0.13.0 refuses, like fr-par,
+  to snapshot a volume nothing was ever attached to, so `feint.sh` died on its
+  bare volume. It now snapshots a helper server's `l_ssd` root, then deletes
+  the helper and its disk, on failure too. 0.13.0 also refuses `b_ssd`, so the
+  fixture's data volume is `l_ssd`. Proof on 0.13.0: `task feint-test` green,
+  both providers.
 - **`fluxcd/flux-schema` 0.12.1 → 0.13.0** in `.github/workflows/ci.yml` and
   `scripts/setup.sh`, probed green by Cléa (issue #91). `task lint` (including
   a real re-install of the `schema@0.13.0` plugin and a re-run of

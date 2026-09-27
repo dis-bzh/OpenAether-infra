@@ -8,7 +8,7 @@ terraform {
       source = "scaleway/scaleway"
       # Tracks the real lanes (~> 2.68), capped below 2.83.0: from that release
       # destroying a private NIC calls instance/v2alpha1 detach-private-network-interface,
-      # which Feint 0.12.0 answers 501 (#179). Drop the cap once Feint serves it.
+      # which Feint answers 501, 0.13.0 included (#179). Drop the cap once it is served.
       version = "~> 2.68, < 2.83.0"
     }
     outscale = {

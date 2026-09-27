@@ -66,6 +66,12 @@ cat >"$STUB_DIR/kubectl" <<'STUB'
 #!/usr/bin/env bash
 argv="$(basename "$0") $*"
 printf '%s\n' "$argv" >>"${STUB_LOG:-/dev/null}"
+# A manifest piped to `apply -f -` is kept, so a scenario can read what was applied.
+case "$argv" in *"apply -f -"*) cat >>"${STUB_LOG:-/dev/null}.stdin" ;; esac
+# STUB_BLOCK: the matching call hangs, so a scenario can interrupt a run mid-step.
+if [ -n "${STUB_BLOCK:-}" ] && [[ $argv == *"$STUB_BLOCK"* ]]; then
+  : >"${STUB_LOG}.blocked"; exec "$REAL_SLEEP" 30
+fi
 [ -f "${STUB_PLAN:-}" ] || exit 1
 while IFS=$'\t' read -r match rc out; do
   [ -n "$match" ] || continue
@@ -165,7 +171,7 @@ RUN_TIMEOUT="${RUN_TIMEOUT:-30}"
 [ "$RUN_TIMEOUT" -gt 0 ] 2>/dev/null ||
   { echo "RUN_TIMEOUT must be a positive integer (0 disables the hang guard)" >&2; exit 2; }
 run() { # <cmd...> — RUN_OUT gets stdout+stderr, RUN_RC the status
-  : >"$STUB_LOG"; RUN_HUNG=0; RUN_CMD="$*"
+  : >"$STUB_LOG"; rm -f "$STUB_LOG.stdin"; RUN_HUNG=0; RUN_CMD="$*"
   # To a file, not a pipe: cluster-upgrade leaves a background probe holding the
   # inherited stdout, and a command substitution would wait on it forever.
   # 30s is ten times the slowest scenario. -k: a script that swallows TERM must
@@ -201,6 +207,13 @@ VERIFY_OK+='get namespace flux-system\t1\tError from server (NotFound): namespac
 VERIFY_OK+='get nodes --no-headers\t0\tnode-a Ready control-plane 9m v0.0.1%%node-b Ready <none> 9m v0.0.1\n'
 VERIFY_OK+='k8s-app=cilium\t0\tcilium-aaaaa 1/1 Running 0 9m%%cilium-bbbbb 1/1 Running 0 9m\n'
 VERIFY_OK+='task \t0\t\n'
+# The service probe (#41): two schedulable nodes, a workload that rolls out and
+# answers. Here because every real run deploys it before the first step.
+VERIFY_OK+='spec.taints\t0\tNoSchedule%%%%\n'
+VERIFY_OK+='apply -f -\t0\t\n'
+VERIFY_OK+='rollout status deployment/upgrade-probe\t0\t\n'
+VERIFY_OK+='services/http:upgrade-probe\t0\tupgrade-probe-aaaaa\n'
+VERIFY_OK+='delete namespace upgrade-probe\t0\t\n'
 
 # Nodes and kubelets already on the target, for cluster-upgrade.
 # The fleet BEFORE the upgrade. cluster-upgrade now decides what to run by asking
@@ -348,6 +361,77 @@ said 'every node on Talos v0.0.2' \
   || bad "the upgrade ended green (rc=0) without one node version ever having been read"
 
 echo
+echo "=== cluster-upgrade: the service probe (#41) ==="
+
+svc_line() { sed -nE 's/.*service probe: ([0-9]+) FAIL, ([0-9]+) BLIND in ([0-9]+) samples, longest outage ([0-9]+)s.*/\1 \2 \3 \4/p' <<<"$RUN_OUT" | tail -1; }
+svc_cleaned() { # the namespace went, and the probe loop is no longer polling
+  local a
+  called 'delete namespace upgrade-probe' || return 1
+  # Not "no request after the delete": one already in flight when the loop is
+  # killed may still land, harmlessly. A loop still alive keeps adding lines.
+  "$REAL_SLEEP" 0.2; a="$(grep -c 'services/http:upgrade-probe' "$STUB_LOG")"
+  "$REAL_SLEEP" 0.3; [ "$(grep -c 'services/http:upgrade-probe' "$STUB_LOG")" = "$a" ]
+}
+
+plan "${UPGRADE_OK}${VERIFY_OK}"
+upgrade
+read -r s_fail s_blind s_total s_long <<<"$(svc_line)"
+{ [ "$RUN_RC" -eq 0 ] && [ "${s_total:-0}" -gt 0 ] && [ "$s_fail" = 0 ] && [ "$s_long" = 0 ]; } \
+  && ok "a green run reports the service probe: ${s_total} samples, 0 FAIL, longest outage 0s" \
+  || bad "the service probe reported nothing usable on a green run (rc=$RUN_RC): '$(svc_line)'"
+{ [ "$(first_at 'services/http:upgrade-probe')" -lt "$(first_at 'task infra-apply')" ] \
+  && grep -q 'replicas: 2' "$STUB_LOG.stdin" && grep -q 'kind: PodDisruptionBudget' "$STUB_LOG.stdin"; } \
+  && ok "…2 replicas and a PDB, polled before the first apply" \
+  || bad "the probe workload was not deployed and polled before the upgrade started"
+svc_cleaned && ok "…and deleted after the probe stopped" || bad "the probe workload was left behind on a green run"
+
+# The Service stops answering while the apiserver does: reported, not gated.
+plan "services/http:upgrade-probe\t1\terror: no endpoints available\n${UPGRADE_OK}${VERIFY_OK}"
+upgrade
+read -r s_fail s_blind s_total s_long <<<"$(svc_line)"
+{ [ "$RUN_RC" -eq 0 ] && [ "${s_fail:-0}" -gt 0 ] && [ "$s_fail" = "$s_total" ] && [ "$s_long" = "$s_fail" ]; } \
+  && ok "a Service that never answers is counted: ${s_fail} FAIL, longest outage ${s_long}s — reported, not gated" \
+  || bad "a dead Service was not counted as down (rc=$RUN_RC): '$(svc_line)'"
+
+# Failure: a stale kubelet fails the run; the numbers and the cleanup must survive it.
+plan "nodeInfo.kubeletVersion\t0\tv0.0.2%%v0.0.1\n${UPGRADE_OK}${VERIFY_OK}"
+upgrade
+{ [ "$RUN_RC" -ne 0 ] && [ -n "$(svc_line)" ] && svc_cleaned; } \
+  && ok "a failed run still reports the service probe and deletes its workload" \
+  || bad "a failed run lost the service numbers or left the workload behind (rc=$RUN_RC)"
+
+# The workload never comes up: nothing is measured, so nothing is upgraded.
+plan "rollout status deployment/upgrade-probe\t1\terror: timed out\n${UPGRADE_OK}${VERIFY_OK}"
+upgrade
+{ [ "$RUN_RC" -ne 0 ] && said 'never became ready' && ! called 'task infra-apply' \
+  && called 'delete namespace upgrade-probe'; } \
+  && ok "a probe workload that never becomes ready stops the run before any apply, and is deleted" \
+  || bad "an unready probe workload did not stop the run cleanly (rc=$RUN_RC)"
+
+# One schedulable node: a PDB there would hold the only worker's drain to its timeout.
+plan "spec.taints\t0\tNoSchedule%%\n${UPGRADE_OK}${VERIFY_OK}"
+upgrade
+{ [ "$RUN_RC" -eq 0 ] && said 'no PDB' && [ -s "$STUB_LOG.stdin" ] && ! grep -q PodDisruptionBudget "$STUB_LOG.stdin"; } \
+  && ok "a single schedulable node gets no PDB, and the run says so" \
+  || bad "a PDB was applied on a single schedulable node (rc=$RUN_RC)"
+
+# Interrupt mid-step: TERM to the whole group, as Ctrl+C would send it.
+plan "${UPGRADE_OK}${VERIFY_OK}"
+tfvars v0.0.1 v0.0.1; rm -f "$STUB_LOG.blocked"; RUN_HUNG=0
+STUB_BLOCK='task infra-apply' setsid "$UPGRADE" "$PROVIDER" "$ROLE" "$KEYFILE" >"$STUB_DIR/out" 2>&1 &
+int_pid=$!
+for _ in $(seq 1 200); do [ -f "$STUB_LOG.blocked" ] && break; "$REAL_SLEEP" 0.05; done
+if [ ! -f "$STUB_LOG.blocked" ]; then
+  kill -KILL -- "-$int_pid" 2>/dev/null; bad "the run never reached the blocked apply — the interrupt case tested nothing"
+else
+  kill -TERM -- "-$int_pid"; wait "$int_pid"; int_rc=$?
+  { [ "$int_rc" -ne 0 ] && called 'delete namespace upgrade-probe'; } \
+    && ok "an interrupted run (rc=$int_rc) still deletes the probe workload" \
+    || bad "an interrupted run left the probe workload in the cluster (rc=$int_rc)"
+fi
+rm -f "$STUB_LOG.blocked"
+
+echo
 echo "=== cluster-upgrade: report_probe, the interruption budget ==="
 
 RUN_HUNG=0  # nothing below concludes from a run(), so a prior hang must not void it
@@ -400,7 +484,29 @@ else
     || bad "a healthy 600s run was rejected by the sample floor"
   unset PROBE_STARTED
 fi
-unset -f fail probe_ok; unset -f report_probe 2>/dev/null || true
+
+# BLIND = the apiserver was down too, so the Service could not be observed. It
+# must count neither as downtime nor as recovery.
+eval "$(awk '/^report_svc_probe\(\) \{/,/^\}/' "$ROOT/scripts/dev/cluster-upgrade.sh")"
+if ! declare -F report_svc_probe >/dev/null; then
+  bad "report_svc_probe could NOT be extracted from cluster-upgrade.sh"
+else
+  SVC_LOG="$STUB_DIR/svc-probe"
+  printf '%s\n' '10:00:00 ok pod-a' '10:00:01 FAIL' '10:00:02 FAIL' '10:00:03 BLIND' \
+    '10:00:04 FAIL' '10:00:05 ok pod-b' '10:00:06 FAIL' >"$SVC_LOG"
+  got="$( (ROOT="$FAKE" SVC_STARTED=$SECONDS report_svc_probe) 2>&1)"
+  case "$got" in
+    *"4 FAIL, 1 BLIND in 7 samples, longest outage 3s, total downtime ~4s"*)
+      ok "BLIND neither ends an outage nor counts as one: 4 FAIL, 1 BLIND, longest 3s" ;;
+    *) bad "the service probe summary is wrong: $got" ;;
+  esac
+  : >"$SVC_LOG"
+  ( ROOT="$FAKE" SVC_STARTED=$(( SECONDS - 600 )) report_svc_probe ) >/dev/null 2>&1 \
+    && bad "an empty service log after 600s passed — a dead probe proves nothing" \
+    || ok "an empty service log over 600s → refuses to conclude"
+  unset SVC_LOG
+fi
+unset -f fail probe_ok; unset -f report_probe report_svc_probe 2>/dev/null || true
 
 echo
 echo "=== the jsonpath templates parse (real kubectl, no cluster) ==="

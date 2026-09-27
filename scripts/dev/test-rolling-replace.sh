@@ -465,6 +465,85 @@ grep -q 'rolling-replace.sh {{.PROVIDER}} --role={{.ROLE}}' "$TFY" \
   && ok "cluster-upgrade forwards its role on both rolls" \
   || bad "cluster-upgrade still rolls without saying which role"
 
+echo
+echo "=== the roll applies the plan it counted, not a fresh one (#55) ==="
+# An `apply -auto-approve` re-plans, so the blast-radius count guarded a plan
+# nobody applied. The stub tofu logs its argv and answers `show -json` from
+# STUB_SHOW; each call runs in a subshell because die() exits.
+TOFU_LOG="$STUB_DIR/tofu.log"
+cat >"$STUB_DIR/tofu" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$TOFU_LOG"
+case "$1" in
+  plan)  for a in "$@"; do [[ "$a" == -out=* ]] && : >"${a#-out=}"; done
+         exit "${STUB_PLAN_RC:-0}" ;;
+  show)  printf '%s\n' "$STUB_SHOW" ;;
+  apply) exit "${STUB_APPLY_RC:-0}" ;;
+esac
+STUB
+chmod +x "$STUB_DIR/tofu"
+export TOFU_LOG
+eval "$(extract 'saved_plan_apply')"
+TFVARS=envs/management-test.tfvars
+REPLACE_ONE='{"resource_changes":[{"change":{"actions":["delete","create"]}},{"change":{"actions":["update"]}}]}'
+REPLACE_THREE='{"resource_changes":[{"change":{"actions":["delete","create"]}},{"change":{"actions":["create","delete"]}},{"change":{"actions":["delete"]}}]}'
+spa() { # <show-json> [max]  — run saved_plan_apply against the stub
+  : >"$TOFU_LOG"
+  export STUB_SHOW="$1"
+  OUT="$( ( ok() { :; }; saved_plan_apply n1-instance "${2:-2}" "APPLY FAILED" -target=a -replace=a ) 2>&1 )"; RC=$?
+}
+out_file() { sed -nE 's/^plan .*-out=([^ ]+).*/\1/p' "$TOFU_LOG"; }
+
+spa "$REPLACE_ONE"
+PF="$(out_file)"
+[ "$RC" = 0 ] && [ -n "$PF" ] && grep -qxF "apply $PF" "$TOFU_LOG" \
+  && ok "the apply is handed exactly the file the plan wrote" \
+  || bad "apply did not consume the saved plan (rc ${RC}): $(tr '\n' '|' <"$TOFU_LOG")"
+grep -qxF "show -json $PF" "$TOFU_LOG" \
+  && ok "…and the count is read from that same file" || bad "the count did not come from the saved plan"
+! grep -qE '^apply .*(-auto-approve|-target|-replace)' "$TOFU_LOG" \
+  && ok "…with no targets or -auto-approve on the apply, so nothing re-plans" \
+  || bad "the apply re-plans: $(grep '^apply' "$TOFU_LOG")"
+[ ! -e "$PF" ] && ok "…and the plan file (it holds secrets) is removed afterwards" \
+  || bad "the saved plan was left on disk at $PF"
+
+spa "$REPLACE_THREE"
+[ "$RC" -ne 0 ] && ! grep -q '^apply' "$TOFU_LOG" && grep -q 'destroys 3 resources' <<<"$OUT" \
+  && ok "a plan that destroys 3 when 2 are expected is refused, and never applied" \
+  || bad "the blast-radius guard let the plan through (rc ${RC}): ${OUT}"
+
+spa 'not json'
+[ "$RC" -ne 0 ] && ! grep -q '^apply' "$TOFU_LOG" \
+  && ok "an unreadable saved plan is refused, not read as zero deletes" \
+  || bad "an unreadable plan was applied (rc ${RC})"
+
+STUB_PLAN_RC=1 spa "$REPLACE_ONE"
+[ "$RC" -ne 0 ] && ! grep -q '^apply' "$TOFU_LOG" && grep -q 'could not plan' <<<"$OUT" \
+  && ok "a failed plan reaches die and is never applied" \
+  || bad "a failed plan was not refused by name (rc ${RC}): ${OUT}"
+
+STUB_APPLY_RC=1 spa "$REPLACE_ONE"
+[ "$RC" -ne 0 ] && grep -q 'APPLY FAILED' <<<"$OUT" \
+  && ok "a failed apply dies with the caller's message" \
+  || bad "a failed apply was not reported (rc ${RC}): ${OUT}"
+
+# The call sites: the gate above is worthless if replace_node goes around it.
+[ "$(grep -c '^  saved_plan_apply ' "$SUT_R")" = 2 ] \
+  && ok "replace_node goes through it for both applies (instance, then config)" \
+  || bad "expected two saved_plan_apply call sites"
+[ "$(grep -v '^[[:space:]]*#' "$SUT_R" | grep -c -- '-auto-approve')" = 0 ] \
+  && [ "$(grep -cE '^[[:space:]]*tofu apply' "$SUT_R")" = "$(grep -cE '^[[:space:]]*tofu apply "\$pf"' "$SUT_R")" ] \
+  && ok "no -auto-approve apply is left, and no tofu apply is handed anything but the plan file" \
+  || bad "a re-planning apply survives: $(grep -nE -- '-auto-approve|^[[:space:]]*tofu apply' "$SUT_R" | tr '\n' '|')"
+grep -q 'would: tofu plan -out=' "$SUT_R" && ! grep -qE 'would: tofu apply .*-target' "$SUT_R" \
+  && ok "--dry-run prints the saved-plan commands, not the old re-planning apply" \
+  || bad "--dry-run still prints a targeted apply"
+# `for t in` inside replace_node overwrote its cp|worker $t, and the etcd gate
+# after the applies silently never ran for a replaced control plane.
+[ "$(extract 'replace_node' | grep -c 'for t in')" = 0 ] \
+  && ok "replace_node does not reuse \$t (its cp|worker role) as a loop variable" \
+  || bad "replace_node loops over \$t again — the etcd gate after it is skipped for CPs"
+
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 # A floor, not just a verdict: `FAIL -eq 0` is also true when the harness died
 # before asserting anything, which is the shape this repository keeps meeting.

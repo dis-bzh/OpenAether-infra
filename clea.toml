@@ -47,7 +47,8 @@ forms = ["action-sha", "precommit-rev"]
 # Two probes are derived from each row, and the engine needs nothing else:
 #   install : bare container, bump first, run the installer once
 #   upgrade : bare container, installer at the OLD pin, bump, installer again
-# The second one is the interesting one. `scripts/dev/feint.sh:310` records why:
+# The second one is the interesting one. `scripts/dev/feint.sh`, above its
+# `install_feint` call in `start`, records why:
 # the pin moved to 0.10.0 on 2026-08-21 and every machine that had already run
 # the lane kept 0.9.0, because presence was checked and version was not.
 

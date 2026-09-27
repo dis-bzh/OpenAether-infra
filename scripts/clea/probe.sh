@@ -2,10 +2,11 @@
 # Prove a bump before anyone merges it: install it from cold, then upgrade over
 # the version that was there.
 #
-# The second half is the one that finds things. `scripts/dev/feint.sh:310`
-# records what it would have caught: the pin moved to 0.10.0 and every machine
-# that had already run the lane kept 0.9.0, because the installer checked that
-# the binary existed and never asked which version it was.
+# The second half is the one that finds things. `scripts/dev/feint.sh`, above
+# its `install_feint` call, records what it would have caught: the pin moved
+# to 0.10.0 and every machine that had already run the lane kept 0.9.0,
+# because the installer checked that the binary existed and never asked which
+# version it was.
 #
 # Bare ubuntu:24.04, not the runner image: a machine that already has the tool
 # hides the defect. Only curl and ca-certificates are added — anything else the

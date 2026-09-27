@@ -285,8 +285,8 @@ if [ "$PROVIDER" = local ]; then
   ok "local cluster: no remote state, nothing to replicate (backup_enabled=false)"
 else
   # The claim is not "the backup step ran": it is that the object EXISTS in the
-  # replica store, and that the replica is a different endpoint from the primary
-  # — a copy on the cloud that just failed is not a backup.
+  # replica store, and that the replica is not on the primary's cloud — a copy
+  # on the cloud that just failed is not a backup.
   # The shared helpers, not a local copy: this file used to build the bucket name
   # inline, so any change to the convention — the bucket_suffix, for one — would
   # leave it probing the old name and reporting a missing backup that is there
@@ -336,13 +336,15 @@ else
   # words ("Prod: a different provider"). Failing a dev cluster for it is a
   # false red — the mirror of the false greens this repository keeps meeting,
   # and just as useless: an assertion that cannot pass where it runs gets muted,
-  # and then it protects nothing anywhere.
-  if [ -n "$REPL_EP" ] && [ "$REPL_EP" != "$PRIM_EP" ]; then
-    ok "the replica store is a different endpoint from the primary"
+  # and then it protects nothing anywhere. Same predicate as cluster-up's
+  # refusal (ensure-buckets.sh --preflight), which only sees new clusters.
+  WHY="$(oa_replica_colocated "$PRIM_EP" "$REPL_EP")"
+  if [ -z "$WHY" ]; then
+    ok "the replica store is elsewhere: another provider, or another endpoint for an S3 this repo cannot name"
   elif [ "$ENVN" = prod ]; then
-    bad "prod: s3_replica_endpoint equals s3_primary_endpoint — a copy on the cloud that just failed is not a backup"
+    bad "prod: ${WHY} — a copy on the cloud that just failed is not a backup"
   else
-    printf '  \033[33m~\033[0m %s\n' "${ENVN}: the replica shares the primary's endpoint — fine here, but prod must cross providers"
+    printf '  \033[33m~\033[0m %s\n' "${ENVN}: ${WHY} — fine here, but prod must cross providers"
   fi
 fi
 

@@ -13,15 +13,11 @@ this file only explains why the root exists separately.
 
 ## Why a separate root rather than the cluster root
 
-The cluster root cannot apply against the emulator. It always builds a Scaleway
-public gateway and IPAM reservations, and Outscale security groups, public IPs,
-an internet service, a NAT service, route tables and load balancers — none of
-which the emulator serves. Pointing it at Feint is still useful, but only as far
-as `plan`: that is `task feint-plan`, on the real root.
-
-So this root carries the same *shapes* over the subset the emulator does serve,
-which is what makes a create/read/update/delete cycle possible at all. It is
-**not** a deployable cluster and never will be: no Talos, no LB, no bootstrap.
+The real cluster root applies against the emulator too (`task feint-apply-root`,
+see [`docs/emulated-cloud.md`](../../docs/emulated-cloud.md)). This root is kept
+as a small, fixed set of shapes: CI applies it on every code PR, and
+`.feint-evidence-*.json` pins the operations it drives. It is **not** a
+deployable cluster and never will be: no Talos, no LB, no bootstrap.
 
 ## What the runner asserts
 
@@ -42,10 +38,13 @@ which is what makes a create/read/update/delete cycle possible at all. It is
 The list of limits lives in
 **[`docs/emulated-cloud.md`](../../docs/emulated-cloud.md)**, under "Known gaps",
 and is not repeated here — it used to be, and the two copies were already
-wording the same limits differently. Pin: **Feint 0.7.0** (`scripts/dev/feint.sh`).
+wording the same limits differently. Pin: `FEINT_VERSION` in `scripts/dev/feint.sh`.
 
-What is specific to this root rather than to the lane: the fixture **omits the
-`root_volume` block** and leaves the internet service and route tables
-**untagged**. Both are deliberate — those are the two inputs that fail — and
-both mean the fixture is quieter than the production module at exactly the
-points where it differs from it.
+What is specific to this root rather than to the lane: it is reduced on
+purpose. On Scaleway it leaves out shapes the emulator serves (LB, public
+gateway, IPAM reservations, SBS data volumes, an explicit root `volume_type`)
+so the operations `.feint-evidence-scaleway.json` pins stay the same;
+`feint-apply-root` applies all of them except the data volumes (its tfvars
+declare no `disks`). With no `volume_type`, the roots get the emulator's
+default `sbs_volume`. The data volume is `l_ssd` because Feint refuses `b_ssd`
+from 0.13.0, as the real API does.

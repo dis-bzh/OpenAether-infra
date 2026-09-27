@@ -93,7 +93,8 @@ task preflight-quotas PROVIDER=outscale -- --add-vms 7 --add-cores 14 --add-ram-
 Sort en erreur si la topologie dépasse. Ça compte : Outscale plafonne à 40 Go de
 RAM alors qu'un management HA en demande 44, et le dépassement est toléré à la
 création avant que toute VM suivante ne soit refusée en silence. OVH plafonne à
-10 instances — le management (7) plus un seul enfant (2). Cf. `docs/status.md`.
+10 instances — le management (7) plus un seul enfant (2). Cf. `docs/status.md` ;
+les options pour chaque exemple livré sont dans [`capacity.fr.md`](capacity.fr.md).
 
 ## 5. Planifier le snapshot etcd
 
