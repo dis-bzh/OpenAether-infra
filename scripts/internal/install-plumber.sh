@@ -18,7 +18,7 @@
 set -euo pipefail
 
 # renovate: datasource=github-releases depName=getplumber/plumber extractVersion=^v(?<version>.*)$
-PLUMBER_VERSION="0.4.51"
+PLUMBER_VERSION="0.5.12"
 
 # shellcheck source=scripts/lib/common.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
