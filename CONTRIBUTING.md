@@ -38,14 +38,28 @@ so the single command is enough.
 **A change to a provider module is not done until something real exercised it.**
 
 A mock asserts what we believe a provider does. The provider binary asserts what
-it actually does. Three rungs, and a PR says which one it reached — and says
+it actually does. Four rungs, and a PR says which one it reached — and says
 explicitly what could not be run:
 
 | Rung | Command | What it proves |
 |---|---|---|
 | Mocked | `task test` | The graph resolves and the assertions hold. The provider binary never speaks. |
 | Emulated | `task feint-plan` / `task feint-apply` | The real provider binary, real HTTP, zero credentials — over the subset the emulator serves. See [`docs/emulated-cloud.md`](docs/emulated-cloud.md). |
+| Local Docker | `task local-up` / `task local-test` | A real Talos and Kubernetes in containers, no account. No provider, and no `talosctl upgrade`: a container has no disk. |
 | Real cloud | `task cluster-up` | The only proof a deployment works. Costs money, so it is not required of every PR — saying you skipped it is. |
+
+**The claim is checked against a receipt.** Every rung target appends one line
+per run to `.receipts/<rung>.jsonl` (gitignored), red runs included: rung,
+target, tool and version, exit code, the commit it started on and whether the
+tree was clean (untracked files count), UTC time, provider. `task receipts`
+prints the ones for `HEAD`; paste them under `Rung:` in the pull request
+([template](.github/pull_request_template.md)). The **Rung receipt** job fails
+unless a target that stands for the declared rung has a green receipt for the
+PR's head commit, started on a clean tree, and fails on any pasted red run at or
+below that rung. A plan alone does not stand for real cloud. After a push,
+re-run and paste again. Renovate, Dependabot and docs-only diffs may declare
+nothing; a rung they declare is checked. Which targets record, and what a
+receipt proves and cannot: [`scripts/dev/rung-receipt.py`](scripts/dev/rung-receipt.py).
 
 The credentialed rung has no CI lane: it is run by hand, by someone watching.
 The workflow that was meant to automate it never reached a deploy and was

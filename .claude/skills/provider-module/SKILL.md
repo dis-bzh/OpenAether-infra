@@ -49,7 +49,7 @@ or the destroy order 409s and the account is left with no bootable image.
 
 ## Done means exercised
 
-`CONTRIBUTING.md`'s three rungs, and a module change is not done at the mocked
+`CONTRIBUTING.md`'s rungs, and a module change is not done at the mocked
 one. Two faults in `rolling-replace` were invisible until a *second* provider ran
 it, and a third until workers were rolled and not just control planes. If you
 only ran one provider or one node role, say which.

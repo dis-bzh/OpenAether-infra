@@ -16,6 +16,46 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
+- **A pull request's rung is checked against a receipt the harness wrote
+  (#120).** CONTRIBUTING asks every PR to name the rung it reached, but nothing
+  recorded that a rung ever ran, so neither a reviewer nor CI could check the
+  sentence. The 24 rung targets listed in `scripts/dev/rung-receipt.py` now
+  start with a defer that appends `{rung, target, tool, version, rc, sha,
+  dirty, utc, provider}` to the gitignored `.receipts/<rung>.jsonl`, red runs
+  included. The nine other `test`/`feint-`/`local-`/`infra-`/`cluster-` targets
+  are listed there with the reason they record nothing, and the harness fails
+  on a new one that is in neither list. The sha and the dirty flag (untracked
+  files count, and so does a `git status` that fails) are taken when the run
+  starts, so a commit or an edit made during a long run cannot rewrite them.
+  `task ssh-ca-check` now refuses to start without Docker instead of skipping
+  with exit 0, which would have written a green receipt for a proof that never
+  ran. `task receipts` prints the receipts for `HEAD`, and a PR template asks
+  for `Rung:` and those lines.
+  The new **Rung receipt** CI job passes only when a target that stands for the
+  declared rung has a green receipt for the PR head, started on a clean tree.
+  A pasted red run at or below that rung fails it, and a plan alone does not
+  stand for real cloud. A missing, stale or lower-rung receipt fails it too, as
+  does one `record` could not have written. The check reads the body through a
+  model of what GitHub displays (block structure, raw HTML, images, link
+  destinations, titles and labels, reference and footnote definitions). It
+  agrees with GitHub's renderer on the 59 self-test bodies GitHub rendered, and
+  is proven on nothing else. Where an HTML comment or tag is left open with more
+  after it, only GitHub's HTML parser knows how much it hides, so the check
+  refuses and asks to close it. It also refuses quotes, list items and
+  footnotes nested more than 32 deep. Of 153 bodies up to GitHub's
+  65536-character limit built to make it slow, the slowest took 0.80 s on a
+  two-CPU host: backtick runs of distinct lengths, which cost more than
+  linearly, so GitHub's limit is what bounds them. Renovate, Dependabot and
+  docs-only diffs may leave the rung out, but a rung they declare is checked
+  like any other. The body reaches the check only through `env:`. A receipt
+  makes the claim falsifiable, not unforgeable. The job is not a required check. CONTRIBUTING now lists four
+  rungs, adding local Docker as in the issue form. Mocked rung:
+  `test-rung-receipts.sh` (121 assertions) runs the real Taskfile under
+  go-task against a stub `feint` and drives every verdict the check can give,
+  each within 2 s; each of 77 mutations turns it red. With the body
+  interpolated into `run:`, actionlint and plumber's `templateInjection` both
+  go red.
+
 - **`docs/capacity.md`: what a cluster needs, per provider (refs #72).** The
   sizing floor and its evidence (the 2026-08-15 drain measurement), what each
   module creates (instances, disks, public IPs, LBs, security groups), and the

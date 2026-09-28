@@ -147,3 +147,7 @@ clea-state.json
 # task pipeline-audit's own output — a local run's report, not an artefact
 # this repository commits.
 plumber-report.json
+
+# Rung receipts (scripts/dev/rung-receipt.py): written by the harness, pasted
+# into a pull request, never committed.
+.receipts/
