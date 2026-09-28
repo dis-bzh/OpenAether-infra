@@ -95,7 +95,7 @@ jobs:
       # wired live, see that script's header for why.
       - name: Plumber
         # renovate: datasource=github-releases depName=getplumber/plumber
-        uses: getplumber/plumber@e815e0bff47f9170e8e0a056df0a851124634ae2  # v0.4.51
+        uses: getplumber/plumber@dbaaf7384c4d5708ed07744eaa3d2d94b0aebfd9  # v0.5.12
         with:
           # Publishing the score sends this repository's name to a hosted badge
           # service. That is a decision to take on purpose, not a CI default.

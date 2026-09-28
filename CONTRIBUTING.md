@@ -101,6 +101,9 @@ same tool: the `commit-msg` hook refuses a subject as you write it, and the
   starting non-trivial work, and drop an entry once it's done (that's what git
   history is for). Write an entry as **the symptom, not the diagnosis**: the
   diagnosis is often wrong when the entry is written, and the entry outlives it.
+  **Write `closes #N` only when the merge closes it**: GitHub reads "close", "fix"
+  or "resolve" + `#N` anywhere in a PR body or commit message, prose included —
+  "a real roll is what closes #55" closed #55 on a mocked-rung merge.
 - Dependency bumps (OpenTofu providers, Talos, Kubernetes, Cilium, Flux, CI
   actions, pre-commit hooks) are proposed by Renovate and never auto-merged —
   review the diff, especially anything labeled `needs-regen` (the pinned version

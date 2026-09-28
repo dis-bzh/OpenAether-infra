@@ -73,6 +73,19 @@ in git. 0.1.0 is the first entry describing something proven.
   it stays out of `task lint`. Proven by mutating one recorded digest: the
   check went red naming the drift, then green again once restored.
 
+### Changed
+
+- **`getplumber/plumber` v0.4.51 → v0.5.12** in `security.yml` (SHA and comment
+  together) and `install-plumber.sh`, by hand: `clea bump` refuses an
+  `action-sha` pin, so Cléa's daily run had been red on it since at least
+  2026-09-17, and Renovate, which should move it, has proposed nothing since
+  2026-07-30 (#88). The one breaking change since v0.4.51 (0.5.0) re-keys
+  dismissals on the hosted platform, which this repository does not use. Proof:
+  both versions, installed through `install-plumber.sh` (checksum OK) and run
+  tokenless on this tree, give the same verdict on each of the 24 controls — 22
+  passed, `requiredActionsResult` skipped, `branchProtectionResult` unevaluated
+  without a token. The token path rests on CI's "Pipeline audit" job.
+
 ### Fixed
 
 - **A node size change resizes every node at once, on all four providers
