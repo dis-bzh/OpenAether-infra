@@ -16,6 +16,29 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
+- **Repository settings are checked against what actually happens (#122).**
+  The required-check list lives in a GitHub ruleset, where no diff shows it
+  drift: CodeQL ran on every PR while nothing declared it, and two layers of
+  protection disagreed (7 required checks in the ruleset, 13 in classic
+  protection). The `main` ruleset is now the only one, requiring 17 checks
+  pinned to GitHub Actions, and a `tags` ruleset blocks moving or deleting
+  any tag, `0.1.0` included, with no bypass. New
+  `.github/workflows/repo-settings.yml` (push to main, daily, on demand, never
+  on a PR) runs `check-required-checks.sh` live: the required checks against
+  the check runs on the head of the last merged PR (main's own commits also
+  carry Cléa's scheduled jobs), the tag ruleset, and the private
+  vulnerability reporting `SECURITY.md` promises. An empty or unreadable
+  answer fails as "not verifiable". A workflow token cannot read a ruleset's
+  bypass actors, so CI warns on that one item; an admin's run, now a line of
+  `docs/release-checklist.md`, verifies it. Evidence, from this script on top
+  of `f8d6bd3`, anonymous and read-only: against the head of PR #192, the last
+  merged, 17 of 17 required checks match what reported, so it exits 0 with
+  `--tolerate-unreadable-bypass` and 2 without (that token cannot read the
+  bypass actors); with that flag, forced onto `f8d6bd3` it exits 0 too, and
+  forced onto `96e02ca` it lists 10 unrequired checks and exits 1. Offline,
+  51 cases against a canned API (`task test-scripts`) see each check red and
+  green. The workflow token's path is proven by its first run after merge.
+
 - **`docs/capacity.md`: what a cluster needs, per provider (refs #72).** The
   sizing floor and its evidence (the 2026-08-15 drain measurement), what each
   module creates (instances, disks, public IPs, LBs, security groups), and the
@@ -315,19 +338,12 @@ in git. 0.1.0 is the first entry describing something proven.
     `render-bootstrap-manifests.sh` regenerates it after every production
     render, and new `scripts/dev/check-upstream-artifacts-lock.sh` (wired
     into `task lint`) verifies it offline.
-  - **A 14th required check (CodeQL) runs on every PR with no workflow file
-    and no mention anywhere in the tree** (#122) — `security.yml`'s "13
-    required checks" was a comment nothing verified. New
-    `scripts/dev/check-required-checks.sh` diffs GitHub's declared rulesets
-    against what actually reported on a commit, and refuses ("not
-    verifiable") rather than passing when the rulesets response is empty —
-    proven offline against two canned fixtures (a 13-context ruleset, a
-    14-entry check-runs capture with a CodeQL-shaped extra), run via
-    `task test-scripts`. **Not wired into any workflow yet**: against this
-    repository's current classic branch protection the rulesets endpoint
-    legitimately returns `[]`, so a live step would fail-closed on every
-    future PR until an admin adds a ruleset on `main` — that step is a
-    follow-up gated on it.
+  - **A 14th check (CodeQL) ran on every PR with no workflow file and no
+    mention anywhere in the tree** (#122) — `security.yml`'s "13 required
+    checks" was a comment nothing verified. New
+    `scripts/dev/check-required-checks.sh` compares the required checks with
+    what reports on a commit: offline at first, now live — see "Repository
+    settings are checked" above.
 
 - **Three checks that could not fail** ([#75](https://github.com/dis-bzh/OpenAether-infra/issues/75)).
   `test-talos-local.sh`'s Step 5 (schedulable workers Ready) and Step 6 (Flux

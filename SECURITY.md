@@ -4,7 +4,8 @@
 
 Please **do not** open a public issue for a security vulnerability. Use
 [GitHub's private vulnerability reporting](https://github.com/dis-bzh/OpenAether-infra/security/advisories/new)
-for this repository instead — it's enabled and reaches the maintainers directly.
+for this repository instead — it's enabled (checked daily by
+`.github/workflows/repo-settings.yml`) and reaches the maintainers directly.
 
 We'll acknowledge within a few days and keep you updated while we investigate
 and fix.
