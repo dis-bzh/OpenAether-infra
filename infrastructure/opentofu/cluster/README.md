@@ -51,16 +51,17 @@ Between phases, establish SSH tunnels via the bastion for Talos API access (port
 ### One-shot bring-up: `task cluster-up`
 
 ```bash
-task cluster-up ROLE=management                    # or: ROLE=workload PROVIDER=ovh KEY=~/.ssh/yourkey
+task cluster-up PROVIDER=scaleway ROLE=management  # or: PROVIDER=ovh ROLE=workload KEY=~/.ssh/yourkey
 ```
 
 Chains image → render manifests → Phase 1 (`infra`) → tunnels → Phase 2
-(`bootstrap-phase2`) in one command. Every step is idempotent (image build
-skips if already published/downloaded, manifests skip re-rendering unless
-`FORCE=1`, `infra`/`bootstrap-phase2` are plain `tofu apply`s) — if any step
+(`bootstrap-phase2`) → converge → `cluster-verify` in one command, and fails
+when the verifier does; `task --summary cluster-up` has the details. Every step
+is idempotent (image build skips if already published/downloaded, manifests skip
+re-rendering unless `FORCE=1`, `infra`/`bootstrap-phase2` are plain `tofu apply`s) — if any step
 fails, fix the issue and re-run `task cluster-up`; completed steps are no-ops. This
-doesn't replace the two-phase flow above, it just automates running both
-phases back to back — same tasks, same `tofu apply`s underneath.
+doesn't replace the two-phase flow above: it runs the same tasks as above, then
+converges and verifies.
 
 **Fully single-apply (`var.auto_tunnels`, EXPERIMENTAL):** set
 `auto_tunnels = true` (+ `ssh_key_path`) in the cluster tfvars to collapse

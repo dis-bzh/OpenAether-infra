@@ -121,7 +121,7 @@ $EDITOR management-scaleway.tfvars
 |---|---|
 | `cluster_name` | yours. **It has a default, so no checker will tell you to change it** — and its first segment names all four cluster buckets |
 | `bucket_suffix` | **set it unless you are the original author.** S3 bucket names are unique across a whole provider, not per account — Scaleway documents them unique "in our whole platform", OVH "within OVHcloud". Without one you will collide with names somebody already took. `task bucket-suffix` prints one; pick it once, changing it later orphans every bucket you have |
-| `environment` | `dev` or `prod`, nothing else. Pick it once: it names the state bucket. `prod` needs the replica on another provider: `task cluster-up` refuses before spending when `s3_replica_endpoint` is the primary's endpoint or the same cloud (an S3 it cannot name only has to be another endpoint). A cluster name that already has a state object is only warned, and `task cluster-verify` calls it red; that includes one torn down by `task cluster-down`, which keeps the state bucket. `dev` may share the primary's store |
+| `environment` | `dev` or `prod`, nothing else. Pick it once: it names the state bucket. `prod` needs the replica on another provider: `task cluster-up` refuses before spending when `s3_replica_endpoint` is the primary's endpoint or the same cloud (an S3 it cannot name only has to be another endpoint). A cluster name that already has a state object is only warned before spending, then `task cluster-up` fails at its verify step; that includes one torn down by `task cluster-down`, which keeps the state bucket. `dev` may share the primary's store |
 | `admin_ip` | `curl -s ifconfig.me` as a `/32`. It is both the SSH allow-list and the apiserver LB ACL |
 | `s3_primary_endpoint` / `_region` | S3 on the same provider as the cluster |
 | `s3_replica_endpoint` / `_region` | S3 for the backup copy. In production, **a different provider** — a state you can only read from the cloud that just failed is not a backup. That store is opened with ITS OWN cloud's keys (`OUTSCALE_AWS_*` for an Outscale replica) — see step 2. `task cluster-up` refuses before it builds anything if the `-backup` buckets cannot be created there |
@@ -152,7 +152,8 @@ it used to default to Scaleway, which is the wrong cloud to guess.)
 In order it builds the Talos image and uploads it — **measured at 52 s on
 Scaleway, 2026-08-17**, for two buckets, one snapshot and one image per zone —
 creates four more buckets, applies the infrastructure, opens one SSH tunnel per
-node, then applies the machine configs and bootstraps Talos.
+node, then applies the machine configs and bootstraps Talos. It ends by running
+step 6's verifier: if the cluster fails it, `cluster-up` fails.
 
 **The apiserver load balancer is the slowest thing in this step, and the only
 one that can strand you.** On Scaleway it is quick. On OVH and Outscale it is a
@@ -232,7 +233,8 @@ unusable until you reopen them.
 task cluster-verify PROVIDER=scaleway
 ```
 
-Asks the cluster, not the tool: the apiserver answers, every node is Ready, the
+`task cluster-up` already ended with this; run it on its own at any time after.
+It asks the cluster, not the tool: the apiserver answers, every node is Ready, the
 number of control planes matches what you asked for, Cilium runs on each of
 them, CoreDNS serves, there is no `flux-system`, no application load balancer, a
 state replica exists in the backup store — and the first 4 KB of that object is

@@ -238,18 +238,23 @@ in git. 0.1.0 is the first entry describing something proven.
   mocked rung only). Its closing banner read "the plan is the verdict, not
   this line" while nodes-Ready, control-plane count, Cilium, CoreDNS, the
   schematic and the state-backup replica all went unchecked, and the task
-  always exited 0 regardless. `cluster-up` now runs `cluster-verify`
-  (ROLE/PROVIDER forwarded) right after `converge-versions.sh` and before the
-  closing echo — go-task 3.52.0 propagates a failing step's exit code up
-  through the parent task, so a red verify halts `cluster-up` there instead
-  of past it. The banner no longer disclaims itself. New `test-unattended.sh`
-  section statically confirms the call graph reaches `cluster-verify` and
-  that the edge is neither `ignore_error: true` nor trailed by `|| true`
-  (checked negative: both defects made it fail, VERIFIED offline), wired
-  into `task test-scripts`. Real-cloud rung — the failure actually seen red
-  on a cluster that does not match its config — is still open: feint only
-  emulates the provisioning API, no kubelet/apiserver/Cilium/CoreDNS ever
-  exists under it.
+  always exited 0 regardless. `cluster-up` now ends with `cluster-verify`
+  (ROLE/PROVIDER forwarded): a failing verify fails `cluster-up`, and the
+  success line prints only once it has passed. `scripts/dev/test-cluster-up.sh`
+  runs the real `cluster-up` under go-task with only the leaves stubbed (tofu,
+  and every script it calls but the S3 credential resolver): a red verifier
+  exits it non-zero with no success line, a green one prints the line after
+  the verdict, and the verifier re-fetches kubeconfig after the roll, since
+  every cluster in a checkout writes the same path. Seen red on each way of
+  breaking that — `ignore_error: true` on the call, the call removed or
+  `|| true`-ed, the line moved first, a hardcoded ROLE or PROVIDER, the
+  re-fetch deduplicated — so it replaces `test-unattended.sh`'s static read
+  of the same edge. `task lint` now fails when a `scripts/dev/test-*.sh`
+  harness has no Taskfile `cmds` entry: its reachability check took a comment
+  or a CHANGELOG line naming the harness as enough, so dropping this one from
+  `task test-scripts` stayed green. Real-cloud rung — the failure seen red on a cluster that
+  does not match its config — is still open: Feint only emulates the
+  provisioning API, no kubelet/apiserver/Cilium/CoreDNS ever exists under it.
 
 - **The Scaleway security group's documented perimeter and its enforced one
   had drifted apart** (#79). `security.tf`'s own comment said "Talos API —
