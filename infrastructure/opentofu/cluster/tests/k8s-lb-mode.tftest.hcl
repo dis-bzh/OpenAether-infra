@@ -165,6 +165,17 @@ run "scw_vip_mode_contract" {
     condition     = module.talos.cluster_endpoint == "https://10.0.0.99:6443"
     error_message = "cluster_endpoint should point at the VIP in vip mode."
   }
+
+  # No k8s LB and no App LB: no LB backend port, so no carrier-range rule (#79).
+  assert {
+    condition = length(module.scw[0].inbound_rules) > 1 && alltrue([
+      for k, rs in module.scw[0].inbound_rules : k == "bastion" || sort([
+        for r in rs : "${r.protocol} ${r.port_range != null ? r.port_range : (r.port != null ? tostring(r.port) : "-")} ${r.ip_range}"
+        ]) == sort([for p in ["TCP 6443", "TCP 50000", "TCP 50001", "TCP 2379-2381", "TCP 10250", "UDP 8472", "UDP 51871",
+      "TCP 4240", "ICMP -", "TCP 9962-9964", "TCP 9100", "UDP 68"] : "${p} 172.16.0.0/22"])
+    ])
+    error_message = "In vip mode, an SCW node security group differs from the reviewed port list (#79)."
+  }
 }
 
 # ==============================================================================

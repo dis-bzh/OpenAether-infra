@@ -32,14 +32,13 @@ output "nat_gateway_ip" {
   value       = scaleway_vpc_public_gateway_ip.this.address
 }
 
-# Test-only: security group internals aren't visible to test assertions
-# outside a module's own outputs — this lets scaleway.tftest.hcl check the
-# generated inbound rules directly (#79).
-output "inbound_rule_ports" {
-  description = "Flattened port of every security group inbound_rule, for tests"
-  value = flatten([
-    for sg in scaleway_instance_security_group.this : [
-      for r in sg.inbound_rule : r.port
+# Test-only: a test cannot read a child module's resources, so this is how
+# scaleway.tftest.hcl checks the generated inbound rules (#79).
+output "inbound_rules" {
+  description = "Every inbound_rule (protocol, port, port_range, ip_range) of each zone's node group and of the bastion group, for tests"
+  value = {
+    for name, sg in merge(scaleway_instance_security_group.this, { bastion = scaleway_instance_security_group.bastion }) : name => [
+      for r in sg.inbound_rule : { protocol = r.protocol, port = r.port, port_range = r.port_range, ip_range = r.ip_range }
     ]
-  ])
+  }
 }

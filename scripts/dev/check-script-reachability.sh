@@ -26,11 +26,20 @@ while IFS= read -r f; do
   fi
 done < <(git ls-files '*.sh' '*.py')
 
+# A harness is coverage only when a task runs it, and a comment or the CHANGELOG
+# naming it satisfies the match above: each one needs a Taskfile cmds entry.
+while IFS= read -r f; do
+  if ! grep -qE "^[[:space:]]*- \./${f//./\\.}( |$)" Taskfile.yml 2>/dev/null; then
+    echo "✗ never run: no Taskfile.yml cmds entry runs $f"
+    unreachable=$((unreachable + 1))
+  fi
+done < <(git ls-files 'scripts/dev/test-*.sh')
+
 if [ "$unreachable" -gt 0 ]; then
   echo
-  echo "✗ ${unreachable} tracked script(s) are named by nothing else in the tree —"
-  echo "  no task, workflow, script or document references them. Decide, for each:"
-  echo "  wire it in, or delete it. A script nobody invokes is not coverage."
+  echo "✗ ${unreachable} finding(s) above: a tracked script nothing else names, or a"
+  echo "  harness no task runs. Decide, for each: wire it in, or delete it."
+  echo "  A script nobody invokes is not coverage."
   exit 1
 fi
-echo "OK — every tracked script is reachable from something else in the tree."
+echo "OK — every tracked script is named elsewhere in the tree, and a task runs every harness."

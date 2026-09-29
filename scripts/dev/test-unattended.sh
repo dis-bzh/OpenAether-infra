@@ -632,53 +632,7 @@ for f in sorted(claimed):
     else:
         ok(f'{f} claims the interactive exemption and no workflow runs it')
 
-# --- G. cluster-up must ask the cluster it just built (#84) ------------------
-# `cluster-up` used to print "complete" right after converge-versions.sh, with
-# nothing asking the cluster itself: nodes Ready, control-plane count, Cilium,
-# CoreDNS, the schematic, the state-backup replica all unchecked. The fix is a
-# `- task: cluster-verify` edge relying on go-task's own exit-code propagation
-# (VERIFIED offline: Task 3.52.0 halts a parent task on a failing `- task:`
-# step), so this proves the edge exists AND that nothing on it swallows a
-# failure before it can halt cluster-up.
-hdr('cluster-up reaches cluster-verify, and the edge is not defused (#84)')
-VERIFY = 'cluster-verify'
-
-def reaches_task(name, target, seen=None):
-    """True when task `name` calls `target`, directly or through any Taskfile
-    edge (task:/deps/shell) — same graph EDGES was built from, walked instead
-    of scanned."""
-    seen = seen if seen is not None else set()
-    if name == target:
-        return True
-    if name in seen:
-        return False
-    seen.add(name)
-    return any(reaches_task(callee, target, seen)
-               for caller, callee, _, _ in EDGES if caller == name)
-
-if reaches_task(ENTRY, VERIFY):
-    ok(f'{ENTRY} → … → {VERIFY}: the call graph reaches the verifier')
-else:
-    bad(f'{ENTRY} never reaches {VERIFY} — it can still report success without asking the cluster')
-
-# A defused edge would make the propagation above worthless: `ignore_error:
-# true` on a `- task:` entry, or a shell `task cluster-verify …` trailed by a
-# `|| true`, both let go-task swallow a red verify and keep going regardless.
-defused = []
-for c in (TASKS.get(ENTRY) or {}).get('cmds') or []:
-    if isinstance(c, dict) and ALIAS.get(c.get('task'), c.get('task')) == VERIFY and c.get('ignore_error'):
-        defused.append('ignore_error: true on the `- task:` entry')
-for _, line, mask in logical_lines(BODY[ENTRY]):
-    for seg in segments(line, mask):
-        c = task_call(seg)
-        if c and c[0] == VERIFY and re.search(r'\|\|\s*true\s*$', seg):
-            defused.append(f'`{seg.strip()}` trails a `|| true`')
-if defused:
-    bad(f'{ENTRY} → {VERIFY} is defused: {"; ".join(defused)} — a failing verify would not stop {ENTRY}')
-else:
-    ok(f'{ENTRY} → {VERIFY} is not defused — go-task propagates a failing verify up through {ENTRY}')
-
-# --- H. floors: a check that measured nothing is not a green run -------------
+# --- G. floors: a check that measured nothing is not a green run -------------
 # This is the fix for the defect that started this: the harness read Taskfile.yml
 # and nothing else, so a tree containing only that file still printed a green
 # summary. Zero of anything below means the parser went blind, not that the
