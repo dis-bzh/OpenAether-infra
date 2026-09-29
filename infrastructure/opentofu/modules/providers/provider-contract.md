@@ -54,6 +54,8 @@ this contract to be consumed by the Talos module and the root `main.tf`.
 
 4. **Security groups** — Inbound default policy MUST be `drop`. Only explicitly
    required ports should be allowed (6443 from LB, 50000 from bastion, inter-node mesh).
+   Check what the cloud's group actually filters: Scaleway's filters public traffic
+   only (see `scw/security.tf`).
 
 ## Node image drift
 

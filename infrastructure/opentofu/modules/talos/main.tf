@@ -282,13 +282,7 @@ data "talos_machine_configuration" "control_plane" {
             # 0.0.0.0 and not 127.0.0.1: VMAgent is a pod and reaches the node
             # by its address. The port carries NO secret (no keys, no object
             # contents).
-            # Reachable node-to-node because all three providers allow the full
-            # intra-cluster mesh (scw: ANY from 10.0.0.0/8 + 172.16.0.0/12;
-            # ovh: remote_group_id on its own SG; outscale: protocol -1 on
-            # security_groups_members) — that mesh rule is what makes the scrape
-            # work at all. Not reachable from outside: each SG defaults to deny
-            # and only opens 6443, 50000 and the app NodePorts, each from a
-            # named source.
+            # Reachable over the private network only: no node has a public IP.
             extraArgs = {
               listen-metrics-urls = "http://0.0.0.0:2381"
             }
