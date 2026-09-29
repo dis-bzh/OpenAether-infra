@@ -32,11 +32,12 @@ done
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # Same lane resolution as scripts/dev/infra-verify.sh — two spellings of "where
-# does this cluster keep its credentials" would drift.
+# does this cluster keep its credentials" would drift. The two roots name their
+# control-plane output differently.
 if [ "$LANE" = local ]; then
-  CLUSTER_DIR="$ROOT/infrastructure/opentofu-local"
+  CLUSTER_DIR="$ROOT/infrastructure/opentofu-local"; CP_OUTPUT=control_plane_ips
 else
-  CLUSTER_DIR="$ROOT/infrastructure/opentofu/cluster"
+  CLUSTER_DIR="$ROOT/infrastructure/opentofu/cluster"; CP_OUTPUT=control_plane_private_ips
 fi
 SRC="${TALOSCONFIG:-$CLUSTER_DIR/talosconfig}"
 OUT="${OUT:-$CLUSTER_DIR/talosconfig.${ROLES#os:}}"
@@ -53,14 +54,14 @@ if [ ! -s "$SRC" ] || ! TALOSCONFIG="$SRC" talosctl config info >/dev/null 2>&1;
 fi
 
 if [ -z "$NODE" ]; then
-  NODE="$(tofu -chdir="$CLUSTER_DIR" output -json control_plane_ips 2>/dev/null |
+  NODE="$(tofu -chdir="$CLUSTER_DIR" output -json "$CP_OUTPUT" 2>/dev/null |
           sed -nE 's/^\["([^"]+)".*/\1/p')" || true
 fi
 if [ -z "$NODE" ]; then
   echo "✗ no node to ask, and the state did not answer." >&2
-  echo "  Pass one:  $0 $LANE --node <control-plane private IP>" >&2
+  echo "  Pass one:  $ROOT/scripts/ops/talosconfig-new.sh $LANE --node <control-plane private IP>" >&2
   [ "$LANE" != local ] && echo "  On a cloud lane the Talos API is reached through the bastion:" >&2 \
-                       && echo "    task tunnels-up PROVIDER=$LANE" >&2
+                       && echo "    task tunnels-up PROVIDER=$LANE [ROLE=workload]" >&2
   exit 1
 fi
 

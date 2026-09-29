@@ -78,7 +78,7 @@ output "bastion_ip" {
 }
 
 output "bastion_user" {
-  description = "Default SSH user of the bastion (root on Scaleway, ubuntu on OVH/Outscale)"
+  description = "SSH user of the bastion: \"bastion\" on Scaleway, OVH and Outscale; host_ssh_user (default root) on Proxmox"
   value       = local.bastion_user
 }
 
