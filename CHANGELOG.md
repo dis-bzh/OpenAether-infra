@@ -122,6 +122,25 @@ in git. 0.1.0 is the first entry describing something proven.
   public IP, so on this provider the list declares the perimeter; it does not
   enforce it. Still open: one real deploy to confirm the LB health checks pass.
 
+- **`feint.sh` with a non-default `FEINT_ENDPOINT` acted on the emulator at
+  `127.0.0.1:4599` (#195).** Only `feint start` was given `--addr`; `status`
+  and `stop` went to feint's default. `task feint-up
+  FEINT_ENDPOINT=http://127.0.0.1:4699` started the emulator on 4699, then
+  failed with "did not come up within 10s", and `feint-down` or the reset
+  before an apply lane stopped whatever ran on 4599, perhaps another session's.
+  Every start, stop and status now carries the endpoint's address. Emulated
+  rung, Feint 0.13.0, with a second emulator up on 4599: `feint-up`, `status`,
+  `feint-apply PROVIDER=scaleway` (reset, apply, empty re-plan, destroy) and
+  `feint-down` all acted on 4699, and the one on 4599 kept its pid and its
+  resource. Likewise, `feint-record`'s proxy always listened on 4600; with that
+  port taken it died unnoticed, and the lane's apply went to whatever held it.
+  The proxy now takes the endpoint's port + 1 (still 4600 by default), and a
+  proxy that is not running after its startup wait stops the lane before tofu
+  runs. A record lane on 4699 with 4600 taken recorded 28 operations through
+  4700, none of them on 4600; with 4700 taken, it stopped on feint's own bind
+  error. Ten new `test-feint-restart.sh` assertions are red on main's
+  script, green now.
+
 - **A node size change resizes every node at once, on all four providers
   (#51, mocked part).** The Scaleway and Proxmox modules said `type` and
   `cpu`/`memory` were ForceNew. They are not: at scaleway 2.83.1,
