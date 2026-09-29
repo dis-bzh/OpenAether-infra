@@ -66,6 +66,16 @@ cat >"$STUB_DIR/kubectl" <<'STUB'
 #!/usr/bin/env bash
 argv="$(basename "$0") $*"
 printf '%s\n' "$argv" >>"${STUB_LOG:-/dev/null}"
+# STUB_IMAGE_BUILD: `task image-build` runs that real talos-image.sh the way the
+# Taskfile does, with its tofu, aws and curl stubbed, so its #93 guard is real.
+if [ -n "${STUB_IMAGE_BUILD:-}" ] && [[ $argv == "task image-build "* ]]; then
+  for a in "$@"; do
+    case "$a" in PROVIDER=*) p="${a#*=}" ;; VERSION=*) v="${a#*=}" ;; ENSURE=?*) e=--ensure ;; esac
+  done
+  PATH="${0%/*}/image-bin:$PATH" SCW_AWS_ACCESS_KEY_ID=STUB-AK SCW_AWS_SECRET_ACCESS_KEY=STUB-SK \
+    OVH_AWS_ACCESS_KEY_ID=STUB-AK OVH_AWS_SECRET_ACCESS_KEY=STUB-SK \
+    exec "$STUB_IMAGE_BUILD" "${p:-}" "${v:-}" ${e:+"$e"}
+fi
 # A manifest piped to `apply -f -` is kept, so a scenario can read what was applied.
 case "$argv" in *"apply -f -"*) cat >>"${STUB_LOG:-/dev/null}.stdin" ;; esac
 # STUB_BLOCK: the matching call hangs, so a scenario can interrupt a run mid-step.
@@ -94,11 +104,19 @@ STUB
 chmod +x "$STUB_DIR/kubectl"
 
 # A stub talosctl serving one ExtensionStatus: the SCHEMATIC the fleet runs.
-# STUB_SCHEMATIC unset = the node cannot be asked, which is its own case.
+# STUB_SCHEMATIC unset = the node cannot be asked, which is its own case. Like
+# the real one it needs a talosconfig, and only the fake cluster's reaches it.
 cat >"$STUB_DIR/talosctl" <<'STUB'
 #!/usr/bin/env bash
+cfg="${TALOSCONFIG:-}" prev=
+for a in "$@"; do
+  [ "$prev" = --talosconfig ] && cfg="$a"
+  case "$a" in --talosconfig=*) cfg="${a#*=}" ;; esac
+  prev="$a"
+done
 case "$*" in
   *"get extensions"*)
+    [ "$cfg" = "${STUB_TALOSCONFIG:-}" ] || { echo "error: no talosconfig for this cluster" >&2; exit 1; }
     [ -n "${STUB_SCHEMATIC:-}" ] &&
       printf '{"spec":{"metadata":{"name":"schematic","version":"%s"}}}\n' "$STUB_SCHEMATIC"
     ;;
@@ -108,6 +126,8 @@ STUB
 chmod +x "$STUB_DIR/talosctl"
 ln -s kubectl "$STUB_DIR/task"
 ln -s kubectl "$STUB_DIR/flux"
+mkdir "$STUB_DIR/image-bin"
+for t in tofu aws curl; do ln -s ../kubectl "$STUB_DIR/image-bin/$t"; done
 
 # Time is the one thing a wait loop must not really spend here. Log the request,
 # then yield briefly — a pure no-op spins cluster-upgrade's background probe hot.
@@ -131,12 +151,15 @@ GIT_REF='refs/tags/9.9.9-stub'
 FAKE="$STUB_DIR/root"
 CLUSTER="$FAKE/infrastructure/opentofu/cluster"
 TFVARS="$CLUSTER/envs/${ROLE}-${PROVIDER}.tfvars"
-mkdir -p "$FAKE/scripts/dev" "$CLUSTER/envs"
+mkdir -p "$FAKE/scripts/dev" "$FAKE/scripts/lib" "$CLUSTER/envs"
+STUB_TALOSCONFIG="$(cd "$CLUSTER" && pwd)/talosconfig"; export STUB_TALOSCONFIG
 ln -s "$ROOT/scripts/dev/cluster-upgrade.sh" "$FAKE/scripts/dev/cluster-upgrade.sh"
 # cluster-upgrade chains into infra-verify at the end, which has to be reachable
 # from the fake root or the all-green control dies on rc 127 — which is how this
 # harness caught the verifier change five minutes after it was written.
 ln -s "$ROOT/scripts/dev/infra-verify.sh" "$FAKE/scripts/dev/infra-verify.sh"
+# Sourced by infra-verify, converge-versions and talos-image.sh.
+ln -s "$ROOT/scripts/lib/common.sh" "$FAKE/scripts/lib/common.sh"
 UPGRADE="$FAKE/scripts/dev/cluster-upgrade.sh"
 KEYFILE="$STUB_DIR/ssh-key-fixture"; : >"$KEYFILE"
 
@@ -239,6 +262,8 @@ run env DRY_RUN=1 "$UPGRADE" "$PROVIDER" "$ROLE" "$KEYFILE"
   || bad "the dry run did not rewrite both pins (rc=$RUN_RC)"
 grep -q 'v0.0.1' "$TFVARS" && ok "…on a COPY: the env file itself is untouched" \
   || bad "DRY_RUN=1 rewrote the real tfvars"
+grep -q '^task ' "$STUB_LOG" && bad "the dry run called a task, and a task needs credentials" \
+  || ok "…and calls no task, so it needs no credentials"
 
 tfvars v0.0.2 v0.0.2
 run env DRY_RUN=1 "$UPGRADE" "$PROVIDER" "$ROLE" "$KEYFILE"
@@ -261,6 +286,12 @@ said 'DIFFERENT schematic' \
 said 'upgrade nothing' \
   && bad "it still called the fleet done" \
   || ok "…and the run is not refused as a no-op"
+# The cluster's talosconfig, as the probes use its kubeconfig: not whatever
+# cluster the caller's shell happens to point at.
+run env DRY_RUN=1 TALOSCONFIG="$STUB_DIR/another-cluster.talosconfig" "$UPGRADE" "$PROVIDER" "$ROLE" "$KEYFILE"
+said 'DIFFERENT schematic' \
+  && ok "…read with this cluster's talosconfig, not the one the caller exported" \
+  || bad "an exported TALOSCONFIG for another cluster hid the schematic change"
 
 # THE SAME SCHEMATIC must stay a no-op: a guard written for the pathological case
 # and never run against the normal one has turned red on the happy path three
@@ -305,6 +336,10 @@ upgrade
   && said 'plan empty after the upgrade'; } \
   && ok "an upgrade whose nodes report the target passes end to end" \
   || bad "the all-green upgrade control does not pass (rc=$RUN_RC)"
+# The checkout holds one kubeconfig and talosconfig, whichever cluster wrote them.
+[ "$(first_at "task kubeconfig ROLE=${ROLE} PROVIDER=${PROVIDER}")" -lt "$(first_at 'custom-columns=V:')" ] \
+  && ok "…having fetched this cluster's kubeconfig and talosconfig before reading the fleet" \
+  || bad "the fleet was read through whatever kubeconfig the checkout held"
 called 'task image-build PROVIDER=stubcloud VERSION=v0.0.2 ENSURE=1' \
   && ok "the Talos image is ensured for the TARGET version" \
   || bad "task image-build was not called with the target version"
@@ -430,6 +465,55 @@ else
     || bad "an interrupted run left the probe workload in the cluster (rc=$int_rc)"
 fi
 rm -f "$STUB_LOG.blocked"
+
+echo
+echo "=== cluster-upgrade: the Talos step through the REAL #93 guard ==="
+
+# Above, `task image-build` always says yes, so the order the upgrade builds in
+# was invisible. Here it is the real talos-image.sh, whose guard refuses a
+# version any tfvars does not pin. It needs a provider it knows; the fixtures stay
+# in the fake root, which has no schematic.yaml, so the Factory is never asked.
+mkdir -p "$FAKE/scripts/bootstrap" "$FAKE/scripts/internal" "$FAKE/infrastructure/opentofu/talos-image"
+for f in bootstrap/talos-image.sh internal/talos-version.sh; do
+  ln -s "$ROOT/scripts/$f" "$FAKE/scripts/$f"
+done
+export STUB_IMAGE_BUILD="$FAKE/scripts/bootstrap/talos-image.sh"
+PROVIDER=scaleway TFVARS="$CLUSTER/envs/${ROLE}-scaleway.tfvars"
+IMAGE_OK='tofu \t0\t\naws \t0\t\n'
+
+plan "${IMAGE_OK}${UPGRADE_OK}${VERIFY_OK}"
+upgrade
+{ [ "$RUN_RC" -eq 0 ] && called 'tofu plan' && said 'every node on Talos v0.0.2'; } \
+  && ok "the real guard accepts the upgrade's own build of its target" \
+  || bad "the image lane refused the upgrade's own target (rc=$RUN_RC): $(grep -m1 'build targets' <<<"$RUN_OUT")"
+
+# What the guard is for: another cluster on this provider still pins the old image.
+# The upgrade asks the same question before it moves its own pin.
+printf 'talos_version = "v0.0.1"\n' >"$CLUSTER/envs/other-scaleway.tfvars"
+plan "${IMAGE_OK}${UPGRADE_OK}${VERIFY_OK}"
+upgrade
+{ [ "$RUN_RC" -ne 0 ] && said 'other-scaleway.tfvars pins talos_version = v0.0.1' \
+  && ! said "${ROLE}-scaleway.tfvars pins" && ! called 'tofu ' && ! called 'aws ' && ! called 'cluster-roll'; } \
+  && ok "…and still refuses to replace an image another cluster pins, naming only that one" \
+  || bad "the guard did not protect the other cluster, or blamed the one being upgraded (rc=$RUN_RC)"
+grep -qE '^talos_version *= *"v0.0.1"' "$TFVARS" \
+  && ok "…and that refusal leaves this cluster's pin where it was" \
+  || bad "the refusal left talos_version at the target, naming an image that was never built"
+rm -f "$CLUSTER/envs/"*-scaleway.tfvars
+
+# A build that fails AFTER its apply has already replaced the old image: on OVH
+# the stale image_id guard runs last. Moving the pin back would name a gone image.
+PROVIDER=ovh TFVARS="$CLUSTER/envs/${ROLE}-ovh.tfvars"
+plan "tofu plan\t2\t\ntofu output -raw image_id\t0\timg-new\n${IMAGE_OK}${UPGRADE_OK}${VERIFY_OK}"
+tfvars v0.0.1 v0.0.1; printf 'image_id = "img-old"\n' >>"$TFVARS"
+run "$UPGRADE" "$PROVIDER" "$ROLE" "$KEYFILE"
+{ [ "$RUN_RC" -ne 0 ] && called 'tofu apply' && said 'pins image_id = img-old' && said 'talos_version stays at v0.0.2' \
+  && grep -qE '^talos_version *= *"v0.0.2"' "$TFVARS"; } \
+  && ok "a build that failed after its apply keeps the pin on the image it published" \
+  || bad "a build that failed after its apply moved the pin back to a replaced image (rc=$RUN_RC)"
+rm -f "$CLUSTER/envs/"*-ovh.tfvars
+unset STUB_IMAGE_BUILD
+PROVIDER=stubcloud TFVARS="$CLUSTER/envs/${ROLE}-${PROVIDER}.tfvars"
 
 echo
 echo "=== cluster-upgrade: report_probe, the interruption budget ==="
@@ -826,9 +910,8 @@ echo "=== converge-versions: the half of cluster-up that OpenTofu cannot do ==="
 # same field — so the shared plan cannot tell "before the roll" from "after" it.
 # This one keys on whether a roll has happened, which is exactly the distinction
 # the post-roll re-read exists to make.
-mkdir -p "$FAKE/scripts/internal" "$FAKE/scripts/lib" "$STUB_DIR/conv"
+mkdir -p "$FAKE/scripts/internal" "$STUB_DIR/conv"
 ln -s "$ROOT/scripts/internal/converge-versions.sh" "$FAKE/scripts/internal/converge-versions.sh"
-ln -s "$ROOT/scripts/lib/common.sh" "$FAKE/scripts/lib/common.sh"
 CONVERGE="$FAKE/scripts/internal/converge-versions.sh"
 cat >"$STUB_DIR/conv/kubectl" <<'STUB'
 #!/usr/bin/env bash
