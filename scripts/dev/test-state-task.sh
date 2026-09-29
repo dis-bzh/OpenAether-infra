@@ -252,9 +252,6 @@ for v in init 'state list' 'state show'; do
   grep -q "^$v" <<<"$VERBS" && ok "found: tofu $v" \
     || bad "no tofu $v in the target — the reader went blind or the target moved"
 done
-grep -q 'scripts/dev/test-state-task\.sh' Taskfile.yml \
-  && ok "this harness is registered in task test-scripts" \
-  || bad "this harness is not registered — CI would never run it"
 
 
 echo

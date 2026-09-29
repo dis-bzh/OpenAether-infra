@@ -124,7 +124,7 @@ $EDITOR management-scaleway.tfvars
 |---|---|
 | `cluster_name` | le tien. **Il a une valeur par défaut, donc aucun contrôle ne te dira de le changer** — et son premier segment nomme les quatre buckets du cluster |
 | `bucket_suffix` | **à renseigner sauf si tu es l'auteur d'origine.** Les noms de bucket S3 sont uniques à l'échelle d'un fournisseur entier, pas d'un compte — Scaleway les documente uniques « in our whole platform », OVH « within OVHcloud ». Sans lui tu entreras en collision avec des noms déjà pris. `task bucket-suffix` en imprime un ; choisis-le une fois, le changer ensuite orpheline tous tes buckets |
-| `environment` | `dev` ou `prod`, rien d'autre. Choisis-le une fois : il nomme le bucket d'état. `prod` exige le réplica chez un autre provider : `task cluster-up` refuse avant de dépenser si `s3_replica_endpoint` est l'endpoint du primaire ou le même cloud (un S3 qu'il ne sait pas nommer doit seulement être un autre endpoint). Un nom de cluster qui a déjà un objet d'état est seulement averti, et `task cluster-verify` le déclare rouge ; y compris un cluster détruit par `task cluster-down`, qui garde le bucket d'état. `dev` peut partager le magasin du primaire |
+| `environment` | `dev` ou `prod`, rien d'autre. Choisis-le une fois : il nomme le bucket d'état. `prod` exige le réplica chez un autre provider : `task cluster-up` refuse avant de dépenser si `s3_replica_endpoint` est l'endpoint du primaire ou le même cloud (un S3 qu'il ne sait pas nommer doit seulement être un autre endpoint). Un nom de cluster qui a déjà un objet d'état est seulement averti avant la dépense, puis `task cluster-up` échoue à son étape de vérification ; y compris un cluster détruit par `task cluster-down`, qui garde le bucket d'état. `dev` peut partager le magasin du primaire |
 | `admin_ip` | `curl -s ifconfig.me` en `/32`. C'est à la fois la liste d'autorisation SSH et l'ACL du LB apiserver |
 | `s3_primary_endpoint` / `_region` | le S3 sur le même provider que le cluster |
 | `s3_replica_endpoint` / `_region` | le S3 de la copie de sauvegarde. En production, **un autre provider** : un état qu'on ne peut lire que depuis le cloud qui vient de tomber n'est pas une sauvegarde. Ce magasin s'ouvre avec les clés de SON propre cloud (`OUTSCALE_AWS_*` pour un réplica Outscale) — voir l'étape 2. `task cluster-up` refuse avant de construire quoi que ce soit si les buckets `-backup` n'y sont pas créables |
@@ -157,7 +157,8 @@ deviner.)
 Dans l'ordre, il construit l'image Talos et la téléverse — **mesuré à 52 s sur
 Scaleway le 2026-08-17**, pour deux buckets, un snapshot et une image par zone —
 crée quatre buckets de plus, applique l'infrastructure, ouvre un tunnel SSH par
-nœud, puis applique les configurations machine et amorce Talos.
+nœud, puis applique les configurations machine et amorce Talos. Il se termine
+par le vérificateur de l'étape 6 : si le cluster y échoue, `cluster-up` échoue.
 
 **Le load balancer de l'apiserver est ce qu'il y a de plus lent dans cette
 étape, et le seul objet qui peut te laisser en rade.** Rapide chez Scaleway. Chez
@@ -239,9 +240,10 @@ talosconfig inutilisable jusqu'à leur réouverture.
 task cluster-verify PROVIDER=scaleway
 ```
 
-Interroge le cluster, pas l'outil : l'apiserver répond, chaque nœud est Ready, le
-nombre de control planes correspond à ce que tu as demandé, Cilium tourne sur
-chacun, CoreDNS sert, il n'y a pas de `flux-system`, pas de load balancer
+`task cluster-up` s'est déjà terminé par cette commande ; lance-la seule à tout
+moment ensuite. Elle interroge le cluster, pas l'outil : l'apiserver répond,
+chaque nœud est Ready, le nombre de control planes correspond à ce que tu as
+demandé, Cilium tourne sur chacun, CoreDNS sert, il n'y a pas de `flux-system`, pas de load balancer
 applicatif, un réplica de l'état existe dans le magasin de sauvegarde — et les
 4 premiers Kio de cet objet sont ouverts : ce doit être une enveloppe OpenTofu
 `encrypted_data`, pas un état lisible. Hors `dev`, le réplica doit en outre être
