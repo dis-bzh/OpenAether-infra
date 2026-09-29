@@ -234,15 +234,63 @@ run "verify_bastion_config" {
 }
 
 # ==============================================================================
-# Test 4b: Security Groups — no inbound rule left wildcard-port (#79)
+# Test 4b: Security Groups — no inbound rule opens every port (#79)
 # ==============================================================================
 
-run "verify_no_wildcard_inbound_port" {
+# Judged as the provider sends a rule: a non-empty port_range wins over port,
+# and port 0, "0-0" or no port at all means every port. A mock plans an omitted
+# port as null, so null counts as 0 here.
+run "verify_no_all_ports_inbound_rule" {
+  command = plan
+
+  variables {
+    deploy_app_lb = true
+  }
+
+  # Every group, the bastion's included.
+  assert {
+    condition = length(flatten(values(module.scw[0].inbound_rules))) > 0 && alltrue([
+      for r in flatten(values(module.scw[0].inbound_rules)) :
+      r.protocol == "ICMP" || (contains(["TCP", "UDP"], r.protocol) && (
+        r.port_range != null && r.port_range != "" ?
+        try(tonumber(split("-", r.port_range)[0]) > 0 && (tonumber(split("-", r.port_range)[0]) > 1 || tonumber(split("-", r.port_range)[1]) < 65535), false) :
+        try(r.port > 0, false)
+    ))])
+    error_message = "An SCW inbound_rule may open every port: ANY, no port, port 0, a range from 0 (0-0 included), or 1-65535 (#79)."
+  }
+
+  # Node groups hold exactly the reviewed list, so a port added, widened,
+  # duplicated or opened to the carrier range turns this red.
+  assert {
+    condition = length(module.scw[0].inbound_rules) > 1 && alltrue([
+      for k, rs in module.scw[0].inbound_rules : k == "bastion" || sort([
+        for r in rs : "${r.protocol} ${r.port_range != null ? r.port_range : (r.port != null ? tostring(r.port) : "-")} ${r.ip_range}"
+        ]) == sort(concat(
+        [for p in ["TCP 6443", "TCP 50000", "TCP 50001", "TCP 2379-2381", "TCP 10250", "UDP 8472", "UDP 51871",
+        "TCP 4240", "ICMP -", "TCP 9962-9964", "TCP 9100", "UDP 68", "TCP 30080", "TCP 30443"] : "${p} 172.16.0.0/22"],
+        [for p in ["TCP 6443", "TCP 30080", "TCP 30443"] : "${p} 100.64.0.0/10"],
+      ))
+    ])
+    error_message = "An SCW node security group differs from the reviewed port list: a new port needs its evidence in security.tf, then an entry in each pinned list (#79)."
+  }
+}
+
+# Root defaults: no App LB, so no NodePorts, and the carrier range keeps 6443
+# only. The bastion does not vary with these variables: checked above.
+run "verify_node_inbound_rules_defaults" {
   command = plan
 
   assert {
-    condition     = alltrue([for p in module.scw[0].inbound_rule_ports : p != 0])
-    error_message = "No SCW inbound_rule may carry port == 0 (#79)."
+    condition = length(module.scw[0].inbound_rules) > 1 && alltrue([
+      for k, rs in module.scw[0].inbound_rules : k == "bastion" || sort([
+        for r in rs : "${r.protocol} ${r.port_range != null ? r.port_range : (r.port != null ? tostring(r.port) : "-")} ${r.ip_range}"
+        ]) == sort(concat(
+        [for p in ["TCP 6443", "TCP 50000", "TCP 50001", "TCP 2379-2381", "TCP 10250", "UDP 8472", "UDP 51871",
+        "TCP 4240", "ICMP -", "TCP 9962-9964", "TCP 9100", "UDP 68"] : "${p} 172.16.0.0/22"],
+        ["TCP 6443 100.64.0.0/10"],
+      ))
+    ])
+    error_message = "With the root defaults, an SCW node security group differs from the reviewed port list (#79)."
   }
 }
 

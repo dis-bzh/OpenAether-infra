@@ -88,6 +88,34 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **The Scaleway node security group still opened every port, and its test
+  could not see it (#79, mocked part).** The earlier fix (further down) dropped
+  `port = 0` from the two `protocol = "ANY"` rules and asserted that no rule
+  carries `port == 0`. Dropping it changed nothing: applied with the real
+  provider (2.83.1) to a private Feint, an omitted port and `port = 0` were
+  stored as the same rule (no port range, so every port), and both read back as
+  `port = 0`. Only a mock plans the omitted port as null, which is why the
+  assertion passed on two all-ports rules. The group now lists the ports this
+  repository's layers serve over the private network, from the module's own
+  subnet: Talos apid and trustd, etcd and its metrics, the apiserver, the
+  kubelet, Cilium's VXLAN, WireGuard, health and metrics ports, ICMP,
+  node-exporter, DHCP, and the App LB's NodePorts. `100.64.0.0/10` was open on
+  every port "for LB health checks"; it now keeps only the LB backend ports.
+  The rules sourced from the LBs' public IPs are removed, because both LBs
+  reach the nodes over the private network, from that subnet. The test reads a
+  rule as the provider sends it (a set `port_range` wins over `port`, a missing
+  port counts as 0) and rejects `ANY`, port 0, a range from 0 (`0-0` included)
+  or `1-65535`, on the bastion's group too. It pins each node group to the
+  reviewed list in three configurations: App LB on (17 rules), the root
+  defaults (13) and vip mode (12), so a port added, widened, duplicated or
+  opened to the carrier range fails it. Each of 21 reintroduced defects turned
+  it red.
+  Emulated rung: `feint-plan`, plus an apply / empty re-plan / destroy of the
+  whole root with the App LB on. `security.tf` now also says what Scaleway
+  documents: security groups filter public traffic only. The nodes have no
+  public IP, so on this provider the list declares the perimeter; it does not
+  enforce it. Still open: one real deploy to confirm the LB health checks pass.
+
 - **A node size change resizes every node at once, on all four providers
   (#51, mocked part).** The Scaleway and Proxmox modules said `type` and
   `cpu`/`memory` were ForceNew. They are not: at scaleway 2.83.1,
@@ -227,17 +255,18 @@ in git. 0.1.0 is the first entry describing something proven.
   had drifted apart** (#79). `security.tf`'s own comment said "Talos API —
   From Bastion ONLY" and admitted `:50000` from the bastion's **public** IP —
   a rule that never fires, since the bastion reaches nodes over its private
-  NIC. What actually admitted that traffic (and everything else) was a
+  NIC. The rule written to admit that traffic (and everything else) was a
   `port = 0`/`protocol = "ANY"` rule matching `172.16.0.0/12` — Scaleway's
   whole IPAM range, not this cluster's own subnet — plus a redundant
   `10.0.0.0/8` rule nothing in this module ever gets an address in. Fixed by
   pinning the private network's own `/22` (`network.tf`, matching OVH's and
   Outscale's existing self-declared-CIDR pattern instead of trusting IPAM
   auto-assignment), scoping the mesh rule to that `/22`, dropping the dead
-  bastion-public-IP rule and the `10.0.0.0/8` rule, and dropping `port = 0`
-  from every remaining `protocol = "ANY"` rule (meaningless there, and
-  already the pattern `bastion.tf`'s own `outbound_rule` used). New
-  `tofu test` run asserts no SCW `inbound_rule` carries `port == 0`. Rung:
+  bastion-public-IP rule and the `10.0.0.0/8` rule. It also dropped `port = 0`
+  from the `protocol = "ANY"` rules and added a `tofu test` run asserting no
+  SCW `inbound_rule` carries `port == 0`; neither changed what the API receives
+  nor could fail on those rules, and Scaleway groups do not filter private
+  traffic at all (see the #79 entry under Fixed). Rung:
   mocked + `task feint-plan`/`feint-apply` against the emulator; the
   real-cloud confirmation (does pinning the subnet force a disruptive
   replacement on an already-provisioned network, do LB health checks and

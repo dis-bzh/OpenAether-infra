@@ -307,15 +307,15 @@ modules/
 ## Tests
 
 ```bash
-# All unit tests (38 tests, mock providers — no cloud credentials needed)
+# All unit tests (mock providers — no cloud credentials needed)
 tofu test
 
 # Individual test suites
-tofu test -filter=tests/scaleway.tftest.hcl       # SCW module (9 tests)
-tofu test -filter=tests/talos-config.tftest.hcl   # Talos config logic (12 tests)
-tofu test -filter=tests/provider-contract.tftest.hcl  # Junction point (7 tests)
-tofu test -filter=tests/proxmox.tftest.hcl        # Proxmox module + VIP + image convention (7 tests)
-tofu test -filter=tests/k8s-lb-mode.tftest.hcl     # k8s_lb_mode=vip on scw/ovh, rejected on outscale (3 tests)
+tofu test -filter=tests/scaleway.tftest.hcl       # SCW module
+tofu test -filter=tests/talos-config.tftest.hcl   # Talos config logic
+tofu test -filter=tests/provider-contract.tftest.hcl  # Junction point
+tofu test -filter=tests/proxmox.tftest.hcl        # Proxmox module + VIP + image convention
+tofu test -filter=tests/k8s-lb-mode.tftest.hcl     # k8s_lb_mode=vip on scw/ovh, rejected on outscale
 
 # Full local validation
 task lint && task validate && task test && task test-scripts
