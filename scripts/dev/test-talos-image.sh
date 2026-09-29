@@ -26,10 +26,11 @@ SCRIPT=scripts/bootstrap/talos-image.sh
 TFROOT=infrastructure/opentofu/talos-image
 SB="$(mktemp -d)"
 LOG="$SB/tofu.log"
-# #93's guard scans the REAL (gitignored) envs dir, so its fixture has to live
-# there too — synthetic role prefix, removed on exit like every other fixture.
-FIXTURE93=infrastructure/opentofu/cluster/envs/oa93-scaleway.tfvars
-trap 'rm -rf "$SB"; rm -f "$TFROOT"/talos-image-scaleway.tfplan "$FIXTURE93"' EXIT
+# #93's guard scans an envs dir: a sandbox one, so a real gitignored tfvars in
+# this checkout can neither fail these cases nor be written next to (#191).
+export OA_ENVS_DIR="$SB/envs"; mkdir -p "$OA_ENVS_DIR"
+FIXTURE93="$OA_ENVS_DIR/oa93-scaleway.tfvars"
+trap 'rm -rf "$SB"; rm -f "$TFROOT"/talos-image-scaleway.tfplan' EXIT
 
 # The schematic gate calls the Image Factory before anything else and refuses a
 # build when the live id differs from the cluster pin. Offline, the stub answers
