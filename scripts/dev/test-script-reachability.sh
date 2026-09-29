@@ -64,6 +64,24 @@ out="$("$CHECKER" "$TMP/repo" 2>&1)"; rc=$?
   bad "a script->script reference was not recognised: ${out}"
 
 echo
+echo "=== a harness only a comment names is run by nothing ==="
+
+fixture_repo
+mkdir -p "$TMP/repo/scripts/dev"
+printf '#!/usr/bin/env bash\necho ok\n' >"$TMP/repo/scripts/dev/test-foo.sh"
+printf 'test-scripts:\n  cmds:\n    # - ./scripts/dev/test-foo.sh\n' >"$TMP/repo/Taskfile.yml"
+commit
+out="$("$CHECKER" "$TMP/repo" 2>&1)"; rc=$?
+[ "$rc" -ne 0 ] && grep -q 'scripts/dev/test-foo.sh' <<<"$out" \
+  && ok "a harness no cmds entry runs fails the check (rc=${rc})" \
+  || bad "a harness named only in a comment passed: ${out}"
+printf '    - ./scripts/dev/test-foo.sh\n' >>"$TMP/repo/Taskfile.yml"
+commit
+out="$("$CHECKER" "$TMP/repo" 2>&1)"; rc=$?
+[ "$rc" -eq 0 ] && ok "a cmds entry running it clears the failure (rc=0)" ||
+  bad "still failing with a cmds entry: ${out}"
+
+echo
 echo "=== proof against reality: this repository's own tree is clean today ==="
 
 out="$("$CHECKER" 2>&1)"; rc=$?

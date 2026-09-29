@@ -198,8 +198,8 @@ grep -q 'worker_data\[w0-d0\]' <<<"$OUT" \
 # --- the wiring itself -------------------------------------------------------
 # Everything above only inspects tasks that ALREADY defer to the explainer, so
 # deleting the wiring made the script invisible and left this suite green: 107
-# lines could be fully orphaned without one assertion moving. Named tasks, and
-# this harness's own registration, are asserted positively.
+# lines could be fully orphaned without one assertion moving. Named tasks are
+# asserted positively.
 WIRED="$(awk '
   /^  [a-zA-Z0-9_-]+:$/          { t=$1; sub(/:$/,"",t) }
   t != "" && /defer:.*explain-failure\.sh/ { print t }
@@ -209,9 +209,6 @@ for T in infra-apply infra-plan; do
     && ok "$T defers to the explainer" \
     || bad "$T no longer defers to the explainer — a failure there explains nothing"
 done
-grep -q 'scripts/dev/test-explain-failure\.sh' Taskfile.yml \
-  && ok "this harness is registered in task test-scripts" \
-  || bad "this harness is not registered — CI would never run it, and it would still pass here"
 
 
 echo

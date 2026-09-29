@@ -112,7 +112,9 @@ tasks:
   lint:
     desc: Lint and format code (OpenTofu, YAML)
     cmds:
-      - tofu fmt -check -recursive {{.TF_ROOTS}}
+      # Tracked files only: -recursive also walks a gitignored real envs/*.tfvars,
+      # so a workstation preparing a real run failed lint on its own config (#191).
+      - git ls-files -z -- {{.TF_ROOTS}} | grep -zE '\.(tf|tfvars|tftest\.hcl)$' | xargs -0 -r tofu fmt -check
       - yamllint -c infrastructure/.yamllint infrastructure/
       # Same config, the repo's other YAML — CI used to only lint
       # infrastructure/, so a broken .github/workflows/*.yml would pass CI
@@ -382,6 +384,9 @@ tasks:
       # `task state` promises it never writes a state. Real task + real tofu on
       # a local-backend fixture; the state's bytes are compared before and after.
       - ./scripts/dev/test-state-task.sh
+      # `cluster-up` from first guard to last line, real go-task, stubbed leaves:
+      # a failing verifier fails it, and only a passing one prints success (#84).
+      - ./scripts/dev/test-cluster-up.sh
       # The three scripts between a cluster and a lost tfstate or etcd, and the
       # Day-1 seeder whose one rule is never to rotate what exists. Writing
       # these found a retention slice that deleted 28 of 29 snapshots and two
@@ -529,7 +534,8 @@ tasks:
     aliases: [up]
     desc: >-
       Idempotent one-shot bring-up: image -> render manifests -> infra -> tunnels -> bootstrap -> converge the
-      fleet onto the versions the tfvars pins (editing that file IS the decision to upgrade). Usage: task cluster-up
+      fleet onto the versions the tfvars pins (editing that file IS the decision to upgrade) -> cluster-verify,
+      whose failure fails the command. Usage: task cluster-up
       ROLE=management|workload PROVIDER=… [KEY=~/.ssh/yourkey] [VERSION=v1.13.4] [FORCE=1] [APPROVE=auto].
       It shows the plan and asks once before it spends; APPROVE=auto answers for you, for CI and for a
       shell that cannot be asked.
@@ -677,9 +683,8 @@ tasks:
       # above already asked, and --check had told it what this would roll.
       - ./scripts/internal/converge-versions.sh {{.PROVIDER}} {{.ROLE}} {{.KEY}}
       # The verdict, asked of the cluster rather than assumed from the steps
-      # above having run. go-task propagates this task's non-zero exit up
-      # through cluster-up, so a failing verify halts here — the closing
-      # echo below is only ever reached once it has passed.
+      # above: a failing verify fails cluster-up before the line below.
+      # scripts/dev/test-cluster-up.sh runs it.
       - task: cluster-verify
         vars:
           ROLE: "{{.ROLE}}"
@@ -1487,6 +1492,8 @@ tasks:
       # task rather than being run by hand. It had no target at all until 0.5.0,
       # and its only caller was the upgrade lane: the one script that says what a
       # healthy cluster looks like was unreachable to the person deploying one.
+      # Re-fetched even at the end of cluster-up: every cluster in this checkout
+      # writes one kubeconfig path, and verify must read this cluster's.
       - task: kubeconfig
         vars: {ROLE: '{{.ROLE}}', PROVIDER: '{{.PROVIDER}}'}
       - ../../../scripts/dev/infra-verify.sh {{.PROVIDER}} {{.ROLE}}

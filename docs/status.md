@@ -144,5 +144,8 @@ from a billable publish with the pin never verified. `tflint` was linting one
 directory in fourteen. `provider-contract.md` — the document `CLAUDE.md` calls
 the authority — required a variable no module has ever declared.
 
-**Resume here**: the interruption regression, then rolling-replace's two blind
-applies, then decide whether 0.1.0 ships a staging lane at all.
+**Resume here**: one real Scaleway roll. rolling-replace's two applies now apply
+the plan they counted, a size change goes through the roll, and a Service is
+probed during the upgrade — all proven mocked only; one roll gives each its real
+rung (#55, #51, #41) and re-measures the interruption regression
+([`upgrade.md`](upgrade.md), #70). Then decide whether 0.1.0 ships a staging lane.

@@ -176,7 +176,7 @@ else in the example already has a working value.
 
 | field | what to put in it |
 |---|---|
-| `environment` | `dev` or `prod` — nothing else is accepted. It names the buckets and the resources, and `prod` additionally requires `s3_replica_endpoint` to be a **different** provider: `task cluster-up` refuses before spending when it is the primary's endpoint or cloud, unless the cluster name already has a state object (then it only warns) |
+| `environment` | `dev` or `prod` — nothing else is accepted. It names the buckets and the resources, and `prod` additionally requires `s3_replica_endpoint` to be a **different** provider: `task cluster-up` refuses before spending when it is the primary's endpoint or cloud, unless the cluster name already has a state object (then it only warns before spending, and fails at its verify step) |
 | `admin_ip` | your public IP as a CIDR. It is the SSH allow-list AND the apiserver LB ACL |
 | `s3_primary_endpoint` / `s3_primary_region` | S3 for the encrypted tfstate, on the **same** provider as the cluster (e.g. `https://s3.fr-par.scw.cloud` / `fr-par`) |
 | `s3_replica_endpoint` / `s3_replica_region` | S3 for the **backup copy**. In production put it on a **different provider** — a state you can only read from the cloud that just failed is not a backup. It is opened with THAT cloud's `<PU>_AWS_*` keys, so an Outscale replica reads `OUTSCALE_AWS_*` |
@@ -193,21 +193,22 @@ OpenAether-apps; the defaults point at ours, and its `apps/clusters` is not your
 task preflight-quotas PROVIDER=ovh
 
 task cluster-up ROLE=management PROVIDER=scaleway KEY=~/.ssh/yourkey
-task cluster-verify PROVIDER=scaleway               # ask the cluster, not the tool
 ```
 
 `task cluster-up` is the one command, and it is idempotent: it builds the Talos image if
 the account lacks it, renders the bootstrap manifests, applies the
-infrastructure, opens the tunnels and bootstraps Talos. Re-run it after fixing
+infrastructure, opens the tunnels and bootstraps Talos, then asks the cluster
+(`task cluster-verify`) and fails if the cluster says no. Re-run it after fixing
 any failure and it resumes. It is also the command CI runs, so it is the path
 that gets validated. The individual steps (`task image-build`, `task infra-apply`,
 `task bootstrap-phase2`) still exist for when you want to drive one of them
 alone.
 
-**After deployment**: `task cluster-verify` is the whole day-1 path for an
-infrastructure-only cluster. The application platform's own — escrow, offline
-PKI signing, UI access — is [docs/admin-access.md](docs/admin-access.md), and it
-belongs to the release that deploys applications.
+**After deployment**: an infrastructure-only cluster has no day-1 step left, since
+`cluster-up` ended with `task cluster-verify`; re-run that alone at any time. The
+application platform's day-1 path — escrow, offline PKI signing, UI access — is
+[docs/admin-access.md](docs/admin-access.md), and it belongs to the release that
+deploys applications.
 
 ### Teardown
 

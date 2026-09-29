@@ -48,7 +48,8 @@ esac
 # cluster's pin (scripts/internal/talos-version.sh), scanned across every real
 # tfvars for THIS provider before a single credential is resolved.
 # ──────────────────────────────────────────────────────────────────────────────
-ENVS_DIR="$(dirname "${BASH_SOURCE[0]}")/../../infrastructure/opentofu/cluster/envs"
+# OA_ENVS_DIR: a test harness points this at a sandbox, never at the real envs/ (#191).
+ENVS_DIR="${OA_ENVS_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../infrastructure/opentofu/cluster/envs}"
 INTERNAL="$(dirname "${BASH_SOURCE[0]}")/../internal"
 if [ -d "$ENVS_DIR" ]; then
   conflict=0
@@ -261,7 +262,7 @@ echo "   talos_image_file_id follows the same convention.)"
 # ──────────────────────────────────────────────────────────────────────────────
 if [ "$P" = ovh ] || [ "$P" = outscale ]; then
   WANT="$(tofu output -raw image_id 2>/dev/null || true)"
-  ENVS="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../infrastructure/opentofu/cluster/envs" && pwd)"
+  ENVS="$(cd "${OA_ENVS_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../infrastructure/opentofu/cluster/envs}" && pwd)"
   stale=0
   for f in "$ENVS"/*-"$P".tfvars; do
     [ -e "$f" ] || continue
