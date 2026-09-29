@@ -112,7 +112,9 @@ tasks:
   lint:
     desc: Lint and format code (OpenTofu, YAML)
     cmds:
-      - tofu fmt -check -recursive {{.TF_ROOTS}}
+      # Tracked files only: -recursive also walks a gitignored real envs/*.tfvars,
+      # so a workstation preparing a real run failed lint on its own config (#191).
+      - git ls-files -z -- {{.TF_ROOTS}} | grep -zE '\.(tf|tfvars|tftest\.hcl)$' | xargs -0 -r tofu fmt -check
       - yamllint -c infrastructure/.yamllint infrastructure/
       # Same config, the repo's other YAML — CI used to only lint
       # infrastructure/, so a broken .github/workflows/*.yml would pass CI

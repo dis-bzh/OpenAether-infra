@@ -88,6 +88,13 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **A real `envs/*.tfvars` no longer turns `task lint` and `test-talos-image`
+  red (#191).** The `tofu fmt` step now checks tracked files only, and the #93
+  guard reads `OA_ENVS_DIR` (default unchanged), which the harness points at a
+  sandbox, so it neither reads nor writes the real `envs/`. Reproduced with a
+  gitignored tfvars pinning another Talos version: fmt rc 3 → 0, harness 16/21
+  → 37/0; each of the three changes reverted alone turns the harness red again.
+
 - **A node size change resizes every node at once, on all four providers
   (#51, mocked part).** The Scaleway and Proxmox modules said `type` and
   `cpu`/`memory` were ForceNew. They are not: at scaleway 2.83.1,

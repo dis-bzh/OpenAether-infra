@@ -21,7 +21,8 @@ read_pin() { # <file>
 }
 
 v=""
-[[ -n "$TFVARS" ]] && v="$(read_pin "$CLUSTER/envs/$TFVARS" || true)"
+# OA_ENVS_DIR lets a test harness point this at a sandbox instead of the real envs/ (#191).
+[[ -n "$TFVARS" ]] && v="$(read_pin "${OA_ENVS_DIR:-$CLUSTER/envs}/$TFVARS" || true)"
 [[ -n "$v" ]] || v="$(awk '/variable "talos_version"/,/^}/' "$CLUSTER/variables.tf" \
                       | sed -nE 's/^[[:space:]]*default[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' | head -1)"
 [[ -n "$v" ]] || { echo "✗ could not read talos_version from $TFVARS or cluster/variables.tf" >&2; exit 1; }
