@@ -12,8 +12,7 @@
 # done.
 #
 # No cluster, no cloud: kubectl and task are stubbed on PATH, and the tfvars
-# read is a throwaway fixture under the real cluster envs/ dir (the script
-# derives that path from its own location, not from an env var).
+# read is a fixture in a sandbox envs dir (OA_ENVS_DIR), never the operator's.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -21,8 +20,8 @@ SCRIPT="$ROOT/scripts/internal/converge-versions.sh"
 STUB_DIR="$(mktemp -d)"
 ROLE=stubtest
 PROVIDER=fixture
-TFVARS="$ROOT/infrastructure/opentofu/cluster/envs/${ROLE}-${PROVIDER}.tfvars"
-cleanup() { rm -rf "$STUB_DIR"; rm -f "$TFVARS"; }
+TFVARS="$STUB_DIR/${ROLE}-${PROVIDER}.tfvars"
+cleanup() { rm -rf "$STUB_DIR"; }
 trap cleanup EXIT
 
 PASS=0 FAIL=0
@@ -62,7 +61,7 @@ run() {
 talos_version      = "$1"
 kubernetes_version = "$2"
 EOF
-  PATH="$STUB_DIR:$PATH" STUB_TALOS="$3" STUB_K8S="$4" \
+  PATH="$STUB_DIR:$PATH" OA_ENVS_DIR="$STUB_DIR" STUB_TALOS="$3" STUB_K8S="$4" \
     "$SCRIPT" "$PROVIDER" "$ROLE" /dev/null ${5:+--check} 2>&1
 }
 
