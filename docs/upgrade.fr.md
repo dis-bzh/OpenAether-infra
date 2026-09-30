@@ -95,14 +95,21 @@ de nœud ignorent l'image, mais la *data source*, elle, doit résoudre), appliqu
 puis dérouler.
 
 ```bash
+# modifier talos_version dans le tfvars D'ABORD, puis
 task image-build PROVIDER=<p> VERSION=<new> ENSURE=1
-# modifier talos_version dans le tfvars, puis
 task infra-apply ROLE=management PROVIDER=<p>
 task cluster-roll PROVIDER=<p> KEY=~/.ssh/<clé> -- --cp-only --upgrade
 task cluster-roll PROVIDER=<p> KEY=~/.ssh/<clé> -- --workers-only --upgrade
 ```
 
-**Sur Outscale, la première ligne domine tout l'upgrade.** L'image est
+Le pin bouge avant le build : la voie image garde une image par provider, donc
+elle refuse une version que l'un des `envs/*-<p>.tfvars` ne pinne pas, car elle
+remplacerait l'image que ce cluster utilise encore (#93). Elle nomme le fichier
+qui bloque. Un build qui échoue après son apply a déjà remplacé l'ancienne
+image : laisser le pin sur la nouvelle version et relancer. Le dernier upgrade
+réel précède ce garde-fou : cet ordre n'est prouvé qu'en mocké.
+
+**Sur Outscale, la construction de l'image domine tout l'upgrade.** L'image est
 enregistrée depuis un snapshot importé via une file côté provider : 8 min le
 2026-08-18, plus de 60 min le 2026-07-25. Elle bloque avant qu'un seul nœud soit
 touché, et aucun nœud n'en démarre jamais — le roulement installe depuis l'Image

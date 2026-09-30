@@ -115,6 +115,23 @@ in git. 0.1.0 is the first entry describing something proven.
   when `FEINT_ENDPOINT` names another (#195).** `feint status` and `feint stop`
   default to :4599 and were called without `--addr`; `feint_cli` now adds it.
   `test-feint-restart.sh` goes 14 passed / 3 failed → 17 / 0 on the fix.
+- **`task cluster-upgrade` could not upgrade Talos, and could read another
+  cluster's fleet (refs #181).** The Talos step built the target image before
+  it moved `talos_version`, and since #93 `talos-image.sh` refuses to build
+  while any tfvars for the provider pins another version, so the step stopped
+  on the cluster's own pin: "pins talos_version = <old>, but this build
+  targets <new>". The harness stubbed `task` and could not see it. The step
+  now checks the provider's other tfvars first, the way the guard does, then
+  moves the pin, then builds. A failed build leaves the pin at the target: on
+  OVH and Outscale the build can fail after its apply replaced the old image.
+  The script also read the fleet through the checkout's single kubeconfig,
+  whichever cluster wrote it last, and its schematic check passed `talosctl`
+  no talosconfig at all. A real run now fetches both for its own cluster and
+  exports them; a dry run, which needs no credentials, does not. Mocked rung:
+  `test-cluster-checks.sh` runs the real `talos-image.sh` inside the upgrade,
+  and its `talosctl` stub answers only the cluster's talosconfig. On main's
+  script: 70 passed, 7 failed; now 77/0, and each of seven mutants turns it
+  red. No live upgrade has run in this order yet.
 
 - **A real `envs/*.tfvars` no longer turns `task lint` and `test-talos-image`
   red (#191).** The `tofu fmt` step no longer walks ignored files, and the #93

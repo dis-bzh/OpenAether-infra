@@ -42,6 +42,15 @@ intermediate state, because one moves before the other. `versions-guard.tf`
 refuses an unsupported pair and refuses a Talos minor it has never heard of —
 extend its map from the upstream matrix rather than widening it.
 
+## Move the pin, then build the image
+
+The image lane holds one image per provider and refuses a version any tfvars
+does not pin (#93). So the upgrade checks the other clusters' pins, moves
+`talos_version`, then builds; a failed build leaves the pin moved, since past
+its apply the old image is already replaced.
+The upgrade harness stubbed `task`, which hid that order: a stub between two
+scripts hides their contract. It now runs the real `talos-image.sh`.
+
 ## Expect two applies, and know why
 
 Bumping `talos_version` and applying puts the new installer into the machine
