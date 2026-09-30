@@ -23,6 +23,9 @@ FLEET_DOWN="$ROOT/scripts/ops/fleet-down.sh"
 EDGE_DOWN="$ROOT/scripts/ops/edge-down.sh"
 STUB_DIR="$(mktemp -d)"
 trap 'rm -rf "$STUB_DIR"' EXIT
+# Every fleet-down run reads its tfvars from a sandbox, never the operator's envs/.
+export OA_ENVS_DIR="$STUB_DIR/envs"
+mkdir "$OA_ENVS_DIR"
 
 # Captured before the stub dir goes on PATH: the sleep stub below still has to
 # yield, or the wait loops spin thousands of iterations per second.
@@ -411,6 +414,15 @@ STUB_PY_RC=1 STUB_PY_OUT='leftover load balancer' run "$EDGE_DOWN" edge-c --yes 
 expect_rc 1 "a provider that still has resources exits non-zero"
 refute_out "fully deleted" "leftover provider resources are not reported 'fully deleted'"
 expect_out "Purge by hand" "it tells the operator to purge"
+expect_out "delete-openstack-resource.py" "on OpenStack it names the scoped deleter"
+
+# Same failure on Scaleway: that deleter only knows OpenStack objects, and the
+# check also reports project-wide detached IPs and volumes that nothing tags.
+plan "${GONE}get scalewaycluster -n capi-clusters -o name\t0\tscalewaycluster.infrastructure.cluster.x-k8s.io/edge-c\n"
+STUB_PY_RC=1 STUB_PY_OUT='flexible IP 192.0.2.10 in fr-par-1' run "$EDGE_DOWN" edge-c --yes --timeout 30
+expect_rc 1 "a Scaleway leftover exits non-zero"
+refute_out "delete-openstack-resource" "on Scaleway it does not send the operator to an OpenStack-only tool"
+expect_out "left detached in the project" "on Scaleway it says detached resources count"
 
 # Verification skipped (no credentials): exits 0, but must not claim more than
 # it checked.
@@ -447,15 +459,13 @@ echo "=== the buckets it names must be the buckets that exist ==="
 # interpolated cluster_name verbatim, so anyone who set a bucket_suffix — which
 # docs/first-cluster.md step 3 tells every new user to do — or whose cluster_name
 # contains a hyphen was handed names that do not exist.
-mkdir -p "$STUB_DIR/root/infrastructure/opentofu/cluster/envs"
-cat >"$ROOT/infrastructure/opentofu/cluster/envs/management-stubcloud.tfvars" <<'TFV'
+cat >"$OA_ENVS_DIR/management-stubcloud.tfvars" <<'TFV'
 cluster_name  = "example-dev"
 bucket_suffix = "a1b2c3"
 environment   = "dev"
 TFV
 plan "${CLUSTER_INFO_OK}get clusters.cluster.x-k8s.io -A\t0\t\n"
 run "$FLEET_DOWN" stubcloud --plan-file "$STUB_DIR/d.tfplan" --yes --force-no-edges
-rm -f "$ROOT/infrastructure/opentofu/cluster/envs/management-stubcloud.tfvars"
 expect_out "s3-example-a1b2c3-stubcloud-tfstate-dev" \
   "the reported bucket keeps the suffix and the first segment only"
 refute_out "s3-example-dev-stubcloud-tfstate-dev" \

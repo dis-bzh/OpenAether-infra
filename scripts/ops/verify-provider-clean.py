@@ -28,6 +28,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -151,7 +152,33 @@ def outscale_leftovers(cluster: str) -> list[str]:
     return leftovers
 
 
-CHECKS = {"openstack": openstack_leftovers, "outscale": outscale_leftovers}
+def scaleway_leftovers(cluster: str) -> list[str]:
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "purge-orphans"))
+    import scaleway  # the purge's own listing: one definition of a clean project
+
+    refused: list[str] = []
+    leftovers = []
+    # The name between separators: a bare substring made edge-1 own edge-10's servers.
+    mine = re.compile(rf"(?<![A-Za-z0-9]){re.escape(cluster)}(?![A-Za-z0-9])")
+    for kind, where, item, _ in scaleway.leftovers(*scaleway.settings(), refused):
+        # A detached IP or volume carries no reliable cluster name, and bills
+        # whoever left it; the rest is this cluster's when named or tagged so.
+        names = [item.get("name") or "", *(item.get("tags") or [])]
+        detached = kind in ("flexible IP", "LB IP", "gateway IP", "volume", "instance volume")
+        if detached or any(mine.search(n) for n in names):
+            leftovers.append(f"{kind} {scaleway.describe(kind, item)} in {where}")
+    for r in refused:
+        print(f"  ⚠ unreachable: {r}", file=sys.stderr)
+    if refused and not leftovers:
+        raise urllib.error.URLError(f"{len(refused)} endpoint(s) refused, e.g. {refused[0]}")
+    return leftovers
+
+
+CHECKS = {
+    "openstack": openstack_leftovers,
+    "outscale": outscale_leftovers,
+    "scaleway": scaleway_leftovers,
+}
 
 # What each check actually enumerates, and what it does not. Printed on success
 # because a teardown proof that says NOTHING when the account is clean looks
@@ -162,9 +189,12 @@ CHECKS = {"openstack": openstack_leftovers, "outscale": outscale_leftovers}
 SCOPE = {
     "openstack": "servers, load balancers",
     "outscale": "VMs, unassociated public IPs",
+    "scaleway": "servers, LBs, public gateways, security groups and private networks "
+                "named or tagged after the cluster; every detached flexible IP, LB IP, "
+                "gateway IP and volume (block or instance API) in the project",
 }
-UNCHECKED = ("volumes, snapshots, images and buckets are NOT enumerated here — "
-             "see scripts/ops/purge-orphans/")
+UNCHECKED = dict.fromkeys(SCOPE, "volumes, snapshots, images and buckets")
+UNCHECKED["scaleway"] = "snapshots, images and buckets"
 
 
 def main() -> int:
@@ -189,7 +219,7 @@ def main() -> int:
 
     if not leftovers:
         print(f"✓ {provider}/{cluster}: nothing left (checked: {SCOPE[provider]})")
-        print(f"  {UNCHECKED}")
+        print(f"  {UNCHECKED[provider]} are NOT enumerated here — see scripts/ops/purge-orphans/")
         return 0
     for item in leftovers:
         print(item)

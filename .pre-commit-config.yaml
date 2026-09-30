@@ -66,8 +66,12 @@ repos:
   - repo: https://github.com/antonbabenko/pre-commit-terraform
     rev: 55d0143972eec4905fdaea2f444f1e88218f9dce  # v1.96.3
     hooks:
+      # Per changed file's directory, not -recursive: from cluster/ it also
+      # rewrote the gitignored envs/*.tfvars (#191). `files:` adds the test files
+      # upstream skips; `task lint` fails unless it equals TF_FMT_RE in Taskfile.yml.
       - id: terraform_fmt
-        args: ["--args=-recursive", "--hook-config=--tf-path=tofu"]
+        files: \.(tf|tofu|tfvars|tftest\.hcl|tofutest\.hcl)$
+        args: ["--hook-config=--tf-path=tofu"]
       - id: terraform_validate
         args: ["--hook-config=--retry-once-with-cleanup=true", "--hook-config=--tf-path=tofu"]
 

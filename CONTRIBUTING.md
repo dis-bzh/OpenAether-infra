@@ -80,7 +80,9 @@ hand and in what order.
     task test
 
 All four run in CI too — a PR can't merge until they're green (see the required
-checks on `main`). `task feint-test` also runs there, on both providers.
+checks on `main`). `task feint-test` also runs there, on both providers. A new
+job that reports on PRs must be added to those required checks too, or
+`scripts/dev/check-required-checks.sh` turns `repo-settings.yml` red.
 
 Before touching the Flux DAG in the sibling `OpenAether-apps` repo:
 

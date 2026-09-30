@@ -30,7 +30,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source=../lib/common.sh
 source "$ROOT/scripts/lib/common.sh"   # oa_project / oa_backup_bucket
 CLUSTER="$ROOT/infrastructure/opentofu/cluster"
-TFVARS="$CLUSTER/envs/${ROLE}-${PROVIDER}.tfvars"
+TFVARS="${OA_ENVS_DIR:-$CLUSTER/envs}/${ROLE}-${PROVIDER}.tfvars"   # OA_ENVS_DIR: a test sandbox
 
 export KUBECONFIG="${KUBECONFIG:-$CLUSTER/kubeconfig}"
 
