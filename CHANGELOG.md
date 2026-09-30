@@ -16,6 +16,7 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
+<<<<<<< HEAD
 - **A pull request's rung is checked against a receipt the harness wrote
   (#120).** CONTRIBUTING asks every PR to name the rung it reached, but nothing
   recorded that a rung ever ran, so neither a reviewer nor CI could check the
@@ -881,6 +882,25 @@ in git. 0.1.0 is the first entry describing something proven.
   creation, so it fails on a paid cluster with every offline gate green. No
   schema validator can see it: `namespace: gitops` is valid YAML.
 
+=======
+- **`.github/workflows/real-cloud-regression.yml`** — deploy → verify →
+  teardown on a real Scaleway/OVH/Outscale account, the rung nothing else in
+  CI reaches (`emulated` stops at the provider's HTTP API, never a real VM).
+  `workflow_dispatch` only for now, one provider or `all` three sequentially;
+  the `schedule:` block is written and commented out, a one-line diff once a
+  manual run has gone green end to end, teardown included, on every provider
+  it will run against. Two `if: always()` steps — plan-then-apply teardown,
+  then `purge-orphans/<provider>.py` as the final "ask the provider, not the
+  state file" proof — same discipline `docs/release-checklist.md` and the
+  `teardown` skill already require of a human running this by hand.
+  Prerequisites this cannot set up itself, documented in the workflow's own
+  header: a dedicated CI SSH keypair, each provider's full tfvars content as
+  one secret, the provider API credentials, and a decision on `admin_ip` —
+  it gates both bastion SSH and the K8s API LB ACL, and a hosted runner has no
+  small stable IP to put there. Not run here: no cloud credentials in this
+  session, so this is unexercised against a real account — the manual
+  `workflow_dispatch` run is where that gets proven, by design.
+>>>>>>> 58a9c44 (feat(ci): add a real-cloud deploy/verify/teardown workflow, manual-first)
 - **`task talosconfig-new`** — issues a role-scoped talosconfig with a TTL
   (`os:reader`, 8 h by default) from the admin one, which the deploy hands out
   as `os:admin` valid a **year**, identical for every task and every person.

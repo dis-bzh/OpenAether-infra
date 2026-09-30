@@ -1,0 +1,248 @@
+name: Real-Cloud Regression
+
+# Deploy → verify → teardown, on real Scaleway/OVH/Outscale accounts — the
+# rung nothing in ci.yml reaches (emulated stops at the provider's HTTP API,
+# never a real VM). Manual first (workflow_dispatch): run it by hand until the
+# result is trusted, then uncomment the `schedule:` block below to make it
+# recurring. That is the one-line diff that flips it — nothing else changes.
+#
+# PREREQUISITES (per provider you intend to run this against) — none of these
+# can be set up by a workflow; they are yours to create before the first run:
+#   1. A DEDICATED SSH keypair for this lane. Its private half is the secret
+#      CI_BASTION_SSH_PRIVATE_KEY (one key, shared across providers is fine);
+#      its PUBLIC half must already be listed in `bastion_ssh_keys` inside
+#      every tfvars this workflow writes (see prerequisite 2) — task cluster-up
+#      refuses to proceed otherwise (see its own precondition).
+#   2. The FULL content of each `envs/management-<provider>.tfvars` you want
+#      tested, stored verbatim as a secret: SCALEWAY_MANAGEMENT_TFVARS,
+#      OVH_MANAGEMENT_TFVARS, OUTSCALE_MANAGEMENT_TFVARS. Not reconstructed
+#      field-by-field here — you already have a working one from your own real
+#      runs (docs/status.md), and hand-splitting it into two dozen secrets is
+#      itself a source of drift. Only that file's `admin_ip` needs a CI-aware
+#      decision — see the note on that step below.
+#   3. The provider API credentials, same variables `.env.example` documents —
+#      this list is exactly `grep -oE 'secrets\.[A-Z_]+' <this file> | sort -u`,
+#      kept that way on purpose so the two cannot drift apart silently:
+#      Scaleway  — SCW_ACCESS_KEY, SCW_SECRET_KEY, SCW_DEFAULT_ORGANIZATION_ID,
+#                   SCW_DEFAULT_PROJECT_ID, SCW_DEFAULT_REGION, SCW_DEFAULT_ZONE
+#      OVH       — OS_USERNAME, OS_PASSWORD, OS_PROJECT_ID, OS_PROJECT_NAME,
+#                   OS_REGION_NAME, OVH_AWS_ACCESS_KEY_ID, OVH_AWS_SECRET_ACCESS_KEY,
+#                   OVH_AWS_DEFAULT_REGION (NOT the same value as OS_REGION_NAME —
+#                   compute and object-storage regions differ in casing and can
+#                   differ in place entirely; .env.example shows both)
+#      Outscale  — OUTSCALE_ACCESS_KEY_ID, OUTSCALE_SECRET_KEY, OUTSCALE_REGION
+#      All       — CI_BASTION_SSH_PRIVATE_KEY (prerequisite 1) and
+#                   TF_VAR_ENCRYPTION_PASSPHRASE (>= 32 chars) — encrypts the
+#                   tfstate and the gpg-backed kube/talosconfig artifacts, same
+#                   as any cloud deploy.
+#
+# admin_ip, READ THIS BEFORE THE FIRST RUN: it gates bastion SSH *and* the K8s
+# API LB ACL (cluster/variables.tf) — not cosmetic. A hosted GitHub Actions
+# runner has no small, stable IP to put there; GitHub publishes its runner
+# ranges as a large, changing list. Your options, and this workflow does not
+# choose for you:
+#   (a) widen admin_ip in the CI tfvars to GitHub's published hosted-runner
+#       ranges (https://api.github.com/meta, the `actions` key) — acceptable
+#       mainly BECAUSE these are the sandbox accounts with nothing real on
+#       them, still a real widening of who can reach a system:masters API;
+#   (b) point this workflow at a self-hosted runner with a known static IP
+#       instead (`runs-on: [self-hosted, ...]`) and keep admin_ip tight.
+# Neither is wired in here. Pick one before the first manual run — the run
+# itself is where you find out which one you actually needed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: "Provider to run against (or all three, sequentially)"
+        type: choice
+        options: [scaleway, ovh, outscale, all]
+        default: scaleway
+  # Uncomment once a manual run above has gone green end to end, teardown
+  # included, on every provider you care about:
+  # schedule:
+  #   - cron: "0 5 * * 1"   # weekly, Monday 05:00 UTC — pick a slot nobody
+  #                          # is mid-deploy on the same accounts by hand
+
+# Never cancel a run mid-deploy: a cancelled apply can leave real resources
+# behind with no teardown step left to run. Two runs of this CAN legitimately
+# queue (a Monday schedule firing while someone's manual test from the same
+# morning is still finishing) — let them queue, don't let them race the same
+# account.
+concurrency:
+  group: real-cloud-regression-${{ github.event.inputs.provider || 'scheduled' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    name: Deploy + verify + teardown (${{ matrix.provider }})
+    runs-on: ubuntu-latest
+    # A cold image build can run long; give the whole cycle real headroom
+    # rather than have the teardown step never run because the job timed out
+    # mid-apply — that is exactly the "failed apply nobody looks at" shape
+    # the teardown skill calls out as the actual billing risk.
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      # Sequential across providers, on purpose: three independent sandbox
+      # accounts CAN run in parallel safely, but a first real-cloud lane is
+      # exactly where you want ONE failure's logs to be unambiguous rather
+      # than three interleaved. Raise once this has been green a few times.
+      max-parallel: 1
+      matrix:
+        # `all`, and — once schedule: is live — every scheduled firing too:
+        # `github.event.inputs` does not exist outside workflow_dispatch, so a
+        # bare `.provider == 'all'` check alone would default a scheduled run
+        # to scaleway only, silently dropping the other two from the weekly
+        # regression this section exists to run.
+        provider: ${{ fromJSON(
+          (github.event.inputs.provider == 'all' || github.event_name == 'schedule')
+            && '["scaleway","ovh","outscale"]'
+            || format('["{0}"]', github.event.inputs.provider)
+          ) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+
+      - name: Setup Task
+        run: ./scripts/internal/install-task.sh
+
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4  # v2
+        with:
+          # renovate: datasource=github-releases depName=opentofu/opentofu extractVersion=^v(?<version>.*)$
+          tofu_version: "1.12.5"
+
+      - name: Install talosctl (pinned + checksum-verified)
+        run: |
+          ./scripts/internal/install-talosctl.sh
+          talosctl version --client
+
+      - name: Install kubectl
+        run: |
+          STABLE="$(curl -fsSL https://dl.k8s.io/release/stable.txt)"
+          curl -fsSLO "https://dl.k8s.io/release/${STABLE}/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo install -m 0755 kubectl /usr/local/bin/kubectl
+
+      # Mirrors .env.example's own derivation exactly (S3 creds ARE the API
+      # keys on Scaleway/Outscale; OVH's are dedicated) — one secret per
+      # PRIMARY credential, not one per derived variable, so this cannot drift
+      # from what a human sourcing .env.sh already does.
+      - name: Provider credentials (Scaleway)
+        if: matrix.provider == 'scaleway'
+        run: |
+          {
+            echo "SCW_ACCESS_KEY=${{ secrets.SCW_ACCESS_KEY }}"
+            echo "SCW_SECRET_KEY=${{ secrets.SCW_SECRET_KEY }}"
+            echo "SCW_DEFAULT_ORGANIZATION_ID=${{ secrets.SCW_DEFAULT_ORGANIZATION_ID }}"
+            echo "SCW_DEFAULT_PROJECT_ID=${{ secrets.SCW_DEFAULT_PROJECT_ID }}"
+            echo "SCW_DEFAULT_REGION=${{ secrets.SCW_DEFAULT_REGION }}"
+            echo "SCW_DEFAULT_ZONE=${{ secrets.SCW_DEFAULT_ZONE }}"
+            echo "SCW_AWS_ACCESS_KEY_ID=${{ secrets.SCW_ACCESS_KEY }}"
+            echo "SCW_AWS_SECRET_ACCESS_KEY=${{ secrets.SCW_SECRET_KEY }}"
+            echo "SCW_AWS_DEFAULT_REGION=${{ secrets.SCW_DEFAULT_REGION }}"
+          } >> "$GITHUB_ENV"
+
+      - name: Provider credentials (OVH)
+        if: matrix.provider == 'ovh'
+        run: |
+          {
+            echo "OS_AUTH_URL=https://auth.cloud.ovh.net/"
+            echo "OS_INTERFACE=public"
+            echo "OS_IDENTITY_API_VERSION=3"
+            echo "OS_USERNAME=${{ secrets.OS_USERNAME }}"
+            echo "OS_PASSWORD=${{ secrets.OS_PASSWORD }}"
+            echo "OS_PROJECT_ID=${{ secrets.OS_PROJECT_ID }}"
+            echo "OS_PROJECT_NAME=${{ secrets.OS_PROJECT_NAME }}"
+            echo "OS_REGION_NAME=${{ secrets.OS_REGION_NAME }}"
+            echo "OS_USER_DOMAIN_NAME=Default"
+            echo "OS_PROJECT_DOMAIN_NAME=default"
+            echo "OVH_AWS_ACCESS_KEY_ID=${{ secrets.OVH_AWS_ACCESS_KEY_ID }}"
+            echo "OVH_AWS_SECRET_ACCESS_KEY=${{ secrets.OVH_AWS_SECRET_ACCESS_KEY }}"
+            echo "OVH_AWS_DEFAULT_REGION=${{ secrets.OVH_AWS_DEFAULT_REGION }}"
+          } >> "$GITHUB_ENV"
+
+      - name: Provider credentials (Outscale)
+        if: matrix.provider == 'outscale'
+        run: |
+          {
+            echo "OUTSCALE_ACCESS_KEY_ID=${{ secrets.OUTSCALE_ACCESS_KEY_ID }}"
+            echo "OUTSCALE_SECRET_KEY=${{ secrets.OUTSCALE_SECRET_KEY }}"
+            echo "OUTSCALE_REGION=${{ secrets.OUTSCALE_REGION }}"
+            echo "OUTSCALE_AWS_ACCESS_KEY_ID=${{ secrets.OUTSCALE_ACCESS_KEY_ID }}"
+            echo "OUTSCALE_AWS_SECRET_ACCESS_KEY=${{ secrets.OUTSCALE_SECRET_KEY }}"
+            echo "OUTSCALE_AWS_DEFAULT_REGION=${{ secrets.OUTSCALE_REGION }}"
+          } >> "$GITHUB_ENV"
+
+      - name: TF_VAR_encryption_passphrase
+        run: echo "TF_VAR_encryption_passphrase=${{ secrets.TF_VAR_ENCRYPTION_PASSPHRASE }}" >> "$GITHUB_ENV"
+
+      # Real environment data (bucket names, admin_ip, node sizing) — written
+      # to a gitignored path, never logged, never committed. See the
+      # PREREQUISITES block at the top of this file for what each secret holds.
+      - name: Write tfvars
+        run: |
+          DIR=infrastructure/opentofu/cluster/envs
+          mkdir -p "$DIR"
+          case "${{ matrix.provider }}" in
+            scaleway)
+              printf '%s' "${{ secrets.SCALEWAY_MANAGEMENT_TFVARS }}" \
+                > "$DIR/management-scaleway.tfvars" ;;
+            ovh)
+              printf '%s' "${{ secrets.OVH_MANAGEMENT_TFVARS }}" \
+                > "$DIR/management-ovh.tfvars" ;;
+            outscale)
+              printf '%s' "${{ secrets.OUTSCALE_MANAGEMENT_TFVARS }}" \
+                > "$DIR/management-outscale.tfvars" ;;
+          esac
+
+      - name: Write the bastion SSH key
+        run: |
+          install -m 600 /dev/null "$RUNNER_TEMP/ci_bastion_key"
+          printf '%s' "${{ secrets.CI_BASTION_SSH_PRIVATE_KEY }}" > "$RUNNER_TEMP/ci_bastion_key"
+          echo "BASTION_KEY=$RUNNER_TEMP/ci_bastion_key" >> "$GITHUB_ENV"
+
+      # One idempotent command: image, manifests, infra, tunnels, Talos
+      # bootstrap. APPROVE=auto answers the plan confirmation for a shell that
+      # cannot be asked — same flag CI already trusts elsewhere in this repo.
+      - name: task cluster-up
+        run: task cluster-up ROLE=management PROVIDER=${{ matrix.provider }} KEY="$BASTION_KEY" APPROVE=auto
+
+      # This is the actual point of the lane: does a cluster built THIS way,
+      # TODAY, still come up as a healthy, correctly-versioned fleet — apiserver,
+      # every node Ready, Cilium, CoreDNS, no Flux, the pinned Talos/Kubernetes
+      # versions, the pinned schematic, a tfstate replica in the backup store.
+      - name: task cluster-verify
+        run: task cluster-verify PROVIDER=${{ matrix.provider }}
+
+      # Two commands, always — same discipline as a human running this by
+      # hand (docs/release-checklist.md, the teardown skill): a plan first,
+      # then apply exactly that plan. `if: always()` on BOTH steps is the
+      # whole point — the teardown skill names the failed-apply-nobody-looks-
+      # at as the actual billing defect this repository has already paid for
+      # twice. `|| true` on the plan step: a plan-only run can legitimately
+      # exit non-zero when there is nothing to destroy (an early cluster-up
+      # failure), and that must not skip the apply step below, which is safe
+      # to run against an empty plan.
+      - name: task cluster-down (plan)
+        if: always()
+        run: task cluster-down PROVIDER=${{ matrix.provider }} || true
+
+      - name: task cluster-down (apply)
+        if: always()
+        run: |
+          task cluster-down PROVIDER=${{ matrix.provider }} \
+            PLAN=destroy-management-${{ matrix.provider }}.tfplan APPROVE=auto
+
+      # The last sentence between a failed teardown and a bill (teardown
+      # skill, "Proving it") — asks the PROVIDER, not the state file. Exits
+      # non-zero if anything remains, including a refused/unreachable API —
+      # never silently green. Not `--apply`: this run's job is to PROVE
+      # clean, not to sweep up after itself; a non-zero exit here is a signal
+      # for a human, not something this workflow should paper over.
+      - name: Confirm the account is clean
+        if: always()
+        run: python3 scripts/ops/purge-orphans/${{ matrix.provider }}.py
