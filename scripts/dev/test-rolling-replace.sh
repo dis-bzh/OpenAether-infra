@@ -52,6 +52,7 @@ done <"$STUB_PLAN"
 exit 1
 STUB
 chmod +x "$STUB_DIR/kubectl"
+REAL_KUBECTL="$(command -v kubectl || true)"   # before the stub shadows it
 export PATH="$STUB_DIR:$PATH"
 
 # --- load the functions under test -------------------------------------------
@@ -299,7 +300,8 @@ echo "--- and that it is wired in: once, after the budgets are gone, before node
 # call site too: this is the one thing a stub kubectl cannot observe.
 SUT="$ROOT/scripts/ops/rolling-replace.sh"
 lineno() { grep -n "$1" "$SUT" | head -1 | cut -d: -f1; }
-L_MAINT="$(lineno '^  cnpg_maintenance true$')"
+# Last match: the first is the per-node re-assert in cordon_drain, not the main block.
+L_MAINT="$(grep -n '^  cnpg_maintenance true$' "$SUT" | tail -1 | cut -d: -f1)"
 L_PRE="$(lineno '^  preflight_roll$')"
 L_ROLL="$(lineno 'replace_node worker')"
 [ "$(grep -c '^  *preflight_roll$' "$SUT")" = 1 ] \
@@ -543,6 +545,170 @@ grep -q 'would: tofu plan -out=' "$SUT_R" && ! grep -qE 'would: tofu apply .*-ta
 [ "$(extract 'replace_node' | grep -c 'for t in')" = 0 ] \
   && ok "replace_node does not reuse \$t (its cp|worker role) as a loop variable" \
   || bad "replace_node loops over \$t again — the etcd gate after it is skipped for CPs"
+
+echo
+echo "=== the roll's exit checks what it touched, it does not assume (#64) ==="
+# A stateful fake apiserver, unlike the argv-keyed stub above: the restore is a
+# sequence (resume child, resume root, re-enable budgets, operator recreates
+# them) and only state can say where it ended. One CNPG cluster owned by
+# Kustomization flux-system/cnpg, itself owned by the root flux-system/platform.
+FK="$STUB_DIR/fk"; mkdir -p "$FK/bin"
+cat >"$FK/bin/kubectl" <<'FAKE'
+#!/usr/bin/env bash
+S="$FK_STATE"; echo "$*" >>"$S/calls"
+refuse() { echo "fake apiserver: $1" >&2; exit 1; }
+case "$*" in
+  "get crd clusters.postgresql.cnpg.io")
+    [ "${FK_CNPG:-1}" = 1 ] || refuse 'Error from server (NotFound)' ;;
+  "get clusters.postgresql.cnpg.io -A -o jsonpath="*fluxcd*)   # owner labels
+    [ "${FK_FLUX:-1}" = 1 ] && echo "flux-system cnpg" || echo " " ;;
+  "get clusters.postgresql.cnpg.io -A -o jsonpath="*)
+    n=$(( $(cat "$S/lists") + 1 )); echo "$n" >"$S/lists"
+    [ "${FK_LIST_FAIL_ONCE:-0}" = 1 ] && [ "$n" = 1 ] && refuse 'connection refused'
+    echo "foundation-databases zitadel-db" ;;
+  "-n "*" get kustomizations."*"-o jsonpath={.spec.suspend}")
+    [ "${FK_READ_FAIL:-}" = suspend ] && refuse 'connection refused'
+    cat "$S/susp.$5" ;;
+  "-n "*" get kustomizations."*)                                # parent labels
+    [ "$5" = cnpg ] && echo "flux-system platform" || echo " " ;;
+  "-n "*" patch kustomizations."*)
+    [ "$2/$5" = "${FK_PATCH_FAIL:-}" ] && refuse 'webhook refused'
+    case "$9" in *true*) echo true ;; *) echo false ;; esac >"$S/susp.$5" ;;
+  "-n "*" patch clusters."*)
+    case "$9" in *'"enablePDB":true'*) echo true ;; *) echo false ;; esac >"$S/pdb" ;;
+  "get pdb -A -l cnpg.io/cluster "*)
+    [ "${FK_READ_FAIL:-}" = pdb ] && refuse 'connection refused'
+    if [ "${FK_OPERATOR:-1}" = 1 ]; then       # the operator follows enablePDB
+      if [ "$(cat "$S/pdb")" != true ]; then rm -f "$S/budget"
+      elif [ "$(cat "$S/delay")" -gt 0 ]; then echo $(( $(cat "$S/delay") - 1 )) >"$S/delay"
+      else : >"$S/budget"; fi
+    fi
+    [ -e "$S/budget" ] && printf 'foundation-databases/zitadel-db-primary ' ;;
+  *) refuse "unexpected: $*" ;;
+esac
+exit 0
+FAKE
+chmod +x "$FK/bin/kubectl"
+
+eval "$(extract 'cnpg_flux_owners,cnpg_clusters,cnpg_flux_suspend,cnpg_maintenance,cnpg_budgets,cnpg_unrestored,assert_restored,finish_roll')"
+for f in cnpg_budgets cnpg_unrestored assert_restored finish_roll; do
+  declare -F "$f" >/dev/null || bad "$f is not defined in rolling-replace.sh"
+done
+
+# The roll ends in the state the script leaves it in when it is done rolling:
+# owner chain suspended, enablePDB=false, budgets gone. FK_* knobs come from the
+# caller's environment; FK_TRAP swaps the exit handler (for the control below).
+fk_run() { # <the roll's own exit status>
+  FK_STATE="$FK/state"; export FK_STATE; rm -rf "$FK_STATE"; mkdir -p "$FK_STATE"
+  echo true >"$FK_STATE/susp.cnpg"; echo true >"$FK_STATE/susp.platform"
+  echo false >"$FK_STATE/pdb"; echo 0 >"$FK_STATE/lists"; : >"$FK_STATE/calls"
+  echo "${FK_OPERATOR_DELAY:-0}" >"$FK_STATE/delay"
+  # A subshell: the harness's own ok/die/sleep must not be the ones in play, and
+  # `set -e` is on because the roll runs under it.
+  OUT="$( ( set -euo pipefail; hash -r; PATH="$FK/bin:$PATH"
+    ok() { printf '✓ %s\n' "$*"; }; warn() { printf '⚠ %s\n' "$*" >&2; }
+    info() { :; }; sleep() { :; }; die() { printf '✗ %s\n' "$*" >&2; exit 1; }
+    RESTORE_TIMEOUT=10 RESTORE_POLL=5
+    trap "${FK_TRAP:-finish_roll}" EXIT; exit "$1" ) 2>&1 )"; RC=$?
+}
+fk() { cat "$FK_STATE/$1"; }
+
+FK_CNPG=0 fk_run 0
+[ "$RC" = 0 ] && [ -s "$FK_STATE/calls" ] && ! grep -qvxF 'get crd clusters.postgresql.cnpg.io' "$FK_STATE/calls" \
+  && ok "no CNPG: exit 0, and nothing but the CRD lookup is asked" \
+  || bad "a cluster without CNPG was touched or refused (rc ${RC}): $(tr '\n' '|' <"$FK_STATE/calls")"
+
+FK_FLUX=0 fk_run 0
+[ "$RC" = 0 ] && ! grep -q kustomizations "$FK_STATE/calls" && [ "$(fk pdb)" = true ] && [ -e "$FK_STATE/budget" ] \
+  && ok "CNPG without Flux: exit 0, the budget is back, no Kustomization is ever queried" \
+  || bad "CNPG without Flux (rc ${RC}): ${OUT}"
+
+fk_run 0
+[ "$RC" = 0 ] && saw "restored" && [ "$(fk susp.cnpg)" = false ] && [ "$(fk susp.platform)" = false ] \
+  && [ "$(fk pdb)" = true ] && [ -e "$FK_STATE/budget" ] \
+  && ok "everything restored: exit 0, both owners resumed, the primary budget back" \
+  || bad "a clean restore was refused (rc ${RC}): ${OUT}"
+
+FK_PATCH_FAIL=flux-system/platform fk_run 0
+[ "$RC" = 1 ] && saw "flux-system/platform is still suspended" && ! saw "flux-system/cnpg is still" \
+  && [ "$(fk susp.platform)" = true ] && [ "$(fk susp.cnpg)" = false ] \
+  && ok "a root that would not resume: exit 1, and it is the one named" \
+  || bad "a still-suspended root ended the roll clean (rc ${RC}): ${OUT}"
+
+# The control: the OLD exit path on the same fake. If it did not fail here, the
+# fake could not produce the state above and none of that would prove anything.
+FK_PATCH_FAIL=flux-system/platform FK_TRAP='cnpg_maintenance false' fk_run 0
+[ "$RC" = 0 ] && [ "$(fk susp.platform)" = true ] \
+  && ok "control: the old exit path leaves the root suspended and exits 0" \
+  || bad "control: the fake does not reproduce the old defect (rc ${RC})"
+
+FK_LIST_FAIL_ONCE=1 fk_run 0
+[ "$RC" = 1 ] && saw "flux-system/cnpg is still suspended" && saw "flux-system/platform is still suspended" \
+  && saw "foundation-databases/zitadel-db-primary is missing" \
+  && ok "an apiserver blip at exit: the restore dies, and the check still names all three leftovers" \
+  || bad "a blip at exit hid what was left (rc ${RC}): ${OUT}"
+
+FK_OPERATOR=0 fk_run 0
+[ "$RC" = 1 ] && saw "foundation-databases/zitadel-db-primary is missing" && ! saw "still suspended" \
+  && [ "$(fk susp.platform)" = false ] \
+  && ok "an operator that never recreates the budget: exit 1, the budget is named" \
+  || bad "a missing budget ended the roll clean (rc ${RC}): ${OUT}"
+
+FK_OPERATOR_DELAY=1 fk_run 0
+[ "$RC" = 0 ] && saw "restored" \
+  && ok "an operator one read late is waited for, not reported" \
+  || bad "the check did not wait for the operator (rc ${RC}): ${OUT}"
+
+FK_READ_FAIL=suspend fk_run 0
+[ "$RC" = 1 ] && saw "flux-system/cnpg could not be read" \
+  && ok "a Kustomization that cannot be read is a problem, not a pass" \
+  || bad "an unreadable suspend read as restored (rc ${RC}): ${OUT}"
+
+FK_READ_FAIL=pdb fk_run 0
+[ "$RC" = 1 ] && saw "could not be read back" \
+  && ok "an unanswered budget query is a problem, not a pass" \
+  || bad "an unreadable budget list read as restored (rc ${RC}): ${OUT}"
+
+fk_run 1
+[ "$RC" = 1 ] && saw "restored" \
+  && ok "a roll that failed still exits 1 after a clean restore" \
+  || bad "the roll's own failure was lost (rc ${RC}): ${OUT}"
+
+# What the fake cannot see: that the handler is installed, and installed first.
+[ "$(grep -c '^  trap finish_roll EXIT$' "$SUT")" = 1 ] && ! grep -q "trap 'cnpg_maintenance false'" "$SUT" \
+  && ok "the exit trap is finish_roll, once, and the bare restore is gone" \
+  || bad "the exit trap is not finish_roll, or the old one survives"
+L_TRAP="$(lineno '^  trap finish_roll EXIT$')"
+[ -n "$L_TRAP" ] && [ -n "$L_MAINT" ] && [ "$L_TRAP" -lt "$L_MAINT" ] \
+  && ok "…and installed before cnpg_maintenance true, so a death inside it is restored" \
+  || bad "trap at line ${L_TRAP:-?}, cnpg_maintenance true at ${L_MAINT:-?}"
+[ "$(grep -v '^[[:space:]]*#' "$SUT" | grep -c 'get pdb -A -l cnpg.io/cluster')" = 1 ] \
+  && [ "$(extract cnpg_budgets | grep -c 'get pdb -A -l cnpg.io/cluster')" = 1 ] \
+  && ok "one budget query, in cnpg_budgets: the way in and the way out cannot disagree" \
+  || bad "the CNPG budget query is not written exactly once, in cnpg_budgets"
+
+# The fake answers what we TOLD it kubectl prints. Ask the real one, offline, what
+# these templates select on a Kustomization, and that the script sends those.
+if [ -n "$REAL_KUBECTL" ]; then
+  OWN='{.metadata.labels.kustomize\.toolkit\.fluxcd\.io/namespace}{" "}{.metadata.labels.kustomize\.toolkit\.fluxcd\.io/name}'
+  printf '%s\n' 'apiVersion: kustomize.toolkit.fluxcd.io/v1' 'kind: Kustomization' \
+    'metadata: {name: cnpg, namespace: flux-system, labels: {kustomize.toolkit.fluxcd.io/name: platform, kustomize.toolkit.fluxcd.io/namespace: flux-system}}' \
+    'spec: {suspend: true}' >"$STUB_DIR/ks-owned.yaml"
+  printf '%s\n' 'apiVersion: kustomize.toolkit.fluxcd.io/v1' 'kind: Kustomization' \
+    'metadata: {name: platform, namespace: flux-system}' 'spec: {}' >"$STUB_DIR/ks-root.yaml"
+  rk() { "$REAL_KUBECTL" patch --local --type merge -f "$STUB_DIR/$1" -p '{}' -o "jsonpath=$2" 2>/dev/null; }
+  [ "$(rk ks-owned.yaml "$OWN")" = "flux-system platform" ] && [ "$(rk ks-root.yaml "$OWN")" = " " ] \
+    && ok "real kubectl: the owner template yields the parent, and nothing for a root" \
+    || bad "the owner template selected '$(rk ks-owned.yaml "$OWN")' / '$(rk ks-root.yaml "$OWN")'"
+  [ "$(rk ks-owned.yaml '{.spec.suspend}')" = true ] && [ -z "$(rk ks-root.yaml '{.spec.suspend}')" ] \
+    && ok "real kubectl: {.spec.suspend} reads true for a suspended one, empty for unset" \
+    || bad "{.spec.suspend} selected '$(rk ks-owned.yaml '{.spec.suspend}')' / '$(rk ks-root.yaml '{.spec.suspend}')'"
+  grep -qF -- "jsonpath='${OWN}'" "$SUT" && grep -qF -- "jsonpath='{.spec.suspend}'" "$SUT" \
+    && ok "…and the script sends exactly those two templates" \
+    || bad "the script's owner or suspend template is not the one evaluated above"
+else
+  echo "  - no kubectl on PATH: the real-kubectl template checks were skipped"
+fi
 
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 # A floor, not just a verdict: `FAIL -eq 0` is also true when the harness died

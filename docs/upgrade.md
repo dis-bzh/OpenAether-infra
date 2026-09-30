@@ -146,7 +146,10 @@ primary is then evicted like any other pod and CNPG fails over to a replica —
 an unplanned failover, which is what the node reboot was going to cause seconds
 later anyway. The maintenance window stays set alongside it, because that is
 what tells the operator to reuse the PVC instead of reprovisioning an instance
-that node-local storage could not move.
+that node-local storage could not move. On exit the roll checks the restore: it
+waits up to two minutes for each cluster's `<cluster>-primary` budget, and exits
+non-zero, naming what is left, if one is missing or an owning Kustomization is
+still suspended.
 
 **Everything else quorum-shaped blocks it too.** Three runs on 2026-08-14 stopped
 on three different pods — CNPG replicas, `kube-state-metrics`, then `openbao-1`
