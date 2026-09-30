@@ -12,7 +12,9 @@ Taskfile.yml calls `record` from a defer, so a red run leaves a receipt too.
 `check` passes when a target that can stand for the declared rung has a green
 receipt for the PR head, started on a clean tree, and no pasted run at or below
 that rung is red. A receipt makes the claim falsifiable, not unforgeable:
-nothing offline can prove a line was not typed by hand.
+nothing offline can prove a line was not typed by hand. Nor can `check` tell
+what a green run exercised: a verify or teardown target backs its rung like any
+other (a plan does not), and the pasted lines are for the reviewer to weigh.
 """
 import json
 import os

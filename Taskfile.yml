@@ -499,7 +499,8 @@ tasks:
       # start/stop/status call, and the record lane's proxy, to FEINT_ENDPOINT.
       - ./scripts/dev/test-feint-restart.sh
       # Each check of check-required-checks.sh seen red and green against a
-      # canned API, not its HTTP layer; live, it runs in repo-settings.yml only.
+      # canned API, not its HTTP layer; live, it runs in repo-settings.yml and in
+      # an admin's release-checklist run (bypass actors need an admin token).
       - ./scripts/dev/check-required-checks.sh --self-test
       # The receipts behind a PR's rung claim (#120): the real Taskfile's defer
       # under go-task, then every verdict the "Rung receipt" CI job can reach.

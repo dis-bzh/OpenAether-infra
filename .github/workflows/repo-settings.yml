@@ -23,6 +23,8 @@ permissions:
 jobs:
   settings:
     name: Repository settings
+    # A fork has no such rulesets: the check would go red there, daily.
+    if: github.repository == 'dis-bzh/OpenAether-infra'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

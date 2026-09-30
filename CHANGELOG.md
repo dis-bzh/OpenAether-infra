@@ -38,19 +38,19 @@ in git. 0.1.0 is the first entry describing something proven.
   does one `record` could not have written. The check reads the body through a
   model of what GitHub displays (block structure, raw HTML, images, link
   destinations, titles and labels, reference and footnote definitions). It
-  agrees with GitHub's renderer on the 59 self-test bodies GitHub rendered, and
-  is proven on nothing else. Where an HTML comment or tag is left open with more
-  after it, only GitHub's HTML parser knows how much it hides, so the check
-  refuses and asks to close it. It also refuses quotes, list items and
+  agrees with GitHub's renderer on 55 of the 59 self-test bodies GitHub rendered
+  and is stricter by design on the other 4; it is proven on nothing else. Where
+  an HTML comment or tag is left open with more after it, only GitHub's HTML
+  parser knows how much it hides, so the check refuses and asks to close it. It also refuses quotes, list items and
   footnotes nested more than 32 deep. Of 153 bodies up to GitHub's
   65536-character limit built to make it slow, the slowest took 0.80 s on a
   two-CPU host: backtick runs of distinct lengths, which cost more than
   linearly, so GitHub's limit is what bounds them. Renovate, Dependabot and
   docs-only diffs may leave the rung out, but a rung they declare is checked
   like any other. The body reaches the check only through `env:`. A receipt
-  makes the claim falsifiable, not unforgeable. The job is not a required
-  check. CONTRIBUTING now lists four rungs, adding local Docker as in the
-  issue form. Mocked rung:
+  makes the claim falsifiable, not unforgeable. The job is a required check of
+  the `main` ruleset. CONTRIBUTING now lists four rungs, adding local Docker as
+  in the issue form. Mocked rung:
   `test-rung-receipts.sh` (121 assertions) runs the real Taskfile under
   go-task against a stub `feint` and drives every verdict the check can give,
   each within 2 s; each of 77 mutations turns it red. With the body
@@ -721,6 +721,16 @@ in git. 0.1.0 is the first entry describing something proven.
   `APPROVE=auto`. The `bastion_user` output said root on Scaleway and ubuntu on
   OVH and Outscale; the value is `bastion` on all three, and `host_ssh_user` on
   Proxmox.
+
+- **The rung check's docs now say what it cannot see, and the required-checks
+  audit covers two more shapes (follow-up to #205).** `repo-settings.yml` is
+  skipped on forks, which have no such rulesets. `check-required-checks.sh
+  --self-test` gains two cases: a required context pinned to another app, and a
+  tag ruleset matching `refs/tags/*` only, which misses tags with a slash. The
+  rung check cannot tell what a green run exercised, so a verify or teardown
+  target backs its rung like any other; `rung-receipt.py` says so instead of
+  implying otherwise, and `ssh-ca-check.sh` names its rung `local-docker`, not
+  `emulated`.
 
 ### Added
 
