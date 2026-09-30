@@ -358,6 +358,9 @@ Only once everything above is green.
       matrix. "Validated on three clouds" holds — Scaleway, OVH and Outscale.
       "Validated on three providers" does not: Proxmox has never touched real
       hardware, and nothing above Cilium is deployed at all.
+- [ ] `task evidence-check` exits 0, or the announcement names each provider whose
+      measurement predates the pin or is older than its limit. It dates the
+      `docs/status.md` table; it cannot tell a measured row from a typed one.
 
 ---
 

@@ -15,12 +15,17 @@ user choice. CAPI and multi-cluster are an optional overlay, never the entry poi
 
 **Measured on real clouds, from an empty account** — Scaleway and OVH on
 2026-08-19, Outscale on 2026-08-20. This is the evidence the release rests on.
+`task evidence-check` compares the newest row per provider with the pin in
+`infrastructure/opentofu/cluster/variables.tf` and with today.
 
-| | deploy | `task cluster-verify` | idempotency | k8s | Talos | longest outage |
-|---|---|---|---|---|---|---|
-| Scaleway | ✅ 8 min 50, 72 resources | ✅ 11/11 | ✅ 3/3 | ✅ 1.36.2→1.36.3 | ✅ 6/6 nodes 1.13.7→1.13.8 | 5 s (16 fails in 575) |
-| OVH | ✅ | ✅ 11/11 | ✅ 3/3 | ✅ 1.36.2→1.36.3 | ✅ 6/6 nodes 1.13.7→1.13.8 | 7 s (9-10 in ~540) |
-| Outscale | ✅ 51 resources, then 17 | ✅ 11/11 | ✅ 3/3 | ✅ 1.36.2→1.36.3 | ✅ 6/6 nodes 1.13.7→1.13.8 | 8 s (59 in 1179) |
+<!-- Parsed by scripts/dev/check-evidence-age.sh: keep the measured, k8s and Talos headers, one YYYY-MM-DD per row. -->
+
+| | measured | deploy | `task cluster-verify` | idempotency | k8s | Talos | longest outage |
+|---|---|---|---|---|---|---|---|
+| Scaleway | 2026-08-19 | ✅ 8 min 50, 72 resources | ✅ 11/11 | ✅ 3/3 | ✅ 1.36.2→1.36.3 | ✅ 6/6 nodes 1.13.7→1.13.8 | 5 s (16 fails in 575) |
+| Scaleway, re-run | 2026-08-20 | — | ✅ 11/11 | ✅ `No changes.` ×2, one after the upgrade | unchanged at 1.36.3 | ✅ 6/6 nodes 1.13.8→1.13.9 | 2 s (13 fails in 577) |
+| OVH | 2026-08-19 | ✅ | ✅ 11/11 | ✅ 3/3 | ✅ 1.36.2→1.36.3 | ✅ 6/6 nodes 1.13.7→1.13.8 | 7 s (9-10 in ~540) |
+| Outscale | 2026-08-20 | ✅ 51 resources, then 17 | ✅ 11/11 | ✅ 3/3 | ✅ 1.36.2→1.36.3 | ✅ 6/6 nodes 1.13.7→1.13.8 | 8 s (59 in 1179) |
 
 Three things about that table are the point of it:
 
@@ -124,11 +129,12 @@ no container, volume, network or credential.
 [#87](https://github.com/dis-bzh/OpenAether-infra/issues/87) is closed on that
 basis; what it does not answer is below.
 
-**Not proven**: whether `v1.13.9` — the cloud root's own pin, unrelated to the
-change above — has been through the same real-cloud upgrade evidence this page
-records for `v1.13.7`→`v1.13.8`; the table stops one patch short of what is
-currently pinned, and nothing here re-ran it. No lane has ever run unattended
-to completion; nobody has
+**Not proven**: `v1.13.9`, the cloud root's own pin (unrelated to the change
+above), has the real-cloud upgrade evidence this page records on Scaleway only:
+the 2026-08-20 re-run moved Talos to it and left Kubernetes at `v1.36.3`. The
+OVH and Outscale rows stop at `v1.13.8`; `task evidence-check` is what compares
+the table with the pin, so this page does not have to be kept true by hand. No
+lane has ever run unattended to completion; nobody has
 deployed under a non-empty `bucket_suffix`; and the failover — provider A treated
 as gone, the cluster rebuilt on B from B's replica alone — has never been
 attempted.

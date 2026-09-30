@@ -127,8 +127,11 @@ tasks:
           echo "  NOT covered here — only a cloud run can show that the provider accepts these"
           echo "  arguments, that the stored state is ciphertext, that an upgrade keeps the API"
           echo "  up, and that the teardown leaves the account empty. All four HAVE been shown on"
-          echo "  real clouds: see the table in docs/status.md for which, when, and how long."
+          echo "  real clouds: docs/status.md has the table, and task evidence-check says whether it is current."
           fi
+      # --warn: a measurement going stale is news, not a broken tree. Exit 2 (an
+      # unreadable table or pin) is the gate itself failing, and that still fails.
+      - ./scripts/dev/check-evidence-age.sh --warn
 
   lint:
     desc: Lint and format code (OpenTofu, YAML)
@@ -510,6 +513,9 @@ tasks:
       - ./scripts/dev/test-rung-receipts.sh
       # The inline guards of `fmt`, `lint` and the step below, under the real Taskfile.
       - ./scripts/dev/test-task-guards.sh
+      # check-evidence-age.sh on fixtures and a fixed clock. The real tree must parse, never be
+      # current: a verdict here would turn a required check red with no commit.
+      - ./scripts/dev/test-evidence-age.sh
       - |
         written="$(find infrastructure/opentofu/cluster/envs -newer {{.ENVS_STAMP}})" || exit 1
         [ -z "$written" ] || { echo "✗ a step wrote under envs/:" $written >&2; exit 1; }
@@ -1416,6 +1422,14 @@ tasks:
       of `task lint`, which must stay offline. Usage: task check-flux-digests [-- --write]
     cmds:
       - ./scripts/dev/check-flux-image-digests.sh {{.CLI_ARGS}}
+
+  evidence-check:
+    desc: >-
+      Date the real-cloud evidence in docs/status.md (#121): exits 1 while a provider's newest row
+      measured another Talos/Kubernetes than the pin, or is too old (OA_EVIDENCE_MAX_AGE_DAYS). Red by
+      design until it is re-measured, so it is in neither `task lint` nor `task test` and records no receipt.
+    cmds:
+      - ./scripts/dev/check-evidence-age.sh
 
   kubeconfig:
     desc: >-

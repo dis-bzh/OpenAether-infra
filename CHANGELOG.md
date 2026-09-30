@@ -16,6 +16,29 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
+- **`task evidence-check` dates the real-cloud evidence in `docs/status.md`
+  (refs #121).** Nothing aged the table 0.1.0 rests on, so a measurement stayed
+  "true today" after the versions it measured had moved. The table gains a
+  `measured` column and a Scaleway re-run row (2026-08-20, Talos v1.13.8 to
+  v1.13.9), transcribed from `upgrade.md` and the release checklist. The new
+  `scripts/dev/check-evidence-age.sh` takes the newest row per provider and is
+  red when its Talos or Kubernetes is not the pin a fresh `cluster-up` deploys,
+  or when it is older than 45 days (`OA_EVIDENCE_MAX_AGE_DAYS`). The pin is the
+  default in `cluster/variables.tf`, read with no tfvars: the
+  `envs/*.tfvars.example` are not watched by Renovate and stay stale, and a
+  workstation's own `envs/*.tfvars` must not change the verdict. Exit 0 current,
+  1 stale, 2 not verifiable (no table, a bad or future date, a cell with no
+  version), so a broken extractor never reads as stale. On this tree it exits 1:
+  OVH and Outscale measured Talos v1.13.8 against the pin v1.13.9, Scaleway is
+  current. It is in neither `task lint` nor `task test`, where a date-driven red
+  would appear with no commit, and it records no receipt. `task preflight` runs
+  it with `--warn`: stale prints a warning, exit 2 still fails. Mocked rung:
+  `test-evidence-age.sh` (50 assertions, fixtures and an injected clock) sees
+  each verdict red and green, and asserts the real table parses, never that it
+  is current; each of 19 mutations turns it red. It dates a measurement, it
+  cannot tell a measured row from a typed one. Turning it green takes real OVH
+  and Outscale runs at the pin, and the issue stays open until then.
+
 - **A pull request's rung is checked against a receipt the harness wrote
   (#120).** CONTRIBUTING asks every PR to name the rung it reached, but nothing
   recorded that a rung ever ran, so neither a reviewer nor CI could check the
