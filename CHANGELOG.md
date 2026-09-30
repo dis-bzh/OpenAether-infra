@@ -166,6 +166,39 @@ in git. 0.1.0 is the first entry describing something proven.
   documents: security groups filter public traffic only. The nodes have no
   public IP, so on this provider the list declares the perimeter; it does not
   enforce it. Still open: one real deploy to confirm the LB health checks pass.
+- **Scaleway's teardown proof now answers, and missing credentials no longer
+  read as leftovers.** `verify-provider-clean.py` listed `scaleway` as supported
+  but had no check for it, so it exited 2. It now reads `purge-orphans/scaleway.py`'s
+  own listing: servers, LBs, public gateways, security groups and private
+  networks named or tagged after the cluster (the whole name, so `edge-1` does
+  not own `edge-10`), plus every detached flexible IP, LB IP, gateway IP and
+  volume in the project, from the block API and from the instance API that
+  DEV1/GP1 servers still use. The purge never listed public gateways, their
+  IPs, LB IPs left without an LB, security groups or instance volumes, so a
+  project holding only those read as clean, and it read the first 50 items of
+  each list only. It now lists and deletes them, page by page, and a list that
+  answers page 1 then fails is refused, not read as "not offered in this zone".
+  A missing
+  `SCW_SECRET_KEY` or `SCW_DEFAULT_PROJECT_ID` raised `KeyError` and exited 1,
+  the code for "leftovers found". It now exits 2, "could not check". So does an
+  `--apply` run where an endpoint refused to answer, on all three purges: it
+  used to end "clean" with exit 0. `ovh.py` and `outscale.py` had the same bare
+  credential read, and a refused OVH authentication, like a region missing from
+  its catalog, exited 1 with a traceback; both now exit 2. `edge-down.sh` no
+  longer sends a Scaleway or Outscale operator to the OpenStack-only deleter.
+  Mocked rung: `test-purge-orphans.sh` went from 26 to 78 assertions, 41 of the
+  first 74 red on `main`'s scripts, and 22 mutants measured on those 74 each
+  turn it red;
+  `test-teardown.sh` from 105 to 109. Emulated rung, on Feint 0.13.0, with the
+  API base swapped in-process (the scripts read no endpoint from the
+  environment): one resource of each of the 10 kinds plus another cluster's
+  server gives 10 leftovers from verify and 11 targets from the purge, which
+  covers the whole project. A single `--apply` pass deletes 14, the 11 and 3
+  that the emulator released while terminating servers and deleting the
+  gateway; both then report 0. 56 detached volumes give 58 targets, 52 when
+  only the first page is read. Not yet run on real cloud, so a volume that
+  both volume APIs list (counted once, by id) is untested. Buckets are still
+  not listed.
 
 - **`feint-record`'s proxy always listened on 4600, and a dead one went
   unnoticed (#204).** Two record lanes on different endpoints shared that port.

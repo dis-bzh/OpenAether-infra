@@ -14,7 +14,11 @@ import sys
 import urllib.request
 
 APPLY = '--apply' in sys.argv
-AK, SK = os.environ['OUTSCALE_ACCESS_KEY_ID'], os.environ['OUTSCALE_SECRET_KEY']
+try:
+    AK, SK = os.environ['OUTSCALE_ACCESS_KEY_ID'], os.environ['OUTSCALE_SECRET_KEY']
+except KeyError as e:   # not exit 1, which callers read as "leftovers found"
+    print(f"✗ missing credential {e} — source .env.sh first. Nothing was checked.")
+    sys.exit(2)
 REGION, SERVICE = os.environ.get('OSC_REGION', 'eu-west-2'), 'api'
 HOST = f"api.{REGION}.outscale.com"
 
@@ -191,5 +195,10 @@ elif ARTIFACTS or ARTIFACTS_UNVERIFIED:
     # leftover snapshot's milder "not fully clean" wording.
     print(f"\n{TOTAL} resource(s) deleted. {_artifact_reason()} still present (see above) — not fully clean.")
     sys.exit(1)
+elif UNREACHABLE:
+    # Deleted what it could see; a call that refused was never asked (exit 2, as above).
+    print(f"\n✗ {UNREACHABLE} call(s) refused, so what they hold was never asked.")
+    print("  This is NOT an all-clear: check OUTSCALE_ACCESS_KEY_ID / _SECRET_KEY and re-run.")
+    sys.exit(2)
 else:
     print(f"\n{TOTAL} resource(s) deleted. The account is clean.")

@@ -136,13 +136,22 @@ while (( SECONDS < deadline )); do
         sleep 20
       done
       printf '%s\n' "$OUT" >&2
+      # Only OpenStack has a scoped deleter; Scaleway's check also lists project-wide
+      # detached IPs and volumes, which no tag ties to $CLUSTER.
+      DELETE_ONE="python3 scripts/ops/delete-openstack-resource.py <kind> <id>"
+      DETACHED=""
+      if [ "$PROVIDER" != openstack ]; then
+        DELETE_ONE="delete each one in the $PROVIDER console or CLI"
+        [ "$PROVIDER" = scaleway ] && DETACHED=", or left detached in the project"
+      fi
       cat >&2 <<EOT
 
 ✗ the Kubernetes-level cascade finished but $PROVIDER still has resources
-  tagged '$CLUSTER' (listed above) after 4 checks (~80s) — CAPO/CAPOSC's own
-  cleanup did not finish. Purge by hand, ONE resource at a time (a leftover
-  Octavia LB alone breaks the NEXT redeploy — found live 2026-07-31):
-    python3 scripts/ops/delete-openstack-resource.py <kind> <id>
+  named or tagged '$CLUSTER'$DETACHED (listed above) after 4 checks
+  (~80s) — CAPO/CAPOSC's own cleanup did not finish. Purge by hand, ONE
+  resource at a time (a leftover Octavia LB alone breaks the NEXT redeploy —
+  found live 2026-07-31):
+    $DELETE_ONE
   scripts/ops/purge-orphans/ also works but is WHOLE-ACCOUNT (no name
   filtering) — never run it while another cluster is live on the same
   provider. Then re-run: this script is idempotent and will report clean

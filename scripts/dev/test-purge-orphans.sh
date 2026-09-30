@@ -13,7 +13,8 @@
 # NOTHING and did the same. A total authentication failure was indistinguishable
 # from a clean account, in the output and in the exit code.
 #
-# No network: urllib is monkey-patched in-process to raise HTTPError 403.
+# verify-provider-clean.py's Scaleway check reads scaleway.py's listing, so it is
+# tested here too. No network: urllib is monkey-patched in-process.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -131,9 +132,8 @@ else
 fi
 
 # --- ovh.py: auth succeeds, servers are found, one other endpoint is refused --
-# ovh.py's get() raises rather than swallowing, so a TOTAL auth failure already
-# crashes non-zero — not this gap (verified below, unchanged). The gap is a
-# PARTIAL refusal: auth works, servers list fine, then floating-ips answers
+# A TOTAL auth failure exits 2 before any listing (asserted further down) — not
+# this gap. The gap is a PARTIAL refusal: auth works, servers list fine, then floating-ips answers
 # 403. Before the fix that exception propagated out of get() uncaught: the run
 # died mid-listing with a traceback, never reaching routers/networks/security
 # groups or its own summary — which is not "clean", but the run's own findings
@@ -142,10 +142,10 @@ fi
 echo
 echo "=== ovh.py: auth OK, servers found, floating-ips refused 403 ==="
 
-run_403_ovh_partial() {
+run_403_ovh_partial() { # [args...] — a DELETE succeeds, so --apply can get past the servers
   env OS_AUTH_URL=https://stub.invalid/v3 OS_USERNAME=stub OS_PASSWORD=stub \
-      OS_PROJECT_ID=stub OS_REGION_NAME=stub \
-      python3 - "$ROOT/scripts/ops/purge-orphans/ovh.py" <<'PY' 2>&1
+      OS_PROJECT_ID=stub OS_REGION_NAME="${OVH_REGION:-stub}" \
+      python3 - "$ROOT/scripts/ops/purge-orphans/ovh.py" "$@" <<'PY' 2>&1
 import runpy, sys, json, io, urllib.request, urllib.error
 
 class FakeResp(io.BytesIO):
@@ -166,10 +166,12 @@ def fake(req, *a, **k):
         return FakeResp(json.dumps(CATALOG).encode(), headers={'X-Subject-Token': 'stub'})
     if u.endswith('/servers'):
         return FakeResp(json.dumps({'servers': [{'id': 'srv-stub', 'name': 'stub-server'}]}).encode())
+    if req.get_method() == 'DELETE':
+        return FakeResp(b'')
     raise urllib.error.HTTPError(u, 403, 'Forbidden', {}, io.BytesIO(b'{}'))
 
 urllib.request.urlopen = fake
-sys.argv = [sys.argv[1]]
+sys.argv = sys.argv[1:]
 try:
     runpy.run_path(sys.argv[0], run_name='__main__')
 except SystemExit as e:
@@ -354,6 +356,270 @@ if grep -qiE 'deletion\(s\) failed' <<<"$out"; then
 else
   bad "outscale.py --apply: the failed-deletion message is missing when a snapshot is also present"
 fi
+
+# --- Credentials missing or refused: "could not check" (2), never "found" (1) -
+# A bare os.environ[...] raised KeyError and exited 1, the code callers read as
+# "leftovers found". An unanswered question must keep its own code.
+echo
+echo "=== missing or refused credentials exit 2 ==="
+
+# One fake Scaleway API for the purge and for verify-provider-clean, which share
+# its listing. FAKE_SCW maps a path (no query) to its answer; FAKE_REFUSE lists
+# path prefixes answered 403; mutating calls succeed and print "CALL <method> <path>".
+# FAKE_PAGE=<n> serves n items per `page=`, like the real API, and FAKE_TOTAL=1
+# adds the body's total_count (the instance API reports it in a header instead).
+# FAKE_PAGE_ERR=<code> answers that HTTP error from page 2 on.
+SCW_ENV=(SCW_SECRET_KEY=stub SCW_DEFAULT_PROJECT_ID=stub SCW_DEFAULT_REGION=fr-par SCW_ZONES=fr-par-1)
+run_scw() { # <script under scripts/ops/> [args...]
+  env "${SCW_ENV[@]}" FAKE_SCW="${FAKE_SCW:-}" FAKE_REFUSE="${FAKE_REFUSE:-}" \
+      FAKE_PAGE="${FAKE_PAGE:-}" FAKE_TOTAL="${FAKE_TOTAL:-}" FAKE_PAGE_ERR="${FAKE_PAGE_ERR:-}" \
+      python3 - "$ROOT/scripts/ops/$1" "${@:2}" <<'PY' 2>&1
+import io, json, os, runpy, sys, urllib.error, urllib.parse, urllib.request
+
+ANSWERS = json.loads(os.environ['FAKE_SCW'] or '{}')
+REFUSE = os.environ['FAKE_REFUSE'].split()
+SIZE = int(os.environ['FAKE_PAGE'] or 0)
+
+def fake(req, *a, **k):
+    path = req.full_url.split('/', 3)[3]
+    bare = path.split('?')[0]
+    if any(bare.startswith(r) for r in REFUSE):
+        raise urllib.error.HTTPError(req.full_url, 403, 'Forbidden', {}, io.BytesIO(b'{}'))
+    if req.get_method() != 'GET':
+        print('CALL', req.get_method(), path)
+        return io.BytesIO(b'{}')
+    data = ANSWERS.get(bare, {})
+    if SIZE:
+        page = int(urllib.parse.parse_qs(path.partition('?')[2]).get('page', ['1'])[0])
+        if page > 1 and os.environ['FAKE_PAGE_ERR']:
+            raise urllib.error.HTTPError(req.full_url, int(os.environ['FAKE_PAGE_ERR']), 'Err', {},
+                                         io.BytesIO(b'{}'))
+        lo = (page - 1) * SIZE
+        total = max((len(v) for v in data.values()), default=0)
+        data = {key: v[lo:lo + SIZE] for key, v in data.items()}
+        if os.environ['FAKE_TOTAL']:
+            data['total_count'] = total
+    return io.BytesIO(json.dumps(data).encode())
+
+urllib.request.urlopen = fake
+sys.argv = sys.argv[1:]
+try:
+    runpy.run_path(sys.argv[0], run_name='__main__')
+except SystemExit as e:
+    sys.exit(e.code if isinstance(e.code, int) else 1)
+PY
+}
+
+expect_2() { # <label> <rc> <output> <what the output must name>
+  if [ "$2" -eq 2 ] && grep -qF "$4" <<<"$3" && ! grep -q Traceback <<<"$3"; then
+    ok "$1: exit 2, names $4"
+  else
+    bad "$1: expected exit 2 naming '$4', got rc=$2: $(tail -2 <<<"$3" | tr '\n' ' ')"
+  fi
+}
+
+FAKE_SCW='' FAKE_REFUSE=''
+for pair in SCW_SECRET_KEY:SCW_DEFAULT_PROJECT_ID SCW_DEFAULT_PROJECT_ID:SCW_SECRET_KEY; do
+  missing="${pair%%:*}"
+  SCW_ENV=(-u "$missing" "${pair#*:}=stub" SCW_ZONES=fr-par-1)
+  out="$(run_scw purge-orphans/scaleway.py)"; expect_2 "scaleway.py without $missing" $? "$out" "$missing"
+  out="$(run_scw verify-provider-clean.py edge-1 scaleway)"
+  expect_2 "verify-provider-clean scaleway without $missing" $? "$out" "$missing"
+done
+SCW_ENV=(SCW_SECRET_KEY=stub SCW_DEFAULT_PROJECT_ID=stub SCW_DEFAULT_REGION=fr-par SCW_ZONES=fr-par-1)
+
+out="$(env -u OS_AUTH_URL OS_USERNAME=s OS_PASSWORD=s OS_PROJECT_ID=s OS_REGION_NAME=s \
+       python3 "$ROOT/scripts/ops/purge-orphans/ovh.py" 2>&1)"
+expect_2 "ovh.py without OS_AUTH_URL" $? "$out" "OS_AUTH_URL"
+out="$(env -u OUTSCALE_SECRET_KEY OUTSCALE_ACCESS_KEY_ID=s \
+       python3 "$ROOT/scripts/ops/purge-orphans/outscale.py" 2>&1)"
+expect_2 "outscale.py without OUTSCALE_SECRET_KEY" $? "$out" "OUTSCALE_SECRET_KEY"
+out="$(run_403 ovh.py OS_AUTH_URL=https://stub.invalid/v3 OS_USERNAME=s OS_PASSWORD=s \
+       OS_PROJECT_ID=s OS_REGION_NAME=s)"
+expect_2 "ovh.py with its authentication refused" $? "$out" "refused"
+out="$(OVH_REGION=GRA9 run_403_ovh_partial)"; expect_2 "ovh.py, region absent from the catalog" $? "$out" "gra9"
+
+# --apply that deleted what it could see while another endpoint refused: not
+# clean, and the same exit 2 as scaleway.py below (both said "clean", rc 0).
+out="$(run_403_ovh_partial --apply)"; rc=$?
+expect_2 "ovh.py --apply, an endpoint refused after a deletion" $rc "$out" "refused"
+if grep -qi 'is clean' <<<"$out"; then bad "ovh.py --apply: it called the project clean past a refusal"
+  else ok "ovh.py --apply: it does not call the project clean past a refusal"
+fi
+out="$(run_osc_canned_fail '{"ReadLoadBalancers": {"LoadBalancers": [{"LoadBalancerName": "lb-1"}]}}' \
+       "['ReadNets']" --apply)"; rc=$?
+expect_2 "outscale.py --apply, ReadNets refused after a deletion" $rc "$out" "refused"
+if grep -qi 'is clean' <<<"$out"; then bad "outscale.py --apply: it called the account clean past a refusal"
+  else ok "outscale.py --apply: it does not call the account clean past a refusal"
+fi
+
+FAKE_REFUSE='instance lb vpc block'
+out="$(run_scw purge-orphans/scaleway.py)"; expect_2 "scaleway.py, every call refused" $? "$out" "refused"
+out="$(run_scw verify-provider-clean.py edge-1 scaleway)"
+expect_2 "verify-provider-clean scaleway, every call refused" $? "$out" "refused"
+
+# Rejected for one product only (a narrow IAM policy): deleting the servers it
+# could see is not a clean project, since the load balancers were never asked.
+FAKE_SCW='{"instance/v1/zones/fr-par-1/servers": {"servers": [{"id": "srv-1", "name": "edge-1-cp-0"}]}}'
+FAKE_REFUSE='lb/'
+out="$(run_scw purge-orphans/scaleway.py --apply)"; rc=$?
+if [ "$rc" -eq 2 ] && ! grep -qi 'is clean' <<<"$out"
+  then ok "scaleway.py --apply: one product refused after a deletion exits 2, not clean"
+  else bad "scaleway.py --apply: one product refused, rc=${rc}: $(tail -1 <<<"$out")"
+fi
+
+# --- Scaleway: every kind a teardown must leave empty -------------------------
+# The purge never listed public gateways, their IPs or LB IPs, so a project
+# holding only those read as clean; verify-provider-clean had no Scaleway check.
+echo
+echo "=== Scaleway: each kind a teardown must leave empty is seen ==="
+FAKE_REFUSE=''
+Z=instance/v1/zones/fr-par-1
+KINDS=(
+  "server|$Z/servers|servers|{\"id\": \"srv-1\", \"name\": \"edge-1-cp-0\"}|edge-1-cp-0"
+  "LB|lb/v1/zones/fr-par-1/lbs|lbs|{\"id\": \"lb-1\", \"name\": \"edge-1-k8s-lb\"}|edge-1-k8s-lb"
+  "flexible IP|$Z/ips|ips|{\"id\": \"ip-1\", \"address\": \"192.0.2.10\", \"server\": null}|192.0.2.10"
+  "LB IP|lb/v1/zones/fr-par-1/ips|ips|{\"id\": \"lbip-1\", \"ip_address\": \"192.0.2.11\", \"lb_id\": null}|192.0.2.11"
+  "public gateway|vpc-gw/v2/zones/fr-par-1/gateways|gateways|{\"id\": \"gw-1\", \"name\": \"edge-1-gateway\"}|edge-1-gateway"
+  "gateway IP|vpc-gw/v2/zones/fr-par-1/ips|ips|{\"id\": \"gwip-1\", \"address\": \"192.0.2.12\", \"gateway_id\": null}|192.0.2.12"
+  "volume|block/v1alpha1/zones/fr-par-1/volumes|volumes|{\"id\": \"vol-1\", \"name\": \"orphan-root\", \"size\": 10000000000, \"references\": []}|orphan-root"
+  "instance volume|$Z/volumes|volumes|{\"id\": \"iv-1\", \"name\": \"orphan-l_ssd\", \"volume_type\": \"l_ssd\", \"server\": null}|orphan-l_ssd"
+  "security group|$Z/security_groups|security_groups|{\"id\": \"sg-1\", \"name\": \"edge-1-sg-cp\", \"project_default\": false}|edge-1-sg-cp"
+  "private network|vpc/v2/regions/fr-par/private-networks|private_networks|{\"id\": \"pn-1\", \"name\": \"edge-1-private-network\"}|edge-1-private-network"
+)
+ALL=''
+for k in "${KINDS[@]}"; do
+  IFS='|' read -r kind path key item token <<<"$k"
+  ALL="${ALL:+$ALL, }\"$path\": {\"$key\": [$item]}"
+  FAKE_SCW="{\"$path\": {\"$key\": [$item]}}"
+  out="$(run_scw purge-orphans/scaleway.py)"; rc=$?
+  if [ "$rc" -eq 1 ] && grep -qF "$token" <<<"$out"
+    then ok "scaleway.py: a lone $kind is targeted (rc=1)"
+    else bad "scaleway.py: a lone $kind left rc=${rc}: $(tail -1 <<<"$out")"
+  fi
+  out="$(run_scw verify-provider-clean.py edge-1 scaleway)"; rc=$?
+  if [ "$rc" -eq 1 ] && grep -qF "$kind $token" <<<"$out"
+    then ok "verify-provider-clean scaleway: a lone $kind is a leftover (rc=1)"
+    else bad "verify-provider-clean scaleway: a lone $kind left rc=${rc}: $(tail -1 <<<"$out")"
+  fi
+done
+
+# Deleted through the right call: servers terminate (their local volumes go too)
+# and an LB releases its IP; the rest is a DELETE on the listed object.
+FAKE_SCW="{$ALL}"
+out="$(run_scw purge-orphans/scaleway.py --apply)"; rc=$?
+missing_calls=()
+for call in "POST $Z/servers/srv-1/action" "DELETE lb/v1/zones/fr-par-1/lbs/lb-1?release_ip=true" \
+            "DELETE $Z/ips/ip-1" "DELETE lb/v1/zones/fr-par-1/ips/lbip-1" \
+            "DELETE vpc-gw/v2/zones/fr-par-1/gateways/gw-1" "DELETE vpc-gw/v2/zones/fr-par-1/ips/gwip-1" \
+            "DELETE block/v1alpha1/zones/fr-par-1/volumes/vol-1" "DELETE $Z/volumes/iv-1" \
+            "DELETE $Z/security_groups/sg-1" "DELETE vpc/v2/regions/fr-par/private-networks/pn-1"; do
+  grep -qxF "CALL $call" <<<"$out" || missing_calls+=("$call")
+done
+if [ "$rc" -eq 0 ] && [ "${#missing_calls[@]}" -eq 0 ] && grep -qF '10 resource(s) deleted' <<<"$out"
+  then ok "scaleway.py --apply: each of the 10 kinds deleted through its own call"
+  else bad "scaleway.py --apply: rc=${rc}, calls not made: ${missing_calls[*]:-none}"
+fi
+
+# A live cluster sharing the project: its attached IPs and volume, and the
+# project's default security group, are not leftovers of edge-1.
+FAKE_SCW="{
+  \"$Z/servers\": {\"servers\": [{\"id\": \"s9\", \"name\": \"mgmt-cp-0\", \"tags\": [\"mgmt\"]}]},
+  \"$Z/ips\": {\"ips\": [{\"id\": \"i9\", \"address\": \"192.0.2.20\", \"server\": {\"id\": \"s9\"}}]},
+  \"$Z/security_groups\": {\"security_groups\": [{\"id\": \"d\", \"name\": \"Default security group\", \"project_default\": true},
+                                                {\"id\": \"sg9\", \"name\": \"mgmt-sg-cp\", \"project_default\": false}]},
+  \"lb/v1/zones/fr-par-1/lbs\": {\"lbs\": [{\"id\": \"l9\", \"name\": \"mgmt-k8s-lb\"}]},
+  \"lb/v1/zones/fr-par-1/ips\": {\"ips\": [{\"id\": \"li9\", \"ip_address\": \"192.0.2.21\", \"lb_id\": \"l9\"}]},
+  \"vpc-gw/v2/zones/fr-par-1/gateways\": {\"gateways\": [{\"id\": \"g9\", \"name\": \"mgmt-gateway\"}]},
+  \"vpc-gw/v2/zones/fr-par-1/ips\": {\"ips\": [{\"id\": \"gi9\", \"address\": \"192.0.2.22\", \"gateway_id\": \"g9\"}]},
+  \"block/v1alpha1/zones/fr-par-1/volumes\": {\"volumes\": [{\"id\": \"v9\", \"name\": \"w\", \"size\": 1, \"references\": [{\"id\": \"r\"}]}]},
+  \"$Z/volumes\": {\"volumes\": [{\"id\": \"iv9\", \"name\": \"mgmt-cp-0-l_ssd\", \"server\": {\"id\": \"s9\"}}]},
+  \"vpc/v2/regions/fr-par/private-networks\": {\"private_networks\": [{\"id\": \"pn9\", \"name\": \"mgmt-private-network\"}]}}"
+out="$(run_scw verify-provider-clean.py edge-1 scaleway)"; rc=$?
+if [ "$rc" -eq 0 ] && grep -qF 'nothing left' <<<"$out"
+  then ok "verify-provider-clean scaleway: another live cluster in the project is not edge-1's leftover"
+  else bad "verify-provider-clean scaleway: another live cluster read as edge-1's, rc=${rc}: $out"
+fi
+out="$(run_scw purge-orphans/scaleway.py)"; rc=$?
+if [ "$rc" -eq 1 ] && grep -qF '5 resource(s) targeted' <<<"$out"
+  then ok "scaleway.py: 5 targets — attached IPs, the used volume and the default group are not"
+  else bad "scaleway.py: expected 5 targets, rc=${rc}: $(tail -1 <<<"$out")"
+fi
+FAKE_SCW="{\"$Z/servers\": {\"servers\": [{\"id\": \"s8\", \"name\": \"worker-x\", \"tags\": [\"caps-cluster=edge-1\"]}]}}"
+out="$(run_scw verify-provider-clean.py edge-1 scaleway)"; rc=$?
+if [ "$rc" -eq 1 ]; then ok "verify-provider-clean scaleway: a server named only by its tag is a leftover"
+  else bad "verify-provider-clean scaleway: a server tagged edge-1 was missed (rc=${rc})"
+fi
+FAKE_SCW=''
+out="$(run_scw verify-provider-clean.py edge-1 scaleway)"; rc=$?
+if [ "$rc" -eq 0 ]; then ok "verify-provider-clean scaleway: an empty project exits 0"
+  else bad "verify-provider-clean scaleway: an empty project exited ${rc}: $out"
+fi
+
+# edge-10 is not edge-1: a substring match blamed a live cluster's server on the
+# one being torn down, and edge-down then failed its teardown after 4 tries. The
+# cluster name still matches wherever it sits between separators.
+FAKE_SCW="{\"$Z/servers\": {\"servers\": [{\"id\": \"s10\", \"name\": \"edge-10-cp-0\"}]}}"
+out="$(run_scw verify-provider-clean.py edge-1 scaleway)"; rc=$?
+if [ "$rc" -eq 0 ]; then ok "verify-provider-clean scaleway: edge-10's server is not edge-1's leftover"
+  else bad "verify-provider-clean scaleway: edge-10's server read as edge-1's (rc=${rc}): $out"
+fi
+out="$(run_scw verify-provider-clean.py edge-10 scaleway)"; rc=$?
+if [ "$rc" -eq 1 ]; then ok "verify-provider-clean scaleway: the same server is edge-10's leftover"
+  else bad "verify-provider-clean scaleway: edge-10's own server was missed (rc=${rc})"
+fi
+FAKE_SCW="{\"$Z/servers\": {\"servers\": [{\"id\": \"s11\", \"name\": \"kubeapi-edge-1-cp\"}]}}"
+out="$(run_scw verify-provider-clean.py edge-1 scaleway)"; rc=$?
+if [ "$rc" -eq 1 ]; then ok "verify-provider-clean scaleway: the cluster name between separators still matches"
+  else bad "verify-provider-clean scaleway: 'kubeapi-edge-1-cp' was missed (rc=${rc})"
+fi
+
+# The same volume listed by the block and the instance API is one leftover.
+FAKE_SCW="{\"block/v1alpha1/zones/fr-par-1/volumes\": {\"volumes\": [{\"id\": \"v7\", \"name\": \"twice\", \"size\": 1, \"references\": []}]},
+           \"$Z/volumes\": {\"volumes\": [{\"id\": \"v7\", \"name\": \"twice\", \"server\": null}]}}"
+out="$(run_scw purge-orphans/scaleway.py)"; rc=$?
+if [ "$rc" -eq 1 ] && grep -qF '1 resource(s) targeted' <<<"$out"
+  then ok "scaleway.py: a volume both APIs list is targeted once"
+  else bad "scaleway.py: a volume both APIs list was counted twice, rc=${rc}: $(tail -1 <<<"$out")"
+fi
+
+# --- pagination: a listing that stops at page 1 reads the rest as absent -------
+# The API returns 50 items a page. Page 2 of 3 gateway IPs (FAKE_PAGE=2) held the
+# last one, and 'nothing left' or 'the project is clean' was said over it. Both
+# shapes are covered: total_count in the body, and none (the instance API's).
+GWIPS="\"vpc-gw/v2/zones/fr-par-1/ips\": {\"ips\": [{\"id\": \"a\", \"address\": \"192.0.2.31\", \"gateway_id\": null},
+  {\"id\": \"b\", \"address\": \"192.0.2.32\", \"gateway_id\": null}, {\"id\": \"c\", \"address\": \"192.0.2.33\", \"gateway_id\": null}]}"
+SGS="\"$Z/security_groups\": {\"security_groups\": [{\"id\": \"a\", \"name\": \"mgmt-sg-a\", \"project_default\": false},
+  {\"id\": \"b\", \"name\": \"mgmt-sg-b\", \"project_default\": false}, {\"id\": \"c\", \"name\": \"edge-1-sg-c\", \"project_default\": false}]}"
+for total in without with; do
+  FAKE_PAGE=2 FAKE_TOTAL=''; [ "$total" = with ] && FAKE_TOTAL=1
+  shape="$total total_count"
+  FAKE_SCW="{$GWIPS}"
+  out="$(run_scw purge-orphans/scaleway.py --apply)"; rc=$?
+  if [ "$rc" -eq 0 ] && grep -qF '3 resource(s) deleted' <<<"$out"
+    then ok "scaleway.py --apply: 3 items over 2 pages are all deleted, $shape"
+    else bad "scaleway.py --apply: only page 1 was seen, $shape (rc=${rc}): $(tail -1 <<<"$out")"
+  fi
+  FAKE_SCW="{$SGS}"
+  out="$(run_scw verify-provider-clean.py edge-1 scaleway)"; rc=$?
+  if [ "$rc" -eq 1 ] && grep -qF 'edge-1-sg-c' <<<"$out"
+    then ok "verify-provider-clean scaleway: edge-1's group on page 2 is found, $shape"
+    else bad "verify-provider-clean scaleway: page 2 was never read, $shape (rc=${rc}): $out"
+  fi
+done
+# Page 1 answered, page 2 fails: an incomplete read is refused, never "not offered
+# in this zone" (a 404 there used to drop page 1 and print "the project is clean").
+for code in 404 500; do
+  FAKE_PAGE=2 FAKE_TOTAL='' FAKE_PAGE_ERR=$code FAKE_SCW="{$GWIPS}"
+  out="$(run_scw purge-orphans/scaleway.py)"; rc=$?
+  if [ "$rc" -eq 2 ] && grep -qF 'page 2 answered HTTP '$code <<<"$out" && ! grep -qi 'is clean' <<<"$out"
+    then ok "scaleway.py: HTTP $code on page 2 is refused, not clean (rc=2)"
+    else bad "scaleway.py: HTTP $code on page 2 read as complete, rc=${rc}: $(tail -1 <<<"$out")"
+  fi
+  out="$(run_scw verify-provider-clean.py edge-1 scaleway)"; rc=$?
+  expect_2 "verify-provider-clean scaleway, HTTP $code on page 2" $rc "$out" "page 2 answered HTTP $code"
+done
+FAKE_PAGE='' FAKE_TOTAL='' FAKE_PAGE_ERR=''
 
 echo
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"

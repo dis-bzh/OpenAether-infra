@@ -123,7 +123,12 @@ name rather than removing them; that report is the deliverable, not noise.
 
 `scripts/ops/verify-provider-clean.py` and the purge scripts ask the provider,
 not the state file. Report the counts. A session is not finished until something
-that queries the account says zero.
+that queries the account says zero. Both exit 0 clean, 1 leftovers found, 2
+could not check (credentials missing or an endpoint refused, `--apply` included:
+a refusal never reads clean); a purge `--apply` exits 3 when a deletion failed.
+On Scaleway, `verify-provider-clean.py <cluster> scaleway` reads the purge's own
+listing, scoped to that cluster (the whole name: `edge-1` is not `edge-10`) plus
+any detached IP or volume, block or instance API.
 
 **And two ways that proof has lied.** A `| tail` on the purge output hid the
 servers it lists first, so a populated account read as clean — never conclude
