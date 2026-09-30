@@ -88,6 +88,11 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **`feint.sh` no longer checks and stops the emulator on the default port
+  when `FEINT_ENDPOINT` names another (#195).** `feint status` and `feint stop`
+  default to :4599 and were called without `--addr`; `feint_cli` now adds it.
+  `test-feint-restart.sh` goes 14 passed / 3 failed → 17 / 0 on the fix.
+
 - **A real `envs/*.tfvars` no longer turns `task lint` and `test-talos-image`
   red (#191).** The `tofu fmt` step now checks tracked files only, and the #93
   guard reads `OA_ENVS_DIR` (default unchanged), which the harness points at a
