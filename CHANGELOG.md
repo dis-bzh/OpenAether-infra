@@ -755,6 +755,15 @@ in git. 0.1.0 is the first entry describing something proven.
   implying otherwise, and `ssh-ca-check.sh` names its rung `local-docker`, not
   `emulated`.
 
+- **With `enable_bastion = true` on Proxmox, the root now reports the user the
+  bastion VM creates (#201).** `local.bastion_user` was `host_ssh_user` whatever
+  the module did; the VM's user is `ubuntu`, so the tunnels and `talosconfig-new`
+  would have logged in as `root`. It now reads the module's `bastion_user` output.
+  A `tofu test` asserts the root against the module for both values of
+  `enable_bastion`. A real tunnel through a Proxmox VM bastion is not observed, and
+  whether `ubuntu` joins `bastion-admins` (the OVH/Outscale collision) is still
+  open on that issue.
+
 ### Added
 
 - **New `feint-apply-root` lane: an untargeted apply on the REAL cluster

@@ -360,13 +360,14 @@ locals {
 
   # SSH user for the bastion tunnels, by provider:
   #   scaleway, ovh, outscale — a dedicated unprivileged "bastion" user via cloud-init
-  #   proxmox  — host-as-bastion → the host SSH user (host_ssh_user, default root);
-  #              not a literal like the others, so resolved from pmx_dist here.
+  #   proxmox  — the module's own answer: host_ssh_user (default root) for
+  #              host-as-bastion, "ubuntu" for the VM bastion it creates. Read
+  #              from the module, never re-derived here (they drifted apart).
   bastion_user = lookup({
     scaleway = "bastion"
     ovh      = "bastion" # NOT the image's default user (see ovh/bastion.tf)
     outscale = "bastion" # NOT the image's default user (see outscale/bastion.tf)
-    proxmox  = local.pmx_dist.host_ssh_user
+    proxmox  = one(module.proxmox[*].bastion_user)
   }, local.active_provider, "ubuntu")
 
   # k8s_lb_mode only applies to scaleway/ovh (outscale rejects "vip" via its
