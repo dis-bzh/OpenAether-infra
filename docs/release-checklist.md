@@ -147,7 +147,8 @@ task cluster-up ROLE=management PROVIDER=scaleway KEY=~/.ssh/your-key
 credential pair or the passphrase is missing.
 
 - [x] **deploy from an empty account** → 2026-08-19: 8 min 50 for 72 resources.
-- [x] **`task cluster-verify`** → 11/11.
+- [x] **`task cluster-verify`** → 11/11. Since #38 the same 2-zone run also
+      prints a warning: 3 control planes over 2 zones is a 2+1 split.
 - [x] **idempotency is three assertions, not one**: an empty plan, the *same*
       nodes (name and `creationTimestamp`), and a kubeconfig that still reaches
       the apiserver → 3/3. Two of the three can pass while the cluster was
@@ -215,7 +216,8 @@ task cluster-up ROLE=management PROVIDER=ovh
 
 - [x] **the same five pillars, the same day** — deploy, `cluster-verify` 11/11,
       idempotency 3/3, and both upgrades to the same versions as Scaleway,
-      2026-08-19.
+      2026-08-19. Since #38 `cluster-verify` ends red on the example's single
+      `nova` zone: re-run it on distinct `availability_zones` before the tag.
 - [x] **the interruption is a number** → longest outage **7 s**, 9-10 failed
       probes out of ~540. Worse than the 1 s this provider once recorded; quote
       this one.
@@ -252,6 +254,8 @@ count, its Talos upgrade reverted on the next reboot.
       idempotency 3/3, Kubernetes v1.36.2 → v1.36.3, Talos v1.13.7 → v1.13.8
       confirmed on 6/6 nodes by each node's own Talos API (`stage=running`,
       fallback dropped). The new load balancer reached `active` with 3 backends.
+      Since #38 `cluster-verify` ends red here (every node in one subregion)
+      and nothing clears it until #58: say so wherever Outscale is claimed.
 - [x] **the interruption is a number** → longest outage **8 s**, the worst of the
       three clouds and worse than the 1 s this provider once recorded. Quote this
       one.

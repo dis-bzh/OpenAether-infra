@@ -1559,7 +1559,7 @@ tasks:
     aliases: [verify]
     desc: >-
       Ask the CLUSTER whether it is what this release promises: apiserver up, every node Ready, the
-      requested number of control planes (no one zone or host holding an etcd quorum), Cilium on
+      requested number of control planes (not all in one zone or host), Cilium on
       each, CoreDNS serving, no Flux, no app load balancer, the Talos and Kubernetes versions the
       config pins, the schematic it pins, and a tfstate replica in the backup store.
       Usage: task verify PROVIDER=scaleway [ROLE=management]

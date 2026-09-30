@@ -86,7 +86,7 @@ Two orthogonal layers of knobs:
 |---|---|---|---|---|---|---|---|
 | `SCW-mgmt-nonha` | mgmt | 1+1 | managed | single | none | Cheapest cloud path; non-HA CP taint; managed LB ACL. | ✅ |
 | `SCW-mgmt-ha` | mgmt | 3+2 | managed | 3-AZ | none | etcd across 3 zones; multi-AZ distribution. | ⬜ — see the row below: what runs is **2 zones**, because the third has no instance type this project uses |
-| `SCW-mgmt-ha-2az` | mgmt | 3+3 | managed | 2-AZ | **disks+volumes** | What 0.1.0 actually rests on. etcd across 2 zones, round-robinned. | ✅ 2026-08-19, again 2026-08-20 — before the failure-domain check (#38): 3 control planes over 2 zones is a 2+1 split, which `cluster-verify` now fails |
+| `SCW-mgmt-ha-2az` | mgmt | 3+3 | managed | 2-AZ | **disks+volumes** | What 0.1.0 actually rests on. etcd across 2 zones, round-robinned. | ✅ 2026-08-19, again 2026-08-20 — 3 control planes over 2 zones is a 2+1 split, which `cluster-verify` (#38) now warns about |
 | `SCW-vip` | mgmt | 3+1 | **vip** | multi-AZ | none | Drops the LB; Talos Layer2 VIP; private API via tunnel; anti-spoofing. | ✅ *(2026-07-15)* |
 | `SCW-work-ha` | workload | 3+3 | managed | 3-AZ | none | Workload-role Flux bootstrap path. | ⬜ |
 | `SCW-storage` | workload | 3+3 | managed | 3-AZ | **disks+volumes** | SBS block volumes + encrypted `UserVolumeConfig` (LUKS2). | ⬜ on the *workload* role. The block volumes and the UserVolumeConfig patches DID apply on `SCW-mgmt-ha-2az` — 3 × `scaleway_block_volume.worker_data` in state — but **nothing read back that they were formatted LUKS2 and mounted**: `cluster-verify` asks about no volume at all |
