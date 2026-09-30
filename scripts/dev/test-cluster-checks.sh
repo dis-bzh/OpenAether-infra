@@ -758,6 +758,88 @@ verify_local
   || bad "a failed node query read as a fleet on the target, or was not counted as unknown"
 
 # =============================================================================
+# infra-verify: control planes across failure domains (#38)
+#
+# Three control planes in ONE zone passed as "HA": the verifier counted nodes and
+# never asked where they sit. It now reads control_plane_zones from the state.
+# Every section above runs PROVIDER=local, which skips each `tofu output`, so
+# this is the first to run the topology branch: a stub `tofu` answers it.
+#
+# Asserted on the failure COUNT against a spread run, not on the exit code: the
+# backup section has no fixture here and always adds one unknown.
+# =============================================================================
+echo
+echo "=== infra-verify: control planes across failure domains ==="
+
+TOFU_BIN="$STUB_DIR/tofu-bin"; mkdir "$TOFU_BIN"; ln -s ../kubectl "$TOFU_BIN/tofu"
+tfvars v0.0.1 v0.0.1
+
+# The verifier's tally line, by position: 1 passed, 2 failed, 3 could not be checked.
+tally() { sed -E 's/\x1b\[[0-9;]*m//g' <<<"$RUN_OUT" |
+            sed -nE 's/^([0-9]+) passed, ([0-9]+) failed, ([0-9]+) could not be checked.*/\'"$1"'/p' | tail -1; }
+
+# <zones as the state holds them, "-" = the output does not exist> — the state and
+# the cluster agree on the number of control planes, so only the zones differ.
+zones_verify() {
+  local zones="$1" n cps ips i
+  if [ "$zones" = - ]; then n=3; else n="$(jq 'if type == "array" then length else 3 end' <<<"$zones")"; fi
+  [ -n "${2:-}" ] && n="$2"
+  cps="cp-1 Ready control-plane 9m"; ips='"ip1"'
+  for ((i = 2; i <= n; i++)); do cps+="%%cp-$i Ready control-plane 9m"; ips+=",\"ip$i\""; done
+  local zone_line='tofu output -json control_plane_zones\t0\t'"$zones"'\n'
+  [ "$zones" = - ] && zone_line='tofu output -json control_plane_zones\t1\tError: Output not found\n'
+  plan "$zone_line"'tofu output -json control_plane_private_ips\t0\t['"$ips"']\n'\
+'tofu output -raw app_lb_ip\t0\tN/A\n''osImage\t0\tTalos (v0.0.1)\n''kubeletVersion\t0\tv0.0.1\n'\
+'get nodes -l node-role.kubernetes.io/control-plane\t0\t'"$cps"'\n'"$BASE"
+  run env PATH="$TOFU_BIN:$PATH" "$VERIFY_SH" "$PROVIDER" "$ROLE"
+}
+
+zones_verify '["z1","z2","z3"]'
+BASE_FAIL="$(tally 2)" BASE_UNK="$(tally 3)"
+{ said 'across 3 failure domains' && ! said 'share one failure domain'; } \
+  && ok "three control planes in three zones are HA (baseline: ${BASE_FAIL} failed, ${BASE_UNK} unknown)" \
+  || bad "a spread cluster was not reported as spread: $RUN_OUT"
+
+zones_verify '["z1","z1","z1"]'
+{ said '3 of 3 control planes share one failure domain' && ! said 'across' && [ "$(tally 2)" -eq $((BASE_FAIL + 1)) ]; } \
+  && ok "three control planes in ONE zone FAIL the run" \
+  || bad "an HA cluster in a single zone passed (failed=$(tally 2), spread run had ${BASE_FAIL})"
+
+# Two zones is not enough: losing the zone that holds two takes etcd's quorum.
+zones_verify '["z1","z1","z2"]'
+{ said '2 of 3 control planes share one failure domain' && [ "$(tally 2)" -eq $((BASE_FAIL + 1)) ]; } \
+  && ok "a 2+1 split across two zones FAILS the run: it still loses quorum" \
+  || bad "a 2+1 split passed (failed=$(tally 2), spread run had ${BASE_FAIL})"
+
+# Five nodes: quorum is 3, so 2+2+1 survives any one zone and 3+1+1 does not.
+zones_verify '["z1","z1","z2","z2","z3"]'
+{ said 'across 3 failure domains' && [ "$(tally 2)" -eq "$BASE_FAIL" ]; } \
+  && ok "five control planes as 2+2+1 survive the loss of any zone" \
+  || bad "a 2+2+1 split of five was refused (failed=$(tally 2), spread run had ${BASE_FAIL})"
+zones_verify '["z1","z1","z1","z2","z3"]'
+{ said '3 of 5 control planes share one failure domain' && [ "$(tally 2)" -eq $((BASE_FAIL + 1)) ]; } \
+  && ok "five control planes as 3+1+1 FAIL the run: three of five is a quorum" \
+  || bad "a 3+1+1 split of five passed (failed=$(tally 2))"
+
+# One control plane is not HA at all, which is a warning of its own: it must not
+# also be called a zone failure, and must not change the count.
+zones_verify '["z1"]'
+{ said 'NOT HA' && ! said 'failure domain' && [ "$(tally 2)" -eq "$BASE_FAIL" ]; } \
+  && ok "one control plane is NOT HA, and is not also flagged for its zone" \
+  || bad "a single control plane was judged on its zone (failed=$(tally 2), spread run had ${BASE_FAIL})"
+
+# A list that cannot be trusted is UNCHECKED, never a pass: an older state has no
+# such output, and a provider that reads nothing back yields empty names.
+for c in '-|the output missing' '["z1","z2"]|a list shorter than the control planes' \
+         '["z1","","z3"]|an empty zone name' 'null|a null output'; do
+  zones_verify "${c%%|*}" 3
+  { said 'control_plane_zones' && ! said 'across' && [ "$(tally 3)" -eq $((BASE_UNK + 1)) ] \
+    && [ "$(tally 2)" -eq "$BASE_FAIL" ]; } \
+    && ok "${c#*|} is UNCHECKED ($(tally 3) unknown), not a pass" \
+    || bad "${c#*|} was read as a placement (failed=$(tally 2), unknown=$(tally 3))"
+done
+
+# =============================================================================
 # cluster-upgrade: the path across minors
 #
 # Kubernetes forbids skipping a minor on the way up, and Talos supports a WINDOW

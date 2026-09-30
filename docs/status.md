@@ -22,6 +22,13 @@ user choice. CAPI and multi-cluster are an optional overlay, never the entry poi
 | OVH | ✅ | ✅ 11/11 | ✅ 3/3 | ✅ 1.36.2→1.36.3 | ✅ 6/6 nodes 1.13.7→1.13.8 | 7 s (9-10 in ~540) |
 | Outscale | ✅ 51 resources, then 17 | ✅ 11/11 | ✅ 3/3 | ✅ 1.36.2→1.36.3 | ✅ 6/6 nodes 1.13.7→1.13.8 | 8 s (59 in 1179) |
 
+That `cluster-verify` column predates the failure-domain check (#38, offline half
+only): it now fails three control planes that share a zone or host, or any split
+that one domain's loss leaves without an etcd quorum. By construction, 3 control
+planes on OVH's default `nova` or on Outscale end red until their placement is
+fixed. No real account has re-run it, so neither the red nor a spread Scaleway
+cluster's green is measured.
+
 Three things about that table are the point of it:
 
 - **Versions were read from the kubelets and from each node's own Talos API**,

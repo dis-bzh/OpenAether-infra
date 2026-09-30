@@ -16,6 +16,30 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
+- **`cluster-verify` fails an "HA" cluster whose control planes share a failure
+  domain (refs #38, offline half).** Three control planes in one zone passed as
+  HA: the verifier counted nodes and never asked where they sit. Each provider
+  module now outputs `control_plane_zones`, read from its control-plane
+  resources (`zone`, `availability_zone`, `placement_subregion_name`,
+  `node_name`); it is a required row of `provider-contract.md`, which the
+  contract check enforces, and the root passes it through. `infra-verify.sh`
+  fails when one domain holds a quorum's worth of nodes (`most in one domain >=
+  n - n/2`: for three, any two together). That is stricter than the issue's
+  "at least two zones": a 2+1 split still loses etcd with its pair. A missing,
+  short, null or empty-named output is UNCHECKED, never a pass.
+  **A 3-control-plane OVH cluster on the default `nova`, and every Outscale
+  one (the module puts all nodes in `availability_zones[0]`, #58), now end
+  `cluster-up`'s verify red until their placement is fixed.** The value is what
+  was placed, not measured: whether OVH reads its zone back or echoes the
+  config is unknown, and a spread Scaleway cluster's green is not observed on a
+  real account either. Mocked rung: `control-plane-zones.tftest.hcl` (5 runs;
+  `task test` 71 → 76), the root assertions, and ten cases in
+  `test-cluster-checks.sh` (77 → 87, run against a stub `tofu` for the first
+  time: the topology branch was never exercised). Against the old verifier 9
+  of those 10 fail; four mutants (the Outscale output built from the variable,
+  the scw entry dropped from the root, the quorum rule weakened to two zones or
+  off by one) each turn a test red.
+
 - **A pull request's rung is checked against a receipt the harness wrote
   (#120).** CONTRIBUTING asks every PR to name the rung it reached, but nothing
   recorded that a rung ever ran, so neither a reviewer nor CI could check the

@@ -111,7 +111,23 @@ if [ "$PROVIDER" != local ]; then
   elif [ "$want_cp" -lt 3 ]; then
     warn "${want_cp} control plane(s): this cluster is NOT HA, and an upgrade WILL interrupt the API"
   else
-    ok "${got_cp} control planes, matching the state — HA"
+    # Counting nodes is not HA: three in one zone all go when it does. The spread
+    # is what the state says it PLACED (control_plane_zones), not a measurement,
+    # and only the quorum rule is sound: a 2+1 split still loses etcd with its pair.
+    zones="$(cd "$CLUSTER_DIR" && timeout 60 tofu output -json control_plane_zones 2>/dev/null)" || zones=""
+    # "<most nodes in one domain> <distinct domains> <names>", or "x x" for a list
+    # that cannot be trusted: wrong length, null, or a name the provider left empty.
+    read -r worst doms names < <(jq -r --argjson n "$want_cp" '
+      if type == "array" and length == $n and all(.[]; type == "string" and . != "")
+      then "\(group_by(.) | map(length) | max) \(unique | length) \(join(","))"
+      else "x x" end' <<<"$zones" 2>/dev/null)
+    if ! [[ "${worst:-}" =~ ^[0-9]+$ ]]; then
+      unk "control_plane_zones is missing, or is not ${want_cp} non-empty zone names, in the state — the spread is UNCHECKED (an older state: task infra-apply PROVIDER=${PROVIDER} ROLE=${ROLE})"
+    elif [ "$worst" -ge $((want_cp - want_cp / 2)) ]; then
+      bad "${worst} of ${got_cp} control planes share one failure domain (${names}) — losing it loses etcd quorum: HA against a node, not against a zone"
+    else
+      ok "${got_cp} control planes across ${doms} failure domains, none holding a quorum — HA"
+    fi
   fi
 fi
 

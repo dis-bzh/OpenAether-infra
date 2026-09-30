@@ -1559,9 +1559,10 @@ tasks:
     aliases: [verify]
     desc: >-
       Ask the CLUSTER whether it is what this release promises: apiserver up, every node Ready, the
-      requested number of control planes, Cilium on each, CoreDNS serving, no Flux, no app load
-      balancer, the Talos and Kubernetes versions the config pins, the schematic it pins, and
-      a tfstate replica in the backup store. Usage: task verify PROVIDER=scaleway [ROLE=management]
+      requested number of control planes (no one zone or host holding an etcd quorum), Cilium on
+      each, CoreDNS serving, no Flux, no app load balancer, the Talos and Kubernetes versions the
+      config pins, the schematic it pins, and a tfstate replica in the backup store.
+      Usage: task verify PROVIDER=scaleway [ROLE=management]
     # See backup-state above: the *provider-env anchor needs this dir, and the
     # first version of this target shipped without it and exited 127 everywhere.
     dir: infrastructure/opentofu/cluster
