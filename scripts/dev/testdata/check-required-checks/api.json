@@ -1,0 +1,112 @@
+{
+  "/repos/example-org/example-repo/rules/branches/main?per_page=100": {
+    "status": 200,
+    "body": [
+      { "type": "deletion", "ruleset_id": 1 },
+      {
+        "type": "required_status_checks",
+        "ruleset_id": 1,
+        "parameters": {
+          "strict_required_status_checks_policy": true,
+          "required_status_checks": [
+            { "context": "Lint & Format", "integration_id": 15368 },
+            { "context": "OpenTofu Tests", "integration_id": 15368 },
+            { "context": "Secret Detection", "integration_id": 15368 },
+            { "context": "Analyze (python)", "integration_id": 15368 }
+          ]
+        }
+      }
+    ]
+  },
+
+  "/repos/example-org/example-repo/pulls?state=closed&base=main&sort=updated&direction=desc&per_page=100": {
+    "status": 200,
+    "next": "/repos/example-org/example-repo/pulls?state=closed&base=main&sort=updated&direction=desc&per_page=100&page=2",
+    "body": [
+      { "number": 13, "merged_at": null, "updated_at": "2026-01-05T00:00:00Z",
+        "head": { "sha": "0000000000000000000000000000000000000013" } },
+      { "number": 10, "merged_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-04T00:00:00Z",
+        "head": { "sha": "0000000000000000000000000000000000000010" } }
+    ]
+  },
+  "/repos/example-org/example-repo/pulls?state=closed&base=main&sort=updated&direction=desc&per_page=100&page=2": {
+    "status": 200,
+    "body": [
+      { "number": 12, "merged_at": "2026-01-03T00:00:00Z", "updated_at": "2026-01-03T00:00:05Z",
+        "head": { "sha": "0000000000000000000000000000000000000012" } },
+      { "number": 11, "merged_at": "2026-01-02T00:00:00Z", "updated_at": "2026-01-02T00:00:05Z",
+        "head": { "sha": "0000000000000000000000000000000000000011" } }
+    ]
+  },
+
+  "/repos/example-org/example-repo/commits/0000000000000000000000000000000000000012/check-runs?per_page=100": {
+    "status": 200,
+    "next": "/repos/example-org/example-repo/commits/0000000000000000000000000000000000000012/check-runs?per_page=100&page=2",
+    "body": {
+      "total_count": 4,
+      "check_runs": [
+        { "name": "Lint & Format", "app": { "id": 15368, "slug": "github-actions" } },
+        { "name": "OpenTofu Tests", "app": { "id": 15368, "slug": "github-actions" } }
+      ]
+    }
+  },
+  "/repos/example-org/example-repo/commits/0000000000000000000000000000000000000012/check-runs?per_page=100&page=2": {
+    "status": 200,
+    "body": {
+      "total_count": 4,
+      "check_runs": [
+        { "name": "Secret Detection", "app": { "id": 15368, "slug": "github-actions" } },
+        { "name": "Analyze (python)", "app": { "id": 15368, "slug": "github-actions" } }
+      ]
+    }
+  },
+  "/repos/example-org/example-repo/commits/0000000000000000000000000000000000000013/check-runs?per_page=100": {
+    "status": 200,
+    "body": {
+      "total_count": 5,
+      "check_runs": [
+        { "name": "Lint & Format", "app": { "id": 15368, "slug": "github-actions" } },
+        { "name": "OpenTofu Tests", "app": { "id": 15368, "slug": "github-actions" } },
+        { "name": "Secret Detection", "app": { "id": 15368, "slug": "github-actions" } },
+        { "name": "Analyze (python)", "app": { "id": 15368, "slug": "github-actions" } },
+        { "name": "Draft preview", "app": { "id": 15368, "slug": "github-actions" } }
+      ]
+    }
+  },
+  "/repos/example-org/example-repo/commits/0000000000000000000000000000000000000010/check-runs?per_page=100": {
+    "status": 200,
+    "body": {
+      "total_count": 3,
+      "check_runs": [
+        { "name": "Lint & Format", "app": { "id": 15368, "slug": "github-actions" } },
+        { "name": "OpenTofu Tests", "app": { "id": 15368, "slug": "github-actions" } },
+        { "name": "Secret Detection", "app": { "id": 15368, "slug": "github-actions" } }
+      ]
+    }
+  },
+
+  "/repos/example-org/example-repo/rulesets?per_page=100": {
+    "status": 200,
+    "body": [
+      { "id": 1, "name": "main", "target": "branch", "enforcement": "active" },
+      { "id": 2, "name": "tags", "target": "tag", "enforcement": "active" }
+    ]
+  },
+  "/repos/example-org/example-repo/rulesets/2": {
+    "status": 200,
+    "body": {
+      "id": 2,
+      "name": "tags",
+      "target": "tag",
+      "enforcement": "active",
+      "conditions": { "ref_name": { "include": ["~ALL"], "exclude": [] } },
+      "rules": [{ "type": "deletion" }, { "type": "update" }, { "type": "non_fast_forward" }],
+      "bypass_actors": []
+    }
+  },
+
+  "/repos/example-org/example-repo/private-vulnerability-reporting": {
+    "status": 200,
+    "body": { "enabled": true }
+  }
+}

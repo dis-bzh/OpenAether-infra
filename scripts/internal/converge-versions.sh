@@ -27,7 +27,7 @@ CHECK_ONLY=0; [ "${4:-}" = --check ] && CHECK_ONLY=1
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CLUSTER_DIR="$ROOT/infrastructure/opentofu/cluster"
-TFVARS="$CLUSTER_DIR/envs/${ROLE}-${PROVIDER}.tfvars"
+TFVARS="${OA_ENVS_DIR:-$CLUSTER_DIR/envs}/${ROLE}-${PROVIDER}.tfvars"   # OA_ENVS_DIR: a test sandbox
 # shellcheck source=../lib/common.sh
 source "$ROOT/scripts/lib/common.sh"
 export KUBECONFIG="${KUBECONFIG:-$CLUSTER_DIR/kubeconfig}"

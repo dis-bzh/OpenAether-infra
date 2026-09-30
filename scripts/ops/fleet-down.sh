@@ -48,6 +48,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source=../lib/common.sh
 source "$ROOT/scripts/lib/common.sh"
 CLUSTER_DIR="$ROOT/infrastructure/opentofu/cluster"
+ENVS_DIR="${OA_ENVS_DIR:-$CLUSTER_DIR/envs}"   # OA_ENVS_DIR: a test sandbox (absolute)
 export KUBECONFIG="${KUBECONFIG:-$CLUSTER_DIR/kubeconfig}"
 
 # Any step that fails flips this; the script exits non-zero at the end. It used
@@ -89,7 +90,7 @@ never_bootstrapped() {
   ( cd "$ROOT/infrastructure/opentofu/cluster" 2>/dev/null || exit 1
     export AWS_ACCESS_KEY_ID="$ak" AWS_SECRET_ACCESS_KEY="$sk"
     tofu init -reconfigure \
-      $("$ROOT/scripts/internal/tf-backend.sh" "envs/${ROLE}-${PROVIDER}.tfvars") >/dev/null 2>&1 || exit 1
+      $("$ROOT/scripts/internal/tf-backend.sh" "$ENVS_DIR/${ROLE}-${PROVIDER}.tfvars") >/dev/null 2>&1 || exit 1
     # An EMPTY state list is not proof: it can also mean the wrong backend or a
     # failed read. Only a state that holds resources AND no bootstrap is proof.
     local out
@@ -282,7 +283,7 @@ info "Step 3/3 — left to purge MANUALLY (deliberately survives the teardown)"
 # for anyone who set a suffix or put a hyphen in their cluster name, which is
 # every reader of docs/first-cluster.md step 3. The report is the deliverable of
 # this step, so a report that names the wrong buckets is the whole step wasted.
-TFV="$CLUSTER_DIR/envs/$ROLE-$PROVIDER.tfvars"
+TFV="$ENVS_DIR/$ROLE-$PROVIDER.tfvars"
 _tfv() { grep -E "^[[:space:]]*$1[[:space:]]*=" "$TFV" 2>/dev/null | head -1 | sed -E 's/.*"([^"]*)".*/\1/'; }
 CN="$(oa_project "$(_tfv cluster_name)" "$(_tfv bucket_suffix)")"
 ENVN="$(_tfv environment)"

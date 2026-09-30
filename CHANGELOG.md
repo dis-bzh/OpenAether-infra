@@ -16,6 +16,29 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
+- **Repository settings are checked against what actually happens (#122).**
+  The required-check list lives in a GitHub ruleset, where no diff shows it
+  drift: CodeQL ran on every PR while nothing declared it, and two layers of
+  protection disagreed (7 required checks in the ruleset, 13 in classic
+  protection). The `main` ruleset is now the only one, requiring 17 checks
+  pinned to GitHub Actions, and a `tags` ruleset blocks moving or deleting
+  any tag, `0.1.0` included, with no bypass. New
+  `.github/workflows/repo-settings.yml` (push to main, daily, on demand, never
+  on a PR) runs `check-required-checks.sh` live: the required checks against
+  the check runs on the head of the last merged PR (main's own commits also
+  carry Cléa's scheduled jobs), the tag ruleset, and the private
+  vulnerability reporting `SECURITY.md` promises. An empty or unreadable
+  answer fails as "not verifiable". A workflow token cannot read a ruleset's
+  bypass actors, so CI warns on that one item; an admin's run, now a line of
+  `docs/release-checklist.md`, verifies it. Evidence, from this script on top
+  of `f8d6bd3`, anonymous and read-only: against the head of PR #192, the last
+  merged, 17 of 17 required checks match what reported, so it exits 0 with
+  `--tolerate-unreadable-bypass` and 2 without (that token cannot read the
+  bypass actors); with that flag, forced onto `f8d6bd3` it exits 0 too, and
+  forced onto `96e02ca` it lists 10 unrequired checks and exits 1. Offline,
+  51 cases against a canned API (`task test-scripts`) see each check red and
+  green. The workflow token's path is proven by its first run after merge.
+
 - **`docs/capacity.md`: what a cluster needs, per provider (refs #72).** The
   sizing floor and its evidence (the 2026-08-15 drain measurement), what each
   module creates (instances, disks, public IPs, LBs, security groups), and the
@@ -111,7 +134,7 @@ in git. 0.1.0 is the first entry describing something proven.
   red. No live upgrade has run in this order yet.
 
 - **A real `envs/*.tfvars` no longer turns `task lint` and `test-talos-image`
-  red (#191).** The `tofu fmt` step now checks tracked files only, and the #93
+  red (#191).** The `tofu fmt` step no longer walks ignored files, and the #93
   guard reads `OA_ENVS_DIR` (default unchanged), which the harness points at a
   sandbox, so it neither reads nor writes the real `envs/`. Reproduced with a
   gitignored tfvars pinning another Talos version: fmt rc 3 → 0, harness 16/21
@@ -143,6 +166,41 @@ in git. 0.1.0 is the first entry describing something proven.
   documents: security groups filter public traffic only. The nodes have no
   public IP, so on this provider the list declares the perimeter; it does not
   enforce it. Still open: one real deploy to confirm the LB health checks pass.
+
+- **`feint-record`'s proxy always listened on 4600, and a dead one went
+  unnoticed (#204).** Two record lanes on different endpoints shared that port.
+  With it taken the proxy died at bind, and the lane's apply went to whatever
+  held it, through it to that lane's emulator. The proxy now takes the
+  endpoint's port + 1 (4599 gives 4600, so the default is unchanged), and a
+  proxy that is not running after its startup wait stops the lane before tofu
+  runs. Emulated rung, Feint 0.13.0, a record lane on 4699: with 4600 taken
+  the proxy listened on 4700 and the lane recorded, rc 0; with 4700 taken it
+  stopped on feint's bind error, rc 1. `test-feint-restart.sh` keeps one stub
+  emulator per address. Fixing the port at 4600 turns 2 of its assertions red,
+  dropping the liveness check turns 1, and reverting #196's `--addr` turns 10.
+
+- **The rest of `task test-scripts`, `task fmt` and the fmt hook leave the real
+  `envs/` alone (#191).** Four harnesses (bucket-names, seed-openbao,
+  converge-versions, teardown) wrote their fixture there and `rm -f`'d it: a
+  file planted under each fixture's name was gone after the run. They use a
+  sandbox now, through `OA_ENVS_DIR`, which the four scripts they drive honour;
+  with 20 synthetic tfvars in `envs/`, a full `task test-scripts` reads, writes
+  and deletes none of them. It also fails now if anything under `envs/` is
+  newer than its start, a file written and deleted again included: #192's
+  converge-versions harness passes 10/0 and turns it red.
+  `test-bucket-names.sh` read its state-lock assertions from the operator's
+  `envs/management-*.tfvars`: red with a synthetic one present (24/1), and in
+  CI they asserted nothing, so a `tf-backend.sh` locking Outscale passed 24/0.
+  They read the shipped examples and fail on a crashed `tf-backend.sh`.
+  `task fmt` and the pre-commit `terraform_fmt` hook (`-recursive`) rewrote the
+  ignored tfvars, the hook while saying Passed; both leave them alone now. The
+  hook also selects a staged `.tftest.hcl` itself: upstream's filter skips it,
+  and only `-recursive` from a staged `.tf` used to reach it. `task lint` fails
+  if that `files:` pattern and the Taskfile's `TF_FMT_RE` differ. `task lint`
+  and `task fmt` share one file list (tracked and new, never ignored or
+  deleted), so lint catches a new unformatted `.tf` again, no longer dies on a
+  deleted one not yet `git rm`'d, and fails on a `TF_ROOTS` entry that no
+  longer exists, as the recursive walk did.
 
 - **A node size change resizes every node at once, on all four providers
   (#51, mocked part).** The Scaleway and Proxmox modules said `type` and
@@ -337,19 +395,12 @@ in git. 0.1.0 is the first entry describing something proven.
     `render-bootstrap-manifests.sh` regenerates it after every production
     render, and new `scripts/dev/check-upstream-artifacts-lock.sh` (wired
     into `task lint`) verifies it offline.
-  - **A 14th required check (CodeQL) runs on every PR with no workflow file
-    and no mention anywhere in the tree** (#122) — `security.yml`'s "13
-    required checks" was a comment nothing verified. New
-    `scripts/dev/check-required-checks.sh` diffs GitHub's declared rulesets
-    against what actually reported on a commit, and refuses ("not
-    verifiable") rather than passing when the rulesets response is empty —
-    proven offline against two canned fixtures (a 13-context ruleset, a
-    14-entry check-runs capture with a CodeQL-shaped extra), run via
-    `task test-scripts`. **Not wired into any workflow yet**: against this
-    repository's current classic branch protection the rulesets endpoint
-    legitimately returns `[]`, so a live step would fail-closed on every
-    future PR until an admin adds a ruleset on `main` — that step is a
-    follow-up gated on it.
+  - **A 14th check (CodeQL) ran on every PR with no workflow file and no
+    mention anywhere in the tree** (#122) — `security.yml`'s "13 required
+    checks" was a comment nothing verified. New
+    `scripts/dev/check-required-checks.sh` compares the required checks with
+    what reports on a commit: offline at first, now live — see "Repository
+    settings are checked" above.
 
 - **Three checks that could not fail** ([#75](https://github.com/dis-bzh/OpenAether-infra/issues/75)).
   `test-talos-local.sh`'s Step 5 (schedulable workers Ready) and Step 6 (Flux
