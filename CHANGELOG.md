@@ -150,6 +150,18 @@ in git. 0.1.0 is the first entry describing something proven.
   public IP, so on this provider the list declares the perimeter; it does not
   enforce it. Still open: one real deploy to confirm the LB health checks pass.
 
+- **`feint-record`'s proxy always listened on 4600, and a dead one went
+  unnoticed (#204).** Two record lanes on different endpoints shared that port.
+  With it taken the proxy died at bind, and the lane's apply went to whatever
+  held it, through it to that lane's emulator. The proxy now takes the
+  endpoint's port + 1 (4599 gives 4600, so the default is unchanged), and a
+  proxy that is not running after its startup wait stops the lane before tofu
+  runs. Emulated rung, Feint 0.13.0, a record lane on 4699: with 4600 taken
+  the proxy listened on 4700 and the lane recorded, rc 0; with 4700 taken it
+  stopped on feint's bind error, rc 1. `test-feint-restart.sh` keeps one stub
+  emulator per address. Fixing the port at 4600 turns 2 of its assertions red,
+  dropping the liveness check turns 1, and reverting #196's `--addr` turns 10.
+
 - **The rest of `task test-scripts`, `task fmt` and the fmt hook leave the real
   `envs/` alone (#191).** Four harnesses (bucket-names, seed-openbao,
   converge-versions, teardown) wrote their fixture there and `rm -f`'d it: a
