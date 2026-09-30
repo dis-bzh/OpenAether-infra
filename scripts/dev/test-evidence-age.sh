@@ -193,7 +193,7 @@ n="$(grep -cE '^(✓|✗) ' <<<"$out")"
 echo
 echo "=== wiring: what task runs the gate, and what must never ==="
 # A date-driven gate inside a task CI runs (ci.yml: lint, render-check, validate, test-scripts, test)
-# would turn a required check red with no commit, and this one is red by design until OVH and Outscale re-run.
+# would turn a required check red with no commit; this one is red until every provider has a row at the pin within the age limit.
 for t in lint test test-scripts render-check validate; do
   dry="$(task --dir "$ROOT" --dry "$t" 2>&1)"
   [ -n "$dry" ] || { bad "task $t printed nothing under --dry: this check would be blind"; continue; }

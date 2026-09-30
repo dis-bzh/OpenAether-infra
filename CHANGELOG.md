@@ -33,8 +33,9 @@ in git. 0.1.0 is the first entry describing something proven.
   current, 1 stale, 2 not verifiable (no table, a bad or future date, a cell
   with no version), so a broken extractor never reads as stale. On this tree it
   exits 1: OVH and Outscale measured Talos v1.13.8 against the pin v1.13.9,
-  Scaleway is current. It is in neither `task lint` nor `task test`, where a
-  date-driven red would appear with no commit, and it records no receipt.
+  Scaleway is current (41 days old on 2026-09-30) but goes stale on 2026-10-05.
+  It is in neither `task lint` nor `task test`, where a date-driven red would
+  appear with no commit, and it records no receipt.
   `task preflight` runs it with `--warn`, before its banner: stale prints a
   warning and exit 2 fails, so the last lines stay true either way. Mocked rung:
   `test-evidence-age.sh` (63 assertions, fixtures and an injected clock) sees
@@ -42,8 +43,8 @@ in git. 0.1.0 is the first entry describing something proven.
   is current; each of 31 mutations of the gate and of the Taskfile wiring turns
   it red. Nothing else in a row is read: a row that re-ran only the upgrade
   counts, and it cannot tell a measured row from a typed one. Turning it green
-  takes real OVH and Outscale runs at the pin, and the issue stays open until
-  then.
+  takes, for every provider, a row at the pin dated within the limit: real OVH
+  and Outscale runs, then Scaleway again. The issue stays open until then.
 
 - **A pull request's rung is checked against a receipt the harness wrote
   (#120).** CONTRIBUTING asks every PR to name the rung it reached, but nothing
