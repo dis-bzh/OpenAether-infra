@@ -152,10 +152,15 @@ def outscale_leftovers(cluster: str) -> list[str]:
     return leftovers
 
 
-def scaleway_leftovers(cluster: str) -> list[str]:
+def _scaleway():
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "purge-orphans"))
     import scaleway  # the purge's own listing: one definition of a clean project
 
+    return scaleway
+
+
+def scaleway_leftovers(cluster: str) -> list[str]:
+    scaleway = _scaleway()
     refused: list[str] = []
     leftovers = []
     # The name between separators: a bare substring made edge-1 own edge-10's servers.
@@ -218,7 +223,11 @@ def main() -> int:
         return 2
 
     if not leftovers:
-        print(f"✓ {provider}/{cluster}: nothing left (checked: {SCOPE[provider]})")
+        scope = SCOPE[provider]
+        if provider == "scaleway":
+            _, _, region, zones = _scaleway().settings()
+            scope += f"; region {region}, zones {','.join(zones)}"
+        print(f"✓ {provider}/{cluster}: nothing left (checked: {scope})")
         print(f"  {UNCHECKED[provider]} are NOT enumerated here — see scripts/ops/purge-orphans/")
         return 0
     for item in leftovers:

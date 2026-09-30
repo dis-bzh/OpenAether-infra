@@ -369,15 +369,24 @@ echo "=== missing or refused credentials exit 2 ==="
 # FAKE_PAGE=<n> serves n items per `page=`, like the real API, and FAKE_TOTAL=1
 # adds the body's total_count (the instance API reports it in a header instead).
 # FAKE_PAGE_ERR=<code> answers that HTTP error from page 2 on.
+# FAKE_CODE="<path prefix>=<code> ..." answers that HTTP error for a prefix, and
+# FAKE_RAW=<path prefix> answers 200 with an HTML body. SCW_STDERR=<file> keeps
+# stderr apart instead of merging it into the output.
 SCW_ENV=(SCW_SECRET_KEY=stub SCW_DEFAULT_PROJECT_ID=stub SCW_DEFAULT_REGION=fr-par SCW_ZONES=fr-par-1)
 run_scw() { # <script under scripts/ops/> [args...]
+  if [ -n "${SCW_STDERR:-}" ]; then _run_scw "$@" 2>"$SCW_STDERR"; else _run_scw "$@" 2>&1; fi
+}
+_run_scw() {
   env "${SCW_ENV[@]}" FAKE_SCW="${FAKE_SCW:-}" FAKE_REFUSE="${FAKE_REFUSE:-}" \
       FAKE_PAGE="${FAKE_PAGE:-}" FAKE_TOTAL="${FAKE_TOTAL:-}" FAKE_PAGE_ERR="${FAKE_PAGE_ERR:-}" \
-      python3 - "$ROOT/scripts/ops/$1" "${@:2}" <<'PY' 2>&1
+      FAKE_CODE="${FAKE_CODE:-}" FAKE_RAW="${FAKE_RAW:-}" \
+      python3 - "$ROOT/scripts/ops/$1" "${@:2}" <<'PY'
 import io, json, os, runpy, sys, urllib.error, urllib.parse, urllib.request
 
 ANSWERS = json.loads(os.environ['FAKE_SCW'] or '{}')
 REFUSE = os.environ['FAKE_REFUSE'].split()
+CODES = [c.split('=') for c in os.environ['FAKE_CODE'].split()]
+RAW = os.environ['FAKE_RAW']
 SIZE = int(os.environ['FAKE_PAGE'] or 0)
 
 def fake(req, *a, **k):
@@ -385,6 +394,11 @@ def fake(req, *a, **k):
     bare = path.split('?')[0]
     if any(bare.startswith(r) for r in REFUSE):
         raise urllib.error.HTTPError(req.full_url, 403, 'Forbidden', {}, io.BytesIO(b'{}'))
+    for prefix, code in CODES:
+        if bare.startswith(prefix):
+            raise urllib.error.HTTPError(req.full_url, int(code), 'Err', {}, io.BytesIO(b'{}'))
+    if RAW and bare.startswith(RAW):
+        return io.BytesIO(b'<html>gateway</html>')
     if req.get_method() != 'GET':
         print('CALL', req.get_method(), path)
         return io.BytesIO(b'{}')
@@ -520,6 +534,12 @@ if [ "$rc" -eq 0 ] && [ "${#missing_calls[@]}" -eq 0 ] && grep -qF '10 resource(
   then ok "scaleway.py --apply: each of the 10 kinds deleted through its own call"
   else bad "scaleway.py --apply: rc=${rc}, calls not made: ${missing_calls[*]:-none}"
 fi
+# Attached IPs are skipped at listing time and servers leave the listing
+# asynchronously, so the closing line may not vouch for a clean project.
+if grep -qF 'Re-run without --apply to confirm' <<<"$out" && ! grep -qF 'deleted. The project is clean' <<<"$out"
+  then ok "scaleway.py --apply: it asks for a re-check instead of calling the project clean"
+  else bad "scaleway.py --apply: closing line over-claims: $(tail -1 <<<"$out")"
+fi
 
 # A live cluster sharing the project: its attached IPs and volume, and the
 # project's default security group, are not leftovers of edge-1.
@@ -573,6 +593,13 @@ out="$(run_scw verify-provider-clean.py edge-1 scaleway)"; rc=$?
 if [ "$rc" -eq 1 ]; then ok "verify-provider-clean scaleway: the cluster name between separators still matches"
   else bad "verify-provider-clean scaleway: 'kubeapi-edge-1-cp' was missed (rc=${rc})"
 fi
+for neighbour in xedge-1-cp edge-1x-cp; do
+  FAKE_SCW="{\"$Z/servers\": {\"servers\": [{\"id\": \"s12\", \"name\": \"$neighbour\"}]}}"
+  out="$(run_scw verify-provider-clean.py edge-1 scaleway)"; rc=$?
+  if [ "$rc" -eq 0 ]; then ok "verify-provider-clean scaleway: '$neighbour' is not edge-1's leftover"
+    else bad "verify-provider-clean scaleway: '$neighbour' read as edge-1's (rc=${rc}): $out"
+  fi
+done
 
 # The same volume listed by the block and the instance API is one leftover.
 FAKE_SCW="{\"block/v1alpha1/zones/fr-par-1/volumes\": {\"volumes\": [{\"id\": \"v7\", \"name\": \"twice\", \"size\": 1, \"references\": []}]},
@@ -620,6 +647,84 @@ for code in 404 500; do
   expect_2 "verify-provider-clean scaleway, HTTP $code on page 2" $rc "$out" "page 2 answered HTTP $code"
 done
 FAKE_PAGE='' FAKE_TOTAL='' FAKE_PAGE_ERR=''
+
+# --- Scaleway: a question nobody answered is not an empty answer ---------------
+# A kind every zone answers 404/501 was skipped as "not offered", so a listing
+# that asked nothing ended "the project is clean" (rc 0) and edge-down then said
+# "fully deleted (provider verified clean)". One zone answering is enough; none is not.
+echo
+echo "=== Scaleway: unanswered kinds, several zones, odd answers ==="
+GW=vpc-gw/v2/zones/fr-par
+SCW_ENV=(SCW_SECRET_KEY=stub SCW_DEFAULT_PROJECT_ID=stub SCW_DEFAULT_REGION=fr-par SCW_ZONES=fr-par-1,fr-par-2)
+FAKE_SCW=''
+for codes in "$GW-1/gateways=501 $GW-2/gateways=501" "$GW-1/gateways=404 $GW-2/gateways=501"; do
+  FAKE_CODE="$codes"
+  out="$(run_scw purge-orphans/scaleway.py)"; rc=$?
+  if [ "$rc" -eq 2 ] && grep -qF 'public gateway: not offered in fr-par-1, fr-par-2' <<<"$out" && ! grep -qi 'is clean' <<<"$out"
+    then ok "scaleway.py: a kind answered 404/501 by every zone is refused, not clean ($codes)"
+    else bad "scaleway.py: an unanswered kind read as clean, rc=${rc} ($codes): $(tail -1 <<<"$out")"
+  fi
+  out="$(run_scw verify-provider-clean.py edge-1 scaleway)"; rc=$?
+  expect_2 "verify-provider-clean scaleway, a kind no zone answers ($codes)" $rc "$out" "public gateway: not offered"
+done
+FAKE_CODE="$GW-1/gateways=404"
+out="$(run_scw purge-orphans/scaleway.py)"; rc=$?
+if [ "$rc" -eq 0 ]; then ok "scaleway.py: a kind one zone does not offer but another answers is clean"
+  else bad "scaleway.py: 404 in one zone of two was refused, rc=${rc}: $(tail -1 <<<"$out")"
+fi
+FAKE_CODE=''
+
+# Two zones: a leftover only in the second is found, and the all-clear says which
+# region and zones it looked at.
+FAKE_SCW="{\"instance/v1/zones/fr-par-2/servers\": {\"servers\": [{\"id\": \"s2\", \"name\": \"edge-1-cp-0\"}]}}"
+out="$(run_scw purge-orphans/scaleway.py)"; rc=$?
+if [ "$rc" -eq 1 ] && grep -qF '[fr-par-2] server edge-1-cp-0' <<<"$out"
+  then ok "scaleway.py: a server in the second zone only is targeted"
+  else bad "scaleway.py: a leftover in fr-par-2 was missed, rc=${rc}: $(tail -2 <<<"$out" | tr '\n' ' ')"
+fi
+out="$(run_scw verify-provider-clean.py edge-1 scaleway)"; rc=$?
+if [ "$rc" -eq 1 ] && grep -qF 'in fr-par-2' <<<"$out"
+  then ok "verify-provider-clean scaleway: a server in the second zone only is a leftover"
+  else bad "verify-provider-clean scaleway: a leftover in fr-par-2 was missed, rc=${rc}: $out"
+fi
+FAKE_SCW=''
+out="$(run_scw verify-provider-clean.py edge-1 scaleway)"; rc=$?
+if [ "$rc" -eq 0 ] && grep -qF 'region fr-par, zones fr-par-1,fr-par-2' <<<"$out"
+  then ok "verify-provider-clean scaleway: the all-clear names the region and zones it checked"
+  else bad "verify-provider-clean scaleway: the all-clear does not say where it looked, rc=${rc}: $out"
+fi
+SCW_ENV=(SCW_SECRET_KEY=stub SCW_DEFAULT_PROJECT_ID=stub SCW_DEFAULT_REGION=fr-par SCW_ZONES=fr-par-1)
+
+# One kind refused (500) next to a real leftover: the leftover is reported with
+# rc 1, and the unreachable kind is still said, on stderr, not dropped.
+FAKE_SCW="{\"$Z/servers\": {\"servers\": [{\"id\": \"s3\", \"name\": \"edge-1-cp-0\"}]}}"
+FAKE_CODE="lb/v1/zones/fr-par-1/lbs=500"
+err="$(mktemp)"
+out="$(SCW_STDERR="$err" run_scw verify-provider-clean.py edge-1 scaleway)"; rc=$?
+if [ "$rc" -eq 1 ] && grep -qF 'server edge-1-cp-0' <<<"$out" && grep -qF 'unreachable' "$err" && ! grep -qF 'unreachable' <<<"$out"
+  then ok "verify-provider-clean scaleway: a leftover and a refused kind give rc 1, unreachable on stderr"
+  else bad "verify-provider-clean scaleway: leftover + refused kind, rc=${rc}, out: $out, err: $(cat "$err")"
+fi
+rm -f "$err"
+FAKE_CODE=''
+
+# A 200 that is not JSON, and an item with no id: both are an unanswered question
+# (rc 2), neither a traceback (which exits 1, "leftovers") nor a missing credential.
+FAKE_SCW=''
+FAKE_RAW="$Z/servers"
+out="$(run_scw purge-orphans/scaleway.py)"; expect_2 "scaleway.py, a non-JSON 200" $? "$out" "answer is not JSON"
+out="$(run_scw verify-provider-clean.py edge-1 scaleway)"
+expect_2 "verify-provider-clean scaleway, a non-JSON 200" $? "$out" "answer is not JSON"
+FAKE_RAW=''
+FAKE_SCW="{\"$Z/servers\": {\"servers\": [{\"name\": \"edge-1-cp-0\"}]}}"
+out="$(run_scw purge-orphans/scaleway.py)"; expect_2 "scaleway.py, an item with no id" $? "$out" "unexpected answer shape"
+out="$(run_scw verify-provider-clean.py edge-1 scaleway)"
+expect_2 "verify-provider-clean scaleway, an item with no id" $? "$out" "unexpected answer shape"
+if grep -qF 'missing credential' <<<"$out"
+  then bad "verify-provider-clean scaleway: an item with no id was blamed on a missing credential"
+  else ok "verify-provider-clean scaleway: an item with no id is not a missing credential"
+fi
+FAKE_SCW=''
 
 echo
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
