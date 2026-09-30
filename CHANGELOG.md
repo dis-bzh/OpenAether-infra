@@ -117,7 +117,7 @@ in git. 0.1.0 is the first entry describing something proven.
   `test-feint-restart.sh` goes 14 passed / 3 failed → 17 / 0 on the fix.
 
 - **A real `envs/*.tfvars` no longer turns `task lint` and `test-talos-image`
-  red (#191).** The `tofu fmt` step now checks tracked files only, and the #93
+  red (#191).** The `tofu fmt` step no longer walks ignored files, and the #93
   guard reads `OA_ENVS_DIR` (default unchanged), which the harness points at a
   sandbox, so it neither reads nor writes the real `envs/`. Reproduced with a
   gitignored tfvars pinning another Talos version: fmt rc 3 → 0, harness 16/21
@@ -149,6 +149,29 @@ in git. 0.1.0 is the first entry describing something proven.
   documents: security groups filter public traffic only. The nodes have no
   public IP, so on this provider the list declares the perimeter; it does not
   enforce it. Still open: one real deploy to confirm the LB health checks pass.
+
+- **The rest of `task test-scripts`, `task fmt` and the fmt hook leave the real
+  `envs/` alone (#191).** Four harnesses (bucket-names, seed-openbao,
+  converge-versions, teardown) wrote their fixture there and `rm -f`'d it: a
+  file planted under each fixture's name was gone after the run. They use a
+  sandbox now, through `OA_ENVS_DIR`, which the four scripts they drive honour;
+  with 20 synthetic tfvars in `envs/`, a full `task test-scripts` reads, writes
+  and deletes none of them. It also fails now if anything under `envs/` is
+  newer than its start, a file written and deleted again included: #192's
+  converge-versions harness passes 10/0 and turns it red.
+  `test-bucket-names.sh` read its state-lock assertions from the operator's
+  `envs/management-*.tfvars`: red with a synthetic one present (24/1), and in
+  CI they asserted nothing, so a `tf-backend.sh` locking Outscale passed 24/0.
+  They read the shipped examples and fail on a crashed `tf-backend.sh`.
+  `task fmt` and the pre-commit `terraform_fmt` hook (`-recursive`) rewrote the
+  ignored tfvars, the hook while saying Passed; both leave them alone now. The
+  hook also selects a staged `.tftest.hcl` itself: upstream's filter skips it,
+  and only `-recursive` from a staged `.tf` used to reach it. `task lint` fails
+  if that `files:` pattern and the Taskfile's `TF_FMT_RE` differ. `task lint`
+  and `task fmt` share one file list (tracked and new, never ignored or
+  deleted), so lint catches a new unformatted `.tf` again, no longer dies on a
+  deleted one not yet `git rm`'d, and fails on a `TF_ROOTS` entry that no
+  longer exists, as the recursive walk did.
 
 - **A node size change resizes every node at once, on all four providers
   (#51, mocked part).** The Scaleway and Proxmox modules said `type` and

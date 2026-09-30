@@ -8,10 +8,9 @@ env:
   TF_VAR_talos_tunnel_port_offset:
     sh: echo "${TALOS_TUNNEL_OFFSET:-0}"
 
-# The repo's real OpenTofu roots. ⚠️ DO NOT go back to a
-# `-recursive infrastructure/opentofu`: it would sweep in untracked local
-# scratch directories (e.g. `_v2/`), which used to fail `task lint`.
-# Add every new root here.
+# The repo's real OpenTofu roots. ⚠️ Not `infrastructure/opentofu` whole: it
+# would sweep in untracked local scratch directories (e.g. `_v2/`), which used
+# to fail `task lint`. Add every new root here.
 vars:
   TF_ROOTS: >-
     infrastructure/opentofu/cluster
@@ -19,6 +18,16 @@ vars:
     infrastructure/opentofu/talos-image
     infrastructure/opentofu-local
     infrastructure/opentofu-feint
+  # Also terraform_fmt's `files:` in .pre-commit-config.yaml; lint compares them.
+  TF_FMT_RE: '\.(tf|tofu|tfvars|tftest\.hcl|tofutest\.hcl)$'
+  # What `tofu fmt -recursive` visits, minus gitignored files (the operator's
+  # envs/*.tfvars) and deleted ones, which fmt cannot open. lint and fmt share it.
+  # A root that is gone fails it, as the recursive walk did.
+  TF_FMT_FILES: >-
+    for r in {{.TF_ROOTS}}; do [ -d "$r" ] || { echo "✗ TF_ROOTS: no directory $r" >&2; exit 1; }; done;
+    git ls-files --cached --others --exclude-standard -- {{.TF_ROOTS}}
+    | grep -E '{{.TF_FMT_RE}}'
+    | while read -r f; do [ ! -e "$f" ] || echo "$f"; done
 
 tasks:
   default:
@@ -112,9 +121,15 @@ tasks:
   lint:
     desc: Lint and format code (OpenTofu, YAML)
     cmds:
-      # Tracked files only: -recursive also walks a gitignored real envs/*.tfvars,
-      # so a workstation preparing a real run failed lint on its own config (#191).
-      - git ls-files -z -- {{.TF_ROOTS}} | grep -zE '\.(tf|tfvars|tftest\.hcl)$' | xargs -0 -r tofu fmt -check
+      # Not -recursive: it also walks a gitignored real envs/*.tfvars, so a
+      # workstation preparing a real run failed lint on its own config (#191).
+      # An empty list fails: `tofu fmt -check` given no file passes.
+      - |
+        files="$({{.TF_FMT_FILES}})" || exit 1
+        [ -n "$files" ] || { echo "✗ no OpenTofu file under TF_ROOTS" >&2; exit 1; }
+        sed -n '/- id: terraform_fmt$/,/- id:/s/^ *files: //p' .pre-commit-config.yaml | grep -qxF '{{.TF_FMT_RE}}' \
+          || { echo "✗ terraform_fmt's files: in .pre-commit-config.yaml is not TF_FMT_RE" >&2; exit 1; }
+        tofu fmt -check $files
       - yamllint -c infrastructure/.yamllint infrastructure/
       # Same config, the repo's other YAML — CI used to only lint
       # infrastructure/, so a broken .github/workflows/*.yml would pass CI
@@ -177,7 +192,7 @@ tasks:
   fmt:
     desc: Format OpenTofu code
     cmds:
-      - tofu fmt -recursive {{.TF_ROOTS}}
+      - files="$({{.TF_FMT_FILES}})" && tofu fmt $files
 
   validate:
     desc: "Validate an OpenTofu root. Usage: task validate [ROOT=cluster|talos-image]"
@@ -350,7 +365,12 @@ tasks:
       that cost real cloud runs on 2026-08-15 were logic, not cloud — a resource
       name resolving to the wrong CRD, an error read as an empty list, an rc
       capture `set -e` never reached. Seconds here instead of 25-90 minutes there.
+    vars:
+      # Made when the task starts. The last step fails on anything under envs/
+      # newer than it: a file written there, even one deleted again (#191).
+      ENVS_STAMP: {sh: mktemp}
     cmds:
+      - defer: rm -f {{.ENVS_STAMP}}
       # jsonpath first: a query kubectl cannot parse makes every assertion below
       # it meaningless, and this costs milliseconds.
       - ./scripts/dev/check-jsonpath.sh
@@ -447,6 +467,9 @@ tasks:
       # Each check of check-required-checks.sh seen red and green against a
       # canned API, not its HTTP layer; live, it runs in repo-settings.yml only.
       - ./scripts/dev/check-required-checks.sh --self-test
+      - |
+        written="$(find infrastructure/opentofu/cluster/envs -newer {{.ENVS_STAMP}})" || exit 1
+        [ -z "$written" ] || { echo "✗ a step wrote under envs/:" $written >&2; exit 1; }
 
   test:
     desc: Run OpenTofu tests (cluster root)
