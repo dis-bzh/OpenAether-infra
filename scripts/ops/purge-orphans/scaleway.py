@@ -54,7 +54,11 @@ def call(token, url, method='GET', body=None):
         'X-Auth-Token': token, 'Content-Type': 'application/json'})
     with urllib.request.urlopen(req, timeout=90) as r:
         raw = r.read()
-    return json.loads(raw) if raw else {}
+    try:
+        return json.loads(raw) if raw else {}
+    except ValueError as e:
+        # A 200 that is not JSON (a proxy page) is an unanswered question, not a traceback.
+        raise urllib.error.URLError(f"answer is not JSON: {raw[:40]!r}") from e
 
 
 def pages(token, url, key):
@@ -71,7 +75,10 @@ def pages(token, url, key):
             # The list exists (page 1 answered): failing later is an incomplete read,
             # not "not offered in this zone", which leftovers() would pass as empty.
             raise urllib.error.URLError(f"page {page} answered HTTP {e.code}") from e
-        new =[i for i in data.get(key, []) if i['id'] not in found]
+        try:
+            new = [i for i in data.get(key, []) if i['id'] not in found]
+        except (KeyError, TypeError, AttributeError) as e:
+            raise urllib.error.URLError(f"unexpected answer shape ({type(e).__name__}: {e})") from e
         found.update((i['id'], i) for i in new)
         total = data.get('total_count')
         if not new or (total is not None and len(found) >= total):
@@ -82,10 +89,13 @@ def pages(token, url, key):
 def leftovers(token, project, region, zones, refused):
     """Yields (kind, zone or region, item, item url) for each leftover. Each
     endpoint that refused is appended to `refused`: a refused question is not
-    an empty answer, and both used to leave the count at 0 and print "clean"."""
+    an empty answer, and both used to leave the count at 0 and print "clean".
+    So is a kind that no location answered at all (404/501 everywhere)."""
     seen = set()          # both volume APIs may list the same volume
     for kind, path, key, owner in KINDS:
-        for where in (zones if '{z}' in path else [region]):
+        locations = zones if '{z}' in path else [region]
+        answered, refused_before = False, len(refused)
+        for where in locations:
             url = f"{API}/{path.format(z=where, r=where, p=project)}"
             base = url.split('?')[0]
             try:
@@ -97,10 +107,13 @@ def leftovers(token, project, region, zones, refused):
             except (urllib.error.URLError, TimeoutError) as e:
                 refused.append(f"{base} ({str(e)[:60]})")
                 continue
+            answered = True
             for item in items:
                 if not (owner and item.get(owner)) and item['id'] not in seen:
                     seen.add(item['id'])
                     yield kind, where, item, f"{base}/{item['id']}"
+        if not answered and len(refused) == refused_before:
+            refused.append(f"{kind}: not offered in {', '.join(locations)} (404/501 everywhere)")
 
 
 def describe(kind, item):
@@ -154,8 +167,10 @@ def main():
         print(f"\n✗ {len(refused)} endpoint(s) refused to answer, so what they hold was never")
         print("  asked. This is NOT an all-clear: check the credentials and re-run.")
         return 2
-    print(f"\n{total} resource(s) deleted. The project is clean." if total
-          else "Nothing to purge — the project is clean.")
+    # No re-list: a terminated server leaves the listing asynchronously, so one
+    # straight after would call a good purge dirty.
+    print(f"\n{total} resource(s) deleted. Re-run without --apply to confirm the project is clean."
+          if total else "Nothing to purge — the project is clean.")
     return 0
 
 

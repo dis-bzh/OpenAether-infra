@@ -415,6 +415,7 @@ expect_rc 1 "a provider that still has resources exits non-zero"
 refute_out "fully deleted" "leftover provider resources are not reported 'fully deleted'"
 expect_out "Purge by hand" "it tells the operator to purge"
 expect_out "delete-openstack-resource.py" "on OpenStack it names the scoped deleter"
+refute_out "left detached" "on OpenStack it does not talk about detached resources"
 
 # Same failure on Scaleway: that deleter only knows OpenStack objects, and the
 # check also reports project-wide detached IPs and volumes that nothing tags.
@@ -423,6 +424,17 @@ STUB_PY_RC=1 STUB_PY_OUT='flexible IP 192.0.2.10 in fr-par-1' run "$EDGE_DOWN" e
 expect_rc 1 "a Scaleway leftover exits non-zero"
 refute_out "delete-openstack-resource" "on Scaleway it does not send the operator to an OpenStack-only tool"
 expect_out "left detached in the project" "on Scaleway it says detached resources count"
+if grep -q 'verify-provider-clean.py edge-c scaleway' "$STUB_PY_LOG"
+  then ok "on Scaleway the verifier is called with the scaleway provider"
+  else bad "the Scaleway verifier was not called as expected: $(cat "$STUB_PY_LOG")"
+fi
+
+# Outscale leaks EIPs too, but its check names no project-wide detached kinds.
+plan "${GONE}get osccluster -n capi-clusters -o name\t0\tosccluster.infrastructure.cluster.x-k8s.io/edge-c\n"
+STUB_PY_RC=1 STUB_PY_OUT='unassociated EIP 192.0.2.10' run "$EDGE_DOWN" edge-c --yes --timeout 30
+expect_rc 1 "an Outscale leftover exits non-zero"
+refute_out "left detached" "on Outscale it does not claim the Scaleway-only detached wording"
+refute_out "delete-openstack-resource" "on Outscale it does not send the operator to an OpenStack-only tool"
 
 # Verification skipped (no credentials): exits 0, but must not claim more than
 # it checked.

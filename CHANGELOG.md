@@ -152,6 +152,16 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **A Scaleway kind that no zone answered is no longer read as clean.**
+  `scaleway.py` skipped a kind that every zone answered 404/501 as "not
+  offered", so a listing that asked nothing ended "the project is clean" (exit
+  0) and `edge-down.sh` printed "fully deleted". Such a kind is now refused
+  (exit 2) in the purge and in `verify-provider-clean.py`, whose all-clear also
+  names the region and zones it read. A 200 that is not JSON, or an item with
+  no `id`, is exit 2 too, not a traceback (exit 1, "leftovers"). `--apply` no
+  longer closes on "The project is clean": a terminated server leaves the
+  listing late, so it asks for a re-run. Mocked rung: `test-purge-orphans.sh`
+  78 → 95 assertions and `test-teardown.sh` +4; 8 mutants each turn one red.
 - **`feint.sh` no longer checks and stops the emulator on the default port
   when `FEINT_ENDPOINT` names another (#195).** `feint status` and `feint stop`
   default to :4599 and were called without `--addr`; `feint_cli` now adds it.
