@@ -8,8 +8,10 @@
 # envs/*.tfvars must not change the verdict.
 #
 # It proves age and pin agreement, never that a run happened: a typed row looks like
-# a measured one. Red by design while a provider lags the pin, so it is in neither
-# `task lint` nor `task test`: a date-driven check there goes red with no commit.
+# a measured one. The one verdict it reads is a ❌ or ⚠ anywhere in a row (a failed
+# run is no evidence); a row that re-ran only the upgrade counts. Red by design while
+# a provider lags the pin, so it is in neither `task lint` nor `task test`: a
+# date-driven check there goes red with no commit.
 #
 # Exit 0 current, 1 stale, 2 not verifiable (the extractor is broken, not the
 # repository: no table, a missing column, a bad or future date, no version).
@@ -71,6 +73,10 @@ def day(text, what):
         raise NotVerifiable(f"{what}: {text!r} is not a date")
 
 
+# A run that did not go through is no evidence at any version it mentions.
+FAILED = ("❌", "⚠")
+
+
 def version(text):
     # The LAST x.y.z: "1.13.7→1.13.8" measured 1.13.8, and a v prefix is not a difference.
     found = re.findall(r"(?<![\d.])\d+\.\d+\.\d+(?!\.?\d)", text)
@@ -116,19 +122,21 @@ def check():
         need(m, f"row {row[0]!r} names no provider")
         date = day(row[col["measured"]].replace("`", ""), f"{row[0]}: measured")
         need(date <= today, f"{row[0]}: measured {date} is after today ({today})")
+        failed = any(g in c for c in row for g in FAILED)
         cell = {"talos": row[col["talos"]], "kubernetes": row[col["k8s"]]}
         seen = {name: version(c) for name, c in cell.items()}
         for name, v in seen.items():
-            need(v, f"{row[0]}: the {name} cell {cell[name]!r} holds no version")
+            need(v or failed, f"{row[0]}: the {name} cell {cell[name]!r} holds no version")
         # The later row wins a tie: a re-run is written under the row it re-runs.
         if m.group() not in latest or date >= latest[m.group()][0]:
-            latest[m.group()] = (date, seen)
+            latest[m.group()] = (date, seen, failed)
     need(latest, "the table has no rows")
 
     stale = 0
-    for provider, (date, seen) in sorted(latest.items()):
+    for provider, (date, seen, failed) in sorted(latest.items()):
         age = (today - date).days
-        why = [f"{name} measured v{seen[name]}, pinned v{pins[name]}" for name in pins if seen[name] != pins[name]]
+        why = ["the row records a failure (❌ or ⚠)"] if failed else \
+            [f"{name} measured v{seen[name]}, pinned v{pins[name]}" for name in pins if seen[name] != pins[name]]
         if age > int(limit):
             why.append(f"{age} days old, limit {limit}")
         if why:

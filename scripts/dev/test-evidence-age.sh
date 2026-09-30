@@ -6,6 +6,9 @@
 # and a verdict that turns this harness red would turn CI red with no commit.
 set -uo pipefail
 
+# The gate's own knobs: a value a maintainer exported would bend every case below.
+unset OA_EVIDENCE_MAX_AGE_DAYS OA_EVIDENCE_TODAY
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 GATE="$ROOT/scripts/dev/check-evidence-age.sh"
 TMP="$(mktemp -d)"
@@ -78,6 +81,25 @@ TODAY=2026-10-05 gate; expect "46 days old" 1
 grep -q '46 days' <<<"$out" && ok "the age is in the output" || bad "no '46 days': $out"
 OA_EVIDENCE_MAX_AGE_DAYS=10 TODAY=2026-09-01 gate; expect "a tighter OA_EVIDENCE_MAX_AGE_DAYS=10 at 12 days" 1
 
+TODAY=2026-08-20 gate; expect "measured today" 0
+grep -q '(0 d)' <<<"$out" && ok "…and its age is 0 days" || bad "no '(0 d)': $out"
+
+echo
+echo "=== a row that records a failure is no evidence, whatever versions it names ==="
+status <<<'| Scaleway | 2026-08-20 | 1.36.3 | ❌ upgrade failed: 1.13.8→1.13.9, 2/6 nodes |'
+gate; expect "a ❌ in the Talos cell, at the pin" 1
+stale_lines | grep -q 'records a failure' && ok "…and the line says why" || bad "no failure reason: $out"
+status <<<'| Scaleway | 2026-08-20 | ⚠ 1.36.3 roll interrupted | ✅ 1.13.9 |'
+gate; expect "a ⚠ in the Kubernetes cell, at the pin" 1
+{ printf '| | deploy | measured | k8s | Talos |\n|---|---|---|---|---|\n'
+  echo '| Scaleway | ❌ quota | 2026-08-20 | 1.36.3 | 1.13.9 |'; } >"$ST"
+gate; expect "a ❌ in a column the gate does not read" 1
+status <<<'| OVH | 2026-09-29 | ❌ failed | ❌ failed |'
+gate; expect "a failed row that names no version is stale, not unreadable" 1
+status <<<'| Scaleway | 2026-08-01 | ❌ 1.36.3 | ❌ 1.13.9 |
+| Scaleway, re-run | 2026-08-20 | 1.36.3 | 1.13.9 |'
+gate; expect "a green re-run after a failed row" 0
+
 echo
 echo "=== the newest row per provider is judged, by date and not by position ==="
 status <<<'| Scaleway | 2026-08-01 | 1.36.1→1.36.2 | 1.13.6→1.13.7 |
@@ -120,6 +142,7 @@ cluster v1.13.9 v1.36.3
 echo
 echo "=== not verifiable is 2, never 1: the extractor is broken, not the repository ==="
 no_table; gate; expect "no table at all" 2
+status </dev/null; gate; expect "a header-only table: green by absence is not green" 2
 printf '# fixture\n\n| | k8s | Talos |\n|---|---|---|\n| Scaleway | 1.36.3 | 1.13.9 |\n' >"$ST"
 gate; expect "a table without a measured column" 2
 status <<<'| Scaleway | 2026-13-45 | 1.36.3 | 1.13.9 |'; gate; expect "a date that does not exist" 2
@@ -147,8 +170,12 @@ status <<<"$GREEN"; rm "$ST"; gate; expect "a status file that is not there" 2
 echo
 echo "=== the pin comes from variables.tf, never from a real tfvars ==="
 pin="$("$ROOT/scripts/internal/talos-version.sh")"
+k8s_pin="$(awk '/variable "kubernetes_version"/,/^}/' "$ROOT/infrastructure/opentofu/cluster/variables.tf" \
+  | sed -nE 's/^[[:space:]]*default[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' | head -1)"
 out="$("$GATE" 2>&1)"
-grep -qF "$pin" <<<"$out" && ok "on this tree, the printed pin is talos-version.sh's ($pin)" || bad "pin $pin not printed: $out"
+# Anchored on the gate's own line: the real table also holds these versions, so a bare match proves nothing.
+grep -qF "pin: talos $pin, kubernetes $k8s_pin;" <<<"$out" && ok "on this tree, the default cluster dir gives the pin ($pin, $k8s_pin)" \
+  || bad "the gate's pin line is not '$pin, $k8s_pin': $out"
 cluster v1.13.9 v1.36.3
 status <<<"$GREEN"
 before="$(OA_EVIDENCE_TODAY=2026-09-30 "$GATE" --status "$ST" --cluster-dir "$CL" 2>&1)"
@@ -165,22 +192,30 @@ n="$(grep -cE '^[✓✗] ' <<<"$out")"
 
 echo
 echo "=== wiring: what task runs the gate, and what must never ==="
-# A date-driven gate inside `lint` or `test` would turn a required check red
-# with no commit, and this one is red by design until OVH and Outscale re-run.
-for t in lint test; do
+# A date-driven gate inside a task CI runs (ci.yml: lint, render-check, validate, test-scripts, test)
+# would turn a required check red with no commit, and this one is red by design until OVH and Outscale re-run.
+for t in lint test test-scripts render-check validate; do
   dry="$(task --dir "$ROOT" --dry "$t" 2>&1)"
+  [ -n "$dry" ] || { bad "task $t printed nothing under --dry: this check would be blind"; continue; }
   grep -q 'check-evidence-age' <<<"$dry" && bad "task $t runs the gate — a required check would go red with no commit" \
     || ok "task $t does not run the gate"
 done
+# The exact line: a name match alone passes a dropped --warn, `|| true` and an `echo` in front.
 dry="$(task --dir "$ROOT" --dry evidence-check 2>&1)"
-grep -q 'check-evidence-age' <<<"$dry" && ok "task evidence-check runs the gate" || bad "task evidence-check does not name the gate: ${dry:0:200}"
+grep -qE '^task: \[evidence-check\] \./scripts/dev/check-evidence-age\.sh$' <<<"$dry" \
+  && ok "task evidence-check runs the gate, bare" || bad "task evidence-check does not run the bare gate: ${dry:0:200}"
 dry="$(task --dir "$ROOT" --dry preflight 2>&1)"
-grep -q 'check-evidence-age' <<<"$dry" && ok "task preflight runs the gate" || bad "task preflight does not name the gate"
-export OA_EVIDENCE_TODAY=2026-09-30
-"$GATE" >/dev/null 2>&1; want=$?
+gate_at="$(grep -nE '^task: \[preflight\] \./scripts/dev/check-evidence-age\.sh --warn$' <<<"$dry" | head -1 | cut -d: -f1)"
+[ -n "$gate_at" ] && ok "task preflight runs the gate with --warn, and nothing else on the line" || bad "task preflight does not run 'check-evidence-age.sh --warn': ${dry:0:200}"
+# A gate that fails after the banner leaves "green" on the screen above a non-zero exit.
+banner_at="$(grep -nE 'preflight (INCOMPLETE|green)' <<<"$dry" | head -1 | cut -d: -f1)"
+[ -n "$gate_at" ] && [ -n "$banner_at" ] && [ "$gate_at" -lt "$banner_at" ] \
+  && ok "the gate runs before the banner (line $gate_at, banner $banner_at)" || bad "the gate is not before the banner (gate ${gate_at:-none}, banner ${banner_at:-none})"
+# A far-future clock makes every real row stale by age, so the script exits 1 whatever the table says.
+OA_EVIDENCE_TODAY=2099-01-01 "$GATE" >/dev/null 2>&1; want=$?
 # Plain `task` turns any failure into 201; -x passes the script's own code through.
-task --dir "$ROOT" -x evidence-check >/dev/null 2>&1; got=$?
-[ "$got" -eq "$want" ] && ok "task evidence-check exits as the script does (rc=$got)" || bad "task exits $got, the script $want"
+OA_EVIDENCE_TODAY=2099-01-01 task --dir "$ROOT" -x evidence-check >/dev/null 2>&1; got=$?
+[ "$want" -eq 1 ] && [ "$got" -eq "$want" ] && ok "task evidence-check exits as the script does (rc=$got)" || bad "task exits $got, the script $want (want 1 both)"
 
 echo
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"

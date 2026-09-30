@@ -117,6 +117,10 @@ tasks:
         vars: {ROOT: talos-image}
       - task: test
       - task: test-scripts
+      # --warn: a measurement going stale is news, not a broken tree. Exit 2 (an
+      # unreadable table or pin) is the gate itself failing. It runs BEFORE the banner:
+      # a failure after "green" is a banner that lied.
+      - ./scripts/dev/check-evidence-age.sh --warn
       - cmd: |
           echo
           if [ "${RENDER_CHECK_ALLOW_OFFLINE:-0}" = 1 ]; then
@@ -129,9 +133,6 @@ tasks:
           echo "  up, and that the teardown leaves the account empty. All four HAVE been shown on"
           echo "  real clouds: docs/status.md has the table, and task evidence-check says whether it is current."
           fi
-      # --warn: a measurement going stale is news, not a broken tree. Exit 2 (an
-      # unreadable table or pin) is the gate itself failing, and that still fails.
-      - ./scripts/dev/check-evidence-age.sh --warn
 
   lint:
     desc: Lint and format code (OpenTofu, YAML)
