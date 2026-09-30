@@ -4,7 +4,7 @@
 # SSH-CA once ssh_ca_public_key / ssh_ca_principals are set (#81: both were
 # hardcoded to an empty file/dir, so no caller could ever turn it on).
 #
-# Mocked/local proof, rung "emulated": renders the real .tftpl with `tofu`
+# Local-docker proof (rung "local-docker"): renders the real .tftpl with `tofu`
 # (the same technique used to investigate #81 — read what the template
 # actually emits, not what the .tftpl source implies) and drops the exact
 # write_files bytes onto a real sshd in Docker. No cloud account, no VM boot.
@@ -23,8 +23,9 @@
 # this issue cites (talos-tunnels.sh reporting 0/6 against a healthy bastion).
 #
 # Usage: ./scripts/dev/ssh-ca-check.sh
-# Requires: docker, tofu, ssh, ssh-keygen, python3+pyyaml. Skips (exit 0) if
-# docker is unavailable — same fail-open shape as check-docker-talos-capability.sh.
+# Requires: docker, tofu, ssh, ssh-keygen, python3+pyyaml. Run directly it skips
+# (exit 0) without docker; `task ssh-ca-check` refuses instead, since a skip
+# would record a green receipt for a proof that never ran.
 # ==============================================================================
 set -uo pipefail
 

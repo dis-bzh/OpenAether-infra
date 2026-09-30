@@ -122,7 +122,8 @@ jobs:
 
   # The rung a PR declares, against the receipt the harness wrote on its head
   # (#120). Renovate, Dependabot and docs-only diffs may declare nothing; a rung
-  # they do declare is checked. Not a required check: that is a repository setting.
+  # they do declare is checked. Required on main: a ruleset setting, which
+  # repo-settings.yml compares with what reports.
   rung:
     name: Rung receipt
     if: github.event_name == 'pull_request'

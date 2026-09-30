@@ -256,6 +256,8 @@ def self_test(fixture):
         ("a required check does not report", drop_run, {}, 1, "required but not reported by GitHub Actions: Analyze"),
         ("a required context pinned to no app", lambda a: body(a, RULES)[1]["parameters"]["required_status_checks"][0]
          .pop("integration_id"), {}, 1, "Lint & Format is required from app None"),
+        ("a required context pinned to another app", lambda a: body(a, RULES)[1]["parameters"]
+         ["required_status_checks"][0].update(integration_id=999), {}, 1, "Lint & Format is required from app 999"),
         ("the rules answer is empty", lambda a: a[R + RULES].update(body=[]), {}, 2, "no required status check"),
         ("... and a later section differs: still 2",
          lambda a: (a[R + RULES].update(body=[]), body(a, PVR).update(enabled=False)), {}, 2, "disabled"),
@@ -299,6 +301,8 @@ def self_test(fixture):
         ("the tag ruleset is disabled", lambda a: tags(a).update(enforcement="disabled"), {}, 1, "enforcement is disabled"),
         ("the tag ruleset covers v* only", lambda a: tags(a)["conditions"]["ref_name"].update(include=["refs/tags/v*"]),
          {}, 1, "not every tag"),
+        ("the tag ruleset covers refs/tags/* only: one path segment, not every tag",
+         lambda a: tags(a)["conditions"]["ref_name"].update(include=["refs/tags/*"]), {}, 1, "not every tag"),
         ("the tag ruleset has no conditions", lambda a: tags(a).pop("conditions"), {}, 1, "not every tag"),
         ("the tag ruleset excludes some tags", lambda a: tags(a)["conditions"]["ref_name"].update(exclude=["refs/tags/tmp-*"]),
          {}, 1, "excludes"),
