@@ -368,10 +368,11 @@ echo "=== missing or refused credentials exit 2 ==="
 # path prefixes answered 403; mutating calls succeed and print "CALL <method> <path>".
 # FAKE_PAGE=<n> serves n items per `page=`, like the real API, and FAKE_TOTAL=1
 # adds the body's total_count (the instance API reports it in a header instead).
+# FAKE_PAGE_ERR=<code> answers that HTTP error from page 2 on.
 SCW_ENV=(SCW_SECRET_KEY=stub SCW_DEFAULT_PROJECT_ID=stub SCW_DEFAULT_REGION=fr-par SCW_ZONES=fr-par-1)
 run_scw() { # <script under scripts/ops/> [args...]
   env "${SCW_ENV[@]}" FAKE_SCW="${FAKE_SCW:-}" FAKE_REFUSE="${FAKE_REFUSE:-}" \
-      FAKE_PAGE="${FAKE_PAGE:-}" FAKE_TOTAL="${FAKE_TOTAL:-}" \
+      FAKE_PAGE="${FAKE_PAGE:-}" FAKE_TOTAL="${FAKE_TOTAL:-}" FAKE_PAGE_ERR="${FAKE_PAGE_ERR:-}" \
       python3 - "$ROOT/scripts/ops/$1" "${@:2}" <<'PY' 2>&1
 import io, json, os, runpy, sys, urllib.error, urllib.parse, urllib.request
 
@@ -389,7 +390,11 @@ def fake(req, *a, **k):
         return io.BytesIO(b'{}')
     data = ANSWERS.get(bare, {})
     if SIZE:
-        lo = (int(urllib.parse.parse_qs(path.partition('?')[2]).get('page', ['1'])[0]) - 1) * SIZE
+        page = int(urllib.parse.parse_qs(path.partition('?')[2]).get('page', ['1'])[0])
+        if page > 1 and os.environ['FAKE_PAGE_ERR']:
+            raise urllib.error.HTTPError(req.full_url, int(os.environ['FAKE_PAGE_ERR']), 'Err', {},
+                                         io.BytesIO(b'{}'))
+        lo = (page - 1) * SIZE
         total = max((len(v) for v in data.values()), default=0)
         data = {key: v[lo:lo + SIZE] for key, v in data.items()}
         if os.environ['FAKE_TOTAL']:
@@ -602,7 +607,19 @@ for total in without with; do
     else bad "verify-provider-clean scaleway: page 2 was never read, $shape (rc=${rc}): $out"
   fi
 done
-FAKE_PAGE='' FAKE_TOTAL=''
+# Page 1 answered, page 2 fails: an incomplete read is refused, never "not offered
+# in this zone" (a 404 there used to drop page 1 and print "the project is clean").
+for code in 404 500; do
+  FAKE_PAGE=2 FAKE_TOTAL='' FAKE_PAGE_ERR=$code FAKE_SCW="{$GWIPS}"
+  out="$(run_scw purge-orphans/scaleway.py)"; rc=$?
+  if [ "$rc" -eq 2 ] && grep -qF 'page 2 answered HTTP '$code <<<"$out" && ! grep -qi 'is clean' <<<"$out"
+    then ok "scaleway.py: HTTP $code on page 2 is refused, not clean (rc=2)"
+    else bad "scaleway.py: HTTP $code on page 2 read as complete, rc=${rc}: $(tail -1 <<<"$out")"
+  fi
+  out="$(run_scw verify-provider-clean.py edge-1 scaleway)"; rc=$?
+  expect_2 "verify-provider-clean scaleway, HTTP $code on page 2" $rc "$out" "page 2 answered HTTP $code"
+done
+FAKE_PAGE='' FAKE_TOTAL='' FAKE_PAGE_ERR=''
 
 echo
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"

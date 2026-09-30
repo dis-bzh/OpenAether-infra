@@ -136,7 +136,9 @@ in git. 0.1.0 is the first entry describing something proven.
   DEV1/GP1 servers still use. The purge never listed public gateways, their
   IPs, LB IPs left without an LB, security groups or instance volumes, so a
   project holding only those read as clean, and it read the first 50 items of
-  each list only. It now lists and deletes them, page by page. A missing
+  each list only. It now lists and deletes them, page by page, and a list that
+  answers page 1 then fails is refused, not read as "not offered in this zone".
+  A missing
   `SCW_SECRET_KEY` or `SCW_DEFAULT_PROJECT_ID` raised `KeyError` and exited 1,
   the code for "leftovers found". It now exits 2, "could not check". So does an
   `--apply` run where an endpoint refused to answer, on all three purges: it
@@ -144,8 +146,9 @@ in git. 0.1.0 is the first entry describing something proven.
   credential read, and a refused OVH authentication, like a region missing from
   its catalog, exited 1 with a traceback; both now exit 2. `edge-down.sh` no
   longer sends a Scaleway or Outscale operator to the OpenStack-only deleter.
-  Mocked rung: `test-purge-orphans.sh` went from 26 to 74 assertions, 41 of them
-  red on `main`'s scripts, and 22 mutants of the scripts each turn it red;
+  Mocked rung: `test-purge-orphans.sh` went from 26 to 78 assertions, 41 of the
+  first 74 red on `main`'s scripts, and 22 mutants measured on those 74 each
+  turn it red;
   `test-teardown.sh` from 105 to 109. Emulated rung, on Feint 0.13.0, with the
   API base swapped in-process (the scripts read no endpoint from the
   environment): one resource of each of the 10 kinds plus another cluster's

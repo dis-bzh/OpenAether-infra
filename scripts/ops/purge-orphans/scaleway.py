@@ -63,8 +63,15 @@ def pages(token, url, key):
     header), else on the first page that adds nothing."""
     found, page = {}, 1
     while True:
-        data = call(token, f"{url}&page={page}")
-        new = [i for i in data.get(key, []) if i['id'] not in found]
+        try:
+            data = call(token, f"{url}&page={page}")
+        except urllib.error.HTTPError as e:
+            if page == 1:
+                raise
+            # The list exists (page 1 answered): failing later is an incomplete read,
+            # not "not offered in this zone", which leftovers() would pass as empty.
+            raise urllib.error.URLError(f"page {page} answered HTTP {e.code}") from e
+        new =[i for i in data.get(key, []) if i['id'] not in found]
         found.update((i['id'], i) for i in new)
         total = data.get('total_count')
         if not new or (total is not None and len(found) >= total):
