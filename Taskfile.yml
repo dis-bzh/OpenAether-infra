@@ -464,12 +464,8 @@ tasks:
       # delay under our control; FEINT_RESTART_TIMEOUT=0 reproduces the exact
       # pre-fix behavior through the real code path.
       - ./scripts/dev/test-feint-restart.sh
-      # Offline self-test of check-required-checks.sh's diff logic (#122):
-      # against canned fixtures, proves it flags a required check that a
-      # ruleset never declares (CodeQL-shaped) AND refuses an empty rulesets
-      # response instead of reading it as "nothing is required". Live mode
-      # needs GITHUB_TOKEN and a real ruleset on main — deliberately not
-      # exercised here or wired into any workflow, see the script's header.
+      # Each check of check-required-checks.sh seen red and green against a
+      # canned API, not its HTTP layer; live, it runs in repo-settings.yml only.
       - ./scripts/dev/check-required-checks.sh --self-test
       - |
         written="$(find infrastructure/opentofu/cluster/envs -newer {{.ENVS_STAMP}})" || exit 1
