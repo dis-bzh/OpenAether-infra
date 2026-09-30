@@ -18,16 +18,16 @@ BIN_DIR="${FEINT_BIN_DIR:-$HOME/.local/bin}"
 # evidence lane sets this to "incus", nothing else needs to.
 FEINT_VM="${FEINT_VM:-}"
 
-# feint_cli runs the emulator's own lifecycle commands (start/stop/status)
-# against FEINT_ENDPOINT: without --addr each one acts on feint's default
-# 127.0.0.1:4599, whatever emulator the lane targets.
-# A machine runtime means Incus, whose socket belongs to root:incus-admin, and a
+# feint_cli runs the emulator's own lifecycle commands (start/stop/status): a
+# machine runtime means Incus, whose socket belongs to root:incus-admin, and a
 # group granted mid-job never reaches the runner's already-running session —
 # so root is how feint's own CI runs it too. Resolved to an absolute path
 # first: sudo's secure_path does not carry $BIN_DIR when that is a user
 # install (~/.local/bin).
 feint_cli() {
-  set -- "$1" --addr "$(addr_of "$FEINT_ENDPOINT")" "${@:2}"
+  # status and stop default to :4599; without this they answer for, and stop,
+  # a different emulator than the one FEINT_ENDPOINT names (#195).
+  case "${1:-}" in status | stop) set -- "$1" --addr "$(addr_of "$FEINT_ENDPOINT")" "${@:2}" ;; esac
   if [ -n "$FEINT_VM" ]; then
     sudo "$(command -v feint)" "$@"
   else
@@ -115,7 +115,7 @@ reset_emulator() {
   local vm_args=()
   [ -n "$FEINT_VM" ] && vm_args=(--vm "$FEINT_VM")
   feint_cli stop >/dev/null 2>&1 || true
-  feint_cli start "${vm_args[@]}" >/dev/null
+  feint_cli start --addr "$(addr_of "$FEINT_ENDPOINT")" "${vm_args[@]}" >/dev/null
   poll_running || {
     echo "✗ the emulator did not come back on $FEINT_ENDPOINT within ${FEINT_RESTART_TIMEOUT}s" >&2
     emulator_log_hint
@@ -515,7 +515,7 @@ case "${1:-}" in
     # way, so keying off it silently skipped the start and left every later
     # step running against nothing.
     if ! running; then
-      feint_cli start "${vm_args[@]}"
+      feint_cli start --addr "$(addr_of "$FEINT_ENDPOINT")" "${vm_args[@]}"
       poll_running || {
         echo "✗ the emulator did not come up on $FEINT_ENDPOINT within ${FEINT_RESTART_TIMEOUT}s" >&2
         emulator_log_hint
