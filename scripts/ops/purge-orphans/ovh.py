@@ -8,17 +8,25 @@ import sys
 import urllib.request
 
 APPLY = '--apply' in sys.argv
-base = os.environ['OS_AUTH_URL'].rstrip('/')
-url = base + ('/auth/tokens' if base.endswith('/v3') else '/v3/auth/tokens')
-auth = {"auth": {"identity": {"methods": ["password"], "password": {"user": {
-    "name": os.environ['OS_USERNAME'], "password": os.environ['OS_PASSWORD'],
-    "domain": {"name": os.environ.get('OS_USER_DOMAIN_NAME', 'Default')}}}},
-    "scope": {"project": {"id": os.environ['OS_PROJECT_ID']}}}}
-req = urllib.request.Request(url, data=json.dumps(auth).encode(),
-                             headers={'Content-Type': 'application/json'})
-with urllib.request.urlopen(req, timeout=30) as r:
-    TOK, CAT = r.headers['X-Subject-Token'], json.load(r)['token']['catalog']
-REGION = os.environ['OS_REGION_NAME'].lower()
+# Exit 2, not the 1 callers read as "leftovers found": nothing was asked.
+try:
+    base = os.environ['OS_AUTH_URL'].rstrip('/')
+    url = base + ('/auth/tokens' if base.endswith('/v3') else '/v3/auth/tokens')
+    auth = {"auth": {"identity": {"methods": ["password"], "password": {"user": {
+        "name": os.environ['OS_USERNAME'], "password": os.environ['OS_PASSWORD'],
+        "domain": {"name": os.environ.get('OS_USER_DOMAIN_NAME', 'Default')}}}},
+        "scope": {"project": {"id": os.environ['OS_PROJECT_ID']}}}}
+    req = urllib.request.Request(url, data=json.dumps(auth).encode(),
+                                 headers={'Content-Type': 'application/json'})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        TOK, CAT = r.headers['X-Subject-Token'], json.load(r)['token']['catalog']
+    REGION = os.environ['OS_REGION_NAME'].lower()
+except KeyError as e:
+    print(f"✗ missing credential {e} — source .env.sh first. Nothing was checked.")
+    sys.exit(2)
+except (urllib.error.URLError, TimeoutError) as e:
+    print(f"✗ authentication refused or unreachable ({str(e)[:60]}). Nothing was checked.")
+    sys.exit(2)
 H = {'X-Auth-Token': TOK, 'Content-Type': 'application/json'}
 
 
@@ -31,11 +39,8 @@ def get(u):
     return json.load(urllib.request.urlopen(urllib.request.Request(u, headers=H), timeout=60))
 
 
-# Counted, not just printed — same reasoning as scaleway.py/outscale.py. A total
-# auth failure above still crashes non-zero (get() raises, uncaught), which is
-# not this gap; what get() left open is a PARTIAL refusal, one endpoint 403 while
-# the others answer, which used to crash the whole run instead of being counted
-# and continuing like its siblings do.
+# Counted, not just printed — same reasoning as scaleway.py/outscale.py. One
+# endpoint refusing while the others answer must not end the run, nor read clean.
 UNREACHABLE = 0
 
 
@@ -78,7 +83,11 @@ def delete(u, label):
         print("  ⚠ failed:", label, str(e)[:80])
 
 
-net, comp = ep('network'), ep('compute')
+try:
+    net, comp = ep('network'), ep('compute')
+except StopIteration:      # exit 2 like the credentials: a traceback exits 1, "leftovers found"
+    print(f"✗ no network/compute endpoint for region {REGION} in the catalog. Nothing was checked.")
+    sys.exit(2)
 try:
     lb_ep = ep('load-balancer')
 except StopIteration:
@@ -122,19 +131,19 @@ for g in listing(net + '/v2.0/security-groups', 'security_groups'):
     if g['name'] != 'default' and g.get('project_id') == os.environ['OS_PROJECT_ID']:
         delete(net + f"/v2.0/security-groups/{g['id']}", f"SG {g['name']}")
 
-if TOTAL == 0 and UNREACHABLE:
-    print(f"\n✗ {UNREACHABLE} endpoint(s) refused to answer — found nothing, but nothing was")
-    print("  actually asked. This is NOT an all-clear: check the credentials and re-run.")
-    sys.exit(2)
-if TOTAL == 0:
-    print("Nothing to purge — the project is clean.")
-elif not APPLY:
+if TOTAL and not APPLY:
     print(f"\n{TOTAL} resource(s) targeted. Re-run with --apply to delete them.")
     # Non-zero: see the note in scaleway.py. Callers read this exit code as
     # "the provider is clean", and it used to say yes regardless.
     sys.exit(1)
-elif FAILED:
+if FAILED:
     print(f"\n✗ {FAILED} of {TOTAL} deletion(s) failed — the project is NOT clean.")
     sys.exit(3)
+if UNREACHABLE:
+    print(f"\n✗ {UNREACHABLE} endpoint(s) refused to answer, so what they hold was never")
+    print("  asked. This is NOT an all-clear: check the credentials and re-run.")
+    sys.exit(2)
+if TOTAL == 0:
+    print("Nothing to purge — the project is clean.")
 else:
     print(f"\n{TOTAL} resource(s) deleted. The project is clean.")

@@ -411,6 +411,15 @@ STUB_PY_RC=1 STUB_PY_OUT='leftover load balancer' run "$EDGE_DOWN" edge-c --yes 
 expect_rc 1 "a provider that still has resources exits non-zero"
 refute_out "fully deleted" "leftover provider resources are not reported 'fully deleted'"
 expect_out "Purge by hand" "it tells the operator to purge"
+expect_out "delete-openstack-resource.py" "on OpenStack it names the scoped deleter"
+
+# Same failure on Scaleway: that deleter only knows OpenStack objects, and the
+# check also reports project-wide detached IPs and volumes that nothing tags.
+plan "${GONE}get scalewaycluster -n capi-clusters -o name\t0\tscalewaycluster.infrastructure.cluster.x-k8s.io/edge-c\n"
+STUB_PY_RC=1 STUB_PY_OUT='flexible IP 192.0.2.10 in fr-par-1' run "$EDGE_DOWN" edge-c --yes --timeout 30
+expect_rc 1 "a Scaleway leftover exits non-zero"
+refute_out "delete-openstack-resource" "on Scaleway it does not send the operator to an OpenStack-only tool"
+expect_out "left detached in the project" "on Scaleway it says detached resources count"
 
 # Verification skipped (no credentials): exits 0, but must not claim more than
 # it checked.
