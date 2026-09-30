@@ -187,7 +187,7 @@ echo
 echo "=== the real tree parses (a verdict is not asserted) ==="
 out="$("$GATE" 2>&1)"; rc=$?
 [ "$rc" -le 1 ] && ok "docs/status.md is read: rc=$rc, never 2" || bad "docs/status.md is not readable by the gate (rc=$rc): $out"
-n="$(grep -cE '^[✓✗] ' <<<"$out")"
+n="$(grep -cE '^(✓|✗) ' <<<"$out")"
 [ "$n" -ge 3 ] && ok "$n providers judged" || bad "fewer than 3 providers judged ($n): $out"
 
 echo
