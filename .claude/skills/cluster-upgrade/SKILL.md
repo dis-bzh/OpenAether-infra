@@ -49,7 +49,8 @@ does not pin (#93). So the upgrade checks the other clusters' pins, moves
 `talos_version`, then builds; a failed build leaves the pin moved, since past
 its apply the old image is already replaced.
 The upgrade harness stubbed `task`, which hid that order: a stub between two
-scripts hides their contract. It now runs the real `talos-image.sh`.
+scripts hides their contract. Its three Talos-step scenarios now run the real
+`talos-image.sh`.
 
 ## Expect two applies, and know why
 

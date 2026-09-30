@@ -528,7 +528,7 @@ upgrade_talos_to() { # <version>
     pin="$("$ROOT/scripts/internal/talos-version.sh" "${f##*/}" 2>/dev/null || true)"
     [ -z "$pin" ] || [ "$pin" = "$target" ] || clash+=" ${f##*/} pins talos_version = ${pin};"
   done
-  [ -z "$clash" ] || fail "${clash# } the image lane keeps one image per provider, and building ${target} would replace it (#93). Update that tfvars first; this step has changed nothing."
+  [ -z "$clash" ] || fail "${clash# } the image lane keeps one image per provider, and building ${target} would replace it (#93). Update those tfvars first; this step has changed nothing."
 
   # The lane builds only a pinned version, so the pin moves first. A failed build
   # leaves it: past its apply, the previous image is already replaced.

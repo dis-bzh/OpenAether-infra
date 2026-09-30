@@ -30,12 +30,15 @@ vars:
   TF_FMT_RE: '\.(tf|tofu|tfvars|tftest\.hcl|tofutest\.hcl)$'
   # What `tofu fmt -recursive` visits, minus gitignored files (the operator's
   # envs/*.tfvars) and deleted ones, which fmt cannot open. lint and fmt share it.
-  # A root that is gone fails it, as the recursive walk did.
+  # A root that is gone fails it, as the recursive walk did; so does an empty
+  # list, which `tofu fmt -check` would pass and `tofu fmt` would answer by
+  # formatting the current directory.
   TF_FMT_FILES: >-
     for r in {{.TF_ROOTS}}; do [ -d "$r" ] || { echo "✗ TF_ROOTS: no directory $r" >&2; exit 1; }; done;
     git ls-files --cached --others --exclude-standard -- {{.TF_ROOTS}}
     | grep -E '{{.TF_FMT_RE}}'
     | while read -r f; do [ ! -e "$f" ] || echo "$f"; done
+    | grep . || { echo "✗ no OpenTofu file under TF_ROOTS" >&2; exit 1; }
 
 tasks:
   default:
@@ -132,10 +135,8 @@ tasks:
     cmds:
       # Not -recursive: it also walks a gitignored real envs/*.tfvars, so a
       # workstation preparing a real run failed lint on its own config (#191).
-      # An empty list fails: `tofu fmt -check` given no file passes.
       - |
         files="$({{.TF_FMT_FILES}})" || exit 1
-        [ -n "$files" ] || { echo "✗ no OpenTofu file under TF_ROOTS" >&2; exit 1; }
         sed -n '/- id: terraform_fmt$/,/- id:/s/^ *files: //p' .pre-commit-config.yaml | grep -qxF '{{.TF_FMT_RE}}' \
           || { echo "✗ terraform_fmt's files: in .pre-commit-config.yaml is not TF_FMT_RE" >&2; exit 1; }
         tofu fmt -check $files
@@ -201,7 +202,9 @@ tasks:
   fmt:
     desc: Format OpenTofu code
     cmds:
-      - files="$({{.TF_FMT_FILES}})" && tofu fmt $files
+      - |
+        files="$({{.TF_FMT_FILES}})" || exit 1
+        tofu fmt $files
 
   validate:
     desc: "Validate an OpenTofu root. Usage: task validate [ROOT=cluster|talos-image]"
@@ -505,6 +508,8 @@ tasks:
       # The receipts behind a PR's rung claim (#120): the real Taskfile's defer
       # under go-task, then every verdict the "Rung receipt" CI job can reach.
       - ./scripts/dev/test-rung-receipts.sh
+      # The inline guards of `fmt`, `lint` and the step below, under the real Taskfile.
+      - ./scripts/dev/test-task-guards.sh
       - |
         written="$(find infrastructure/opentofu/cluster/envs -newer {{.ENVS_STAMP}})" || exit 1
         [ -z "$written" ] || { echo "✗ a step wrote under envs/:" $written >&2; exit 1; }
@@ -1244,7 +1249,11 @@ tasks:
       # the script signs from it: re-fetch THIS cluster's, as cluster-verify does.
       - task: kubeconfig
         vars: {ROLE: '{{.ROLE}}', PROVIDER: '{{.PROVIDER}}'}
-      - ../../../scripts/ops/talosconfig-new.sh {{.PROVIDER}} --roles {{.ROLES}} --ttl {{.TTL}}
+      # Pinned: the script honours an exported TALOSCONFIG, which would sign from
+      # another cluster's config instead of the one just fetched.
+      - |
+        TALOSCONFIG="$PWD/talosconfig" ../../../scripts/ops/talosconfig-new.sh \
+          {{.PROVIDER}} --roles {{.ROLES}} --ttl {{.TTL}}
 
   backup-state:
     desc: >-
