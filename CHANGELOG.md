@@ -48,8 +48,9 @@ in git. 0.1.0 is the first entry describing something proven.
   linearly, so GitHub's limit is what bounds them. Renovate, Dependabot and
   docs-only diffs may leave the rung out, but a rung they declare is checked
   like any other. The body reaches the check only through `env:`. A receipt
-  makes the claim falsifiable, not unforgeable. The job is not a required check. CONTRIBUTING now lists four
-  rungs, adding local Docker as in the issue form. Mocked rung:
+  makes the claim falsifiable, not unforgeable. The job is not a required
+  check. CONTRIBUTING now lists four rungs, adding local Docker as in the
+  issue form. Mocked rung:
   `test-rung-receipts.sh` (121 assertions) runs the real Taskfile under
   go-task against a stub `feint` and drives every verdict the check can give,
   each within 2 s; each of 77 mutations turns it red. With the body
