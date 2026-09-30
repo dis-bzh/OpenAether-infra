@@ -87,14 +87,21 @@ Bump `talos_version`, build the image for the new version (the node resources
 ignore the image, but the *data source* still has to resolve), apply, then roll.
 
 ```bash
+# edit talos_version in the tfvars FIRST, then
 task image-build PROVIDER=<p> VERSION=<new> ENSURE=1
-# edit talos_version in the tfvars, then
 task infra-apply ROLE=management PROVIDER=<p>
 task cluster-roll PROVIDER=<p> KEY=~/.ssh/<key> -- --cp-only --upgrade
 task cluster-roll PROVIDER=<p> KEY=~/.ssh/<key> -- --workers-only --upgrade
 ```
 
-**On Outscale the first line dominates the whole upgrade.** The image is
+The pin moves before the build: the image lane keeps one image per provider, so
+it refuses a version that any `envs/*-<p>.tfvars` does not pin, as it would
+replace the image that cluster still uses (#93). It names the file that blocks.
+A build that fails after its apply has already replaced the old image, so leave
+the pin at the new version and re-run. The last live upgrade predates that
+guard, so this order is proven mocked only.
+
+**On Outscale the image build dominates the whole upgrade.** The image is
 registered from a snapshot imported through a provider-side queue: 8 min on
 2026-08-18, over 60 min on 2026-07-25. It blocks before a single node is touched,
 and no node ever boots from it — the roll installs from the Image Factory

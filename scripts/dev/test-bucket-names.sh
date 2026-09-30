@@ -107,9 +107,9 @@ echo "=== the restore path derives the SAME name as everything else ==="
 # "not found" for a backup that was sitting there.
 SB="$(mktemp -d)"; SUF=a1b2c3
 printf '#!/usr/bin/env bash\nexit 9\n' >"$SB/aws"; chmod +x "$SB/aws"
-FIX="infrastructure/opentofu/cluster/envs/oatest-scaleway.tfvars"
-cleanup_restore() { rm -f "$FIX"; rm -rf "$SB"; }
-trap cleanup_restore EXIT
+# Both scripts read the fixture from a sandbox envs dir, never the operator's.
+mkdir "$SB/envs"; FIX="$SB/envs/oatest-scaleway.tfvars"; export OA_ENVS_DIR="$SB/envs"
+trap 'rm -rf "$SB"' EXIT
 sed -E "s/^bucket_suffix.*//" infrastructure/opentofu/cluster/envs/management-scaleway.tfvars.example >"$FIX"
 printf '\nbucket_suffix = "%s"\n' "$SUF" >>"$FIX"
 CNAME="$(grep -E '^cluster_name' "$FIX" | head -1 | sed -E 's/.*"([^"]*)".*/\1/')"
@@ -148,21 +148,25 @@ echo "--- the state lock is claimed only where the store honours it ---"
 # "Acquiring state lock" and hold nothing, which is worse than none — so this
 # asserts the asymmetry rather than trusting it to stay true by accident.
 # Keyed on the endpoint, because a Proxmox cluster's state lives elsewhere.
+# The shipped examples, not the operator's gitignored tfvars: those decided the
+# verdict locally, and in CI, where they do not exist, nothing was asserted.
+EX=infrastructure/opentofu/cluster/envs/management
+lock_of() { # <tfvars> → yes|no|error: a crashed tf-backend.sh must not read as "no"
+  local out; out="$(scripts/internal/tf-backend.sh "$1" 2>/dev/null)" || { echo error; return; }
+  case "$out" in *-backend-config=bucket=*) ;; *) echo error; return ;; esac
+  case "$out" in *use_lockfile=true*) echo yes ;; *) echo no ;; esac
+}
 for pair in "scaleway:yes" "ovh:yes" "outscale:no"; do
   prov="${pair%%:*}"; want="${pair##*:}"
-  tf="infrastructure/opentofu/cluster/envs/management-${prov}.tfvars"
-  [ -f "$tf" ] || { echo "  (no $tf — skipped)"; continue; }
-  if scripts/internal/tf-backend.sh "$tf" 2>/dev/null | grep -q 'use_lockfile=true'; then got=yes; else got=no; fi
-  eq "${prov}: state lock claimed = ${want}" "$got" "$want"
+  eq "${prov}: state lock claimed = ${want}" "$(lock_of "$EX-${prov}.tfvars.example")" "$want"
 done
 
 # And the reason it is keyed on the endpoint, not the provider name.
-if scripts/internal/tf-backend.sh infrastructure/opentofu/cluster/envs/management-proxmox.tfvars 2>/dev/null \
-   | grep -q 'use_lockfile=true'; then got=yes; else got=no; fi
-case "$(grep -E '^s3_primary_endpoint' infrastructure/opentofu/cluster/envs/management-proxmox.tfvars 2>/dev/null)" in
+got="$(lock_of "$EX-proxmox.tfvars.example")"
+case "$(grep -E '^s3_primary_endpoint' "$EX-proxmox.tfvars.example")" in
   *scw.cloud*|*io.cloud.ovh.net*) eq "proxmox on a locking store claims the lock" "$got" "yes" ;;
   *outscale.com*)                 eq "proxmox on Outscale claims no lock"        "$got" "no"  ;;
-  *) echo "  (proxmox endpoint is not one of the three — not asserted)" ;;
+  *) bad "the proxmox example's endpoint is none of the three — nothing asserted" ;;
 esac
 
 

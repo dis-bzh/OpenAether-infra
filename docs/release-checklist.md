@@ -329,6 +329,10 @@ Only once everything above is green.
 - [x] the issues — close what is now done, open what this shook out →
       idempotency-after-upgrade and the staging-lane decision removed as done;
       seven entries added.
+- [ ] the tag cannot move: a repository admin runs
+      `GITHUB_TOKEN="$(gh auth token)" ./scripts/dev/check-required-checks.sh dis-bzh OpenAether-infra`
+      and it says `no bypass actors`. CI's token cannot read that list, so
+      `repo-settings.yml` only warns about it.
 - [x] `CHANGELOG.md` names what 0.1.0 claims **and** what it does not → four
       Known limits carry the honest half, including the two checklist lines below
       that are NOT met.

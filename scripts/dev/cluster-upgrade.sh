@@ -35,7 +35,10 @@ TFVARS="$ROOT/infrastructure/opentofu/cluster/envs/${ROLE}-${PROVIDER}.tfvars"
 # a claim of zero: raise it only with a measurement that says why.
 MAX_PROBE_FAILS="${MAX_PROBE_FAILS:-15}"
 
+# Never the caller's, which may point at another cluster. The checkout holds one
+# of each for every cluster, so a real run re-fetches this one's below.
 export KUBECONFIG="$ROOT/infrastructure/opentofu/cluster/kubeconfig"
+export TALOSCONFIG="$ROOT/infrastructure/opentofu/cluster/talosconfig"
 
 fail() { echo "✗ $*" >&2; exit 1; }
 ok() { echo "✓ $*"; }
@@ -47,6 +50,10 @@ if [ "${DRY_RUN:-}" = "1" ]; then
   cp "$TFVARS" "$DRY_COPY"
   TFVARS="$DRY_COPY"
   trap 'rm -f "$DRY_COPY"' EXIT
+else
+  # Before the survey below reads the fleet. A dry run needs no credentials, so it
+  # reads whatever the checkout holds.
+  task kubeconfig ROLE="$ROLE" PROVIDER="$PROVIDER"
 fi
 
 # --- Where we are, and where we are going -------------------------------------
@@ -228,7 +235,8 @@ if [ "$TALOS_DONE" = 1 ]; then
                 "$ROOT/infrastructure/opentofu/cluster/variables.tf" 2>/dev/null |
               grep -oE '[0-9a-f]{64}' | head -1)" || WANT_SCH=""
   # -n 127.0.0.1 through the tunnel: apid answers for the node behind it, so this
-  # needs no node address and therefore no kubectl, no tofu and no credentials.
+  # needs no node address and therefore no kubectl, no tofu and no cloud
+  # credentials — only the talosconfig exported above.
   TUN="127.0.0.1:$((50000 + ${TF_VAR_talos_tunnel_port_offset:-0}))"
   HAVE_SCH="$(talosctl get extensions -e "$TUN" -n 127.0.0.1 -o json 2>/dev/null |
               jq -s -r '.[] | select(.spec.metadata.name == "schematic") | .spec.metadata.version' 2>/dev/null | head -1)" || HAVE_SCH=""
@@ -509,15 +517,29 @@ upgrade_k8s_to() { # <version>
 }
 
 upgrade_talos_to() { # <version>
-  local target="$1"
+  local target="$1" f pin clash=""
   echo "--- Talos → ${target} ---"
+
+  # The image lane keeps one image per provider and refuses a version another
+  # cluster's tfvars pins (#93, talos-image.sh). Asked before the pin moves, the
+  # same way, so that refusal changes nothing.
+  for f in "$ROOT/infrastructure/opentofu/cluster/envs/"*-"${PROVIDER}.tfvars"; do
+    [ -e "$f" ] && [ "${f##*/}" != "${ROLE}-${PROVIDER}.tfvars" ] || continue
+    pin="$("$ROOT/scripts/internal/talos-version.sh" "${f##*/}" 2>/dev/null || true)"
+    [ -z "$pin" ] || [ "$pin" = "$target" ] || clash+=" ${f##*/} pins talos_version = ${pin};"
+  done
+  [ -z "$clash" ] || fail "${clash# } the image lane keeps one image per provider, and building ${target} would replace it (#93). Update that tfvars first; this step has changed nothing."
+
+  # The lane builds only a pinned version, so the pin moves first. A failed build
+  # leaves it: past its apply, the previous image is already replaced.
+  tfvar_set talos_version "$target"
 
   # The nodes ignore their image attribute, but the image DATA SOURCE still has
   # to resolve, and it derives its name from talos_version. Without this the
   # plan fails on an image the account does not have.
-  task image-build PROVIDER="$PROVIDER" VERSION="$target" ENSURE=1
+  task image-build PROVIDER="$PROVIDER" VERSION="$target" ENSURE=1 ||
+    fail "the Talos ${target} image build failed; talos_version stays at ${target}, since a build that reached its apply has replaced the previous image. Fix the cause and re-run."
 
-  tfvar_set talos_version "$target"
   task infra-apply ROLE="$ROLE" PROVIDER="$PROVIDER" KEY="$KEY" APPROVE=auto
 
   # One node at a time, health-gated between each; control planes first because
