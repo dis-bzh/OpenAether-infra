@@ -24,21 +24,32 @@ in git. 0.1.0 is the first entry describing something proven.
   `node_name`); it is a required row of `provider-contract.md`, which the
   contract check enforces, and the root passes it through. `infra-verify.sh`
   fails when one domain holds a quorum's worth of nodes (`most in one domain >=
-  n - n/2`: for three, any two together). That is stricter than the issue's
-  "at least two zones": a 2+1 split still loses etcd with its pair. A missing,
-  short, null or empty-named output is UNCHECKED, never a pass.
-  **A 3-control-plane OVH cluster on the default `nova`, and every Outscale
-  one (the module puts all nodes in `availability_zones[0]`, #58), now end
-  `cluster-up`'s verify red until their placement is fixed.** The value is what
-  was placed, not measured: whether OVH reads its zone back or echoes the
-  config is unknown, and a spread Scaleway cluster's green is not observed on a
-  real account either. Mocked rung: `control-plane-zones.tftest.hcl` (5 runs;
-  `task test` 71 → 76), the root assertions, and ten cases in
-  `test-cluster-checks.sh` (77 → 87, run against a stub `tofu` for the first
-  time: the topology branch was never exercised). Against the old verifier 9
-  of those 10 fail; four mutants (the Outscale output built from the variable,
-  the scw entry dropped from the root, the quorum rule weakened to two zones or
-  off by one) each turn a test red.
+  n - n/2`: for three, any two together), and its red line names the knob that
+  clears it. A missing, short, null or empty-named output, or one with a null
+  element, is UNCHECKED, never a pass.
+  **Behaviour change: the topology 0.1.0 rests on now ends red.** The rule is
+  stricter than the issue's "at least two zones": a 2+1 split still loses etcd
+  with its pair. So the Scaleway run (3 control planes over 2 zones, the 11/11
+  in the README, `first-cluster.md` and `docs/status.md`) reads red, as does
+  any 3-control-plane cluster not spread over 3 domains: OVH on the default
+  `nova`, every Outscale one (all nodes in `availability_zones[0]`, #58: no
+  setting clears it), Proxmox on fewer than 3 hosts. Scaleway clears it only
+  with 3 zones, and the matrix records that the third has no instance type this
+  project uses. `cluster-up` ends at its verify, so
+  `cluster-idempotency` stops at its second bring-up and `cluster-upgrade` ends
+  non-zero after the upgrade landed, its outage probes already reported. Open
+  decision: keep the quorum rule, or relax it to the issue's "at least two
+  domains" (one comparison in `infra-verify.sh`: the 2-zone run turns green
+  again and 2+1 becomes a known limit).
+  The value is what was placed, not measured: whether OVH reads its zone back
+  or echoes the config is unknown, and no real account has re-run the check.
+  Mocked rung: `control-plane-zones.tftest.hcl` (5 runs; `task test` 71 → 76),
+  a root assertion for each provider, and sixteen cases in
+  `test-cluster-checks.sh` (77 → 93, run against a stub `tofu` for the first
+  time: the topology branch was never exercised). Each of these mutants turns a
+  test red: the Outscale output built from the variable, a root entry dropped,
+  the quorum rule weakened to two zones or off by one, the null-element clause
+  or the hint removed.
 
 - **A pull request's rung is checked against a receipt the harness wrote
   (#120).** CONTRIBUTING asks every PR to name the rung it reached, but nothing

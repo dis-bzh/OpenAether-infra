@@ -86,7 +86,7 @@ Two orthogonal layers of knobs:
 |---|---|---|---|---|---|---|---|
 | `SCW-mgmt-nonha` | mgmt | 1+1 | managed | single | none | Cheapest cloud path; non-HA CP taint; managed LB ACL. | ✅ |
 | `SCW-mgmt-ha` | mgmt | 3+2 | managed | 3-AZ | none | etcd across 3 zones; multi-AZ distribution. | ⬜ — see the row below: what runs is **2 zones**, because the third has no instance type this project uses |
-| `SCW-mgmt-ha-2az` | mgmt | 3+3 | managed | 2-AZ | **disks+volumes** | What 0.1.0 actually rests on. etcd across 2 zones, round-robinned. | ✅ 2026-08-19, again 2026-08-20 |
+| `SCW-mgmt-ha-2az` | mgmt | 3+3 | managed | 2-AZ | **disks+volumes** | What 0.1.0 actually rests on. etcd across 2 zones, round-robinned. | ✅ 2026-08-19, again 2026-08-20 — before the failure-domain check (#38): 3 control planes over 2 zones is a 2+1 split, which `cluster-verify` now fails |
 | `SCW-vip` | mgmt | 3+1 | **vip** | multi-AZ | none | Drops the LB; Talos Layer2 VIP; private API via tunnel; anti-spoofing. | ✅ *(2026-07-15)* |
 | `SCW-work-ha` | workload | 3+3 | managed | 3-AZ | none | Workload-role Flux bootstrap path. | ⬜ |
 | `SCW-storage` | workload | 3+3 | managed | 3-AZ | **disks+volumes** | SBS block volumes + encrypted `UserVolumeConfig` (LUKS2). | ⬜ on the *workload* role. The block volumes and the UserVolumeConfig patches DID apply on `SCW-mgmt-ha-2az` — 3 × `scaleway_block_volume.worker_data` in state — but **nothing read back that they were formatted LUKS2 and mounted**: `cluster-verify` asks about no volume at all |
@@ -95,7 +95,7 @@ Two orthogonal layers of knobs:
 
 | ID | Role | CP/W | k8s_lb_mode | Uniquely exercises | Status |
 |---|---|---|---|---|---|
-| `OVH-mgmt-ha` | mgmt | 3+3 | managed | Octavia LB + floating IP; OpenStack ports; Ubuntu bastion; SNAT router egress. | ✅ *(2026-07-27/28, several cycles)* |
+| `OVH-mgmt-ha` | mgmt | 3+3 | managed | Octavia LB + floating IP; OpenStack ports; Ubuntu bastion; SNAT router egress. | ✅ *(2026-07-27/28, several cycles)* — before the failure-domain check (#38): on the default `nova` `cluster-verify` now fails it, green needs distinct `availability_zones` |
 | `OVH-vip` | mgmt | 3+2 | **vip** | `allowed_address_pairs` on CP ports for Neutron anti-spoof (distinct from Scaleway). | 🧪 |
 | `OVH-work-ha` | workload | 3+3 | managed | Workload role on OVH. | ⬜ |
 | `OVH-storage` | workload | 3+3 | managed | Cinder volume attach. | ⬜ |
@@ -104,7 +104,7 @@ Two orthogonal layers of knobs:
 
 | ID | Role | CP/W | k8s_lb_mode | Uniquely exercises | Status |
 |---|---|---|---|---|---|
-| `OSC-mgmt-ha` | mgmt | 3+1 | managed | LB returns a **DNS name**, not an IP; outscale SSH user. 3+3 does not fit the 40 GB RAM quota, so HA here means the control plane only — and **every node is in eu-west-2a**, because the module never reads past the first subregion. Three control planes, one failure domain. | ✅ *(2026-08-20, on a **fresh** Net — LB `active` with 3 backends. The hang that blocked it was a timeout inside Outscale's own LBU service, request 399530 closed; the Net that predates the fix still refuses deletion. The 2026-08-13 ✅ does not stand: its Talos upgrade reverted on the next reboot, see the open issues)* |
+| `OSC-mgmt-ha` | mgmt | 3+1 | managed | LB returns a **DNS name**, not an IP; outscale SSH user. 3+3 does not fit the 40 GB RAM quota, so HA here means the control plane only — and **every node is in eu-west-2a**, because the module never reads past the first subregion. Three control planes, one failure domain. | ✅ *(2026-08-20, on a **fresh** Net — LB `active` with 3 backends. The hang that blocked it was a timeout inside Outscale's own LBU service, request 399530 closed; the Net that predates the fix still refuses deletion. The 2026-08-13 ✅ does not stand: its Talos upgrade reverted on the next reboot, see the open issues)* — before the failure-domain check (#38): `cluster-verify` now fails it, and nothing clears that until #58 |
 | `OSC-work-ha` | workload | 3+3 | managed | Workload role; BSU volumes if paired with storage. | ⬜ |
 | `OSC-vip-reject` | — | any | vip | Negative test: validation must reject `vip`. | 🧪 |
 

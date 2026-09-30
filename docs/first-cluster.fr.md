@@ -243,8 +243,9 @@ task cluster-verify PROVIDER=scaleway
 `task cluster-up` s'est déjà terminé par cette commande ; lance-la seule à tout
 moment ensuite. Elle interroge le cluster, pas l'outil : l'apiserver répond,
 chaque nœud est Ready, le nombre de control planes correspond à ce que tu as
-demandé, Cilium tourne sur chacun, CoreDNS sert, il n'y a pas de `flux-system`, pas de load balancer
-applicatif, un réplica de l'état existe dans le magasin de sauvegarde — et les
+demandé sans qu'aucune zone ni aucun hôte n'en tienne un quorum etcd, Cilium
+tourne sur chacun, CoreDNS sert, il n'y a pas de `flux-system`, pas de load
+balancer applicatif, un réplica de l'état existe dans le magasin de sauvegarde — et les
 4 premiers Kio de cet objet sont ouverts : ce doit être une enveloppe OpenTofu
 `encrypted_data`, pas un état lisible. Hors `dev`, le réplica doit en outre être
 hors du cloud du primaire (pour un S3 qu'il ne sait pas nommer, un autre endpoint).
@@ -332,7 +333,9 @@ quelque chose de prouvé, et c'est la raison d'être de ce document.
 Ce qui **est** mesuré, avec les dates (`docs/status.md`) :
 
 - `task cluster-verify` donne **11/11 sur Scaleway, sur OVH et sur Outscale** —
-  les deux premiers le 2026-08-19, Outscale le 2026-08-20.
+  les deux premiers le 2026-08-19, Outscale le 2026-08-20. C'est antérieur au
+  contrôle des domaines de panne (#38) : les topologies mesurées sont
+  désormais rouges, voir `docs/status.md`.
 - **L'idempotence, ce sont trois assertions**, et les trois ont tenu 3/3 sur les
   trois clouds : un plan vide, les *mêmes* nœuds (nom et `creationTimestamp`), et
   un kubeconfig qui joint encore l'apiserver. Deux des trois peuvent passer alors

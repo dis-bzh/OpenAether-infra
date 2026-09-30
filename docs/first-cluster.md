@@ -235,9 +235,10 @@ task cluster-verify PROVIDER=scaleway
 
 `task cluster-up` already ended with this; run it on its own at any time after.
 It asks the cluster, not the tool: the apiserver answers, every node is Ready, the
-number of control planes matches what you asked for, Cilium runs on each of
-them, CoreDNS serves, there is no `flux-system`, no application load balancer, a
-state replica exists in the backup store — and the first 4 KB of that object is
+number of control planes matches what you asked for and no one zone or host
+holds an etcd quorum of them, Cilium runs on each of them, CoreDNS serves,
+there is no `flux-system`, no application load balancer, a state replica
+exists in the backup store — and the first 4 KB of that object is
 opened and must be an OpenTofu `encrypted_data` envelope rather than readable
 state. Outside `dev`, the replica must also be off the primary's cloud (for an
 S3 it cannot name, another endpoint).
@@ -323,7 +324,9 @@ proven, and the reason this document exists.
 What **is** measured, with dates (`docs/status.md`):
 
 - `task cluster-verify` scores **11/11 on Scaleway, on OVH and on Outscale** —
-  the first two on 2026-08-19, Outscale on 2026-08-20.
+  the first two on 2026-08-19, Outscale on 2026-08-20. That predates the
+  failure-domain check (#38): the topologies it measured now read red, see
+  `docs/status.md`.
 - **Idempotency is three assertions**, and all three held 3/3 on all three
   clouds: an empty plan, the *same* nodes (name and `creationTimestamp`), and a
   kubeconfig that still reaches the apiserver. Two of the three can pass while
