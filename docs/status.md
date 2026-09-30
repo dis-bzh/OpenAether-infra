@@ -13,8 +13,8 @@ deleted on both repositories; the versions they named never worked. Scope:
 by default (`deploy_flux`, false) — disabled, not amputated, and it returns as a
 user choice. CAPI and multi-cluster are an optional overlay, never the entry point.
 
-**Measured on real clouds, from an empty account** — Scaleway and OVH on
-2026-08-19, Outscale on 2026-08-20. This is the evidence the release rests on.
+**Measured on real clouds, from an empty account**, each row on the date in its
+`measured` column. This is the evidence the release rests on.
 `task evidence-check` compares the newest row per provider with the pin in
 `infrastructure/opentofu/cluster/variables.tf` and with today.
 
@@ -129,15 +129,11 @@ no container, volume, network or credential.
 [#87](https://github.com/dis-bzh/OpenAether-infra/issues/87) is closed on that
 basis; what it does not answer is below.
 
-**Not proven**: `v1.13.9`, the cloud root's own pin (unrelated to the change
-above), has the real-cloud upgrade evidence this page records on Scaleway only:
-the 2026-08-20 re-run moved Talos to it and left Kubernetes at `v1.36.3`. The
-OVH and Outscale rows stop at `v1.13.8`; `task evidence-check` is what compares
-the table with the pin, so this page does not have to be kept true by hand. No
-lane has ever run unattended to completion; nobody has
-deployed under a non-empty `bucket_suffix`; and the failover — provider A treated
-as gone, the cluster rebuilt on B from B's replica alone — has never been
-attempted.
+**Not proven**: that every row of the table above is at the current pin; which
+rows trail it is what `task evidence-check` reports. No lane has ever run
+unattended to completion; nobody has deployed under a non-empty `bucket_suffix`;
+and the failover — provider A treated as gone, the cluster rebuilt on B from B's
+replica alone — has never been attempted.
 
 **Six gates were green on something they had stopped checking**, found on
 2026-08-28 by auditing what the pipeline actually constrains rather than what it
