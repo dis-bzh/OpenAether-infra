@@ -18,6 +18,14 @@ vars:
     infrastructure/opentofu/talos-image
     infrastructure/opentofu-local
     infrastructure/opentofu-feint
+  # What a rung receipt vouches for: Task runs this once per invocation, before
+  # the first command, so a commit or an edit made mid-run cannot rewrite it.
+  # A git status that fails says so, and the receipt reads it as dirty.
+  RECEIPT_START:
+    sh: >-
+      echo "$(git rev-parse HEAD 2>/dev/null)
+      $(if s=$(git --no-optional-locks status --porcelain --untracked-files=normal 2>/dev/null);
+      then printf '%s' "$s" | grep -c ''; else echo failed; fi)"
   # Also terraform_fmt's `files:` in .pre-commit-config.yaml; lint compares them.
   TF_FMT_RE: '\.(tf|tofu|tfvars|tftest\.hcl|tofutest\.hcl)$'
   # What `tofu fmt -recursive` visits, minus gitignored files (the operator's
@@ -64,6 +72,7 @@ tasks:
 
         Before you push:
           task preflight                  everything provable without a cloud account
+          task receipts                   what the rung targets recorded for this commit, for the PR
 
         Everything else — the steps `up` runs for you, the local and emulated rungs,
         the CAPI and application targets — is still there:  task --list-all
@@ -341,12 +350,30 @@ tasks:
     cmds:
       - ./scripts/dev/check-jsonpath.sh
 
+  # A rung target's FIRST command is `defer: *receipt` (anchored below): a defer
+  # also runs on failure, so a red run leaves its receipt too. A task, because
+  # `defer: {cmd: …}` is silently never run on Task 3.53. See rung-receipt.py.
+  _receipt:
+    internal: true
+    silent: true
+    cmds:
+      - python3 scripts/dev/rung-receipt.py record "{{.TARGET}}" "{{.PROVIDER}}" "{{.RC}}" "{{.START}}"
+
+  receipts:
+    desc: "Print the rung receipts recorded for HEAD, to paste into the pull request body"
+    silent: true
+    cmds:
+      - python3 scripts/dev/rung-receipt.py show
+
   test-gates-local:
     desc: >-
       Rung ONE: the roll's gates against a real Kubernetes in Docker (needs
       `task local-up`). A stub proves the branching; only a real apiserver proves
       the queries run. Does NOT cover `talosctl upgrade` — no disk in a container.
     cmds:
+      - defer: &receipt
+          task: _receipt
+          vars: {TARGET: "{{.TASK}}", PROVIDER: "{{.PROVIDER}}", RC: "{{.EXIT_CODE}}", START: "{{.RECEIPT_START}}"}
       - ./scripts/dev/test-gates-local.sh
 
   test-cnpg-gates-local:
@@ -357,6 +384,7 @@ tasks:
       assertions to while kubectl could not parse its jsonpath. Installs
       local-path-provisioner and the CNPG operator (pinned) if absent, ~80s.
     cmds:
+      - defer: *receipt
       - ./scripts/dev/test-cnpg-gates-local.sh
 
   test-scripts:
@@ -370,6 +398,7 @@ tasks:
       # newer than it: a file written there, even one deleted again (#191).
       ENVS_STAMP: {sh: mktemp}
     cmds:
+      - defer: *receipt
       - defer: rm -f {{.ENVS_STAMP}}
       # jsonpath first: a query kubectl cannot parse makes every assertion below
       # it meaningless, and this costs milliseconds.
@@ -472,6 +501,9 @@ tasks:
       # Each check of check-required-checks.sh seen red and green against a
       # canned API, not its HTTP layer; live, it runs in repo-settings.yml only.
       - ./scripts/dev/check-required-checks.sh --self-test
+      # The receipts behind a PR's rung claim (#120): the real Taskfile's defer
+      # under go-task, then every verdict the "Rung receipt" CI job can reach.
+      - ./scripts/dev/test-rung-receipts.sh
       - |
         written="$(find infrastructure/opentofu/cluster/envs -newer {{.ENVS_STAMP}})" || exit 1
         [ -z "$written" ] || { echo "✗ a step wrote under envs/:" $written >&2; exit 1; }
@@ -494,6 +526,7 @@ tasks:
       AWS_ACCESS_KEY_ID: mock
       AWS_SECRET_ACCESS_KEY: mock
     cmds:
+      - defer: *receipt
       # Self-sufficient from a cold shell/CI runner — `tofu test` needs the
       # providers and modules resolved first. -upgrade: see `validate`.
       - tofu init -backend=false -upgrade
@@ -577,6 +610,7 @@ tasks:
       # there is one: every apply still plans, then applies that saved plan.
       APPROVE: '{{.APPROVE | default "ask"}}'
     cmds:
+      - defer: *receipt
       # Everything a later phase needs, checked BEFORE anything bills. The SSH
       # key was verified in bootstrap-phase2, which runs after `infra` — so a
       # missing key left a full cluster running and the run reported failure.
@@ -782,6 +816,7 @@ tasks:
       TF_VAR_outscale_secret_key_id:
         sh: '[ "{{.PROVIDER}}" = outscale ] && ../../../scripts/internal/resolve-s3-cred.sh outscale sk || true'
     cmds:
+      - defer: *receipt
       - |
         # Two ways in, and NEITHER of them is a prompt.
         #
@@ -885,6 +920,7 @@ tasks:
       KEY: '{{.KEY | default "~/.ssh/id_ed25519"}}'
     env: *provider-env
     cmds:
+      - defer: *receipt
       # Dropped first, for the same reason as in `infra-apply`: a stale
       # transcript would make the explainer diagnose the run before this one.
       - rm -f .tofu-run.log
@@ -1047,6 +1083,7 @@ tasks:
       APPROVE: '{{.APPROVE | default "ask"}}'
     env: *provider-env
     cmds:
+      - defer: *receipt
       - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
       - SSH_KEY="{{.KEY}}" ../../../scripts/bootstrap/talos-tunnels.sh open .
       # --role BEFORE CLI_ARGS: a role passed by the caller in `-- …` then wins,
@@ -1071,6 +1108,7 @@ tasks:
       OUT: '{{.OUT | default "destroy.tfplan"}}'
     env: *provider-env
     cmds:
+      - defer: *receipt
       - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
       # ⚠️ NOT purely read-only, and the one wart in this two-step design.
       # machine_secrets carries prevent_destroy — the PKI is the cluster's root of
@@ -1138,6 +1176,7 @@ tasks:
       PLAN: '{{.PLAN | default ""}}'
     env: *provider-env
     cmds:
+      - defer: *receipt
       - |
         # THE POINT OF THIS TARGET. Destroying a cluster must take two deliberate
         # commands, so that no single mistyped line — and no environment variable
@@ -1271,6 +1310,7 @@ tasks:
       PLAN: '{{.PLAN | default ""}}'
       APPROVE: '{{.APPROVE | default "ask"}}'
     cmds:
+      - defer: *receipt
       - |
         # The teardown was the one command that spoke a different language: six
         # dash-flags behind a bare `--` that Task otherwise keeps for itself,
@@ -1479,6 +1519,7 @@ tasks:
       ROLE: '{{.ROLE | default "management"}}'
       KEY: '{{.KEY | default "~/.ssh/id_ed25519"}}'
     cmds:
+      - defer: *receipt
       # cluster-upgrade.sh was reachable from no target and from no workflow —
       # the same gap infra-verify.sh had until today. The script that defines
       # what an upgrade must prove could only be run by typing its path.
@@ -1501,6 +1542,7 @@ tasks:
       ROLE: '{{.ROLE | default "management"}}'
       KEY: '{{.KEY | default "~/.ssh/id_ed25519"}}'
     cmds:
+      - defer: *receipt
       - ./scripts/dev/cluster-idempotency.sh {{.PROVIDER}} {{.ROLE}} {{.KEY}}
 
   cluster-verify:
@@ -1524,6 +1566,7 @@ tasks:
       ROLE: '{{.ROLE | default "management"}}'
     env: *provider-env
     cmds:
+      - defer: *receipt
       # The script reads the state for the topology and the bucket names, so it
       # needs the backend and the S3 credentials — which is why it goes through a
       # task rather than being run by hand. It had no target at all until 0.5.0,
@@ -1572,6 +1615,7 @@ tasks:
     env:
       FEINT_ENDPOINT: '{{.FEINT_ENDPOINT | default "http://127.0.0.1:4599"}}'
     cmds:
+      - defer: *receipt
       - ./scripts/dev/feint.sh plan {{.PROVIDER}}
 
   feint-apply:
@@ -1585,6 +1629,7 @@ tasks:
     env:
       FEINT_ENDPOINT: '{{.FEINT_ENDPOINT | default "http://127.0.0.1:4599"}}'
     cmds:
+      - defer: *receipt
       - ./scripts/dev/feint.sh apply {{.PROVIDER}}
 
   feint-apply-root:
@@ -1600,6 +1645,7 @@ tasks:
     env:
       FEINT_ENDPOINT: '{{.FEINT_ENDPOINT | default "http://127.0.0.1:4599"}}'
     cmds:
+      - defer: *receipt
       - ./scripts/dev/feint.sh apply-root {{.PROVIDER}}
 
   feint-record:
@@ -1631,10 +1677,16 @@ tasks:
 
   ssh-ca-check:
     desc: >-
-      Bastion SSH-CA, rung "emulated" (#81): renders the shared cloud-init template and proves
+      Bastion SSH-CA, rung "local Docker" (#81): renders the shared cloud-init template and proves
       TrustedUserCAKeys/AuthorizedPrincipalsFile actually work on a real sshd in Docker. No cloud
-      account. Needs Docker; skips (exit 0) if it is unavailable.
+      account. Needs Docker, and refuses to start without it.
+    # The script alone skips with exit 0 without Docker, which would leave a green
+    # receipt for a proof that never ran. Refused here, before the defer registers.
+    preconditions:
+      - sh: command -v docker
+        msg: ssh-ca-check needs Docker; nothing ran and no receipt was written.
     cmds:
+      - defer: *receipt
       - ./scripts/dev/ssh-ca-check.sh
 
   feint-evidence:
@@ -1651,6 +1703,7 @@ tasks:
       FEINT_ENDPOINT: '{{.FEINT_ENDPOINT | default "http://127.0.0.1:4599"}}'
       FEINT_VM: incus
     cmds:
+      - defer: *receipt
       - ./scripts/dev/feint.sh start
       - ./scripts/dev/feint.sh apply {{.PROVIDER}}
       - ./scripts/dev/feint.sh evidence {{.PROVIDER}}
@@ -1664,6 +1717,7 @@ tasks:
     vars:
       PROVIDER: '{{.PROVIDER | default "scaleway"}}'
     cmds:
+      - defer: *receipt
       - ./scripts/dev/feint.sh evidence-verify {{.PROVIDER}}
 
   # ===========================================================================
@@ -1684,6 +1738,7 @@ tasks:
       # the one port nobody could move turned out to be the one that collided.
       K8S_API_PORT: '{{.K8S_API_PORT | default "6443"}}'
     cmds:
+      - defer: *receipt
       # Fail fast on a Hyper-V port reservation: Docker Desktop only reports it
       # as an opaque 500, five retries and a 90s timeout later.
       - ./scripts/dev/check-host-ports.sh {{.TALOS_API_PORT_BASE}} {{.K8S_API_PORT}}
@@ -1720,6 +1775,7 @@ tasks:
     # at all, so the only way to reach it was `cluster-verify PROVIDER=local`,
     # exactly the mixing the preconditions above now refuse.
     cmds:
+      - defer: *receipt
       - ./scripts/dev/infra-verify.sh local
 
   local-rbac:
@@ -1731,11 +1787,13 @@ tasks:
     # knew whether roles were enforced at all, and the answer was priced at a
     # real cloud run; it costs a container.
     cmds:
+      - defer: *receipt
       - ./scripts/dev/test-talos-rbac.sh local
 
   local-test:
     desc: "Full end-to-end local test: 3 CP + 3 workers + etcd quorum + Cilium + Flux + GitOps"
     cmds:
+      - defer: *receipt
       - ./scripts/dev/test-talos-local.sh
       # The cluster is up and credentialed at this point, so the role assertions
       # cost seconds here. A harness nobody invokes is this repository's most

@@ -120,6 +120,30 @@ jobs:
             "./$check" "$RUNNER_TEMP/msg"
           done
 
+  # The rung a PR declares, against the receipt the harness wrote on its head
+  # (#120). Renovate, Dependabot and docs-only diffs may declare nothing; a rung
+  # they do declare is checked. Not a required check: that is a repository setting.
+  rung:
+    name: Rung receipt
+    if: github.event_name == 'pull_request'
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
+
+      # The body is whatever the PR author typed: it reaches the script as data,
+      # through env, and never as an expression inside `run:`.
+      - name: The declared rung has a green receipt for this head
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          DOCS_ONLY: ${{ needs.changes.outputs.code == 'false' }}
+        run: python3 scripts/dev/rung-receipt.py check
+
   # Environment data — real IPs, account ids, bucket names — is what actually
   # leaked here, and the credential rules gitleaks ships do not look for it.
   # Scoped to what a PR ADDS, and the config is passed with -c rather than named

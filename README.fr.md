@@ -18,7 +18,7 @@ Puis [Démarrage rapide](#démarrage-rapide) pour un cloud, ou
 de la machine nue à un cluster qu'on rejoint, met à jour et détruit.
 
 **Vous voulez contribuer.** [`CONTRIBUTING.md`](CONTRIBUTING.md) porte les règles
-qui ne se devinent pas — ce qui compte comme preuve, les trois barreaux qu'un
+qui ne se devinent pas — ce qui compte comme preuve, les quatre barreaux qu'un
 changement doit gravir, et comment se signe un commit écrit avec une IA. Le
 travail ouvert est dans [les issues](https://github.com/dis-bzh/OpenAether-infra/issues), et chacune
 nomme le barreau qu'elle exige : `task test` et `mocked` sont celles qu'on peut
@@ -269,7 +269,7 @@ task security            # contrôles de durcissement
 | [docs/upgrade.fr.md](docs/upgrade.fr.md) | Faire bouger Kubernetes et Talos sur un cluster qui doit rester debout |
 | [docs/release-checklist.md](docs/release-checklist.md) | Ce qu'il faut lancer avant de taguer, dans l'ordre qui échoue le moins cher |
 | [docs/status.md](docs/status.md) | **Source de vérité** : état courant, dette, améliorations (anglais seulement) |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | **À lire avant une première pull request** : ce qui compte comme preuve, les trois barreaux, les trailers de commit, les contributions assistées par IA |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | **À lire avant une première pull request** : ce qui compte comme preuve, les quatre barreaux, les trailers de commit, les contributions assistées par IA |
 
 ## Sécurité
 
