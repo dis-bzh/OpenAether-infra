@@ -394,6 +394,15 @@ locals {
     []
   )
 
+  # Only the active provider's list is non-empty, so concat() picks it without
+  # the length test above.
+  control_plane_zones = concat(
+    coalesce(one(module.scw[*].control_plane_zones), []),
+    coalesce(one(module.ovh[*].control_plane_zones), []),
+    coalesce(one(module.outscale[*].control_plane_zones), []),
+    coalesce(one(module.proxmox[*].control_plane_zones), []),
+  )
+
   worker_ips = coalesce(
     length(coalesce(one(module.scw[*].worker_private_ips), [])) > 0 ? module.scw[0].worker_private_ips : null,
     length(coalesce(one(module.ovh[*].worker_private_ips), [])) > 0 ? module.ovh[0].worker_private_ips : null,
