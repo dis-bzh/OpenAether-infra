@@ -21,11 +21,10 @@ is()  { # <label> <expected> <actual>
 
 SCRIPT=scripts/ops/seed-openbao.sh
 SB="$(mktemp -d)"; LOG="$SB/calls.log"
-# The script reads the REAL (gitignored) envs dir, so the fixture lives there
-# under a synthetic role and goes away with the sandbox.
+# A sandbox envs dir (OA_ENVS_DIR): the real one holds the operator's tfvars.
 ROLE=oaseed
-FIXTURE="infrastructure/opentofu/cluster/envs/${ROLE}-scaleway.tfvars"
-trap 'rm -rf "$SB"; rm -f "$FIXTURE"' EXIT
+mkdir "$SB/envs"; FIXTURE="$SB/envs/${ROLE}-scaleway.tfvars"
+trap 'rm -rf "$SB"' EXIT
 
 cat >"$FIXTURE" <<'EOF'
 cluster_name        = "example-mgmt"
@@ -64,7 +63,7 @@ BASE="KUBECONFIG=$SB/kubeconfig OPENBAO_WAIT=0 SCW_AWS_ACCESS_KEY_ID=STUB-PRIMAR
 run() { # [env k=v ...] — the script's stdout+stderr; env is exactly $ENV_EXTRA
   : >"$LOG"
   # shellcheck disable=SC2086
-  env -i PATH="$SB:$PATH" HOME="$SB" OA_STUB_LOG="$LOG" $ENV_EXTRA "$SCRIPT" scaleway "$ROLE" </dev/null 2>&1
+  env -i PATH="$SB:$PATH" HOME="$SB" OA_STUB_LOG="$LOG" OA_ENVS_DIR="$SB/envs" $ENV_EXTRA "$SCRIPT" scaleway "$ROLE" </dev/null 2>&1
 }
 puts()   { grep '^put:' "$LOG"; }
 put_of() { grep "^put:$1|" "$LOG" | sed 's/^[^|]*|//'; }

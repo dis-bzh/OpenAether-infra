@@ -8,10 +8,9 @@ env:
   TF_VAR_talos_tunnel_port_offset:
     sh: echo "${TALOS_TUNNEL_OFFSET:-0}"
 
-# The repo's real OpenTofu roots. ⚠️ DO NOT go back to a
-# `-recursive infrastructure/opentofu`: it would sweep in untracked local
-# scratch directories (e.g. `_v2/`), which used to fail `task lint`.
-# Add every new root here.
+# The repo's real OpenTofu roots. ⚠️ Not `infrastructure/opentofu` whole: it
+# would sweep in untracked local scratch directories (e.g. `_v2/`), which used
+# to fail `task lint`. Add every new root here.
 vars:
   TF_ROOTS: >-
     infrastructure/opentofu/cluster
@@ -19,6 +18,16 @@ vars:
     infrastructure/opentofu/talos-image
     infrastructure/opentofu-local
     infrastructure/opentofu-feint
+  # Also terraform_fmt's `files:` in .pre-commit-config.yaml; lint compares them.
+  TF_FMT_RE: '\.(tf|tofu|tfvars|tftest\.hcl|tofutest\.hcl)$'
+  # What `tofu fmt -recursive` visits, minus gitignored files (the operator's
+  # envs/*.tfvars) and deleted ones, which fmt cannot open. lint and fmt share it.
+  # A root that is gone fails it, as the recursive walk did.
+  TF_FMT_FILES: >-
+    for r in {{.TF_ROOTS}}; do [ -d "$r" ] || { echo "✗ TF_ROOTS: no directory $r" >&2; exit 1; }; done;
+    git ls-files --cached --others --exclude-standard -- {{.TF_ROOTS}}
+    | grep -E '{{.TF_FMT_RE}}'
+    | while read -r f; do [ ! -e "$f" ] || echo "$f"; done
 
 tasks:
   default:
@@ -43,8 +52,8 @@ tasks:
           task cluster-down PROVIDER=… -- --plan                  computes, destroys nothing
           task cluster-down PROVIDER=… -- --plan-file F --yes     lands exactly that plan
 
-        Nothing asks you a question except `cluster-up`, once, before it spends. Add APPROVE=auto
-        to answer it in advance — for CI, and for a shell that cannot be asked.
+        Nothing asks you a question except `cluster-up`, twice: on its phase-1 and phase-2 infrastructure
+        plans. Add APPROVE=auto to answer both in advance — for CI, and for a shell that cannot be asked.
         APPROVE=auto is deliberately powerless on anything that destroys.
 
         When you need them:
@@ -112,9 +121,15 @@ tasks:
   lint:
     desc: Lint and format code (OpenTofu, YAML)
     cmds:
-      # Tracked files only: -recursive also walks a gitignored real envs/*.tfvars,
-      # so a workstation preparing a real run failed lint on its own config (#191).
-      - git ls-files -z -- {{.TF_ROOTS}} | grep -zE '\.(tf|tfvars|tftest\.hcl)$' | xargs -0 -r tofu fmt -check
+      # Not -recursive: it also walks a gitignored real envs/*.tfvars, so a
+      # workstation preparing a real run failed lint on its own config (#191).
+      # An empty list fails: `tofu fmt -check` given no file passes.
+      - |
+        files="$({{.TF_FMT_FILES}})" || exit 1
+        [ -n "$files" ] || { echo "✗ no OpenTofu file under TF_ROOTS" >&2; exit 1; }
+        sed -n '/- id: terraform_fmt$/,/- id:/s/^ *files: //p' .pre-commit-config.yaml | grep -qxF '{{.TF_FMT_RE}}' \
+          || { echo "✗ terraform_fmt's files: in .pre-commit-config.yaml is not TF_FMT_RE" >&2; exit 1; }
+        tofu fmt -check $files
       - yamllint -c infrastructure/.yamllint infrastructure/
       # Same config, the repo's other YAML — CI used to only lint
       # infrastructure/, so a broken .github/workflows/*.yml would pass CI
@@ -177,7 +192,7 @@ tasks:
   fmt:
     desc: Format OpenTofu code
     cmds:
-      - tofu fmt -recursive {{.TF_ROOTS}}
+      - files="$({{.TF_FMT_FILES}})" && tofu fmt $files
 
   validate:
     desc: "Validate an OpenTofu root. Usage: task validate [ROOT=cluster|talos-image]"
@@ -350,7 +365,12 @@ tasks:
       that cost real cloud runs on 2026-08-15 were logic, not cloud — a resource
       name resolving to the wrong CRD, an error read as an empty list, an rc
       capture `set -e` never reached. Seconds here instead of 25-90 minutes there.
+    vars:
+      # Made when the task starts. The last step fails on anything under envs/
+      # newer than it: a file written there, even one deleted again (#191).
+      ENVS_STAMP: {sh: mktemp}
     cmds:
+      - defer: rm -f {{.ENVS_STAMP}}
       # jsonpath first: a query kubectl cannot parse makes every assertion below
       # it meaningless, and this costs milliseconds.
       - ./scripts/dev/check-jsonpath.sh
@@ -417,6 +437,10 @@ tasks:
       # converge-versions.sh had no downgrade guard of its own — it only
       # survived one by accident, on two layers upstream it does not own.
       - ./scripts/dev/test-converge-versions.sh
+      # talosconfig-new asked the Docker root's output name, without the data dir
+      # or S3 key, so no cloud lane found a node, and signed from any cluster's
+      # admin config. Real go-task, stubbed tofu.
+      - ./scripts/dev/test-talosconfig-new.sh
       # Against an isolated throwaway git repo, not this one — proves
       # check-script-reachability.sh actually flags an unreferenced script
       # and clears once it's wired in, not just that today's tree is clean.
@@ -442,15 +466,15 @@ tasks:
       # returned, with no retry — raced on a GitHub-hosted runner and failed
       # CI once with no code change (#169). A stub feint puts the startup
       # delay under our control; FEINT_RESTART_TIMEOUT=0 reproduces the exact
-      # pre-fix behavior through the real code path.
+      # pre-fix behavior through the real code path. Also holds every
+      # start/stop/status call, and the record lane's proxy, to FEINT_ENDPOINT.
       - ./scripts/dev/test-feint-restart.sh
-      # Offline self-test of check-required-checks.sh's diff logic (#122):
-      # against canned fixtures, proves it flags a required check that a
-      # ruleset never declares (CodeQL-shaped) AND refuses an empty rulesets
-      # response instead of reading it as "nothing is required". Live mode
-      # needs GITHUB_TOKEN and a real ruleset on main — deliberately not
-      # exercised here or wired into any workflow, see the script's header.
+      # Each check of check-required-checks.sh seen red and green against a
+      # canned API, not its HTTP layer; live, it runs in repo-settings.yml only.
       - ./scripts/dev/check-required-checks.sh --self-test
+      - |
+        written="$(find infrastructure/opentofu/cluster/envs -newer {{.ENVS_STAMP}})" || exit 1
+        [ -z "$written" ] || { echo "✗ a step wrote under envs/:" $written >&2; exit 1; }
 
   test:
     desc: Run OpenTofu tests (cluster root)
@@ -536,9 +560,9 @@ tasks:
       Idempotent one-shot bring-up: image -> render manifests -> infra -> tunnels -> bootstrap -> converge the
       fleet onto the versions the tfvars pins (editing that file IS the decision to upgrade) -> cluster-verify,
       whose failure fails the command. Usage: task cluster-up
-      ROLE=management|workload PROVIDER=… [KEY=~/.ssh/yourkey] [VERSION=v1.13.4] [FORCE=1] [APPROVE=auto].
-      It shows the plan and asks once before it spends; APPROVE=auto answers for you, for CI and for a
-      shell that cannot be asked.
+      ROLE=management|workload PROVIDER=… [KEY=~/.ssh/yourkey] [FORCE=1] [APPROVE=auto].
+      It asks twice, on the phase-1 and phase-2 infrastructure plans, showing each; APPROVE=auto answers
+      for you, for CI and for a shell that cannot be asked.
     # PROVIDER is REQUIRED, not defaulted. Twenty targets used to fall back to
     # scaleway in silence — including destroy and down — so a command typed
     # while working on another cloud aimed at the wrong account. The refusal is
@@ -552,9 +576,6 @@ tasks:
       # ask | auto — the value names WHO answers the approval, never whether
       # there is one: every apply still plans, then applies that saved plan.
       APPROVE: '{{.APPROVE | default "ask"}}'
-      # Not an anchor site: see talos-image above.
-      VERSION:
-        sh: ./scripts/internal/talos-version.sh {{.ROLE}}-{{.PROVIDER}}.tfvars
     cmds:
       # Everything a later phase needs, checked BEFORE anything bills. The SSH
       # key was verified in bootstrap-phase2, which runs after `infra` — so a
@@ -620,10 +641,13 @@ tasks:
           *change-me*) echo "✗ TF_VAR_encryption_passphrase is still the example from .env.example." >&2
                        echo "  It is public. Replace it: openssl rand -base64 48" >&2; exit 1 ;;
         esac
+      # image-build reads the pin from ROLE's tfvars. VERSION is blanked because
+      # go-task hands it an exported or typed one, and the tfvars is the decision.
       - task: image-build
         vars:
           PROVIDER: "{{.PROVIDER}}"
-          VERSION: "{{.VERSION}}"
+          ROLE: "{{.ROLE}}"
+          VERSION: ""
           ENSURE: "1"
       - |
         CILIUM=infrastructure/opentofu/cluster/bootstrap-manifests/cilium.yaml
@@ -640,9 +664,9 @@ tasks:
       # output` failing truncates the file it writes to, and overwriting a good
       # kubeconfig to print a notice is a bad trade.
       - ./scripts/internal/converge-versions.sh {{.PROVIDER}} {{.ROLE}} {{.KEY}} --check
-      # ONE human checkpoint on the whole journey, and it is here — the step that
-      # spends. `up` plans, shows it, asks once, then applies EXACTLY that plan:
-      # never two different plans, and never a silent apply. APPROVE=auto skips the
+      # The first of the journey's two checkpoints (bootstrap-phase2 holds the other,
+      # for its own plan). `up` plans, shows it, asks, then applies EXACTLY that plan:
+      # never a different plan, and never a silent apply. APPROVE=auto skips the
       # question, which is what CI and a shell with no terminal need; without a
       # terminal and without APPROVE it stops with the plan saved and names the one
       # command that lands it.
@@ -679,7 +703,7 @@ tasks:
           ROLE: "{{.ROLE}}"
           PROVIDER: "{{.PROVIDER}}"
       # Editing the tfvars IS the decision to upgrade, so the command that reads it
-      # has to reach it. APPROVE=auto inside is not a bypass: the one checkpoint
+      # has to reach it. APPROVE=auto inside is not a bypass: the first checkpoint
       # above already asked, and --check had told it what this would roll.
       - ./scripts/internal/converge-versions.sh {{.PROVIDER}} {{.ROLE}} {{.KEY}}
       # The verdict, asked of the cluster rather than assumed from the steps
@@ -1156,7 +1180,11 @@ tasks:
     desc: >-
       Issue a short-lived, role-scoped talosconfig from the admin one — the deploy hands out
       os:admin valid a YEAR, and read-only work does not need it.
-      Usage: task talosconfig-new PROVIDER=scaleway [ROLES=os:reader] [TTL=8h]
+      It first re-fetches that cluster's kubeconfig and talosconfig.
+      Usage: task talosconfig-new PROVIDER=scaleway [ROLE=management] [ROLES=os:reader] [TTL=8h]
+    # The node to ask comes from this cluster's state: its data dir and S3
+    # credentials, as `kubeconfig` reads them (test-talosconfig-new.sh).
+    dir: infrastructure/opentofu/cluster
     # PROVIDER is REQUIRED, not defaulted — see cluster-upgrade above for why.
     requires:
       vars: [PROVIDER]
@@ -1164,13 +1192,19 @@ tasks:
     # which mints one as part of proving the roles are enforced.
     preconditions: *refuse-local
     vars:
+      ROLE: '{{.ROLE | default "management"}}'
       ROLES: '{{.ROLES | default "os:reader"}}'
       TTL: '{{.TTL | default "8h"}}'
+    env: *provider-env
     # ⚠️ Proven on the Docker lane only (task local-rbac). On a cloud lane the
     # Talos API is reached through the bastion, so the tunnels must be open —
     # `task tunnels-up PROVIDER=…` first. That path has never been run.
     cmds:
-      - ./scripts/ops/talosconfig-new.sh {{.PROVIDER}} --roles {{.ROLES}} --ttl {{.TTL}}
+      # The admin talosconfig is one file for every cluster in this checkout, and
+      # the script signs from it: re-fetch THIS cluster's, as cluster-verify does.
+      - task: kubeconfig
+        vars: {ROLE: '{{.ROLE}}', PROVIDER: '{{.PROVIDER}}'}
+      - ../../../scripts/ops/talosconfig-new.sh {{.PROVIDER}} --roles {{.ROLES}} --ttl {{.TTL}}
 
   backup-state:
     desc: >-
@@ -1349,7 +1383,10 @@ tasks:
       ROLE: '{{.ROLE | default "management"}}'
     env: *provider-env
     cmds:
-      - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
+      # Captured first: a failure inside `tofu init $(...)` is lost and init runs bare.
+      - |
+        BACKEND="$(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)" || exit 1
+        tofu init -reconfigure $BACKEND
       - tofu output -raw kubeconfig > kubeconfig
       - tofu output -raw talosconfig > talosconfig
       - echo "KUBECONFIG and TALOSCONFIG written to infrastructure/opentofu/cluster/"
@@ -1429,8 +1466,8 @@ tasks:
     desc: >-
       Upgrade Kubernetes then Talos on a running cluster, MEASURING the interruption instead of
       asserting there was none. Targets come from cluster/variables.tf; the tfvars is expected to pin
-      one patch below. DRY_RUN=1 resolves the versions and stops, needing no cluster. Needs a terminal:
-      the applies ask for approval. Usage: task upgrade PROVIDER=scaleway [ROLE=management] [KEY=~/.ssh/key]
+      one patch below. DRY_RUN=1 resolves the versions and stops, needing no cluster. It asks nothing:
+      its applies run with APPROVE=auto. Usage: task upgrade PROVIDER=scaleway [ROLE=management] [KEY=~/.ssh/key]
     # PROVIDER is REQUIRED, not defaulted. Twenty targets used to fall back to
     # scaleway in silence — including destroy and down — so a command typed
     # while working on another cloud aimed at the wrong account. The refusal is

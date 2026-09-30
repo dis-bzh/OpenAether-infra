@@ -48,7 +48,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source=../lib/common.sh
 source "$ROOT/scripts/lib/common.sh"
 CLUSTER_DIR="$ROOT/infrastructure/opentofu/cluster"
-TFVARS="$CLUSTER_DIR/envs/${ROLE}-${PROVIDER}.tfvars"
+TFVARS="${OA_ENVS_DIR:-$CLUSTER_DIR/envs}/${ROLE}-${PROVIDER}.tfvars"   # OA_ENVS_DIR: a test sandbox
 OUT="${OUT:-$CLUSTER_DIR}"
 
 # FIRST, before the tools and before the tfvars. It is the only thing that cannot
