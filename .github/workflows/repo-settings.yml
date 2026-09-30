@@ -1,0 +1,42 @@
+# Repository settings no diff can show: the required checks on main, tag
+# protection, private vulnerability reporting. Never on pull_request: a PR cannot
+# fix a setting, and a job running on PRs would join the very set it checks.
+name: Repository settings
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Off the hour: a shared runner pool is busiest at :00.
+    - cron: "37 5 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  checks: read
+  pull-requests: read
+
+jobs:
+  settings:
+    name: Repository settings
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
+
+      # A workflow token can never read a ruleset's bypass actors (that needs
+      # admin), so that one item is reported as a warning here; an admin's run,
+      # a line of docs/release-checklist.md, verifies it.
+      - name: Compare with what GitHub enforces and reports
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          ./scripts/dev/check-required-checks.sh
+          "${GITHUB_REPOSITORY%/*}" "${GITHUB_REPOSITORY#*/}"
+          --tolerate-unreadable-bypass
