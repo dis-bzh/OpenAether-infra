@@ -804,7 +804,7 @@ zones_verify() {
 }
 
 zones_verify '["z1","z2","z3"]'
-BASE_FAIL="$(tally 2)" BASE_UNK="$(tally 3)"
+BASE_PASS="$(tally 1)" BASE_FAIL="$(tally 2)" BASE_UNK="$(tally 3)"
 { said 'across 3 failure domains' && ! said 'share one failure domain'; } \
   && ok "three control planes in three zones are HA (baseline: ${BASE_FAIL} failed, ${BASE_UNK} unknown)" \
   || bad "a spread cluster was not reported as spread: $RUN_OUT"
@@ -814,11 +814,13 @@ zones_verify '["z1","z1","z1"]'
   && ok "three control planes in ONE zone FAIL the run" \
   || bad "an HA cluster in a single zone passed (failed=$(tally 2), spread run had ${BASE_FAIL})"
 
-# Two zones is not enough: losing the zone that holds two takes etcd's quorum.
+# Two zones clear the check, but a 2+1 split still loses etcd with its pair: a
+# warning that names it, not a failure (the Scaleway run 0.1.0 rests on is 2+1).
 zones_verify '["z1","z1","z2"]'
-{ said '2 of 3 control planes share one failure domain' && [ "$(tally 2)" -eq $((BASE_FAIL + 1)) ]; } \
-  && ok "a 2+1 split across two zones FAILS the run: it still loses quorum" \
-  || bad "a 2+1 split passed (failed=$(tally 2), spread run had ${BASE_FAIL})"
+{ said '2 of 3 control planes sit in one of 2 failure domains' && ! said 'share one failure domain' \
+    && [ "$(tally 1)" -eq "$BASE_PASS" ] && [ "$(tally 2)" -eq "$BASE_FAIL" ] && [ "$(tally 3)" -eq "$BASE_UNK" ]; } \
+  && ok "a 2+1 split across two zones warns, and scores what the spread run scored" \
+  || bad "a 2+1 split failed the run or said nothing (failed=$(tally 2), spread run had ${BASE_FAIL}): $RUN_OUT"
 
 # The red line says what clears it, per provider: Outscale has no knob yet (#58).
 for c in 'scaleway|node_distribution.scaleway.zones' 'ovh|node_distribution.ovh.availability_zones' \
@@ -835,9 +837,10 @@ zones_verify '["z1","z1","z2","z2","z3"]'
   && ok "five control planes as 2+2+1 survive the loss of any zone" \
   || bad "a 2+2+1 split of five was refused (failed=$(tally 2), spread run had ${BASE_FAIL})"
 zones_verify '["z1","z1","z1","z2","z3"]'
-{ said '3 of 5 control planes share one failure domain' && [ "$(tally 2)" -eq $((BASE_FAIL + 1)) ]; } \
-  && ok "five control planes as 3+1+1 FAIL the run: three of five is a quorum" \
-  || bad "a 3+1+1 split of five passed (failed=$(tally 2))"
+{ said '3 of 5 control planes sit in one of 3 failure domains' && ! said 'across' \
+    && [ "$(tally 1)" -eq "$BASE_PASS" ] && [ "$(tally 2)" -eq "$BASE_FAIL" ]; } \
+  && ok "five control planes as 3+1+1 are not called HA: three of five is a quorum" \
+  || bad "a 3+1+1 split of five was called HA or failed (failed=$(tally 2))"
 
 # One control plane is not HA at all, which is a warning of its own: it must not
 # also be called a zone failure, and must not change the count.
@@ -848,14 +851,18 @@ zones_verify '["z1"]'
 
 # A list that cannot be trusted is UNCHECKED, never a pass: an older state has no
 # such output, and a provider that reads nothing back yields empty or null names.
+# Only the missing output is cured by an apply, so only it names one — and the
+# command must be one the Taskfile accepts (a bare `infra-apply` refuses).
 for c in '-|the output missing' '["z1","z2"]|a list shorter than the control planes' \
          '["z1","","z3"]|an empty zone name' '[null,"z1","z2"]|a null zone name' \
          'null|a null output'; do
   zones_verify "${c%%|*}" 3
+  hint=false; said "task infra-apply PROVIDER=${PROVIDER} ROLE=${ROLE} PLAN=tfplan" && hint=true
+  want=false; [ "${c%%|*}" = - ] && want=true
   { said 'control_plane_zones' && ! said 'across' && [ "$(tally 3)" -eq $((BASE_UNK + 1)) ] \
-    && [ "$(tally 2)" -eq "$BASE_FAIL" ]; } \
+    && [ "$(tally 2)" -eq "$BASE_FAIL" ] && [ "$hint" = "$want" ]; } \
     && ok "${c#*|} is UNCHECKED ($(tally 3) unknown), not a pass" \
-    || bad "${c#*|} was read as a placement (failed=$(tally 2), unknown=$(tally 3))"
+    || bad "${c#*|} was read as a placement, or named the wrong cure (failed=$(tally 2), unknown=$(tally 3), apply hint=$hint): $RUN_OUT"
 done
 
 # =============================================================================

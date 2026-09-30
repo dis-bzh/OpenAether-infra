@@ -112,8 +112,9 @@ if [ "$PROVIDER" != local ]; then
     warn "${want_cp} control plane(s): this cluster is NOT HA, and an upgrade WILL interrupt the API"
   else
     # Counting nodes is not HA: three in one zone all go when it does. The spread
-    # is what the state says it PLACED (control_plane_zones), not a measurement,
-    # and only the quorum rule is sound: a 2+1 split still loses etcd with its pair.
+    # is what the state says it PLACED (control_plane_zones), not a measurement.
+    # One domain is red; a quorum's worth in one of several is a warning, because
+    # the 2-zone topology 0.1.0 was measured on is a 2+1 split.
     zones="$(cd "$CLUSTER_DIR" && timeout 60 tofu output -json control_plane_zones 2>/dev/null)" || zones=""
     # "<most nodes in one domain> <distinct domains> <names>", or "x x" for a list
     # that cannot be trusted: wrong length, null, or a name the provider left empty.
@@ -122,8 +123,12 @@ if [ "$PROVIDER" != local ]; then
       then "\(group_by(.) | map(length) | max) \(unique | length) \(join(","))"
       else "x x" end' <<<"$zones" 2>/dev/null)
     if ! [[ "${worst:-}" =~ ^[0-9]+$ ]]; then
-      unk "control_plane_zones is missing, or is not ${want_cp} non-empty zone names, in the state — the spread is UNCHECKED (an older state: task infra-apply PROVIDER=${PROVIDER} ROLE=${ROLE})"
-    elif [ "$worst" -ge $((want_cp - want_cp / 2)) ]; then
+      if [ -z "$zones" ]; then
+        unk "control_plane_zones could not be read from the state — the spread is UNCHECKED; a state older than this output needs one apply: task infra-plan PROVIDER=${PROVIDER} ROLE=${ROLE} OUT=tfplan, read it, then task infra-apply PROVIDER=${PROVIDER} ROLE=${ROLE} PLAN=tfplan"
+      else
+        unk "control_plane_zones is not ${want_cp} non-empty zone names (the provider placed nodes it did not name) — the spread is UNCHECKED"
+      fi
+    elif [ "$doms" -lt 2 ]; then
       case "$PROVIDER" in
         scaleway | scw) clears="spread node_distribution.scaleway.zones" ;;
         ovh)            clears="spread node_distribution.ovh.availability_zones" ;;
@@ -131,7 +136,10 @@ if [ "$PROVIDER" != local ]; then
         outscale)       clears="the module only uses availability_zones[0] until #58" ;;
         *)              clears="spread the control planes" ;;
       esac
-      bad "${worst} of ${got_cp} control planes share one failure domain (${names}) — losing it loses etcd quorum: HA against a node, not against a zone; ${clears}"
+      bad "${worst} of ${got_cp} control planes share one failure domain (${names}) — losing it loses the control plane: HA against a node, not against a zone; ${clears}"
+    elif [ "$worst" -ge $((want_cp - want_cp / 2)) ]; then
+      ok "${got_cp} control planes, matching the state"
+      warn "${worst} of ${got_cp} control planes sit in one of ${doms} failure domains (${names}): losing that one loses etcd quorum"
     else
       ok "${got_cp} control planes across ${doms} failure domains, none holding a quorum — HA"
     fi
