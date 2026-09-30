@@ -359,9 +359,7 @@ locals {
   )
 
   # SSH user for the bastion tunnels, by provider:
-  #   scaleway — a dedicated unprivileged "bastion" user via cloud-init (no root login)
-  #   ovh      — the OpenStack Ubuntu image's default "ubuntu"
-  #   outscale — Outscale's official OMIs default to "outscale" (NOT "ubuntu")
+  #   scaleway, ovh, outscale — a dedicated unprivileged "bastion" user via cloud-init
   #   proxmox  — host-as-bastion → the host SSH user (host_ssh_user, default root);
   #              not a literal like the others, so resolved from pmx_dist here.
   bastion_user = lookup({

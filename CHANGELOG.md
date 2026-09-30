@@ -612,6 +612,42 @@ in git. 0.1.0 is the first entry describing something proven.
   `k8s_min` in `version-support.json` turned one of the new intermediate runs
   red before the revert.
 
+- **`task talosconfig-new` could not find a node on any cloud lane, and would
+  have signed with another cluster's admin config (refs #80, mocked part).**
+  The script asked the state for `control_plane_ips`, an output only the Docker
+  root declares (the cluster root's is `control_plane_private_ips`), and the
+  task ran with no data dir and no S3 key, so it always stopped at "no node to
+  ask". The script now picks the output by lane, and the task runs `kubeconfig`
+  first, for the cluster's own data dir and S3 key and a fresh copy of its
+  admin talosconfig, a file every cluster in a checkout shares. It also takes
+  `ROLE=`. `kubeconfig` now captures `tf-backend.sh`'s answer before
+  `tofu init`, so a mistyped `ROLE=` stops instead of initialising a bare
+  backend; eight other tasks still use the old form. New
+  `scripts/dev/test-talosconfig-new.sh`, in `task test-scripts`, runs the real
+  task under go-task with tofu and talosctl stubbed: 2 passed and 7 failed on
+  the previous code, 9 and 0 now, and red on each of eight one-line mutants.
+  The cloud path, through the tunnels, has still never run.
+
+- **`task cluster-up VERSION=…` was advertised and ignored.** A task-level
+  `VERSION` read from the tfvars shadowed the command line: with the pin at
+  v0.0.1, `VERSION=v9.9.9` built v0.0.1 without a word (go-task 3.53.1,
+  stubbed leaves). It leaves the usage instead of being wired, because the
+  tfvars pin decides the version and `talos-image.sh` refuses a build that
+  differs from it (#93). `cluster-up` still ignores a `VERSION`, typed or
+  exported for another reason: it passes `ROLE` to `image-build`, which reads
+  the pin itself, and blanks `VERSION`, which go-task would otherwise hand
+  down. `test-cluster-up.sh` covers both forms and a workload cluster's own
+  pin. `task image-build VERSION=…` is unchanged.
+
+- **Wrong statements about a deploy.** The Taskfile said `cluster-up` asks
+  once; it asks twice, on the phase-1 infrastructure plan and on
+  `bootstrap-phase2`'s (the image build and the version roll apply without a
+  question), as `docs/first-cluster.md` already said. `cluster-upgrade`'s
+  description said its applies ask for approval; it runs them all with
+  `APPROVE=auto`. The `bastion_user` output said root on Scaleway and ubuntu on
+  OVH and Outscale; the value is `bastion` on all three, and `host_ssh_user` on
+  Proxmox.
+
 ### Added
 
 - **New `feint-apply-root` lane: an untargeted apply on the REAL cluster

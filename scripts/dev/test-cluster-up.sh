@@ -33,6 +33,7 @@ echo "\$(basename "\$0") \$*" >>"$W/calls.log"
 case "\$(basename "\$0") \$*" in
   "tofu plan"*) for a in "\$@"; do case "\$a" in -out=*) : >"\${a#-out=}" ;; esac; done ;;
   "tofu output -raw "*) echo "fixture-\$3" ;;
+  "talos-version.sh workload-"*) echo v0.0.1-fixture ;;
   talos-version.sh*) echo v0.0.0-fixture ;;
   tf-backend.sh*) echo -backend-config=path=fixture.tfstate ;;
   ssh-keygen*) exit 1 ;;
@@ -53,10 +54,10 @@ for e in management-scaleway workload-ovh; do echo 'cluster_name = "fixture"' >"
 : >"$W/key"
 
 O="$W/out"
-run() { # <verifier rc> <task args...> — combined output in $O, calls in calls.log
+run() { # <verifier rc> <task args...> — combined output in $O, calls in calls.log; EXTRA=NAME=value adds one env var
   local rc="$1"; shift
   : >"$W/calls.log"
-  env -i PATH="$W/bin:$PATH" HOME="$W" VERIFY_RC="$rc" \
+  env -i PATH="$W/bin:$PATH" HOME="$W" VERIFY_RC="$rc" ${EXTRA:+"$EXTRA"} \
       TF_VAR_encryption_passphrase=fixture-passphrase-of-at-least-32-characters \
       SCW_ACCESS_KEY=scw-access-key SCW_SECRET_KEY=scw-secret-key \
       OVH_AWS_ACCESS_KEY_ID=ovh-access-key OVH_AWS_SECRET_ACCESS_KEY=ovh-secret-key \
@@ -100,6 +101,24 @@ c="$(line_of "$W/calls.log" '^converge-versions.sh ')"; i="$(line_of "$W/calls.l
 [ "$(calls "$K")" = 2 ] && [ -n "$c" ] && [ -n "$i" ] && [ "${k1:-0}" -lt "$c" ] && [ "$c" -lt "${k2:-0}" ] && [ "$k2" -lt "$i" ] \
   && ok "kubeconfig is fetched before the roll, and again between the roll and the verifier" \
   || bad "fetches: $(calls "$K"), first ${k1:-none}, last ${k2:-none}; roll at ${c:-none}; verify at ${i:-none}"
+
+
+echo "--- the image is the one ROLE's tfvars pins ---"
+# Only the workload pin differs from the management one, so a build that
+# ignored ROLE would take the management image.
+run 0 "${UP[@]}" PROVIDER=ovh ROLE=workload; rc=$?
+[ "$rc" = 0 ] && grep -qx 'talos-image.sh ovh v0.0.1-fixture --ensure' "$W/calls.log" \
+  && ok "a workload cluster builds the workload pin" \
+  || bad "exit $rc; the build was: $(grep '^talos-image' "$W/calls.log")"
+# VERSION is not a cluster-up option, and a name that generic is often exported
+# for something else: neither form may steer the image.
+for how in env cli; do
+  if [ "$how" = env ]; then EXTRA=VERSION=v9.9.9 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+  else run 0 "${UP[@]}" PROVIDER=scaleway VERSION=v9.9.9; rc=$?; fi
+  [ "$rc" = 0 ] && grep -qx 'talos-image.sh scaleway v0.0.0-fixture --ensure' "$W/calls.log" \
+    && ok "VERSION given as $how is ignored: the pin is built" \
+    || bad "VERSION as $how, exit $rc; the build was: $(grep '^talos-image' "$W/calls.log")"
+done
 
 
 echo "--- cluster-verify on its own still refreshes kubeconfig ---"
