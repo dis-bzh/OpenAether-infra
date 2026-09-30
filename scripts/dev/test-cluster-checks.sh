@@ -288,6 +288,7 @@ said 'upgrade nothing' \
   || ok "…and the run is not refused as a no-op"
 # The cluster's talosconfig, as the probes use its kubeconfig: not whatever
 # cluster the caller's shell happens to point at.
+: >"$STUB_DIR/another-cluster.talosconfig"
 run env DRY_RUN=1 TALOSCONFIG="$STUB_DIR/another-cluster.talosconfig" "$UPGRADE" "$PROVIDER" "$ROLE" "$KEYFILE"
 said 'DIFFERENT schematic' \
   && ok "…read with this cluster's talosconfig, not the one the caller exported" \

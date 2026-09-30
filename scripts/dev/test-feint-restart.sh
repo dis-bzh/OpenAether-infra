@@ -71,9 +71,10 @@ case "$1" in
 esac
 STUB
 # A stub tofu ends an apply lane right after its reset_emulator: nothing is planned.
+# OA_STUB_TOFU_PASS=1 lets a record lane run through, so its apply line can be read.
 cat >"$SB/tofu" <<'STUB'
 #!/usr/bin/env bash
-printf 'tofu:%s\n' "$*" >>"$OA_STUB_LOG"; exit 1
+printf 'tofu:%s\n' "$*" >>"$OA_STUB_LOG"; [ "${OA_STUB_TOFU_PASS:-0}" = 1 ]
 STUB
 chmod +x "$SB/feint" "$SB/tofu"
 
@@ -143,7 +144,7 @@ ALT=127.0.0.1:4699
 on_alt() { # <feint.sh args...>
   env -i PATH="$SB:$PATH" HOME="$SB" TMPDIR="$SB" OA_STUB_VERSION="$PIN" OA_STUB_LOG="$LOG" \
       OA_STUB_STATE="$STATE" OA_STUB_DELAY=0 FEINT_RESTART_TIMEOUT=2 FEINT_ENDPOINT="http://$ALT" \
-      "$FEINT" "$@" </dev/null 2>&1
+      OA_STUB_TOFU_PASS="${OA_STUB_TOFU_PASS:-0}" "$FEINT" "$@" </dev/null 2>&1
 }
 stray() { grep -E '^feint:(start|stop|status)' "$LOG" | grep -vF -- "--addr $ALT"; }
 fresh
@@ -169,13 +170,17 @@ grep -q '^tofu:init' "$LOG" && ok "an apply lane on $ALT gets past its reset" ||
 
 echo "--- a record lane on $ALT, with 4600 taken: its proxy follows the endpoint ---"
 fresh; seed_up "$ALT"; seed_up 127.0.0.1:4600
-OUT="$(on_alt record outscale)"
+OUT="$(OA_STUB_TOFU_PASS=1 on_alt record outscale)"
 grep -q '^feint:proxy .*--addr 127.0.0.1:4700' "$LOG" && grep -q '^tofu:init' "$LOG" \
   && ok "its proxy listens on 4700, and the lane goes on" || bad "proxy: $(grep '^feint:proxy' "$LOG"); $OUT"
+# The proxy is only half of it: the apply must be pointed at that proxy, not at the emulator.
+grep -q '^tofu:apply .*-var emulator_api_url=http://127.0.0.1:4700' "$LOG" \
+  && ok "…and its apply goes through that proxy" || bad "apply not aimed at the proxy: $(grep '^tofu:apply' "$LOG")"
 fresh; seed_up "$ALT"; seed_up 127.0.0.1:4700
-OUT="$(on_alt record outscale)"
+OUT="$(OA_STUB_TOFU_PASS=1 on_alt record outscale)"; RC=$?
 ! grep -q '^tofu:' "$LOG" && grep -q 'proxy did not start' <<<"$OUT" \
   && ok "…and with 4700 taken, it stops before tofu runs" || bad "a dead proxy went unnoticed: $OUT"
+[ "$RC" -ne 0 ] && ok "…and the lane fails (rc=$RC), it does not report success" || bad "a dead proxy ended the lane with rc=0: $OUT"
 
 echo
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"

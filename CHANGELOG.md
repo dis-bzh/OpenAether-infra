@@ -178,7 +178,8 @@ in git. 0.1.0 is the first entry describing something proven.
   The script also read the fleet through the checkout's single kubeconfig,
   whichever cluster wrote it last, and its schematic check passed `talosctl`
   no talosconfig at all. A real run now fetches both for its own cluster and
-  exports them; a dry run, which needs no credentials, does not. Mocked rung:
+  exports them; a dry run, which needs no credentials, exports both paths but skips
+  the `task kubeconfig` fetch. Mocked rung:
   `test-cluster-checks.sh` runs the real `talos-image.sh` inside the upgrade,
   and its `talosctl` stub answers only the cluster's talosconfig. On main's
   script: 70 passed, 7 failed; now 77/0, and each of seven mutants turns it
@@ -731,6 +732,18 @@ in git. 0.1.0 is the first entry describing something proven.
   `APPROVE=auto`. The `bastion_user` output said root on Scaleway and ubuntu on
   OVH and Outscale; the value is `bastion` on all three, and `host_ssh_user` on
   Proxmox.
+
+- **The mocked suite now sees what a review of #198, #199, #200 and #202 found it
+  could not.** `test-feint-restart.sh` asserts that the record lane's apply goes
+  to the proxy (its stub `tofu` passes on request and logs the apply) and that a
+  dead proxy fails the lane. `task fmt` formatted the current directory on an empty
+  file list; the check now sits in `TF_FMT_FILES`, which `lint` shares. The new
+  `test-task-guards.sh` runs the real Taskfile for that list, the `TF_ROOTS` check,
+  the hook/`TF_FMT_RE` comparison and the `envs/` write guard of `test-scripts`.
+  `task talosconfig-new` pins `TALOSCONFIG` to the admin config it has just
+  fetched: an exported one from another cluster signed the reader config. Its
+  hints and that case are asserted. Wording: the upgrade skill, the CHANGELOG
+  on dry runs, "those tfvars". Ten mutants, each turning its test red.
 
 ### Added
 
