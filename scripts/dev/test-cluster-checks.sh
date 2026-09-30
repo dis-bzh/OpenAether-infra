@@ -421,6 +421,15 @@ read -r s_fail s_blind s_total s_long <<<"$(svc_line)"
   || bad "the probe workload was not deployed and polled before the upgrade started"
 svc_cleaned && ok "…and deleted after the probe stopped" || bad "the probe workload was left behind on a green run"
 
+# A red final verify (a shared failure domain, #38) fails the run but loses no
+# measurement: the apiserver probe reported after each step, the service probe on exit.
+plan 'task cluster-verify\t1\t\n'"${UPGRADE_OK}${VERIFY_OK}"
+upgrade
+read -r s_fail s_blind s_total s_long <<<"$(svc_line)"
+{ [ "$RUN_RC" -ne 0 ] && said '  probe: 0 FAIL in' && [ "${s_total:-0}" -gt 0 ] && ! said 'in place'; } \
+  && ok "a red final verify fails the run after the apiserver and service probes reported" \
+  || bad "a red final verify hid the outage measurement (rc=$RUN_RC): '$(svc_line)'"
+
 # The Service stops answering while the apiserver does: reported, not gated.
 plan "services/http:upgrade-probe\t1\terror: no endpoints available\n${UPGRADE_OK}${VERIFY_OK}"
 upgrade
@@ -811,6 +820,15 @@ zones_verify '["z1","z1","z2"]'
   && ok "a 2+1 split across two zones FAILS the run: it still loses quorum" \
   || bad "a 2+1 split passed (failed=$(tally 2), spread run had ${BASE_FAIL})"
 
+# The red line says what clears it, per provider: Outscale has no knob yet (#58).
+for c in 'scaleway|node_distribution.scaleway.zones' 'ovh|node_distribution.ovh.availability_zones' \
+         'proxmox|node_distribution.proxmox.node_names' 'outscale|until #58'; do
+  PROVIDER="${c%%|*}" zones_verify '["z1","z1","z1"]'
+  grep 'share one failure domain' <<<"$RUN_OUT" | grep -qF "${c#*|}" \
+    && ok "a shared failure domain on ${c%%|*} names what clears it" \
+    || bad "the red line for ${c%%|*} does not name '${c#*|}': $RUN_OUT"
+done
+
 # Five nodes: quorum is 3, so 2+2+1 survives any one zone and 3+1+1 does not.
 zones_verify '["z1","z1","z2","z2","z3"]'
 { said 'across 3 failure domains' && [ "$(tally 2)" -eq "$BASE_FAIL" ]; } \
@@ -829,9 +847,10 @@ zones_verify '["z1"]'
   || bad "a single control plane was judged on its zone (failed=$(tally 2), spread run had ${BASE_FAIL})"
 
 # A list that cannot be trusted is UNCHECKED, never a pass: an older state has no
-# such output, and a provider that reads nothing back yields empty names.
+# such output, and a provider that reads nothing back yields empty or null names.
 for c in '-|the output missing' '["z1","z2"]|a list shorter than the control planes' \
-         '["z1","","z3"]|an empty zone name' 'null|a null output'; do
+         '["z1","","z3"]|an empty zone name' '[null,"z1","z2"]|a null zone name' \
+         'null|a null output'; do
   zones_verify "${c%%|*}" 3
   { said 'control_plane_zones' && ! said 'across' && [ "$(tally 3)" -eq $((BASE_UNK + 1)) ] \
     && [ "$(tally 2)" -eq "$BASE_FAIL" ]; } \

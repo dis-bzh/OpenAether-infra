@@ -124,7 +124,14 @@ if [ "$PROVIDER" != local ]; then
     if ! [[ "${worst:-}" =~ ^[0-9]+$ ]]; then
       unk "control_plane_zones is missing, or is not ${want_cp} non-empty zone names, in the state — the spread is UNCHECKED (an older state: task infra-apply PROVIDER=${PROVIDER} ROLE=${ROLE})"
     elif [ "$worst" -ge $((want_cp - want_cp / 2)) ]; then
-      bad "${worst} of ${got_cp} control planes share one failure domain (${names}) — losing it loses etcd quorum: HA against a node, not against a zone"
+      case "$PROVIDER" in
+        scaleway | scw) clears="spread node_distribution.scaleway.zones" ;;
+        ovh)            clears="spread node_distribution.ovh.availability_zones" ;;
+        proxmox)        clears="spread node_distribution.proxmox.node_names" ;;
+        outscale)       clears="the module only uses availability_zones[0] until #58" ;;
+        *)              clears="spread the control planes" ;;
+      esac
+      bad "${worst} of ${got_cp} control planes share one failure domain (${names}) — losing it loses etcd quorum: HA against a node, not against a zone; ${clears}"
     else
       ok "${got_cp} control planes across ${doms} failure domains, none holding a quorum — HA"
     fi
