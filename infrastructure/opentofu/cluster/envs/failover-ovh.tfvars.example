@@ -45,6 +45,8 @@ node_distribution = {
     # name (published by talos-image). Override only if you use a different name/UUID:
     # image_id           = "TALOS_IMAGE_ID"
     network_name       = "Ext-Net"
+    # One zone puts all control planes in one failure domain and `cluster-verify` ends
+    # red (#38); in a multi-AZ region, list one zone per control plane.
     availability_zones = ["nova"]
     bastion_image_id   = "Ubuntu 22.04"
   }
