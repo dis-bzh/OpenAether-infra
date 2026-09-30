@@ -114,6 +114,24 @@ OUT="$(already_running 1)"; RC=$?
 [ "$(calls start)" = 0 ] && ok "…without restarting an emulator that was up" \
   || bad "running() reported a live emulator as down, and 'feint start' was called"
 
+# status and stop default to :4599 whatever FEINT_ENDPOINT says (#195): the
+# stub logs the arguments it received, so a bare `status` is visible.
+on_port() { # <subcommand>
+  : >"$LOG"; rm -f "$STATE"
+  env -i PATH="$SB:$PATH" HOME="$SB" OA_STUB_VERSION="$PIN" OA_STUB_LOG="$LOG" OA_STUB_STATE="$STATE" \
+      OA_STUB_DELAY=0 FEINT_RESTART_TIMEOUT=2 FEINT_ENDPOINT="http://127.0.0.1:4701" \
+      ./scripts/dev/feint.sh "$1" </dev/null 2>&1
+}
+
+echo "--- a non-default FEINT_ENDPOINT: status and stop name that address ---"
+on_port status >/dev/null
+grep -qx 'feint:status --addr 127.0.0.1:4701' "$LOG" && ok "status is asked about the endpoint's address" || bad "status: $(cat "$LOG")"
+on_port stop >/dev/null
+grep -qx 'feint:stop --addr 127.0.0.1:4701' "$LOG" && ok "stop stops the endpoint's emulator" || bad "stop: $(cat "$LOG")"
+on_port start >/dev/null
+grep -qE '^feint:(status|stop)( -|$)' "$LOG" && ! grep -qE '^feint:(status|stop)$' "$LOG" \
+  && ok "start's own liveness checks name it too" || bad "start: $(cat "$LOG")"
+
 echo
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$PASS" -gt 0 ] && [ "$FAIL" -eq 0 ]

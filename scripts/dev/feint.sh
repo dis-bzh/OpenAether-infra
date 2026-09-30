@@ -25,6 +25,9 @@ FEINT_VM="${FEINT_VM:-}"
 # first: sudo's secure_path does not carry $BIN_DIR when that is a user
 # install (~/.local/bin).
 feint_cli() {
+  # status and stop default to :4599; without this they answer for, and stop,
+  # a different emulator than the one FEINT_ENDPOINT names (#195).
+  case "${1:-}" in status | stop) set -- "$1" --addr "$(addr_of "$FEINT_ENDPOINT")" "${@:2}" ;; esac
   if [ -n "$FEINT_VM" ]; then
     sudo "$(command -v feint)" "$@"
   else
