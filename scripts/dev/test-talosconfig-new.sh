@@ -123,6 +123,25 @@ grep -qx 'context: workload-ovh' "$C/talosconfig.reader" \
   || bad "the reader config came from: $(grep '^context' "$C/talosconfig.reader" 2>&1)"
 
 
+echo "--- an exported TALOSCONFIG does not replace the one just fetched ---"
+printf 'context: foreign\nroles: os:reader\n' >"$W/foreign.talosconfig"
+run env TALOSCONFIG="$W/foreign.talosconfig" "$TASK" -d "$W" talosconfig-new PROVIDER=scaleway; rc=$?
+[ "$rc" = 0 ] && grep -qx 'context: management-scaleway' "$C/talosconfig.reader" \
+  && ok "the reader config is signed by this cluster's admin config, not the exported one" \
+  || bad "rc=$rc; signed from: $(grep '^context' "$C/talosconfig.reader" 2>&1)"
+
+
+echo "--- a cluster whose state names no control plane says what to do next ---"
+mv "$W/state/cluster/.terraform-workload-ovh/control_plane_private_ips" "$W/ips.moved"
+run "$TASK" -d "$W" talosconfig-new PROVIDER=ovh ROLE=workload; rc=$?
+mv "$W/ips.moved" "$W/state/cluster/.terraform-workload-ovh/control_plane_private_ips"
+[ "$rc" != 0 ] && said "no node to ask" \
+  && said "Pass one:  $W/scripts/ops/talosconfig-new.sh ovh --node <control-plane private IP>" \
+  && said "task tunnels-up PROVIDER=ovh [ROLE=workload]" \
+  && ok "it names the node to pass, by absolute path, and the tunnels of this ROLE" \
+  || bad "exit $rc; hints: $(tail_of)"
+
+
 echo "--- a mistyped ROLE stops before anything runs ---"
 # ROLE=os:reader is the likely slip, next to ROLES=. tf-backend.sh refuses the
 # missing tfvars; a bare `tofu init` after that would open some other backend.
