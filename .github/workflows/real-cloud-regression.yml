@@ -105,6 +105,10 @@ jobs:
           ) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          # Nothing here pushes; the token must not linger in .git/config
+          # next to the cloud credentials this job handles.
+          persist-credentials: false
 
       - name: Setup Task
         run: ./scripts/internal/install-task.sh
