@@ -9,7 +9,8 @@ mock_provider "talos" {}
 mock_provider "local" {}
 
 
-# No override_data/override_resource needed: unlike the cloud providers,
+# No override_data/override_resource needed (bar the bastion VM's snippet id in
+# verify_bastion_user_vm_bastion): unlike the cloud providers,
 # every Proxmox provider-contract output (control_plane_private_ips,
 # worker_private_ips, k8s_lb_ip, bastion_ip, bastion_user,
 # worker_ingress_targets) is derived from cidrhost()/variables in
@@ -132,6 +133,69 @@ run "verify_provider_contract" {
   assert {
     condition     = output.cluster_role == "management"
     error_message = "cluster_role should be 'management' for this test."
+  }
+}
+
+# ==============================================================================
+# Test 2b: bastion_user — the root reports what the module reports (VM bastion
+# creates "ubuntu"; host-as-bastion uses host_ssh_user), not pmx_dist's value.
+# ==============================================================================
+
+run "verify_bastion_user_vm_bastion" {
+  command = plan
+
+  variables {
+    node_distribution = {
+      proxmox = {
+        control_planes = 1
+        workers        = 1
+        node_names     = ["pve1"]
+        gateway_ip     = "10.0.0.1"
+        apiserver_vip  = "10.0.0.100"
+        host_public_ip = "203.0.113.10"
+        host_ssh_user  = "pmxadmin"
+        enable_bastion = true
+      }
+    }
+  }
+
+  # The VM resource validates user_data_file_id's shape; the mock's random id fails it.
+  override_resource {
+    target = module.proxmox.proxmox_virtual_environment_file.bastion_cloud_init
+    values = { id = "local:snippets/test-cluster-dev-bastion-cloud-init.yaml" }
+  }
+
+  assert {
+    condition     = output.bastion_user == module.proxmox[0].bastion_user
+    error_message = "Root bastion_user must be the Proxmox module's output, not re-derived from host_ssh_user."
+  }
+
+  assert {
+    condition     = output.bastion_user == "ubuntu"
+    error_message = "With enable_bastion=true the VM bastion's user is 'ubuntu' whatever host_ssh_user says."
+  }
+}
+
+run "verify_bastion_user_host_as_bastion" {
+  command = plan
+
+  variables {
+    node_distribution = {
+      proxmox = {
+        control_planes = 1
+        workers        = 1
+        node_names     = ["pve1"]
+        gateway_ip     = "10.0.0.1"
+        apiserver_vip  = "10.0.0.100"
+        host_public_ip = "203.0.113.10"
+        host_ssh_user  = "pmxadmin"
+      }
+    }
+  }
+
+  assert {
+    condition     = output.bastion_user == module.proxmox[0].bastion_user && output.bastion_user == "pmxadmin"
+    error_message = "With enable_bastion=false the root reports host_ssh_user, as the module does."
   }
 }
 
