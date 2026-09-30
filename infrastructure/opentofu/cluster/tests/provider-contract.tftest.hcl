@@ -228,6 +228,12 @@ run "ovh_active_junction_point" {
     condition     = output.active_provider == "ovh"
     error_message = "active_provider must be 'ovh' when OVH is configured."
   }
+
+  # Root pass-through only (values: control-plane-zones); a dropped concat() entry leaves [].
+  assert {
+    condition     = length(output.control_plane_zones) == 3
+    error_message = "control_plane_zones must reach the root from the OVH module, one entry per control plane."
+  }
 }
 
 # ==============================================================================
@@ -254,6 +260,12 @@ run "outscale_active_junction_point" {
   assert {
     condition     = output.active_provider == "outscale"
     error_message = "active_provider must be 'outscale' when Outscale is configured."
+  }
+
+  # Root pass-through only (values: control-plane-zones); a dropped concat() entry leaves [].
+  assert {
+    condition     = length(output.control_plane_zones) == 3
+    error_message = "control_plane_zones must reach the root from the Outscale module, one entry per control plane."
   }
 }
 
