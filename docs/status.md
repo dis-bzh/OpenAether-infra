@@ -41,7 +41,8 @@ four green. The two re-runs are the idempotency evidence and they are the comman
 itself, not a script — `No changes.` on all three roots, `0 added, 0 changed, 0
 destroyed`. **The second re-run is new**: idempotency AFTER an upgrade had never
 been checked, and it holds because `cluster-upgrade` writes the new pin back into
-the tfvars, so a later `cluster-up` does not try to revert. Longest outage 2 s
+the tfvars, so a later `cluster-up` does not try to revert. That upgrade moved
+Talos v1.13.8→v1.13.9 on 6/6 nodes, `cluster-verify` 11/11. Longest outage 2 s
 (13 fails in 577) — see [`upgrade.md`](upgrade.md) for why that does NOT establish
 the leader-last fix: that run moved Talos only, the 5 s one also moved Kubernetes.
 
@@ -125,9 +126,10 @@ no container, volume, network or credential.
 basis; what it does not answer is below.
 
 **Not proven**: whether `v1.13.9` — the cloud root's own pin, unrelated to the
-change above — has been through the same real-cloud upgrade evidence this page
-records for `v1.13.7`→`v1.13.8`; the table stops one patch short of what is
-currently pinned, and nothing here re-ran it. No lane has ever run unattended
+change above — has been through the three-cloud evidence the table records for
+`v1.13.7`→`v1.13.8`, which stops one patch short of what is currently pinned.
+It was reached once on a real cloud (Scaleway, Talos only, 2026-08-20, above),
+never on OVH or Outscale. No lane has ever run unattended
 to completion; nobody has
 deployed under a non-empty `bucket_suffix`; and the failover — provider A treated
 as gone, the cluster rebuilt on B from B's replica alone — has never been
@@ -150,4 +152,4 @@ during the upgrade, and the upgrade fetches its own cluster's kubeconfig and
 talosconfig and moves the Talos pin before it builds the image (run it without
 editing the pin first) — all proven mocked only; one roll gives each its real
 rung (#55, #51, #41) and re-measures the interruption regression
-([`upgrade.md`](upgrade.md), #70). Then decide whether 0.1.0 ships a staging lane.
+([`upgrade.md`](upgrade.md), #70).

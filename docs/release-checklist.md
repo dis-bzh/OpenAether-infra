@@ -47,9 +47,9 @@ docker run --rm -v /tmp/repo.tar:/tmp/repo.tar:ro ubuntu:24.04 bash -c '
 - [x] **`nc`**: absent from the image, `✖ nc is missing` then `Installing
       netcat…`, and `/usr/bin/nc` present afterwards. This line used to read "it
       warns, and does not claim to install it" — the script installs it now, on
-      purpose (`setup.sh:331`), and only warns where `apt-get` is absent. The
-      line was describing a behaviour that had changed, which is the failure this
-      checklist exists to catch.
+      purpose (the `# 9. Check nc` block of `setup.sh`), and only warns where
+      `apt-get` is absent. The line was describing a behaviour that had changed,
+      which is the failure this checklist exists to catch.
 - [x] every command the README quick start names exists → 18/18 against
       `task --list-all` plus aliases. Checked to fail too: an invented name and
       two just-deleted scripts all came back absent.
@@ -309,11 +309,11 @@ and does not belong here twice. What a *release* adds to it:
       three roots.
 - [x] whatever it shook out is filed as an issue before the tag, including what you
       chose not to fix → this cycle added: the purge scripts' uncounted deletions
-      (fixed), `ovh.py`'s missing refused-call counter (not fixed), encrypted
-      worker volumes applied and never read back, no way to ask what is in the
-      state, two harnesses that went red then green unchanged, the bucket this
-      release's own rename orphaned, and what deleting the staging lane stopped
-      covering.
+      (fixed), `ovh.py`'s missing refused-call counter (not fixed then; #106),
+      encrypted worker volumes applied and never read back, no way to ask what is
+      in the state, two harnesses that went red then green unchanged, the bucket
+      this release's own rename orphaned, and what deleting the staging lane
+      stopped covering.
 
 `scripts/dev/cluster-upgrade.sh` does all of the above unattended and does not
 retry the failing apply, on purpose.
