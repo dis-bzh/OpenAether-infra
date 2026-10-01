@@ -67,10 +67,17 @@ esac
 EOF
 chmod +x "$W/stub"
 ln -s "$W/stub" "$W/bin/tofu"; ln -s "$W/stub" "$W/bin/talosctl"
+# `timeout` logs its arguments, then is the real one: the bound is what the script asks for.
+cat >"$W/bin/timeout" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >>"$W/timeout.log"
+exec "$(command -v timeout)" "\$@"
+EOF
+chmod +x "$W/bin/timeout"
 
 # A fresh fixture per case: the state forgot the bootstrap, three CPs, nobody answers.
 reset() {
-  rm -rf "$FX"; mkdir -p "$FX"; rm -f "$W"/{calls.log,tc.path,tc.seen,stdin.leak}; : >"$W/calls.log"
+  rm -rf "$FX"; mkdir -p "$FX"; rm -f "$W"/{calls.log,tc.path,tc.seen,stdin.leak,timeout.log}; : >"$W/calls.log"
   printf '%s\n' module.talos.talos_machine_secrets.this[0] \
     'module.talos.talos_machine_configuration_apply.control_plane[0]' >"$FX/state"
   echo "[\"$CP0\",\"$CP1\",\"$CP2\"]" >"$FX/cps.json"
@@ -120,6 +127,9 @@ want=$(printf '%s\n' "talosctl -e 127.0.0.1:50000 -n $CP0 etcd members" \
 said 'bootstrapping as usual' && ok "it says it is bootstrapping as usual" || bad "no such line: $(tail_of)"
 [ ! -s "$W/stdin.leak" ] && ok "talosctl never reads the caller's stdin" \
   || bad "stdin was not /dev/null for: $(tr '\n' ' ' <"$W/stdin.leak")"
+[ "$(grep -cE '^-k [0-9]+ 15 talosctl ' "$W/timeout.log")" = 3 ] \
+  && ok "each probe is bounded to 15s unless ADOPT_PROBE_TIMEOUT says otherwise" \
+  || bad "timeout was called with: $(tr '\n' '|' <"$W/timeout.log")"
 
 
 echo "--- the first control plane has etcd members: it is imported ---"
@@ -128,7 +138,7 @@ $ROW"
 run; rc=$?
 [ "$rc" = 0 ] && ok "exit 0" || bad "rc $rc: $(tail_of)"
 [ "$(calls '^tofu import')" = 1 ] && [ "$(grep '^tofu import' "$W/calls.log")" = "$IMPORT" ] \
-  && ok "exactly one import, of the bootstrap address, under this role's tfvars with talos_bootstrap=true" \
+  && ok "exactly one import, of the bootstrap address, under this role's tfvars with talos_bootstrap=true, health check skipped" \
   || bad "imports: $(grep '^tofu import' "$W/calls.log" | tr '\n' '|')"
 [ "$(calls '^talosctl')" = 1 ] && ok "it stops asking at the first positive" \
   || bad "talosctl was called $(calls '^talosctl') times"
@@ -166,9 +176,13 @@ reset; members $CP0 "$ROW" 1; members $CP1 "$ROW" 1; members $CP2 "$ROW" 1
 run; rc=$?
 [ "$rc" = 0 ] && untouched && ok "a member row with a non-zero exit: nobody is adopted" \
   || bad "rc $rc: $(tail_of)"
-reset; members $CP0 "$ROW" 0; echo "unexpected: not json" >"$FX/cps.json"
-run; rc=$?
-[ "$rc" = 0 ] && untouched && ok "an unreadable CP list: nothing is asked" || bad "rc $rc: $(tail_of)"
+# Not a list, or a list with no usable address: nothing is asked, and it says why.
+for list in 'unexpected: not json' '[null,""]' '[]'; do
+  reset; members $CP0 "$ROW" 0; echo "$list" >"$FX/cps.json"
+  run; rc=$?
+  [ "$rc" = 0 ] && untouched && [ "$(calls '^talosctl')" = 0 ] && said 'no control plane in the outputs' \
+    && ok "a CP list of ${list}: exit 0, nothing asked" || bad "rc $rc for ${list}: $(tail_of)"
+done
 
 
 echo "--- unsure means do nothing ---"
@@ -177,21 +191,21 @@ run; rc=$?
 [ "$rc" = 0 ] && [ "$(calls '^talosctl')" = 0 ] && untouched \
   && ok "tofu state list fails: exit 0, no node is asked" || bad "rc $rc: $(tail_of)"
 said 'plan' && ok "and it says the plan will explain" || bad "no pointer to the plan: $(tail_of)"
-reset; echo '[]' >"$FX/cps.json"; members $CP0 "$ROW"
-run; rc=$?
-[ "$rc" = 0 ] && [ "$(calls '^talosctl')" = 0 ] && untouched && ok "no control plane in the outputs: exit 0, nothing asked" \
-  || bad "rc $rc: $(tail_of)"
 reset; rm "$FX/talosconfig"; members $CP0 "$ROW"
 run; rc=$?
 [ "$rc" = 0 ] && [ "$(calls '^talosctl')" = 0 ] && untouched && ok "no talosconfig in the outputs: exit 0, nothing asked" \
   || bad "rc $rc: $(tail_of)"
-# A PATH holding only what the script needs, minus talosctl.
-mkdir -p "$W/min"; ln -s "$W/stub" "$W/min/tofu"
-for t in jq mktemp timeout grep rm cat dirname; do ln -sf "$(command -v "$t")" "$W/min/$t"; done
-reset; members $CP0 "$ROW"
-( cd "$C" && env -i PATH="$W/min" HOME="$W" "$BASH_BIN" "$A" ovh workload ) </dev/zero >"$W/out" 2>"$W/err"; rc=$?
-[ "$rc" = 0 ] && untouched && [ "$(calls '^talosctl')" = 0 ] && ok "talosctl is not installed: exit 0, no import" \
-  || bad "rc $rc: $(tail_of)"
+# A PATH holding only what the script needs, minus one of the three it checks for.
+# Each is named: without the check the others' symptoms differ, and so does the message.
+for gone in talosctl jq timeout; do
+  rm -rf "$W/min"; mkdir -p "$W/min"; ln -s "$W/stub" "$W/min/tofu"; ln -s "$W/stub" "$W/min/talosctl"
+  for t in bash basename jq mktemp timeout grep rm cat dirname; do ln -sf "$(command -v "$t")" "$W/min/$t"; done
+  rm "$W/min/$gone"
+  reset; members $CP0 "$ROW"
+  ( cd "$C" && env -i PATH="$W/min" HOME="$W" "$BASH_BIN" "$A" ovh workload ) </dev/zero >"$W/out" 2>"$W/err"; rc=$?
+  [ "$rc" = 0 ] && untouched && [ "$(calls '^talosctl')" = 0 ] && said "$gone is not installed" \
+    && ok "$gone is not installed: exit 0, no import, and it says so" || bad "rc $rc without $gone: $(tail_of)"
+done
 
 
 echo "--- a node that hangs costs at most the probe timeout ---"
@@ -201,6 +215,8 @@ start=$SECONDS; run; rc=$?; took=$((SECONDS - start))
 [ "$rc" = 0 ] && untouched && [ "$took" -lt 8 ] \
   && ok "three probes that never answer: exit 0 after ${took}s, no import" \
   || bad "rc $rc after ${took}s: $(tail_of)"
+[ "$(grep -cE '^-k [0-9]+ 1 talosctl ' "$W/timeout.log")" = 3 ] \
+  && ok "ADOPT_PROBE_TIMEOUT is what bounds each probe" || bad "timeout was called with: $(tr '\n' '|' <"$W/timeout.log")"
 
 
 echo "--- the tunnel block follows TALOS_TUNNEL_OFFSET ---"
