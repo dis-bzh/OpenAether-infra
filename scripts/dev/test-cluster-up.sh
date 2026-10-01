@@ -131,7 +131,8 @@ run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
   || bad "control, exit $rc, preflight calls $(calls '^ensure-buckets.sh .*--preflight$'): $(tail_of)"
 for c in "|is not set" "change-me-fixture-passphrase|is still the example"; do
   EXTRA="TF_VAR_encryption_passphrase=${c%%|*}" run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
-  [ "$rc" != 0 ] && grep -q "${c#*|}" "$O" \
+  # Anchored: go-task echoes the whole script into $O, so an unanchored match is always true.
+  [ "$rc" != 0 ] && grep -q "^✗ TF_VAR_encryption_passphrase ${c#*|}" "$O" \
     && [ "$(calls '^ensure-buckets.sh ')" = 0 ] && [ "$(calls '^talos-image.sh ')" = 0 ] \
     && ok "passphrase '${c%%|*}': refused, nothing built" \
     || bad "passphrase '${c%%|*}', exit $rc, ensure-buckets $(calls '^ensure-buckets.sh '), image $(calls '^talos-image.sh '): $(tail_of)"
