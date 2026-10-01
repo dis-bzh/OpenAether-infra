@@ -764,6 +764,22 @@ in git. 0.1.0 is the first entry describing something proven.
   whether `ubuntu` joins `bastion-admins` (the OVH/Outscale collision) is still
   open on that issue.
 
+- **`task infra-down-plan` is tested against a pinned image that is gone (refs
+  #69).** #69 says such a cluster cannot be destroyed, because the destroy plan
+  still evaluates the image lookup. The `-refresh=false` fallback, added for the
+  Outscale load balancer, plans such a destroy, and nothing tested that.
+  `test-task-guards.sh` now runs the real target under the real tofu, on a root of
+  builtin providers standing in for the lookups: a data source that errors
+  (Scaleway, OVH) and a `coalesce` over an empty answer (Outscale). The refreshed
+  plan fails and the state-only plan is written, with its deletion; with the image
+  present there is one refreshed plan; with both plans failing the target exits
+  non-zero and writes none. The warning now names the pinned image as a cause. Five
+  mutants of the target (no fallback, fallback first, fallback without
+  `talos_bootstrap=false` or `-out`, failure swallowed) each turn it red. Mocked
+  rung. Not shown: that the real providers fail their lookups like the stand-ins,
+  which only #69's own measurement says, and #69 itself, two versions kept side by
+  side with a node created on the older one, which stays open on a real cloud.
+
 ### Added
 
 - **New `feint-apply-root` lane: an untargeted apply on the REAL cluster

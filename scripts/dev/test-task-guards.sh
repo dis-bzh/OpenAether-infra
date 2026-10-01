@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # The guards written into Taskfile.yml itself (#191): `fmt` and `lint` over the
-# OpenTofu file list, and the check that `test-scripts` leaves envs/ untouched.
-# They are inline shell, so the only way to test them is to run the REAL
-# Taskfile.yml under go-task in a throwaway repository, with a stub `tofu` that
-# records what it was asked to format and every script of test-scripts stubbed.
+# OpenTofu file list, the check that `test-scripts` leaves envs/ untouched, and
+# `infra-down-plan`'s fallback when the refresh fails (#69). They are inline
+# shell, so the only way to test them is to run the REAL Taskfile.yml under
+# go-task in a throwaway repository: with a stub `tofu` that records what it was
+# asked to format and every script of test-scripts stubbed, or, for the destroy
+# plan, with the real tofu on a root made of builtin providers.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -110,6 +112,96 @@ rm -f "$repo/$envs/leftover.tmp"
 ts "printf x >$envs/scratch.tmp; rm $envs/scratch.tmp"; rc=$?
 [ "$rc" -ne 0 ] && grep -q 'a step wrote under envs/' "$TMP/out" && ok "…and so does one written and deleted again" \
   || bad "a file written then deleted (rc=$rc): $(tail -5 "$TMP/out")"
+
+echo "=== infra-down-plan plans a destroy although the image the tfvars pin is gone ==="
+# The provider modules' image lookups are read on a destroy plan too: a data source
+# that errors (scaleway, ovh) or a coalesce over an empty answer (outscale). The root
+# below stands in for them with builtin providers, so the real tofu fails the real way.
+real_tofu="$(command -v tofu || true)"
+[ -n "${TOFU_CLI_PATH:-}" ] && [ -x "$TOFU_CLI_PATH/tofu-bin" ] && real_tofu="$TOFU_CLI_PATH/tofu-bin"  # CI's wrapper
+if [ -z "$real_tofu" ]; then
+  bad "tofu is not on PATH: the destroy-plan fallback was not checked"
+else
+  mkdir -p "$TMP/shim"
+  cat >"$TMP/shim/tofu" <<EOF
+#!/usr/bin/env bash
+"$real_tofu" "\$@"; rc=\$?
+printf '%s rc=%s\\n' "\$*" "\$rc" >>"\$TOFU_LOG"
+exit "\$rc"
+EOF
+  chmod +x "$TMP/shim/tofu"
+  fixture
+  C="$repo/infrastructure/opentofu/cluster"
+  rm -f "$C/new.tf" "$C/envs/real.tfvars"
+  mkdir -p "$repo/scripts/internal"
+  printf '#!/usr/bin/env bash\necho placeholder\n' >"$repo/scripts/internal/resolve-s3-cred.sh"
+  printf '#!/usr/bin/env bash\necho "-backend-config=path=%s"\n' "$TMP/cluster.tfstate" >"$repo/scripts/internal/tf-backend.sh"
+  chmod +x "$repo"/scripts/internal/*.sh
+  cat >"$C/main.tf" <<'EOF'
+terraform {
+  backend "local" {}
+}
+variable "image_state" { type = string }
+variable "talos_bootstrap" { type = bool }
+data "terraform_remote_state" "image" {
+  backend = "local"
+  config  = { path = var.image_state }
+}
+locals {
+  image = coalesce(try(data.terraform_remote_state.image.outputs.images[0], null))
+}
+resource "terraform_data" "node" {
+  input = local.image
+}
+EOF
+  tfvars="$C/envs/management-scaleway.tfvars"
+  printf 'image_state = "%s"\n' "$TMP/image.tfstate" >"$tfvars"
+  images() { # the image registry's state: what the lookup finds under the pinned name
+    printf '{"version":4,"terraform_version":"1.12.6","serial":1,"lineage":"00000000-0000-0000-0000-000000000000","outputs":{"images":{"value":%s,"type":["tuple",%s]}},"resources":[]}\n' \
+      "$1" "$2" >"$TMP/image.tfstate"
+  }
+  images '["img-1"]' '["string"]'
+  ( cd "$C" && export TF_DATA_DIR=.seed && "$real_tofu" init -input=false -backend-config=path="$TMP/cluster.tfstate" >/dev/null \
+    && "$real_tofu" apply -auto-approve -input=false -var-file="$tfvars" -var talos_bootstrap=false >/dev/null ) \
+    || { echo "✗ could not seed the fixture cluster — nothing was checked" >&2; exit 1; }
+  rm -rf "$C/.seed"
+
+  down() { : >"$TOFU_LOG"; rm -f "$C/d.tfplan"
+    PATH="$TMP/shim:$PATH" task --dir "$repo" infra-down-plan PROVIDER=scaleway ROLE=management OUT=d.tfplan </dev/null >"$TMP/out" 2>&1; }
+  plans() { grep '^plan -destroy ' "$TOFU_LOG"; }
+  deletes() { ( cd "$C" && TF_DATA_DIR=.terraform-management-scaleway "$real_tofu" show -json d.tfplan 2>/dev/null ) | grep -q '"actions":\["delete"\]'; }
+
+  down; rc=$?
+  [ "$rc" -eq 0 ] && [ "$(plans | wc -l)" -eq 1 ] && ! grep -q -e '-refresh=false' "$TOFU_LOG" \
+    && ok "image present: one refreshed plan, and the fallback stays the exit, not the default" \
+    || bad "image present (rc=$rc, plans: $(plans | tr '\n' ';')): $(tail -5 "$TMP/out")"
+
+  rm "$TMP/image.tfstate"
+  down; rc=$?
+  [ "$rc" -eq 0 ] && deletes && grep -q 'Unable to find remote state' "$TMP/out" && [ "$(plans | wc -l)" -eq 2 ] \
+    && plans | sed -n 1p | grep -q ' rc=1$' && plans | sed -n 2p | grep -q -e '-refresh=false .*rc=0$' \
+    && ok "lookup errors (scaleway, ovh): the refreshed plan fails, the state-only plan is written" \
+    || bad "lookup errors (rc=$rc, plans: $(plans | tr '\n' ';')): $(tail -5 "$TMP/out")"
+  grep -q 'the pinned image' "$TMP/out" \
+    && ok "…and the warning names a gone image as a cause" || bad "the warning does not name the image: $(grep -A3 'refresh failed' "$TMP/out")"
+  plans | grep -qv -e '-var talos_bootstrap=false' && bad "a plan lost -var talos_bootstrap=false (the tunnel read): $(plans)" \
+    || ok "…both plans keep talos_bootstrap=false"
+
+  images '[]' '[]'
+  down; rc=$?
+  [ "$rc" -eq 0 ] && deletes && grep -q 'no non-null, non-empty-string' "$TMP/out" && [ "$(plans | wc -l)" -eq 2 ] \
+    && plans | sed -n 2p | grep -q -e '-refresh=false .*rc=0$' \
+    && ok "an empty answer (outscale): the coalesce fails the refreshed plan, the state-only plan is written" \
+    || bad "empty answer (rc=$rc, plans: $(plans | tr '\n' ';')): $(tail -5 "$TMP/out")"
+
+  # A failure the fallback does not cure must not read as a plan: the caller (fleet-down) tests the rc.
+  printf '# no image_state\n' >"$tfvars"
+  down; rc=$?
+  [ "$rc" -ne 0 ] && grep -q 'No value for required variable' "$TMP/out" && [ ! -e "$C/d.tfplan" ] \
+    && [ "$(plans | wc -l)" -eq 2 ] && ! grep -q 'destruction plan written' "$TMP/out" \
+    && ok "both plans failing: non-zero, no plan file, no success line" \
+    || bad "both plans failing (rc=$rc, plans: $(plans | tr '\n' ';')): $(tail -5 "$TMP/out")"
+fi
 
 echo
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
