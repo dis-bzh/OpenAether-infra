@@ -108,9 +108,10 @@ variables préfixées ci-dessus.
 
 `task cluster-up` vérifie ce fichier avant de construire quoi que ce soit : la clé SSH
 existe et est bien la moitié privée de `bastion_ssh_keys`, le fichier tfvars
-existe, les DEUX paires d'identifiants S3 fonctionnent (il crée les quatre
-buckets pour le savoir), et la passphrase est définie et n'est pas le texte
-d'exemple. Tout cela tourne avant la construction de l'image.
+existe, la passphrase est définie et n'est pas le texte d'exemple, et les DEUX
+paires d'identifiants S3 fonctionnent (il crée les quatre buckets pour le
+savoir, d'où la passphrase vérifiée d'abord). Tout cela tourne avant la
+construction de l'image.
 
 ## 3. Le fichier du cluster
 
