@@ -32,7 +32,7 @@ anymore. An explicit value in the tfvars always overrides the convention.
 ## State
 
 State lives on the **target provider's** S3 — its own bucket per provider
-(`s3-openaether-<provider>-talos-image` / `talos-image.tfstate`), so building one
+(`s3-<project>-<provider>-talos-image` / `talos-image.tfstate`), so building one
 provider's image never disturbs another's. The state bucket (and the Scaleway
 staging bucket) are **auto-created** by `scripts/bootstrap/talos-image.sh`. Proxmox has no
 native object storage, so its state lives on an external S3-compatible store
