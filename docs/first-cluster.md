@@ -105,10 +105,10 @@ Do not export `AWS_*` yourself: the flow derives them per provider from the
 namespaced variables above.
 
 `task cluster-up` checks this file before it builds anything: the SSH key exists and is
-the private half of `bastion_ssh_keys`, the tfvars file exists, BOTH S3
-credential pairs work (it creates the four buckets to find out), and the
-passphrase is set and is not the placeholder. All of it runs before the image
-build.
+the private half of `bastion_ssh_keys`, the tfvars file exists, the
+passphrase is set and is not the placeholder, and BOTH S3 credential pairs work
+(it creates the four buckets to find out, which is why the passphrase comes
+first). All of it runs before the image build.
 
 ## 3. The cluster file
 
