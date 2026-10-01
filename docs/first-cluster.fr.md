@@ -106,11 +106,11 @@ d'accès.
 N'exporte pas `AWS_*` toi-même : le flux les dérive par provider à partir des
 variables préfixées ci-dessus.
 
-`task cluster-up` vérifie ce fichier avant de dépenser quoi que ce soit : la clé SSH
+`task cluster-up` vérifie ce fichier avant de construire quoi que ce soit : la clé SSH
 existe et est bien la moitié privée de `bastion_ssh_keys`, le fichier tfvars
-existe, les DEUX paires d'identifiants S3 se résolvent, et la passphrase est
-définie et n'est pas le texte d'exemple. Tout cela tourne avant le premier
-bucket.
+existe, les DEUX paires d'identifiants S3 fonctionnent (il crée les quatre
+buckets pour le savoir), et la passphrase est définie et n'est pas le texte
+d'exemple. Tout cela tourne avant la construction de l'image.
 
 ## 3. Le fichier du cluster
 
@@ -146,19 +146,22 @@ cd ../../../..
 task cluster-up ROLE=management PROVIDER=scaleway KEY=~/.ssh/yourkey
 ```
 
-Demande un terminal : l'apply sollicite une approbation deux fois, et il applique
-le plan qu'il vient de montrer — n'utilise pas `-auto-approve`, qui en applique
-un *autre*, recalculé à cet instant. (Pour un run non supervisé, enregistre-le
-d'abord : `task infra-plan ROLE=management PROVIDER=scaleway OUT=tfplan`, relis-le,
-puis `task infra-apply PROVIDER=scaleway PLAN=tfplan`. `PROVIDER` est exigé sur
-les deux — il retombait avant sur Scaleway, ce qui est le mauvais cloud à
-deviner.)
+Sans `APPROVE=auto`, il demande un terminal : il sollicite une approbation deux
+fois, sur les plans de la phase 1 et de la phase 2, et applique le plan qu'il
+vient de montrer — n'utilise pas `-auto-approve`, qui en applique un *autre*,
+recalculé à cet instant. Pour un run non supervisé, ajoute `APPROVE=auto` : il
+répond aux deux questions. (Pour relire à part un plan de la phase 1,
+enregistre-le : `task infra-plan ROLE=management PROVIDER=scaleway OUT=tfplan`,
+relis-le, puis `task infra-apply PROVIDER=scaleway PLAN=tfplan`. `PROVIDER` est
+exigé sur les deux — il retombait avant sur Scaleway, ce qui est le mauvais cloud
+à deviner.)
 
-Dans l'ordre, il construit l'image Talos et la téléverse — **mesuré à 52 s sur
-Scaleway le 2026-08-17**, pour deux buckets, un snapshot et une image par zone —
-crée quatre buckets de plus, applique l'infrastructure, ouvre un tunnel SSH par
-nœud, puis applique les configurations machine et amorce Talos. Il se termine
-par le vérificateur de l'étape 6 : si le cluster y échoue, `cluster-up` échoue.
+Dans l'ordre, il crée les quatre buckets d'état et d'artefacts (le contrôle des
+identifiants ci-dessus), construit l'image Talos et la téléverse — **mesuré à
+52 s sur Scaleway le 2026-08-17**, pour deux buckets, un snapshot et une image
+par zone — applique l'infrastructure, ouvre un tunnel SSH par nœud, puis applique
+les configurations machine et amorce Talos. Il se termine par le vérificateur de
+l'étape 6 : si le cluster y échoue, `cluster-up` échoue.
 
 **Le load balancer de l'apiserver est ce qu'il y a de plus lent dans cette
 étape, et le seul objet qui peut te laisser en rade.** Rapide chez Scaleway. Chez
@@ -374,9 +377,6 @@ Ce qui reste ouvert :
   que Talos n'atteignait jamais `Running` et ne désarmait jamais le repli
   d'upgrade. Elle est retirée, et le run du 2026-08-19 montre `stage=running` et
   le repli abandonné sur les six nœuds. Un run propre, pas encore une habitude.
-- Tous les noms de buckets dérivent de `cluster_name` (son premier segment, plus
-  `bucket_suffix`), sauf ceux de l'image Talos, codés en dur. Dans un autre
-  compte ils peuvent entrer en collision.
 
 Tu trouves une erreur dans ce document ? C'est le rapport de bug le plus utile
 que ce projet puisse recevoir.

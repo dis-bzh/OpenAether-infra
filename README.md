@@ -183,8 +183,9 @@ else in the example already has a working value.
 
 Also `bastion_ssh_keys`: the **public** half of the key you will pass as `KEY=`.
 They are a pair, and `task cluster-up` refuses to start if they do not match — before it
-spends anything. And `git_repo_url` + `git_ref` if you run your own fork of
-OpenAether-apps; the defaults point at ours, and its `apps/clusters` is not yours.
+spends anything. `git_repo_url` + `git_ref` matter only if you turn `deploy_flux`
+on (it is off) and run your own fork of OpenAether-apps; the defaults point at
+ours, and its `apps/clusters` is not yours.
 
 ```bash
 # Quotas: OVH and Outscale only — the script does not cover Scaleway.
@@ -199,10 +200,10 @@ task cluster-up ROLE=management PROVIDER=scaleway KEY=~/.ssh/yourkey
 the account lacks it, renders the bootstrap manifests, applies the
 infrastructure, opens the tunnels and bootstraps Talos, then asks the cluster
 (`task cluster-verify`) and fails if the cluster says no. Re-run it after fixing
-any failure and it resumes. It is also the command CI runs, so it is the path
-that gets validated. The individual steps (`task image-build`, `task infra-apply`,
-`task bootstrap-phase2`) still exist for when you want to drive one of them
-alone.
+any failure and it resumes. CI runs it only against stubs
+(`scripts/dev/test-cluster-up.sh`); a real run is by hand. The individual steps
+(`task image-build`, `task infra-apply`, `task bootstrap-phase2`) still exist
+for when you want to drive one of them alone.
 
 **After deployment**: an infrastructure-only cluster has no day-1 step left, since
 `cluster-up` ended with `task cluster-verify`; re-run that alone at any time. The
@@ -248,7 +249,9 @@ inventory, no load balancer and no quotas. See
 ### Static checks (no cloud, no Docker)
 
 ```bash
-task validate            # tofu fmt/validate/test
+task lint                # tofu fmt, YAML
+task validate            # tofu validate
+task test                # tofu test, mocked
 task apps-validate       # Flux DAG integrity + pick.py profiles up to date
 task security            # hardening checks
 ```
@@ -284,7 +287,7 @@ task security            # hardening checks
 
 | Release | Deliverable | Status |
 |---------|-------------|--------|
-| **0.1.0** | One Talos cluster + Cilium on Scaleway, OVH or Outscale, encrypted state and artifacts, in-place upgrades | ⏳ first release |
+| **0.1.0** | One Talos cluster + Cilium on Scaleway, OVH or Outscale, encrypted state and artifacts, in-place upgrades | ✅ published 2026-08-20 (pre-release) |
 | next | Flux back as a user choice, then the modular pick from `OpenAether-apps` | ⏳ planned |
 | later | CAPI overlay: a management cluster driving children | ⏳ planned |
 | open | Proxmox on real hardware, the full cross-provider failover, the Outscale Net only the provider can delete | ⏳ |

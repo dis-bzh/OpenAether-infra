@@ -3,10 +3,10 @@
 #
 # Talos supports the current Kubernetes minor and the five before it (n-5), so a
 # pair can be individually valid and jointly unsupported — and nothing checked
-# it. Only ranges read from the upstream matrix are encoded here; an unknown
+# it. Only ranges read from the upstream matrix are encoded, in
+# version-support.json (its `_source` says where to read them); an unknown
 # Talos minor fails on purpose rather than passing silently, so bumping one
-# forces a look at:
-#   https://docs.siderolabs.com/talos/v1.13/getting-started/support-matrix
+# forces a look at that matrix.
 # ==============================================================================
 
 locals {
@@ -31,7 +31,7 @@ resource "terraform_data" "version_pair_guard" {
         local.k8s_minor_num >= local.k8s_supported.k8s_min &&
         local.k8s_minor_num <= local.k8s_supported.k8s_max
       )
-      error_message = "talos_version ${var.talos_version} and kubernetes_version ${var.kubernetes_version} are not a supported pair. Talos ${local.talos_minor_key} either supports a different Kubernetes range, or is not in cluster/versions-guard.tf yet — check https://docs.siderolabs.com/talos/v1.13/getting-started/support-matrix and extend the map rather than widening it blindly."
+      error_message = "talos_version ${var.talos_version} and kubernetes_version ${var.kubernetes_version} are not a supported pair. Talos ${local.talos_minor_key} either supports a different Kubernetes range, or is not in cluster/version-support.json yet — read the upstream matrix named by its _source and extend that map rather than widening it blindly."
     }
   }
 }

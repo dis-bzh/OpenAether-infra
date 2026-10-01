@@ -7,7 +7,7 @@ to pick up.
 Open work is **not** here — it is in the GitHub issues, each naming what closes it
 and the rung it needs. This file answers "what is true today", not "what is left".
 
-**0.1.0 is the first release that will ship something proven.** Every 1.x tag was
+**0.1.0, published 2026-08-20 as a pre-release, is the first release that shipped something proven.** Every 1.x tag was
 deleted on both repositories; the versions they named never worked. Scope:
 **one Talos cluster on one supported provider, floor = Cilium**. Flux is disabled
 by default (`deploy_flux`, false) — disabled, not amputated, and it returns as a
@@ -48,7 +48,8 @@ four green. The two re-runs are the idempotency evidence and they are the comman
 itself, not a script — `No changes.` on all three roots, `0 added, 0 changed, 0
 destroyed`. **The second re-run is new**: idempotency AFTER an upgrade had never
 been checked, and it holds because `cluster-upgrade` writes the new pin back into
-the tfvars, so a later `cluster-up` does not try to revert. Longest outage 2 s
+the tfvars, so a later `cluster-up` does not try to revert. That upgrade moved
+Talos v1.13.8→v1.13.9 on 6/6 nodes, `cluster-verify` 11/11. Longest outage 2 s
 (13 fails in 577) — see [`upgrade.md`](upgrade.md) for why that does NOT establish
 the leader-last fix: that run moved Talos only, the 5 s one also moved Kubernetes.
 
@@ -131,11 +132,13 @@ no container, volume, network or credential.
 [#87](https://github.com/dis-bzh/OpenAether-infra/issues/87) is closed on that
 basis; what it does not answer is below.
 
-**Not proven**: that every row of the table above is at the current pin; which
-rows trail it is what `task evidence-check` reports. No lane has ever run
-unattended to completion; nobody has deployed under a non-empty `bucket_suffix`;
-and the failover — provider A treated as gone, the cluster rebuilt on B from B's
-replica alone — has never been attempted.
+**Not proven**: `v1.13.9`, the cloud root's pin, on OVH and Outscale: the
+three-cloud table above stops at `v1.13.8` for them (`task evidence-check` says
+which rows trail the pin). On Scaleway it was reached once, by upgrading Talos
+only (`v1.13.8`→`v1.13.9`, 2026-08-20, 6/6 nodes, `cluster-verify` 11/11,
+above). No lane has ever run unattended to completion; nobody has deployed under
+a non-empty `bucket_suffix`; and the failover — provider A treated as gone, the
+cluster rebuilt on B from B's replica alone — has never been attempted.
 
 **Six gates were green on something they had stopped checking**, found on
 2026-08-28 by auditing what the pipeline actually constrains rather than what it
@@ -154,4 +157,4 @@ during the upgrade, and the upgrade fetches its own cluster's kubeconfig and
 talosconfig and moves the Talos pin before it builds the image (run it without
 editing the pin first) — all proven mocked only; one roll gives each its real
 rung (#55, #51, #41) and re-measures the interruption regression
-([`upgrade.md`](upgrade.md), #70). Then decide whether 0.1.0 ships a staging lane.
+([`upgrade.md`](upgrade.md), #70).

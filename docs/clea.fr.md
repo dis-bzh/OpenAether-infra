@@ -31,7 +31,7 @@ deux bots se disputent une même dépendance.
 | lane | quand | ce qu'elle exerce |
 |---|---|---|
 | scan + couverture | tous les jours, 04:17 UTC | chaque ancre lue, résolue en amont, et comparée à `renovate.json5` |
-| sondes outils | tous les jours | installation à froid et mise à jour sur place de chaque outil qui a bougé, dans un `ubuntu:24.04` nu, puis `task lint`, `task render-check`, `task test-scripts` sur l'arbre modifié |
+| sondes outils | tous les jours | installation à froid et mise à jour sur place de chaque outil qui a bougé, dans un `ubuntu:24.04` nu, puis les gates propres au dépôt (`[lane] repo` dans `clea.toml`) sur l'arbre modifié |
 | cluster local | toutes les semaines, dimanche 03:41 UTC | `task local-up` sur le couple Talos / Kubernetes publié en amont, puis `task local-verify`, en 1 plan de contrôle + 1 worker |
 | cloud réel | jamais | à la main, par quelqu'un qui regarde — voir [`CONTRIBUTING.md`](../CONTRIBUTING.md) |
 
