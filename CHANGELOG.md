@@ -152,6 +152,14 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **`task cluster-up` refuses a missing or placeholder passphrase before it
+  creates the buckets.** The check ran after `ensure-buckets.sh --preflight`,
+  which creates the four buckets, so the refusal came once resources existed. It
+  now runs first. `test-cluster-up.sh` gains a control and two cases (empty,
+  `change-me`): the refusal, and no `ensure-buckets.sh` or `talos-image.sh` call;
+  12 passed / 2 failed on the old order, 14 / 0 on the fix. `EXTRA` is now applied
+  last, so a case can override the default passphrase. Mocked rung only.
+
 - **A Scaleway kind that no zone answered is no longer read as clean.**
   `scaleway.py` skipped a kind that every zone answered 404/501 as "not
   offered", so a listing that asked nothing ended "the project is clean" (exit
