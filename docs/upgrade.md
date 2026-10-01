@@ -149,10 +149,12 @@ what tells the operator to reuse the PVC instead of reprovisioning an instance
 that node-local storage could not move. On exit the roll checks the restore: it
 waits about two minutes (3.5 measured with the apiserver down) for each cluster's
 `<cluster>-primary` budget and every owning Kustomization, then exits non-zero
-naming what is left. That verdict comes after the last node is replaced, so do
-not re-run replacement mode to clear it: it replaces every node again. Fix what
-is named by hand and run `scripts/ops/backup-state.sh`, which `task cluster-roll`
-skips after a non-zero exit. `task cluster-upgrade` stops at the first roll that
+naming what is left. Ctrl+C ends that wait ("restore NOT verified", exit 130); a
+roll stopped between nodes says so instead of "complete". The verdict comes after
+the last node is replaced, so do not re-run replacement mode to clear it: it
+replaces every node again. Fix what is named by hand and run
+`scripts/ops/backup-state.sh`, which `task cluster-roll` skips after a non-zero
+exit. `task cluster-upgrade` stops at the first roll that
 ends this way: if it is the control-plane roll, the workers are not rolled.
 
 **Everything else quorum-shaped blocks it too.** Three runs on 2026-08-14 stopped

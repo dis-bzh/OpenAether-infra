@@ -521,17 +521,31 @@ assert_restored() {
 # end the trap before the check reads what is left; the roll's own status is kept.
 # Nothing runs after it, so KCTL can be bounded here: a down apiserver must not
 # hold the exit for client-go's own dial timeout on every read.
+# Signals: ignored during the restore (a subshell dies on one and abandons it),
+# and ending the wait, which runs minutes, instead of queueing behind it.
 finish_roll() {
-  local rc=$?
+  local rc=$? stopped=$STOP_REQUESTED
   KCTL+=(--request-timeout="${RESTORE_REQUEST_TIMEOUT:-10s}")
+  trap '' INT TERM
   ( cnpg_maintenance false ) || warn "the CNPG/Flux restore did not complete"
+  trap 'warn "interrupted: the restore is NOT verified; check the Flux Kustomizations and the CNPG budgets by hand"; exit 130' INT TERM
   if assert_restored; then
-    [[ $rc -ne 0 ]] || ok "Rolling replacement complete. Run a state backup:  scripts/ops/backup-state.sh"
+    if [[ $rc -ne 0 ]]; then :
+    elif (( stopped )); then
+      warn "Stop requested: the roll is not reported complete. A 'stopping before' line above says what is left."
+    else
+      ok "Rolling replacement complete. Run a state backup:  scripts/ops/backup-state.sh"
+    fi
   elif [[ $rc -eq 0 ]]; then
     rc=1
-    warn "The roll itself finished; only the restore did not. Fix what is named by hand; do NOT re-run"
-    warn "replacement mode (it replaces every node again). Then run scripts/ops/backup-state.sh, which"
-    warn "task cluster-roll skips after a non-zero exit."
+    if (( stopped )); then
+      warn "The roll stopped on request and the restore did not complete. Fix what is named by hand, then"
+      warn "re-run to continue; only --upgrade skips the nodes already done."
+    else
+      warn "The roll itself finished; only the restore did not. Fix what is named by hand; do NOT re-run"
+      warn "replacement mode (it replaces every node again). Then run scripts/ops/backup-state.sh, which"
+      warn "task cluster-roll skips after a non-zero exit."
+    fi
   fi
   exit "$rc"
 }

@@ -563,7 +563,7 @@ count() { n=$(( $(cat "$S/$1") + 1 )); echo "$n" >"$S/$1"; }       # -> $n
 from() { [ -n "${1:-}" ] && [ "$n" -ge "$1" ]; }                    # knob set and reached
 [ -z "${FK_SLOW:-}" ] || sleep "$FK_SLOW"
 [ -z "${FK_DOWN:-}" ] || refuse 'connection refused'
-clusters() { for c in ${FK_CLUSTERS:-foundation-databases/zitadel-db}; do echo "${c%/*} ${c#*/}"; done; }
+clusters() { for c in ${FK_CLUSTERS-foundation-databases/zitadel-db}; do echo "${c%/*} ${c#*/}"; done; }
 case "$*" in
   "get crd clusters.postgresql.cnpg.io")
     [ "${FK_CNPG:-1}" = 1 ] || refuse 'Error from server (NotFound)' ;;
@@ -579,6 +579,8 @@ case "$*" in
     cat "$S/susp.$5" ;;
   "-n "*" get kustomizations."*)                                # parent labels
     count parents; from "${FK_PARENT_FAIL_FROM:-}" && refuse "${FK_PARENT_ERR:-connection refused}"
+    [ -z "${FK_PARENT_WARN:-}" ] || echo "Warning: ${FK_PARENT_WARN}" >&2   # kubectl says it, then answers
+    [ -z "${FK_PARENT_WARN:-}" ] || echo "Warning: ${FK_PARENT_WARN}" >&2   # kubectl says it, then answers
     [ "$5" = cnpg ] && echo "flux-system platform" || echo " " ;;
   "-n "*" patch kustomizations."*)
     [ "$2/$5" = "${FK_PATCH_FAIL:-}" ] && refuse 'webhook refused'
@@ -607,22 +609,36 @@ done
 
 # The roll ends in the state the script leaves it in when it is done rolling:
 # owner chain suspended, enablePDB=false, budgets gone. FK_* knobs come from the
-# caller's environment; FK_TRAP swaps the exit handler (for the control below) and
-# FK_CMD runs something before the roll exits.
-fk_run() { # <the roll's own exit status>
+# caller's environment; FK_TRAP swaps the exit handler (for the control below),
+# FK_CMD is evaluated before the roll exits, FK_REALSLEEP gives it a real clock.
+fk_reset() {
   FK_STATE="$FK/state"; export FK_STATE; rm -rf "$FK_STATE"; mkdir -p "$FK_STATE"
   echo true >"$FK_STATE/susp.cnpg"; echo true >"$FK_STATE/susp.platform"
   echo false >"$FK_STATE/pdb"; : >"$FK_STATE/calls"; : >"$FK_STATE/bounded"
   for c in lists owners parents; do echo 0 >"$FK_STATE/$c"; done
   echo "${FK_OPERATOR_DELAY:-0}" >"$FK_STATE/delay"
-  # A subshell: the harness's own ok/die/sleep must not be the ones in play, and
-  # `set -e` is on because the roll runs under it.
-  OUT="$( ( set -euo pipefail; hash -r; PATH="$FK/bin:$PATH"
-    ok() { printf '✓ %s\n' "$*"; }; warn() { printf '⚠ %s\n' "$*" >&2; }
-    info() { :; }; die() { printf '✗ %s\n' "$*" >&2; exit 1; }
-    sleep() { SECONDS=$((SECONDS + $1)); }   # a clock the roll's own waits move
-    RESTORE_TIMEOUT="${FK_TIMEOUT:-10}" RESTORE_POLL="${FK_POLL:-5}"
-    trap "${FK_TRAP:-finish_roll}" EXIT; ${FK_CMD:-:}; exit "$1" ) 2>&1 )"; RC=$?
+}
+# Run in a subshell by the caller: the harness's own ok/die/sleep must not be the
+# ones in play, `set -e` is on because the roll runs under it, and a signal must
+# reach this one process, not a wrapper around it.
+fk_body() { # <the roll's own exit status>
+  set -euo pipefail; hash -r; PATH="$FK/bin:$PATH"
+  ok() { printf '✓ %s\n' "$*"; }; warn() { printf '⚠ %s\n' "$*" >&2; }
+  info() { :; }; die() { printf '✗ %s\n' "$*" >&2; exit 1; }
+  [ -n "${FK_REALSLEEP:-}" ] || sleep() { SECONDS=$((SECONDS + $1)); }   # a clock the roll's own waits move
+  STOP_REQUESTED=0
+  RESTORE_TIMEOUT="${FK_TIMEOUT:-10}" RESTORE_POLL="${FK_POLL:-5}"
+  trap "${FK_TRAP:-finish_roll}" EXIT; eval "${FK_CMD:-:}"; exit "$1"
+}
+fk_run() { fk_reset; OUT="$( ( fk_body "$1" ) 2>&1 )"; RC=$?; }
+# A signal to the whole process group, as a terminal's Ctrl+C sends it, <delay>
+# seconds in, on a clock that really runs. Job control: a background job of a
+# script ignores SIGINT otherwise, and the roll's own trap could not be set.
+fk_signal() { # <signal> <delay> <the roll's own exit status>
+  local pid
+  fk_reset; set -m; ( FK_REALSLEEP=1 fk_body "$3" ) >"$FK_STATE/out" 2>&1 & pid=$!; set +m
+  sleep "$2"; kill -"$1" -- "-$pid" 2>/dev/null; wait "$pid" 2>/dev/null; RC=$?
+  OUT="$(cat "$FK_STATE/out")"
 }
 fk() { cat "$FK_STATE/$1"; }
 
@@ -715,6 +731,10 @@ FK_PARENT_FAIL_FROM=1 FK_PARENT_ERR='Error from server (NotFound): kustomization
 [ "$RC" = 0 ] && saw "restored" && [ "$(fk susp.cnpg)" = false ] \
   && ok "an owner that is gone (NotFound) ends the chain; any other error does not" \
   || bad "a NotFound owner was not read as the end of the chain (rc ${RC}): ${OUT}"
+FK_PARENT_WARN='a deprecation notice' fk_run 0
+[ "$RC" = 0 ] && saw "restored" && [ "$(fk susp.cnpg)" = false ] && [ "$(fk susp.platform)" = false ] \
+  && ok "a kubectl warning before the owner value: the chain is still walked to the root" \
+  || bad "a warning on the owner read hid an ancestor (rc ${RC}, root suspended=$(fk susp.platform)): ${OUT}"
 
 # One budget, exactly <ns>/<name>-primary, for EACH cluster.
 missing() { # <why> <the one budget named>
@@ -730,6 +750,10 @@ FK_CLUSTERS="$Z $G" FK_BUDGETS=$G-primary fk_run 0; missing "two clusters, the f
 FK_CLUSTERS="$Z $G" fk_run 0
 [ "$RC" = 0 ] && saw "restored" && ok "two clusters, both budgets back: exit 0" \
   || bad "two restored clusters were refused (rc ${RC}): ${OUT}"
+FK_CLUSTERS= fk_run 0
+[ "$RC" = 0 ] && saw "restored" && ! saw "missing" \
+  && ok "the CRD installed and no cluster yet: nothing to check, exit 0" \
+  || bad "an operator with no database was refused (rc ${RC}): ${OUT}"
 
 # The bound is the clock's, not a count of sleeps, and a problem is said once.
 FK_DOWN=1 FK_SLOW=2 FK_TIMEOUT=2 FK_POLL=1 fk_run 0; N="$(wc -l <"$FK_STATE/calls")"
@@ -737,14 +761,47 @@ FK_DOWN=1 FK_SLOW=2 FK_TIMEOUT=2 FK_POLL=1 fk_run 0; N="$(wc -l <"$FK_STATE/call
   && ok "an apiserver that hangs: the wait ends on the clock (${N} reads, not one per sleep)" \
   || bad "the wait counted sleeps, not seconds (rc ${RC}, ${N} reads): ${OUT}"
 FK_DOWN=1 fk_run 0
-[ "$RC" = 1 ] && [ "$(grep -c 'cannot tell whether' <<<"$OUT")" -le 2 ] \
-  && ok "an apiserver that is down: the reason is printed once, not once per poll" \
-  || bad "the same reason was repeated per poll (rc ${RC}): ${OUT}"
+# Twice: the restore's own die, then the final warning. Fewer drops the reason
+# from the warning, more repeats it per poll.
+[ "$RC" = 1 ] && [ "$(grep -c 'cannot tell whether' <<<"$OUT")" = 2 ] \
+  && grep 'cannot tell whether' <<<"$OUT" | tail -1 | grep -q '^⚠' \
+  && ok "an apiserver that is down: the final warning carries the reason, once, not once per poll" \
+  || bad "the reason is missing from the final warning or repeated per poll (rc ${RC}): ${OUT}"
 
 fk_run 1
 [ "$RC" = 1 ] && saw "restored" && ! saw "complete" && ! saw "roll itself finished" \
   && ok "a roll that failed still exits 1 after a clean restore, and claims neither" \
   || bad "the roll's own failure was lost or dressed up (rc ${RC}): ${OUT}"
+FK_PATCH_FAIL=flux-system/platform fk_run 5
+[ "$RC" = 5 ] && saw "is still suspended" && ! saw "roll itself finished" && ! saw "Rolling replacement complete" \
+  && ok "a roll that failed AND a restore that did: the roll's own status, and it is not called finished" \
+  || bad "a failed roll's status or words were overwritten by the restore's (rc ${RC}): ${OUT}"
+
+# A stop (Ctrl+C, SIGTERM) leaves the loops with status 0 and nodes unreached.
+FK_CMD='export STOP_REQUESTED=1' fk_run 0
+[ "$RC" = 0 ] && saw "restored" && saw "Stop requested" && ! saw "Rolling replacement complete" && ! saw "finished" \
+  && ok "a stopped roll with a clean restore exits as before and is not called complete" \
+  || bad "a stopped roll was reported complete or finished (rc ${RC}): ${OUT}"
+FK_CMD='export STOP_REQUESTED=1' FK_PATCH_FAIL=flux-system/platform fk_run 0
+[ "$RC" = 1 ] && saw "flux-system/platform is still suspended" && saw "stopped on request" \
+  && ! saw "roll itself finished" && ! saw "do NOT re-run" && ! saw "Rolling replacement complete" \
+  && ok "a stopped roll whose restore failed: exit 1, the leftover named, no \"finished\", no \"do NOT re-run\"" \
+  || bad "a stopped roll's failed restore was dressed as a finished roll (rc ${RC}): ${OUT}"
+
+# Signals at the exit, with the roll's own INT/TERM trap installed, on a real clock.
+RR_TRAP="$(grep -m1 "^trap 'STOP_REQUESTED=1" "$SUT")"
+for sig in INT TERM; do
+  t0=$SECONDS
+  FK_CMD="$RR_TRAP" FK_DOWN=1 FK_TIMEOUT=60 FK_POLL=1 fk_signal "$sig" 2 0
+  [ "$RC" = 130 ] && saw "restore is NOT verified" && ! saw "Rolling replacement complete" && [ $((SECONDS - t0)) -lt 20 ] \
+    && ok "SIG${sig} during the wait ends it, says the restore is not verified, exits 130" \
+    || bad "SIG${sig} did not end the wait in time (rc ${RC}, $((SECONDS - t0))s): ${OUT}"
+done
+# The restore is a subshell, which a caught signal would kill half way through.
+FK_CMD="$RR_TRAP" FK_SLOW=0.3 fk_signal INT 1 0
+[ "$RC" = 0 ] && saw "restored" && [ "$(fk susp.cnpg)" = false ] && [ "$(fk susp.platform)" = false ] && ! saw "NOT verified" \
+  && ok "SIGINT during the restore does not abandon it: both owners resumed, then verified" \
+  || bad "a signal during the restore cut it short (rc ${RC}, root suspended=$(fk susp.platform)): ${OUT}"
 
 # What the fake cannot see: that the handler is installed, and installed first.
 [ "$(grep -c '^  trap finish_roll EXIT$' "$SUT")" = 1 ] && ! grep -q "trap 'cnpg_maintenance false'" "$SUT" \
@@ -761,6 +818,13 @@ L_TRAP="$(lineno '^  trap finish_roll EXIT$')"
   && [ "$(extract cnpg_budgets | grep -c 'get pdb -A -l cnpg.io/cluster')" = 1 ] \
   && ok "one budget query, in cnpg_budgets: the way in and the way out cannot disagree" \
   || bad "the CNPG budget query is not written exactly once, in cnpg_budgets"
+
+# Every scenario above overrides the timeout and poll, and the request timeout is
+# only checked for being there: pin the defaults the CHANGELOG and docs quote.
+RR_EXIT="$(extract 'assert_restored,finish_roll' | grep -vE '^[[:space:]]*#')"
+for d in 'RESTORE_TIMEOUT:-120}' 'RESTORE_POLL:-5}' 'RESTORE_REQUEST_TIMEOUT:-10s}'; do
+  grep -qF -- "$d" <<<"$RR_EXIT" && ok "the default is pinned: \${$d" || bad "the default \${$d is not in the exit path"
+done
 
 # The fake answers what we TOLD it kubectl prints. Ask the real one, offline, what
 # these templates select on a Kustomization, and that the script sends those.
