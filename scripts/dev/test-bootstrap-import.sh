@@ -2,12 +2,14 @@
 # ==============================================================================
 # Importing talos_machine_bootstrap adopts it without touching a node (#67).
 #
-# adopt-bootstrap.sh stakes its recovery on three provider behaviours no stub can
+# adopt-bootstrap.sh stakes its recovery on four provider behaviours no stub can
 # show: a failed create leaves the resource out of state, `tofu import` accepts
-# whatever ID it is given, and the plan after it is an in-place update that applies
-# without an RPC. Measured here with the provider version the cluster root pins, in
-# a scratch config aimed at a closed loopback port: real provider, real tofu, no
-# node, no cloud. A provider bump that changes any of the three turns this red.
+# whatever ID it is given, the plan after it is an in-place update that applies
+# without an RPC, and the import reads the cluster-health data source (hence its
+# skip_health_check=true). Measured here with the provider version the cluster root
+# pins, in a scratch config aimed at a closed loopback port: real provider, real
+# tofu, no node, no cloud. The real cluster root is not exercised. A provider bump
+# that changes any of the four turns this red.
 #
 # Needs the provider (the registry, or the cache TF_PLUGIN_CACHE_DIR names). A run
 # that cannot init fails: it does not skip.
@@ -43,6 +45,10 @@ terraform {
     }
   }
 }
+variable "skip_health_check" {
+  type    = bool
+  default = false
+}
 resource "talos_machine_secrets" "this" {}
 resource "talos_machine_bootstrap" "this" {
   client_configuration = talos_machine_secrets.this.client_configuration
@@ -51,6 +57,17 @@ resource "talos_machine_bootstrap" "this" {
   timeouts = {
     create = "3s"
   }
+}
+# Same wiring as modules/talos: counted off skip_health_check, after the bootstrap.
+data "talos_cluster_health" "this" {
+  count                = var.skip_health_check ? 0 : 1
+  client_configuration = talos_machine_secrets.this.client_configuration
+  control_plane_nodes  = ["192.0.2.10"]
+  endpoints            = ["127.0.0.1:1"]
+  timeouts = {
+    read = "4s"
+  }
+  depends_on = [talos_machine_bootstrap.this]
 }
 EOF
 t() { local sub="$1"; shift; "$TOFU" "$sub" -no-color "$@" 2>&1; }
@@ -72,20 +89,30 @@ grep -qx "$BOOT" <<<"$state" \
   && bad "the failed create is in state: it would be tainted, not absent" \
   || ok "it is absent from state (not tainted): the state phase 2 finds on a re-run"
 
-echo "--- an import takes any ID and sends nothing ---"
-out="$(t import "$BOOT" an-id-the-provider-ignores)"; rc=$?
-[ "$rc" = 0 ] && grep -qx "$BOOT" <<<"$("$TOFU" state list 2>/dev/null)" \
-  && ok "tofu import with an arbitrary ID exits 0 and records the resource" \
-  || bad "import rc $rc: $(tail -n 4 <<<"$out")"
+echo "--- an import reads the health data source: without skipping it, it fails ---"
+# What the cluster root's import would hit on a cluster that is not healthy: the
+# read runs to its timeout, then fails the import and records nothing.
+start=$SECONDS; out="$(t import "$BOOT" an-id-the-provider-ignores)"; rc=$?; took=$((SECONDS - start))
+[ "$rc" != 0 ] && grep -q 'talos_cluster_health' <<<"$out" && [ "$took" -ge 4 ] \
+  && ! grep -qx "$BOOT" <<<"$("$TOFU" state list 2>/dev/null)" \
+  && ok "it fails after ${took}s on the data source's read, and the resource stays out of state" \
+  || bad "import rc $rc after ${took}s: $(tail -n 4 <<<"$out")"
+
+echo "--- with skip_health_check=true, an import takes any ID and sends nothing ---"
+SKIP=(-var skip_health_check=true)
+start=$SECONDS; out="$(t import "${SKIP[@]}" "$BOOT" an-id-the-provider-ignores)"; rc=$?; took=$((SECONDS - start))
+[ "$rc" = 0 ] && [ "$took" -lt 4 ] && grep -qx "$BOOT" <<<"$("$TOFU" state list 2>/dev/null)" \
+  && ok "tofu import with an arbitrary ID exits 0 in ${took}s and records the resource" \
+  || bad "import rc $rc after ${took}s: $(tail -n 4 <<<"$out")"
 
 echo "--- and what follows is an in-place update, never a create ---"
-out="$(t plan -out=p.tfplan)"
+out="$(t plan "${SKIP[@]}" -out=p.tfplan)"
 acts="$("$TOFU" show -json p.tfplan 2>/dev/null | jq -c --arg a "$BOOT" '[.resource_changes[] | select(.address == $a) | .change.actions] | add')"
 [ "$acts" = '["update"]' ] && ok "the plan's action on it is [\"update\"]" || bad "actions: ${acts:-none}; $(tail -n 4 <<<"$out")"
 start=$SECONDS; out="$(t apply p.tfplan)"; rc=$?; took=$((SECONDS - start))
 # A bootstrap RPC would retry against the closed port until the 3s create timeout.
 [ "$rc" = 0 ] && [ "$took" -lt 10 ] && ok "the apply succeeds in ${took}s: no RPC" || bad "apply rc $rc after ${took}s: $(tail -n 3 <<<"$out")"
-t plan -detailed-exitcode >/dev/null; rc=$?
+t plan "${SKIP[@]}" -detailed-exitcode >/dev/null; rc=$?
 [ "$rc" = 0 ] && ok "the re-plan is empty" || bad "the re-plan exits $rc (2 = a change is still pending)"
 
 echo

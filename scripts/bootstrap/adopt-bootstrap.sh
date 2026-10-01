@@ -6,8 +6,10 @@
 # AlreadyExists or, on a CP with an empty disk, accepted and forking etcd. So:
 # when the state lacks the resource AND a control plane already reports etcd
 # members, import it. The provider ignores the import ID and sends nothing to a
-# node (scripts/dev/test-bootstrap-import.sh). Any other answer does nothing, so
-# the worst this can be is inert — it only ever adds the import.
+# node (scripts/dev/test-bootstrap-import.sh). Any other answer does nothing.
+# skip_health_check=true: an import also reads the cluster-health data source,
+# which fails it after its 15m timeout on a cluster that is not healthy. Measured
+# on a scratch config holding that data source, not on the real cluster root.
 #
 # Usage, from the cluster dir with the backend inited and the tunnels open:
 #   adopt-bootstrap.sh <role> <provider>
@@ -56,8 +58,8 @@ echo "  yet the state has no ${ADDR}. Another bootstrap would be refused"
 echo "  (AlreadyExists) or fork etcd. Adopting it: nothing is sent to any node."
 sed 's/^/    /' <<<"$members"
 
-cmd=(tofu import -input=false -var-file="envs/${ROLE}-${PROVIDER}.tfvars" -var talos_bootstrap=true "$ADDR" "${CPS[0]}")
+cmd=(tofu import -input=false -var-file="envs/${ROLE}-${PROVIDER}.tfvars" -var talos_bootstrap=true -var skip_health_check=true "$ADDR" "${CPS[0]}")
 "${cmd[@]}" && { echo "✓ adopted ${ADDR}"; exit 0; }
 echo "✗ tofu import failed and the state is unchanged. Run it by hand, then re-run:" >&2
-echo "    ${TF_DATA_DIR:+TF_DATA_DIR=$TF_DATA_DIR }tofu import -input=false -var-file=envs/${ROLE}-${PROVIDER}.tfvars -var talos_bootstrap=true '${ADDR}' ${CPS[0]}" >&2
+echo "    ${TF_DATA_DIR:+TF_DATA_DIR=$TF_DATA_DIR }tofu import -input=false -var-file=envs/${ROLE}-${PROVIDER}.tfvars -var talos_bootstrap=true -var skip_health_check=true '${ADDR}' ${CPS[0]}" >&2
 exit 1

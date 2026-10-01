@@ -772,19 +772,25 @@ in git. 0.1.0 is the first entry describing something proven.
   the new `scripts/bootstrap/adopt-bootstrap.sh` once the tunnels are open. If
   the state lacks `module.talos.talos_machine_bootstrap.this[0]` and any control
   plane answers `talosctl etcd members` with exit 0 and a `:2380` row, it runs
-  `tofu import` on it; otherwise, including a node that does not answer within
-  `ADOPT_PROBE_TIMEOUT` (15s), it changes nothing. A fresh cluster pays up to
-  that timeout per control plane. The import fails the task only after etcd has
-  answered, with the command to run by hand.
+  `tofu import -var skip_health_check=true` on it (the import also reads the
+  cluster-health data source, which runs to its 15m timeout and fails it when no
+  healthy cluster answers);
+  otherwise, including a node that does not answer within `ADOPT_PROBE_TIMEOUT`
+  (15s), it changes nothing. A fresh cluster pays up to that timeout per control
+  plane. The import fails the task only after etcd has answered, with the command
+  to run by hand.
   `test-adopt-bootstrap.sh` (stubbed `tofu` and `talosctl`) holds each of those
   branches, and `test-cluster-up.sh` the call order. `test-bootstrap-import.sh`
   runs the pinned talos provider offline: a create against a closed port leaves
-  the resource out of state, an import with any ID succeeds, the plan is an
-  in-place update that applies in under a second with no RPC, and the re-plan is
-  empty. Not observed: what `talosctl etcd members` prints on a real node in each
-  state, so whether the guard ever fires; and whether the import evaluates on the
-  real cluster root. The other control planes' etcd (#40) is not touched, and
-  both issues stay open for a real interrupted bootstrap.
+  the resource out of state, an import reads the health data source and fails on
+  its timeout unless that is skipped, an import with any ID then succeeds, the
+  plan is an in-place update that applies in under a second with no RPC, and the
+  re-plan is empty. Not observed: what `talosctl etcd members` prints on a real
+  node in each state, so whether the guard ever fires; the import on the real
+  cluster root (the scratch config holds only the provider and that data
+  source); the data source against a reachable, unhealthy cluster (seen only
+  against a closed port). The other control planes' etcd (#40) is not touched,
+  and both issues stay open for a real interrupted bootstrap.
 
 ### Added
 

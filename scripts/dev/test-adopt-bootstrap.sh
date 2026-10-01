@@ -85,7 +85,7 @@ run() { # rc of the script, as ovh/workload; stdout in $W/out, stderr in $W/err
     </dev/zero >"$W/out" 2>"$W/err"
 }
 calls() { grep -c "$1" "$W/calls.log"; }
-IMPORT="tofu import -input=false -var-file=envs/ovh-workload.tfvars -var talos_bootstrap=true $BOOT $CP0"
+IMPORT="tofu import -input=false -var-file=envs/ovh-workload.tfvars -var talos_bootstrap=true -var skip_health_check=true $BOOT $CP0"
 tail_of() { { tail -n 3 "$W/out"; tail -n 3 "$W/err"; } | tr '\n' ' '; }
 untouched() { # the cases where nothing may change — no import, and no exit code
   [ "$(calls '^tofu import')" = 0 ] && ! grep -q UNEXPECTED "$W/calls.log"
@@ -152,7 +152,7 @@ echo "--- a positive answer whose import fails is an error, with the command ---
 reset; members $CP0 "$HEADER
 $ROW"; E=(IMPORT_RC=1)
 run; rc=$?
-[ "$rc" != 0 ] && grep -qF "tofu import -input=false -var-file=envs/ovh-workload.tfvars -var talos_bootstrap=true '$BOOT' $CP0" "$W/err" \
+[ "$rc" != 0 ] && grep -qF "tofu import -input=false -var-file=envs/ovh-workload.tfvars -var talos_bootstrap=true -var skip_health_check=true '$BOOT' $CP0" "$W/err" \
   && ok "exit $rc, and stderr carries the manual command verbatim" \
   || bad "rc $rc, stderr: $(tr '\n' ' ' <"$W/err")"
 

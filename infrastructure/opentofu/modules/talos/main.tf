@@ -534,8 +534,11 @@ resource "talos_machine_configuration_apply" "worker" {
 # One-shot, and NOT idempotent: once the node is bootstrapped, a create returns
 # `AlreadyExists: etcd data directory is not empty`, so a success that never
 # reached state (interrupted apply, dropped tunnel) sticks against a healthy
-# cluster. scripts/bootstrap/adopt-bootstrap.sh adopts it before phase 2; by hand:
-#   tofu import 'module.talos.talos_machine_bootstrap.this[0]' <first-cp-ip>
+# cluster. scripts/bootstrap/adopt-bootstrap.sh adopts it before phase 2; by hand,
+# with the role's -var-file (skip_health_check: the import also reads the health
+# data source below, up to its timeout):
+#   tofu import -var talos_bootstrap=true -var skip_health_check=true \
+#     'module.talos.talos_machine_bootstrap.this[0]' <first-cp-ip>
 # The provider ignores the ID and sends nothing to a node.
 # In 'userdata' mode there are no apply resources to wait on — the provider
 # retries connection until the (USERDATA-configured) node is up.
