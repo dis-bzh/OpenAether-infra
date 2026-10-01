@@ -1,16 +1,16 @@
 # ==============================================================================
 # Failover Management Cluster on Proxmox (cross-provider)
 # A SECOND management cluster, on-premise (Proxmox), for when your PRIMARY
-# management provider (a cloud) is lost/unavailable. Rebuilds a full management
-# cluster in ~30 min. Use this only when Proxmox is NOT your primary provider.
+# management provider (a cloud) is lost/unavailable. Meant to rebuild a full
+# management cluster. Use this only when Proxmox is NOT your primary provider.
 #
 # Note on terminology: re-running your own management-proxmox.tfvars rebuilds
 # the cluster on the SAME provider (the everyday recovery). This file is the
 # CROSS-provider failover — same role, different (on-prem) target.
 #
-# Usage:
-#   task failover PROVIDER=proxmox
-#   (or manually: tofu apply -var-file=envs/failover-proxmox.tfvars -var talos_bootstrap=true)
+# Usage: there is no failover command yet — see "Cross-provider failover" in
+# ../README.md. Untested sketch:
+#   tofu apply -var-file=envs/failover-proxmox.tfvars -var talos_bootstrap=true
 #
 # Prerequisites:
 #   export PROXMOX_VE_ENDPOINT=https://<host-ip-or-fqdn>:8006/
@@ -32,7 +32,7 @@
 # ==============================================================================
 
 # ⚠️ NEVER EXECUTED. This describes the disaster-recovery drill (primary provider
-# gone, cluster rebuilt on another) that is still an OPEN item in docs/backlog.md.
+# gone, cluster rebuilt on another) that is still undone (docs/status.md).
 # Nothing here has been deployed, so read it as a design intent, not as a proven
 # procedure. Note also that `ROLE=failover` only picks THIS FILE: the Flux overlay
 # and the bucket segment come from cluster_role below, which is "management".
