@@ -789,6 +789,14 @@ in git. 0.1.0 is the first entry describing something proven.
   state-only plan destroys anything; and #69 itself, two versions kept side by
   side with a node created on the older one, which stays open on a real cloud.
 
+- **`task upgrade PROVIDER=x DRY_RUN=1` now makes a dry run.** A Task variable is
+  not an environment variable, and `cluster-upgrade.sh` reads `DRY_RUN`,
+  `UPGRADE_TALOS_TO` and `UPGRADE_K8S_TO` from the environment, so the
+  command-line form was ignored and a real upgrade started. The target now passes
+  the three on, empty when unset. `test-task-guards.sh` runs it against a stub
+  script, from the command line and from the shell; deleting the `env:` block
+  turns it red. Mocked rung; no upgrade was run.
+
 ### Added
 
 - **New `feint-apply-root` lane: an untargeted apply on the REAL cluster

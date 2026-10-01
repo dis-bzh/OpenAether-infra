@@ -206,6 +206,21 @@ EOF
     || bad "both plans failing (rc=$rc, plans: $(plans | tr '\n' ';')): $(tail -5 "$TMP/out")"
 fi
 
+echo "=== upgrade hands DRY_RUN and UPGRADE_*_TO to the script, from the command line or the shell ==="
+# A Task variable is not an environment variable and cluster-upgrade.sh reads the
+# environment, so `task upgrade DRY_RUN=1` once started a real upgrade. The script is a stub.
+fixture
+printf '#!/usr/bin/env bash\necho "stub dry=[${DRY_RUN-}] talos=[${UPGRADE_TALOS_TO-}] k8s=[${UPGRADE_K8S_TO-}]"\n' >"$repo/scripts/dev/cluster-upgrade.sh"
+chmod +x "$repo/scripts/dev/cluster-upgrade.sh"
+unset DRY_RUN UPGRADE_TALOS_TO UPGRADE_K8S_TO
+up() { PATH="$TMP/bin:$PATH" task --dir "$repo" upgrade PROVIDER=scaleway "$@" </dev/null >"$TMP/out" 2>&1; sed -nE 's/\x1b\[[0-9;]*m//g; s/^stub //p' "$TMP/out"; }  # CI colours Task's lines
+check() { [ "$3" = "$2" ] && ok "$1" || bad "$1: want '$2', got '$3': $(tail -3 "$TMP/out")"; }
+all='dry=[1] talos=[1.2.3] k8s=[1.30.4]'
+check "on the command line, all three reach the script" "$all" "$(up DRY_RUN=1 UPGRADE_TALOS_TO=1.2.3 UPGRADE_K8S_TO=1.30.4)"
+check "from the shell, all three reach the script" "$all" "$(DRY_RUN=1 UPGRADE_TALOS_TO=1.2.3 UPGRADE_K8S_TO=1.30.4 up)"
+check "one given, the other two arrive empty" 'dry=[1] talos=[] k8s=[]' "$(up DRY_RUN=1)"
+check "none given, and nothing leaks from the runs before" 'dry=[] talos=[] k8s=[]' "$(up)"
+
 echo
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$PASS" -gt 0 ] && [ "$FAIL" -eq 0 ]
