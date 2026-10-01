@@ -161,13 +161,15 @@ EOF
       "$1" "$2" >"$TMP/image.tfstate"
   }
   images '["img-1"]' '["string"]'
+  unset TF_WORKSPACE   # an exported one sends the seed's state, and the plans, to another workspace
   ( cd "$C" && export TF_DATA_DIR=.seed && "$real_tofu" init -input=false -backend-config=path="$TMP/cluster.tfstate" >/dev/null \
     && "$real_tofu" apply -auto-approve -input=false -var-file="$tfvars" -var talos_bootstrap=false >/dev/null ) \
     || { echo "✗ could not seed the fixture cluster — nothing was checked" >&2; exit 1; }
   rm -rf "$C/.seed"
 
   down() { : >"$TOFU_LOG"; rm -f "$C/d.tfplan"
-    PATH="$TMP/shim:$PATH" task --dir "$repo" infra-down-plan PROVIDER=scaleway ROLE=management OUT=d.tfplan </dev/null >"$TMP/out" 2>&1; }
+    env -i PATH="$TMP/shim:$PATH" HOME="$HOME" TOFU_LOG="$TOFU_LOG" \
+      task --dir "$repo" infra-down-plan PROVIDER=scaleway ROLE=management OUT=d.tfplan </dev/null >"$TMP/out" 2>&1; }
   plans() { grep '^plan -destroy ' "$TOFU_LOG"; }
   deletes() { ( cd "$C" && TF_DATA_DIR=.terraform-management-scaleway "$real_tofu" show -json d.tfplan 2>/dev/null ) | grep -q '"actions":\["delete"\]'; }
 
@@ -182,8 +184,9 @@ EOF
     && plans | sed -n 1p | grep -q ' rc=1$' && plans | sed -n 2p | grep -q -e '-refresh=false .*rc=0$' \
     && ok "lookup errors (scaleway, ovh): the refreshed plan fails, the state-only plan is written" \
     || bad "lookup errors (rc=$rc, plans: $(plans | tr '\n' ';')): $(tail -5 "$TMP/out")"
-  grep -q 'the pinned image' "$TMP/out" \
-    && ok "…and the warning names a gone image as a cause" || bad "the warning does not name the image: $(grep -A3 'refresh failed' "$TMP/out")"
+  # Anchored: go-task echoes the script's source into the output too, and every source line starts `echo "`.
+  grep -q '^  stuck provisioning; the pinned image' "$TMP/out" \
+    && ok "…and the warning names a gone image as a cause" || bad "the warning does not name the image: $(grep -A3 '^⚠ the refresh failed' "$TMP/out")"
   plans | grep -qv -e '-var talos_bootstrap=false' && bad "a plan lost -var talos_bootstrap=false (the tunnel read): $(plans)" \
     || ok "…both plans keep talos_bootstrap=false"
 
