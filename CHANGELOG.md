@@ -776,8 +776,9 @@ in git. 0.1.0 is the first entry describing something proven.
   non-zero and writes none. The warning now names the pinned image as a cause. Five
   mutants of the target (no fallback, fallback first, fallback without
   `talos_bootstrap=false` or `-out`, failure swallowed) each turn it red. Mocked
-  rung. Not shown: that the real providers fail their lookups like the stand-ins,
-  which only #69's own measurement says, and #69 itself, two versions kept side by
+  rung, plan half only. Not shown: that the real providers fail their lookups like
+  the stand-ins, which only #69's own measurement says; that the apply of the
+  state-only plan destroys anything; and #69 itself, two versions kept side by
   side with a node created on the older one, which stays open on a real cloud.
 
 ### Added
