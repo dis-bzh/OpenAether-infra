@@ -144,6 +144,10 @@ run; rc=$?
   || bad "talosctl was called $(calls '^talosctl') times"
 said AlreadyExists && said '1 member' && ok "it names AlreadyExists and the member count" \
   || bad "output: $(tail_of)"
+# The state is written before phase 2's approval prompt: the undo must be on screen.
+grep -qF "tofu state rm '$BOOT'" "$W/out" && said 'before phase 2' && said 'not undo' \
+  && ok "it says the state is written before the approval, that declining does not undo it, and prints the undo" \
+  || bad "no undo in: $(tail_of)"
 untouched_unexpected=$(grep -c UNEXPECTED "$W/calls.log"); [ "$untouched_unexpected" = 0 ] \
   && ok "no call outside the contract" || bad "unexpected calls: $(grep UNEXPECTED "$W/calls.log")"
 
@@ -165,6 +169,7 @@ run; rc=$?
 [ "$rc" != 0 ] && grep -qF "tofu import -input=false -var-file=envs/ovh-workload.tfvars -var talos_bootstrap=true -var skip_health_check=true '$BOOT' $CP0" "$W/err" \
   && ok "exit $rc, and stderr carries the manual command verbatim" \
   || bad "rc $rc, stderr: $(tr '\n' ' ' <"$W/err")"
+said 'state rm' && bad "it prints an undo for a state it did not write" || ok "no undo is offered: the state is unchanged"
 
 
 echo "--- the exit code decides, not the text ---"

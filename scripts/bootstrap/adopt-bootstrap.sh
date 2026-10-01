@@ -7,6 +7,8 @@
 # when the state lacks the resource AND a control plane already reports etcd
 # members, import it. The provider ignores the import ID and sends nothing to a
 # node (scripts/dev/test-bootstrap-import.sh). Any other answer does nothing.
+# The import writes state BEFORE phase 2's approval prompt and declining that
+# plan does not undo it: the success message prints the undo.
 # skip_health_check=true: an import also reads the cluster-health data source,
 # which fails it after its 15m timeout on a cluster that is not healthy. Measured
 # on a scratch config holding that data source, not on the real cluster root.
@@ -59,7 +61,12 @@ echo "  (AlreadyExists) or fork etcd. Adopting it: nothing is sent to any node."
 sed 's/^/    /' <<<"$members"
 
 cmd=(tofu import -input=false -var-file="envs/${ROLE}-${PROVIDER}.tfvars" -var talos_bootstrap=true -var skip_health_check=true "$ADDR" "${CPS[0]}")
-"${cmd[@]}" && { echo "✓ adopted ${ADDR}"; exit 0; }
+tfd="${TF_DATA_DIR:+TF_DATA_DIR=$TF_DATA_DIR }"
+"${cmd[@]}" && {
+  echo "✓ adopted ${ADDR}"
+  echo "  The state is written now, before phase 2's approval: declining that plan does"
+  echo "  not undo it. To undo (the state is not backed up):  ${tfd}tofu state rm '${ADDR}'"
+  exit 0; }
 echo "✗ tofu import failed and the state is unchanged. Run it by hand, then re-run:" >&2
-echo "    ${TF_DATA_DIR:+TF_DATA_DIR=$TF_DATA_DIR }tofu import -input=false -var-file=envs/${ROLE}-${PROVIDER}.tfvars -var talos_bootstrap=true -var skip_health_check=true '${ADDR}' ${CPS[0]}" >&2
+echo "    ${tfd}tofu import -input=false -var-file=envs/${ROLE}-${PROVIDER}.tfvars -var talos_bootstrap=true -var skip_health_check=true '${ADDR}' ${CPS[0]}" >&2
 exit 1

@@ -1013,6 +1013,8 @@ tasks:
     desc: >-
       Phase 2: open SSH tunnels (from state) + bootstrap Talos. It computes its OWN plan and
       needs an approval — APPROVE=auto answers it, for CI and for a shell that cannot be asked.
+      Before the plan, a bootstrap the state forgot is imported (#67): that writes state BEFORE
+      the approval, and declining the plan does not undo it (the message prints the `tofu state rm`).
       Usage: task bootstrap-phase2 ROLE=management|workload
       [PROVIDER=scaleway|ovh|outscale|proxmox] [KEY=~/.ssh/yourkey] [APPROVE=auto]
     dir: infrastructure/opentofu/cluster
@@ -1028,7 +1030,8 @@ tasks:
       - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
       - SSH_KEY="{{.KEY}}" ../../../scripts/bootstrap/talos-tunnels.sh open .
       # A bootstrap the state forgot would be re-sent below at a live etcd. Needs
-      # the tunnels just opened; imports only on a positive answer (#67).
+      # the tunnels just opened; imports only on a positive answer (#67). That
+      # writes state before the approval below, and declining the plan keeps it.
       - ../../../scripts/bootstrap/adopt-bootstrap.sh {{.ROLE}} {{.PROVIDER}}
       - |
         # Phase 2 cannot reuse the phase-1 plan: that one was computed with

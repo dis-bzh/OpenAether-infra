@@ -778,7 +778,10 @@ in git. 0.1.0 is the first entry describing something proven.
   otherwise, including a node that does not answer within `ADOPT_PROBE_TIMEOUT`
   (15s), it changes nothing. A fresh cluster pays up to that timeout per control
   plane. The import fails the task only after etcd has answered, with the command
-  to run by hand.
+  to run by hand. A successful import writes state BEFORE phase 2's approval
+  prompt, and declining that plan does not undo it (the state is not backed up
+  first): `tofu state rm 'module.talos.talos_machine_bootstrap.this[0]'` does,
+  and the script prints it.
   `test-adopt-bootstrap.sh` (stubbed `tofu` and `talosctl`) holds each of those
   branches, and `test-cluster-up.sh` the call order. `test-bootstrap-import.sh`
   runs the pinned talos provider offline: a create against a closed port leaves
