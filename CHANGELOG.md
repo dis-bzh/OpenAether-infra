@@ -790,9 +790,10 @@ in git. 0.1.0 is the first entry describing something proven.
   plan is an in-place update that applies in under a second with no RPC, and the
   re-plan is empty. Not observed: what `talosctl etcd members` prints on a real
   node in each state, so whether the guard ever fires; the import on the real
-  cluster root (the scratch config holds only the provider and that data
-  source); the data source against a reachable, unhealthy cluster (seen only
-  against a closed port); that a control plane with an empty disk accepts a
+  cluster root (the scratch config holds only the provider and that data source,
+  with the real module's `count` line, which the harness refuses to run without
+  `skip_health_check`); the data source against a reachable, unhealthy cluster
+  (seen only against a closed port); that a control plane with an empty disk accepts a
   second Bootstrap and forks etcd (upstream behaviour, and the reason every
   control plane is asked and any member row counts). The other control planes'
   etcd (#40) is not touched, and both issues stay open for a real interrupted

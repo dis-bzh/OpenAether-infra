@@ -8,8 +8,9 @@
 # without an RPC, and the import reads the cluster-health data source (hence its
 # skip_health_check=true). Measured here with the provider version the cluster root
 # pins, in a scratch config aimed at a closed loopback port: real provider, real
-# tofu, no node, no cloud. The real cluster root is not exercised. A provider bump
-# that changes any of the four turns this red.
+# tofu, no node, no cloud. The real cluster root is not exercised, but the data
+# source's `count` line is the real module's own: skip_health_check only works if
+# it says so. A provider bump that changes any of the four turns this red.
 #
 # Needs the provider (the registry, or the cache TF_PLUGIN_CACHE_DIR names). A run
 # that cannot init fails: it does not skip.
@@ -33,6 +34,18 @@ PIN="$(sed -nE '/^[[:space:]]*talos[[:space:]]*=/,/^[[:space:]]*}/ s/^[[:space:]
   infrastructure/opentofu/cluster/versions.tf | head -1)"
 [ -n "$PIN" ] || { echo "✗ no talos provider constraint in cluster/versions.tf — nothing was checked" >&2; exit 1; }
 
+# The real data source's count, not a copy: a module edit that drops skip_health_check
+# from it brings back the 15m hang inside the import, and nothing else would notice.
+COUNT="$(awk '/^data "talos_cluster_health" "this" \{/ {f=1; next}
+  f && /^[[:space:]]*count[[:space:]]*=/ {sub(/^[[:space:]]*count[[:space:]]*=[[:space:]]*/, ""); print; exit}
+  f && /^}/ {exit}' infrastructure/opentofu/modules/talos/main.tf)"
+case "$COUNT" in *var.skip_health_check*) ;; *)
+  echo "✗ the count of data.talos_cluster_health in modules/talos/main.tf no longer reads skip_health_check (got: ${COUNT:-nothing})" >&2
+  exit 1 ;;
+esac
+OTHER="$(grep -oE 'var\.[a-z_]+' <<<"$COUNT" | sort -u | grep -vxE 'var\.(control_plane_count|skip_health_check)')"
+[ -z "$OTHER" ] || { echo "✗ that count now reads ${OTHER//$'\n'/ }: declare it in the scratch config below" >&2; exit 1; }
+
 W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
 cd "$W" || exit 1
 export TF_DATA_DIR="$W/.data" TF_IN_AUTOMATION=1 TF_INPUT=0
@@ -49,6 +62,10 @@ variable "skip_health_check" {
   type    = bool
   default = false
 }
+variable "control_plane_count" {
+  type    = number
+  default = 1
+}
 resource "talos_machine_secrets" "this" {}
 resource "talos_machine_bootstrap" "this" {
   client_configuration = talos_machine_secrets.this.client_configuration
@@ -58,9 +75,9 @@ resource "talos_machine_bootstrap" "this" {
     create = "3s"
   }
 }
-# Same wiring as modules/talos: counted off skip_health_check, after the bootstrap.
+# modules/talos' data source: its own count line, after the bootstrap.
 data "talos_cluster_health" "this" {
-  count                = var.skip_health_check ? 0 : 1
+  count                = $COUNT
   client_configuration = talos_machine_secrets.this.client_configuration
   control_plane_nodes  = ["192.0.2.10"]
   endpoints            = ["127.0.0.1:1"]
