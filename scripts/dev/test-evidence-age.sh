@@ -200,11 +200,13 @@ for t in lint test test-scripts render-check validate; do
   grep -q 'check-evidence-age' <<<"$dry" && bad "task $t runs the gate — a required check would go red with no commit" \
     || ok "task $t does not run the gate"
 done
+# CI colours go-task's output (FORCE_COLOR), and the anchors below start at `task:`.
+strip_color() { sed $'s/\x1b\\[[0-9;]*m//g'; }
 # The exact line: a name match alone passes a dropped --warn, `|| true` and an `echo` in front.
-dry="$(task --dir "$ROOT" --dry evidence-check 2>&1)"
+dry="$(task --dir "$ROOT" --dry evidence-check 2>&1 | strip_color)"
 grep -qE '^task: \[evidence-check\] \./scripts/dev/check-evidence-age\.sh$' <<<"$dry" \
   && ok "task evidence-check runs the gate, bare" || bad "task evidence-check does not run the bare gate: ${dry:0:200}"
-dry="$(task --dir "$ROOT" --dry preflight 2>&1)"
+dry="$(task --dir "$ROOT" --dry preflight 2>&1 | strip_color)"
 gate_at="$(grep -nE '^task: \[preflight\] \./scripts/dev/check-evidence-age\.sh --warn$' <<<"$dry" | head -1 | cut -d: -f1)"
 [ -n "$gate_at" ] && ok "task preflight runs the gate with --warn, and nothing else on the line" || bad "task preflight does not run 'check-evidence-age.sh --warn': ${dry:0:200}"
 # A gate that fails after the banner leaves "green" on the screen above a non-zero exit.
