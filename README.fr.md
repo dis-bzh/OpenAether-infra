@@ -184,9 +184,10 @@ eux. Tout le reste de l'exemple a déjà une valeur qui fonctionne.
 
 Et `bastion_ssh_keys` : la moitié **publique** de la clé que tu passeras en `KEY=`.
 Les deux forment une paire, et `task cluster-up` refuse de démarrer si elles ne
-correspondent pas — avant toute dépense. Ainsi que `git_repo_url` + `git_ref` si
-tu utilises ton propre fork d'OpenAether-apps ; les défauts pointent sur le
-nôtre, et son `apps/clusters` n'est pas le tien.
+correspondent pas — avant toute dépense. `git_repo_url` + `git_ref` ne comptent
+que si tu actives `deploy_flux` (désactivé) et utilises ton propre fork
+d'OpenAether-apps ; les défauts pointent sur le nôtre, et son `apps/clusters`
+n'est pas le tien.
 
 ```bash
 # Quotas : OVH et Outscale uniquement — le script ne couvre pas Scaleway.
@@ -201,10 +202,10 @@ task cluster-up ROLE=management PROVIDER=scaleway KEY=~/.ssh/yourkey
 l'image Talos si le compte ne l'a pas, rend les manifests de bootstrap, applique
 l'infrastructure, ouvre les tunnels et amorce Talos, puis interroge le cluster
 (`task cluster-verify`) et échoue si le cluster dit non. Relance-la après avoir
-corrigé une erreur, elle reprend. C'est aussi la commande que joue la CI, donc
-le chemin qui est réellement validé. Les étapes séparées (`task image-build`,
-`task infra-apply`, `task bootstrap-phase2`) restent disponibles pour n'en piloter
-qu'une.
+corrigé une erreur, elle reprend. La CI ne la joue que contre des stubs
+(`scripts/dev/test-cluster-up.sh`) ; un vrai passage se fait à la main. Les
+étapes séparées (`task image-build`, `task infra-apply`, `task bootstrap-phase2`)
+restent disponibles pour n'en piloter qu'une.
 
 **Après le déploiement** : un cluster d'infrastructure seule n'a plus d'étape
 jour-1, puisque `cluster-up` s'est terminé par `task cluster-verify` ; relance-la
@@ -252,7 +253,9 @@ inventaire, ni load balancer, ni quotas. Cf.
 ### Contrôles statiques (sans cloud ni Docker)
 
 ```bash
-task validate            # tofu fmt/validate/test
+task lint                # tofu fmt, YAML
+task validate            # tofu validate
+task test                # tofu test, mocké
 task apps-validate       # intégrité du DAG Flux + profils pick.py à jour
 task security            # contrôles de durcissement
 ```
