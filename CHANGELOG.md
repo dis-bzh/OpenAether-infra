@@ -182,6 +182,14 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **`task cluster-up` refuses a missing or placeholder passphrase before it
+  creates the buckets.** The check ran after `ensure-buckets.sh --preflight`,
+  which creates the four buckets, so the refusal came once resources existed. It
+  now runs first. `test-cluster-up.sh` gains a control and two cases (empty,
+  `change-me`): the refusal, and no `ensure-buckets.sh` or `talos-image.sh` call;
+  12 passed / 2 failed on the old order, 14 / 0 on the fix. `EXTRA` is now applied
+  last, so a case can override the default passphrase. Mocked rung only.
+
 - **A Scaleway kind that no zone answered is no longer read as clean.**
   `scaleway.py` skipped a kind that every zone answered 404/501 as "not
   offered", so a listing that asked nothing ended "the project is clean" (exit
@@ -810,6 +818,14 @@ in git. 0.1.0 is the first entry describing something proven.
   the stand-ins, which only #69's own measurement says; that the apply of the
   state-only plan destroys anything; and #69 itself, two versions kept side by
   side with a node created on the older one, which stays open on a real cloud.
+
+- **`task upgrade PROVIDER=x DRY_RUN=1` now makes a dry run.** A Task variable is
+  not an environment variable, and `cluster-upgrade.sh` reads `DRY_RUN`,
+  `UPGRADE_TALOS_TO` and `UPGRADE_K8S_TO` from the environment, so the
+  command-line form was ignored and a real upgrade started. The target now passes
+  the three on, empty when unset. `test-task-guards.sh` runs it against a stub
+  script, from the command line and from the shell; deleting the `env:` block
+  turns it red. Mocked rung; no upgrade was run.
 
 ### Added
 

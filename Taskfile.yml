@@ -675,10 +675,6 @@ tasks:
           echo "  else in this shell will tell you it is missing until it costs time." >&2
           exit 1
         fi
-        # --preflight adds prod's replica-on-another-cloud rule, for a cluster
-        # with no state object yet. Only here: infra-apply, which cluster-upgrade
-        # and converge-versions call, must keep working on a deployed cluster.
-        ./scripts/internal/ensure-buckets.sh "$TFVARS" --preflight || exit 1
         # The passphrase encrypts the state and both access artifacts, and NOTHING
         # else checks it: without it `tofu` stops to prompt, and with the shipped
         # placeholder — long enough to pass the only validation there is — it
@@ -688,6 +684,10 @@ tasks:
           *change-me*) echo "✗ TF_VAR_encryption_passphrase is still the example from .env.example." >&2
                        echo "  It is public. Replace it: openssl rand -base64 48" >&2; exit 1 ;;
         esac
+        # --preflight adds prod's replica-on-another-cloud rule, for a cluster
+        # with no state object yet. Only here: infra-apply, which cluster-upgrade
+        # and converge-versions call, must keep working on a deployed cluster.
+        ./scripts/internal/ensure-buckets.sh "$TFVARS" --preflight || exit 1
       # image-build reads the pin from ROLE's tfvars. VERSION is blanked because
       # go-task hands it an exported or typed one, and the tfvars is the decision.
       - task: image-build
@@ -1547,6 +1547,12 @@ tasks:
     vars:
       ROLE: '{{.ROLE | default "management"}}'
       KEY: '{{.KEY | default "~/.ssh/id_ed25519"}}'
+    # The script reads the environment and a CLI variable is not in it:
+    # `task upgrade DRY_RUN=1` used to start a real upgrade.
+    env:
+      DRY_RUN: '{{.DRY_RUN | default ""}}'
+      UPGRADE_TALOS_TO: '{{.UPGRADE_TALOS_TO | default ""}}'
+      UPGRADE_K8S_TO: '{{.UPGRADE_K8S_TO | default ""}}'
     cmds:
       - defer: *receipt
       # cluster-upgrade.sh was reachable from no target and from no workflow —
