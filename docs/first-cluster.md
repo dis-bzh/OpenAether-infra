@@ -104,10 +104,11 @@ access artifacts.
 Do not export `AWS_*` yourself: the flow derives them per provider from the
 namespaced variables above.
 
-`task cluster-up` checks this file before it spends anything: the SSH key exists and is
-the private half of `bastion_ssh_keys`, the tfvars file exists, BOTH S3
-credential pairs resolve, and the passphrase is set and is not the placeholder.
-All of it runs before the first bucket.
+`task cluster-up` checks this file before it builds anything: the SSH key exists and is
+the private half of `bastion_ssh_keys`, the tfvars file exists, the
+passphrase is set and is not the placeholder, and BOTH S3 credential pairs work
+(it creates the four buckets to find out, which is why the passphrase comes
+first). All of it runs before the image build.
 
 ## 3. The cluster file
 
@@ -142,18 +143,21 @@ cd ../../../..
 task cluster-up ROLE=management PROVIDER=scaleway KEY=~/.ssh/yourkey
 ```
 
-Needs a terminal: the apply asks for approval twice, and it applies the plan it
-just showed you — do not reach for `-auto-approve`, which applies a *different*
-plan computed at that moment. (For an unattended run, save one first:
+Without `APPROVE=auto` it needs a terminal: it asks for approval twice, on the
+phase-1 and phase-2 plans, and applies the plan it just showed you — do not reach
+for `-auto-approve`, which applies a *different* plan computed at that moment.
+For an unattended run add `APPROVE=auto`: it answers both questions. (To read a
+phase-1 plan on its own, save it:
 `task infra-plan ROLE=management PROVIDER=scaleway OUT=tfplan`, read it, then
 `task infra-apply PROVIDER=scaleway PLAN=tfplan`. PROVIDER is required on both —
 it used to default to Scaleway, which is the wrong cloud to guess.)
 
-In order it builds the Talos image and uploads it — **measured at 52 s on
-Scaleway, 2026-08-17**, for two buckets, one snapshot and one image per zone —
-creates four more buckets, applies the infrastructure, opens one SSH tunnel per
-node, then applies the machine configs and bootstraps Talos. It ends by running
-step 6's verifier: if the cluster fails it, `cluster-up` fails.
+In order it creates the four state and artifact buckets (the credential check
+above), builds the Talos image and uploads it — **measured at 52 s on Scaleway,
+2026-08-17**, for two buckets, one snapshot and one image per zone — applies the
+infrastructure, opens one SSH tunnel per node, then applies the machine configs
+and bootstraps Talos. It ends by running step 6's verifier: if the cluster fails
+it, `cluster-up` fails.
 
 **The apiserver load balancer is the slowest thing in this step, and the only
 one that can strand you.** On Scaleway it is quick. On OVH and Outscale it is a
@@ -361,9 +365,6 @@ What is still open:
   no `hw_qemu_guest_agent`, so Talos never reached `Running` and never disarmed
   the upgrade fallback. It is gone, and the 2026-08-19 run shows `stage=running`
   with the fallback dropped on all six nodes. One clean run, not yet a habit.
-- Every bucket name derives from `cluster_name` (its first segment, plus
-  `bucket_suffix`) except the Talos image ones, which are hardcoded. In another
-  account they may collide.
 
 Found something this document gets wrong? That is the most useful bug report
 this project can receive.

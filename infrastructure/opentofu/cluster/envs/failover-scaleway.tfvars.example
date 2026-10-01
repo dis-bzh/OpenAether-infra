@@ -1,15 +1,15 @@
 # ==============================================================================
 # Failover Management Cluster on Scaleway (cross-provider)
 # A SECOND management cluster, on Scaleway, for when your PRIMARY management
-# provider is lost/unavailable. Rebuilds a full management cluster (~30 min).
+# provider is lost/unavailable. Meant to rebuild a full management cluster.
 # Use this only when Scaleway is NOT your primary provider.
 #
 # Note on terminology: re-running your own management-<provider>.tfvars rebuilds
 # the cluster on the SAME provider (the everyday recovery). This file is the
 # CROSS-provider failover — same role, different cloud.
 #
-# Usage:
-#   task failover PROVIDER=scaleway
+# Usage: there is no failover command yet — see "Cross-provider failover" in
+# ../README.md.
 #
 # After rebuild:
 #   1. Flux bootstrap -> syncs from Git automatically
@@ -18,7 +18,7 @@
 # ==============================================================================
 
 # ⚠️ NEVER EXECUTED. This describes the disaster-recovery drill (primary provider
-# gone, cluster rebuilt on another) that is still an OPEN item in docs/backlog.md.
+# gone, cluster rebuilt on another) that is still undone (docs/status.md).
 # Nothing here has been deployed, so read it as a design intent, not as a proven
 # procedure. Note also that `ROLE=failover` only picks THIS FILE: the Flux overlay
 # and the bucket segment come from cluster_role below, which is "management".

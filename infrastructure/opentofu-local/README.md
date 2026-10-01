@@ -1,7 +1,7 @@
-# OpenAether — Local Talos Test (3 CP + 2 workers, Docker)
+# OpenAether — Local Talos Test (3 CP + 3 workers, Docker)
 
 Exercises the **production `modules/talos/`** end-to-end on a real **3 control
-plane + 2 worker** Talos cluster running in Docker — no cloud credentials. The
+plane + 3 worker** Talos cluster running in Docker — no cloud credentials. The
 dedicated workers stay schedulable (control planes keep their taint), so it also
 covers HA and real pod scheduling. Use it to validate config generation, etcd
 quorum, bootstrap, kubeconfig retrieval, Cilium, and the Flux GitOps chain
@@ -18,7 +18,7 @@ before spending money in the cloud.
 | `data.talos_client_configuration` | ✅ | talosconfig |
 | `data.talos_machine_configuration` | ✅ | **the real config** (certSANs, CNI=none, proxy off, kubePrism, inlineManifests, hostDNS) |
 | `talos_machine_bootstrap` | ✅ | 3-node etcd quorum (control planes only) |
-| worker join (`modules/talos` worker config) | ✅ | 2 dedicated workers join via USERDATA |
+| worker join (`modules/talos` worker config) | ✅ | 3 dedicated workers join via USERDATA |
 | `talos_cluster_kubeconfig` | ✅ | kubeconfig (rewritten to 127.0.0.1) |
 | `data.talos_cluster_health` | ☁️ cloud-only | stalls behind WSL2 port mappings; verified here via `talosctl health` (skip_health_check=true) |
 | `talos_machine_configuration_apply` | ☁️ cloud-only | Docker uses USERDATA delivery (Talos platform docs); maintenance-apply reboot-loops in containers |
@@ -59,7 +59,7 @@ TF_VAR_encryption_passphrase="local-test-passphrase-32chars-minimum" \
 
 # Or via task:
 task local-render-manifests   # render simplified Cilium (no WireGuard)
-task local-up                 # deploy the cluster (3 CP + 2 workers)
+task local-up                 # deploy the cluster (3 CP + 3 workers)
 task local-status             # etcd members + nodes + Flux
 task local-flux             # Flux UI → http://localhost:9090
 task local-down               # tear down
@@ -88,6 +88,7 @@ WSL2 host (OpenTofu + talosctl + kubectl)
   ├─ 127.0.0.1:50002 → cp-2:50000      (Talos API)   node identity 10.5.0.12
   ├─ 127.0.0.1:50010 → worker-0:50000  (Talos API)   node identity 10.5.0.20
   ├─ 127.0.0.1:50011 → worker-1:50000  (Talos API)   node identity 10.5.0.21
+  ├─ 127.0.0.1:50012 → worker-2:50000  (Talos API)   node identity 10.5.0.22
   └─ 127.0.0.1:6443  → cp-0:6443       (K8s API)
 
 Containers (ghcr.io/siderolabs/talos): --read-only, PLATFORM=container,

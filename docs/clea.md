@@ -29,7 +29,7 @@ dependency.
 | lane | when | what it exercises |
 |---|---|---|
 | scan + coverage | daily, 04:17 UTC | every anchor read, resolved upstream, and compared against `renovate.json5` |
-| tool probes | daily | cold install and in-place upgrade of each tool that moved, in a bare `ubuntu:24.04`, then `task lint`, `task render-check`, `task test-scripts` on the bumped tree |
+| tool probes | daily | cold install and in-place upgrade of each tool that moved, in a bare `ubuntu:24.04`, then the repository's own gates (`[lane] repo` in `clea.toml`) on the bumped tree |
 | local cluster | weekly, Sunday 03:41 UTC | `task local-up` on the Talos and Kubernetes pair upstream publishes, then `task local-verify`, at 1 control plane + 1 worker |
 | real cloud | never | by hand, by someone watching — see [`CONTRIBUTING.md`](../CONTRIBUTING.md) |
 

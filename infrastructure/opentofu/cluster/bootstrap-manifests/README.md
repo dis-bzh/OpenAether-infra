@@ -8,8 +8,8 @@ Static Kubernetes manifests injected at cluster creation via **Talos `inlineMani
 |------|--------|---------------|
 | `cilium.yaml` | `helm template cilium/cilium` | Always (CNI is required) |
 | `cilium-local.yaml` | `helm template cilium/cilium --local` | Local Docker testing only |
-| `flux-install.yaml` | Flux2 official `install.yaml` | `talos_bootstrap=true` (initial bootstrap only) |
-| `flux-bootstrap.yaml.tftpl` | OpenTofu template | `talos_bootstrap=true` (initial bootstrap only) |
+| `flux-install.yaml` | Flux2 official `install.yaml` | `deploy_flux=true` (default false) |
+| `flux-bootstrap.yaml.tftpl` | OpenTofu template | `deploy_flux=true` (default false) |
 
 ## Regenerating Manifests
 
@@ -30,10 +30,8 @@ Then commit the updated files. OpenTofu reads them at apply time.
 
 ## Current Versions
 
-| Component | Version |
-|-----------|---------|
-| Cilium | 1.19.2 |
-| Flux | latest |
+The pins are `CILIUM_VERSION` and `FLUX_VERSION` in
+`scripts/bootstrap/render-bootstrap-manifests.sh`.
 
 ## Bootstrap Flow
 
@@ -61,7 +59,7 @@ The `flux-bootstrap.yaml.tftpl` template receives:
 
 - **Never commit real credentials** — these files contain no secrets
 - **Cilium is always injected** — required for node networking before kubelet starts
-- **Flux is only injected on initial bootstrap** — on upgrades/DRP, Flux already runs
+- **Flux is only injected with `deploy_flux=true`, on initial bootstrap** — on upgrades/DRP, Flux already runs
   and manages itself via GitOps. Re-injecting would cause conflicts.
 - **Upgrade path**: Update versions in `render-bootstrap-manifests.sh`, regenerate,
   then `tofu apply` with the new manifests

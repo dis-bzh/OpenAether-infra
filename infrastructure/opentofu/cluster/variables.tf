@@ -316,17 +316,10 @@ variable "git_repo_url" {
   default     = "https://github.com/dis-bzh/OpenAether-apps.git"
 }
 
-# A release of this repo has to identify a release of the platform it deploys.
-# This was hardcoded to the `main` branch: a commit in OpenAether-apps could then
-# change a running cluster within the reconcile interval, and no version of this
-# repo named a deployable system. `refs/tags/…` by default, and a branch stays
-# available for testing — which is also how two managements avoid sharing
-# apps/clusters (see OpenAether-apps/README.md).
-# The DEFAULT tracks a branch and the EXAMPLES pin a tag, deliberately in that
-# order. A tag default makes the repository undeployable between releases —
-# you cannot test the ref mechanism until the tag exists, and after it exists
-# main still deploys the previous platform. Development tracks main; a user
-# copies an example and gets a pinned pair.
+# The default and the examples both track main: a tag default would make the repo
+# undeployable between releases, since the ref cannot be tested before the tag
+# exists. Pinning a release is the user's choice (refs/tags/<version>); a branch
+# also keeps two managements off the same apps/clusters.
 variable "git_ref" {
   description = "Git ref OpenAether-apps is tracked at, fully qualified: refs/heads/<branch> to develop, refs/tags/<version> to deploy"
   type        = string
