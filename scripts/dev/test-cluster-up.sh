@@ -55,13 +55,14 @@ for e in management-scaleway workload-ovh; do echo 'cluster_name = "fixture"' >"
 : >"$W/key"
 
 O="$W/out"
-run() { # <verifier rc> <task args...> — combined output in $O, calls in calls.log; EXTRA=NAME=value adds one env var
+run() { # <verifier rc> <task args...> — combined output in $O, calls in calls.log; EXTRA=NAME=value sets one env var, last, so it overrides the defaults
   local rc="$1"; shift
   : >"$W/calls.log"
-  env -i PATH="$W/bin:$PATH" HOME="$W" VERIFY_RC="$rc" ${EXTRA:+"$EXTRA"} \
+  env -i PATH="$W/bin:$PATH" HOME="$W" VERIFY_RC="$rc" \
       TF_VAR_encryption_passphrase=fixture-passphrase-of-at-least-32-characters \
       SCW_ACCESS_KEY=scw-access-key SCW_SECRET_KEY=scw-secret-key \
       OVH_AWS_ACCESS_KEY_ID=ovh-access-key OVH_AWS_SECRET_ACCESS_KEY=ovh-secret-key \
+      ${EXTRA:+"$EXTRA"} \
       "$TASK" -d "$W" "$@" </dev/null >"$O" 2>&1
 }
 calls() { grep -c "$1" "$W/calls.log"; }
@@ -147,6 +148,23 @@ for how in env cli; do
   [ "$rc" = 0 ] && grep -qx 'talos-image.sh scaleway v0.0.0-fixture --ensure' "$W/calls.log" \
     && ok "VERSION given as $how is ignored: the pin is built" \
     || bad "VERSION as $how, exit $rc; the build was: $(grep '^talos-image' "$W/calls.log")"
+done
+
+
+echo "--- a bad passphrase is refused before the buckets are created ---"
+# ensure-buckets creates the buckets and the image build follows: neither may have run.
+run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+# (infra-apply calls it again later, so the control counts the --preflight call.)
+[ "$rc" = 0 ] && [ "$(calls '^ensure-buckets.sh .*--preflight$')" = 1 ] \
+  && ok "control: a good passphrase reaches the preflight ensure-buckets once" \
+  || bad "control, exit $rc, preflight calls $(calls '^ensure-buckets.sh .*--preflight$'): $(tail_of)"
+for c in "|is not set" "change-me-fixture-passphrase|is still the example"; do
+  EXTRA="TF_VAR_encryption_passphrase=${c%%|*}" run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+  # Anchored: go-task echoes the whole script into $O, so an unanchored match is always true.
+  [ "$rc" != 0 ] && grep -q "^✗ TF_VAR_encryption_passphrase ${c#*|}" "$O" \
+    && [ "$(calls '^ensure-buckets.sh ')" = 0 ] && [ "$(calls '^talos-image.sh ')" = 0 ] \
+    && ok "passphrase '${c%%|*}': refused, nothing built" \
+    || bad "passphrase '${c%%|*}', exit $rc, ensure-buckets $(calls '^ensure-buckets.sh '), image $(calls '^talos-image.sh '): $(tail_of)"
 done
 
 

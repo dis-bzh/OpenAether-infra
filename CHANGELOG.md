@@ -16,6 +16,36 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
+- **`task evidence-check` dates the real-cloud evidence in `docs/status.md`
+  (refs #121).** Nothing aged the table 0.1.0 rests on, so a measurement stayed
+  "true today" after the versions it measured had moved. The table gains a
+  `measured` column and a Scaleway re-run row (2026-08-20, Talos v1.13.8 to
+  v1.13.9), transcribed from `upgrade.md` and the release checklist. The new
+  `scripts/dev/check-evidence-age.sh` takes the newest row per provider and is
+  red when its Talos or Kubernetes is not the pin, when it is older than 45 days
+  (`OA_EVIDENCE_MAX_AGE_DAYS`), or when the row carries a ❌ or ⚠ (a failed run
+  is no evidence). The pin is the tracked default in `cluster/variables.tf`,
+  read with no tfvars: what a `management-*` example that leaves the pins unset
+  inherits, and the one Renovate bumps. This departs from the issue, which names
+  the `talos_version` / `kubernetes_version` of the `envs/*.tfvars.example`: 9 of
+  the 14 pin `v1.13.3` / `v1.35.3`, they are unwatched and stale, and a
+  workstation's own `envs/*.tfvars` must not change the verdict either. Exit 0
+  current, 1 stale, 2 not verifiable (no table, a bad or future date, a cell
+  with no version), so a broken extractor never reads as stale. On this tree it
+  exits 1: OVH and Outscale measured Talos v1.13.8 against the pin v1.13.9,
+  Scaleway is current (41 days old on 2026-09-30) but goes stale on 2026-10-05.
+  It is in neither `task lint` nor `task test`, where a date-driven red would
+  appear with no commit, and it records no receipt.
+  `task preflight` runs it with `--warn`, before its banner: stale prints a
+  warning and exit 2 fails, so the last lines stay true either way. Mocked rung:
+  `test-evidence-age.sh` (63 assertions, fixtures and an injected clock) sees
+  each verdict red and green, and asserts the real table parses, never that it
+  is current; each of 31 mutations of the gate and of the Taskfile wiring turns
+  it red. Nothing else in a row is read: a row that re-ran only the upgrade
+  counts, and it cannot tell a measured row from a typed one. Turning it green
+  takes, for every provider, a row at the pin dated within the limit: real OVH
+  and Outscale runs, then Scaleway again. The issue stays open until then.
+
 - **A pull request's rung is checked against a receipt the harness wrote
   (#120).** CONTRIBUTING asks every PR to name the rung it reached, but nothing
   recorded that a rung ever ran, so neither a reviewer nor CI could check the
@@ -151,6 +181,14 @@ in git. 0.1.0 is the first entry describing something proven.
   without a token. The token path rests on CI's "Pipeline audit" job.
 
 ### Fixed
+
+- **`task cluster-up` refuses a missing or placeholder passphrase before it
+  creates the buckets.** The check ran after `ensure-buckets.sh --preflight`,
+  which creates the four buckets, so the refusal came once resources existed. It
+  now runs first. `test-cluster-up.sh` gains a control and two cases (empty,
+  `change-me`): the refusal, and no `ensure-buckets.sh` or `talos-image.sh` call;
+  12 passed / 2 failed on the old order, 14 / 0 on the fix. `EXTRA` is now applied
+  last, so a case can override the default passphrase. Mocked rung only.
 
 - **A Scaleway kind that no zone answered is no longer read as clean.**
   `scaleway.py` skipped a kind that every zone answered 404/501 as "not
@@ -814,6 +852,14 @@ in git. 0.1.0 is the first entry describing something proven.
   the stand-ins, which only #69's own measurement says; that the apply of the
   state-only plan destroys anything; and #69 itself, two versions kept side by
   side with a node created on the older one, which stays open on a real cloud.
+
+- **`task upgrade PROVIDER=x DRY_RUN=1` now makes a dry run.** A Task variable is
+  not an environment variable, and `cluster-upgrade.sh` reads `DRY_RUN`,
+  `UPGRADE_TALOS_TO` and `UPGRADE_K8S_TO` from the environment, so the
+  command-line form was ignored and a real upgrade started. The target now passes
+  the three on, empty when unset. `test-task-guards.sh` runs it against a stub
+  script, from the command line and from the shell; deleting the `env:` block
+  turns it red. Mocked rung; no upgrade was run.
 
 ### Added
 

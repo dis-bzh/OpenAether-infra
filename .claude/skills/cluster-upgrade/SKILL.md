@@ -40,7 +40,8 @@ Talos supports the current Kubernetes minor and the five before it. Both the
 starting and the ending pair must sit inside that window, and so must the
 intermediate state, because one moves before the other. `versions-guard.tf`
 refuses an unsupported pair and refuses a Talos minor it has never heard of —
-extend its map from the upstream matrix rather than widening it.
+extend `cluster/version-support.json` from the upstream matrix rather than
+widening it.
 
 ## Move the pin, then build the image
 

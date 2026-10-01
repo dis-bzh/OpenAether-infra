@@ -74,7 +74,8 @@ It reboots nothing, so it isolates the control-plane roll from the node roll.
 
 ```bash
 # edit kubernetes_version in envs/<role>-<provider>.tfvars, then
-task infra-apply ROLE=management PROVIDER=<p>
+task infra-plan  ROLE=management PROVIDER=<p> OUT=tfplan
+task infra-apply ROLE=management PROVIDER=<p> PLAN=tfplan
 ```
 
 Talos reconciles the static pods and the kubelets; wait for every node to report
@@ -89,7 +90,8 @@ ignore the image, but the *data source* still has to resolve), apply, then roll.
 ```bash
 # edit talos_version in the tfvars FIRST, then
 task image-build PROVIDER=<p> VERSION=<new> ENSURE=1
-task infra-apply ROLE=management PROVIDER=<p>
+task infra-plan  ROLE=management PROVIDER=<p> OUT=tfplan
+task infra-apply ROLE=management PROVIDER=<p> PLAN=tfplan
 task cluster-roll PROVIDER=<p> KEY=~/.ssh/<key> -- --cp-only --upgrade
 task cluster-roll PROVIDER=<p> KEY=~/.ssh/<key> -- --workers-only --upgrade
 ```
