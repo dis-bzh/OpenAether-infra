@@ -5,19 +5,14 @@ Several rules below are adapted from
 met while wiring the emulated-cloud lane. Read it there for the reasoning at
 length; kept here is what transfers to an infrastructure repository.
 
-## Issues, and what they are not
+## Issues: intake and tracker
 
-**Issues are for what you hit** — a deploy, a task or a manifest that did not do
-what it says. Reports from outside are welcome and outrank our own list: the
-order in the backlog is a guess about what matters, something that broke on
-somebody is a fact.
-
-**Our own work is not in issues.** It lives in
-[the open issues](https://github.com/dis-bzh/OpenAether-infra/issues), where every one names the command that
-would close it. Keeping the two apart is the point: a working list wants to be
-read offline, in one file, at the start of a session; an intake wants to be
-where a stranger can reach it. Duplicating one into the other would give us two
-records that disagree.
+**Issues are where you report what you hit** — a deploy, a task or a manifest
+that did not do what it says — **and where we track our own work**; each one
+names the command that would close it, in
+[the open issues](https://github.com/dis-bzh/OpenAether-infra/issues). Reports
+from outside are welcome and outrank our own list: its order is a guess about
+what matters, something that broke on somebody is a fact.
 
 Never put a real IP, a cloud account id or a bucket name in an issue. The
 repository is public and has had to purge its history once for that.
