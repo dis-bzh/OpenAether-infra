@@ -7,7 +7,7 @@ to pick up.
 Open work is **not** here — it is in the GitHub issues, each naming what closes it
 and the rung it needs. This file answers "what is true today", not "what is left".
 
-**0.1.0 is the first release that will ship something proven.** Every 1.x tag was
+**0.1.0, published 2026-08-20 as a pre-release, is the first release that shipped something proven.** Every 1.x tag was
 deleted on both repositories; the versions they named never worked. Scope:
 **one Talos cluster on one supported provider, floor = Cilium**. Flux is disabled
 by default (`deploy_flux`, false) — disabled, not amputated, and it returns as a

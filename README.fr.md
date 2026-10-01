@@ -291,7 +291,7 @@ task security            # contrôles de durcissement
 
 | Version | Livrable | Statut |
 |---------|----------|--------|
-| **0.1.0** | Un cluster Talos + Cilium sur Scaleway, OVH ou Outscale, état et artefacts chiffrés, upgrades en place | ⏳ première version |
+| **0.1.0** | Un cluster Talos + Cilium sur Scaleway, OVH ou Outscale, état et artefacts chiffrés, upgrades en place | ✅ publiée le 2026-08-20 (pré-version) |
 | suivante | Flux redevenu un choix utilisateur, puis la pioche modulaire dans `OpenAether-apps` | ⏳ prévu |
 | plus tard | Surcouche CAPI : un cluster de management pilotant des enfants | ⏳ prévu |
 | ouvert | Proxmox sur matériel réel, le failover cross-provider complet, le Net Outscale que seul le provider peut supprimer | ⏳ |

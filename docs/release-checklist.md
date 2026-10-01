@@ -336,7 +336,9 @@ Only once everything above is green.
 - [x] `CHANGELOG.md` names what 0.1.0 claims **and** what it does not → four
       Known limits carry the honest half, including the two checklist lines below
       that are NOT met.
-- [ ] a GitHub Release, with notes that name the open items
+- [x] a GitHub Release, with notes that name the open items → published 2026-08-20 as a
+      pre-release; its "Open items" link still points at the retired backlog file
+      (the GitHub issues replace it).
 - [ ] `git describe --tags` clean
 - [x] the `envs/*.tfvars.example` carry `git_ref = "refs/heads/main"` — infra
       pins no `OpenAether-apps` tag, so there is no ordering constraint between
