@@ -103,9 +103,10 @@ deux qui changent l'écriture des commits :
   certifient l'origine, ce qu'un modèle ne peut pas faire. Refusé par le hook
   `commit-msg` et par la CI.
 - **Apporter la preuve, pas l'intention** : une modif de module provider n'est
-  pas finie tant que quelque chose de réel ne l'a pas exercée. Trois barreaux
-  (`task test` mocké → `task feint-*` émulé → cloud réel) ; dire lequel on a
-  atteint et lequel on a sauté. « Ça devrait passer » n'est pas un barreau.
+  pas finie tant que quelque chose de réel ne l'a pas exercée. Quatre barreaux
+  (`task test` mocké → `task feint-*` émulé → `task local-up` Docker local →
+  cloud réel, voir `CONTRIBUTING.md`) ; dire lequel on a atteint et lequel on a
+  sauté. « Ça devrait passer » n'est pas un barreau.
 
 ## Concision et refacto
 
@@ -126,8 +127,8 @@ souvent, rien.
 
 Toute amélioration identifiée (« mieux que l'existant ») ouvre une **issue
 GitHub**, comme dans Feint. Une issue nomme ce qui cloche, **ce qui la ferme**
-(l'observation qui prouve que c'est réglé) et le **barreau** visé : `task test`
-mocké → `task feint-*` émulé → cloud réel.
+(l'observation qui prouve que c'est réglé) et le **barreau** visé, l'un des
+quatre de `CONTRIBUTING.md`.
 
 Un constat sans changement à proposer est une **issue**, pas une PR. Une PR
 propose un changement ; c'est ce qui distingue les deux.
