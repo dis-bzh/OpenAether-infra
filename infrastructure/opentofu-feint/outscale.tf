@@ -3,10 +3,9 @@
 #
 # Feint 0.6.0 moved this a long way: security groups, public IPs, the internet
 # service, the NAT service, route tables and NICs are all served now, so the
-# egress plan below is the production one rather than a sketch of it. What is
-# still missing is the load balancer — only ReadLoadBalancers is mounted, and
-# CreateLoadBalancer is declined (their OSC-5 batch) — so `k8s_lb_ip` and
-# `app_lb_ip` remain the reason the real cluster root stops at `plan`.
+# egress plan below is the production one rather than a sketch of it. The load
+# balancer is left out by design to keep this fixture small: `feint-apply-root`
+# applies the real root with it (CreateLoadBalancer answers 200 since Feint 0.12.0).
 #
 # This is also the first apply-mode coverage Outscale has in this repository:
 # cluster/tests/*.tftest.hcl mocks it at plan level only.
