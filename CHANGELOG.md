@@ -767,9 +767,9 @@ in git. 0.1.0 is the first entry describing something proven.
 - **A Talos bootstrap the state forgot is adopted before phase 2 re-sends it
   (refs #67, refs #40).** An apply that is interrupted after the node accepted
   the Bootstrap RPC leaves no `talos_machine_bootstrap` in state, so the next
-  phase 2 sends it again at a live etcd: refused with `AlreadyExists`, or, from a
-  control plane with an empty disk, a second etcd. `bootstrap-phase2` now runs
-  the new `scripts/bootstrap/adopt-bootstrap.sh` once the tunnels are open. If
+  phase 2 sends it again at a live etcd, which refuses it with `AlreadyExists`.
+  `bootstrap-phase2` now runs the new `scripts/bootstrap/adopt-bootstrap.sh`
+  once the tunnels are open. If
   the state lacks `module.talos.talos_machine_bootstrap.this[0]` and any control
   plane answers `talosctl etcd members` with exit 0 and a `:2380` row, it runs
   `tofu import -var skip_health_check=true` on it (the import also reads the
@@ -792,8 +792,11 @@ in git. 0.1.0 is the first entry describing something proven.
   node in each state, so whether the guard ever fires; the import on the real
   cluster root (the scratch config holds only the provider and that data
   source); the data source against a reachable, unhealthy cluster (seen only
-  against a closed port). The other control planes' etcd (#40) is not touched,
-  and both issues stay open for a real interrupted bootstrap.
+  against a closed port); that a control plane with an empty disk accepts a
+  second Bootstrap and forks etcd (upstream behaviour, and the reason every
+  control plane is asked and any member row counts). The other control planes'
+  etcd (#40) is not touched, and both issues stay open for a real interrupted
+  bootstrap.
 
 ### Added
 

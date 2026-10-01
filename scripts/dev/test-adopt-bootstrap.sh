@@ -153,7 +153,7 @@ untouched_unexpected=$(grep -c UNEXPECTED "$W/calls.log"); [ "$untouched_unexpec
 
 
 echo "--- only the SECOND control plane answers: still imported ---"
-# A fresh-disk CP-0 would accept a Bootstrap and fork etcd, so any member counts.
+# A fresh-disk CP-0 might accept a Bootstrap (not observed), so any CP's member counts.
 reset; members $CP1 "$HEADER
 $ROW"
 run; rc=$?

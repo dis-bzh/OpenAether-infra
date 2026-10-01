@@ -2,11 +2,12 @@
 # OpenAether — adopt a Talos bootstrap the state does not remember (#67)
 #
 # A bootstrap that reached the node but was never recorded (interrupted apply,
-# dropped tunnel) is re-sent by the next phase 2 at a live etcd: refused with
-# AlreadyExists or, on a CP with an empty disk, accepted and forking etcd. So:
-# when the state lacks the resource AND a control plane already reports etcd
-# members, import it. The provider ignores the import ID and sends nothing to a
-# node (scripts/dev/test-bootstrap-import.sh). Any other answer does nothing.
+# dropped tunnel) is re-sent by the next phase 2 at a live etcd, which refuses it
+# (AlreadyExists). So: when the state lacks the resource AND a control plane
+# already reports etcd members, import it. The provider ignores the import ID and
+# sends nothing to a node (scripts/dev/test-bootstrap-import.sh). Any other answer
+# does nothing. Every CP is asked, not only the first, in case an empty-disk CP
+# would accept a Bootstrap: upstream Talos behaviour, not observed here.
 # The import writes state BEFORE phase 2's approval prompt and declining that
 # plan does not undo it: the success message prints the undo.
 # skip_health_check=true: an import also reads the cluster-health data source,
@@ -57,7 +58,7 @@ done
 
 echo "▶ adopt-bootstrap: etcd on cp-${found} (${CPS[$found]}) already has ${n} member(s), of ${#CPS[@]} control plane(s),"
 echo "  yet the state has no ${ADDR}. Another bootstrap would be refused"
-echo "  (AlreadyExists) or fork etcd. Adopting it: nothing is sent to any node."
+echo "  (AlreadyExists). Adopting it: nothing is sent to any node."
 sed 's/^/    /' <<<"$members"
 
 cmd=(tofu import -input=false -var-file="envs/${ROLE}-${PROVIDER}.tfvars" -var talos_bootstrap=true -var skip_health_check=true "$ADDR" "${CPS[0]}")
