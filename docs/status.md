@@ -125,11 +125,10 @@ no container, volume, network or credential.
 [#87](https://github.com/dis-bzh/OpenAether-infra/issues/87) is closed on that
 basis; what it does not answer is below.
 
-**Not proven**: whether `v1.13.9` — the cloud root's own pin, unrelated to the
-change above — has been through the three-cloud evidence the table records for
-`v1.13.7`→`v1.13.8`, which stops one patch short of what is currently pinned.
-It was reached once on a real cloud (Scaleway, Talos only, 2026-08-20, above),
-never on OVH or Outscale. No lane has ever run unattended
+**Not proven**: `v1.13.9`, the cloud root's pin, on OVH and Outscale: the
+three-cloud table above stops at `v1.13.8` for them. On Scaleway it was reached
+once, by upgrading Talos only (`v1.13.8`→`v1.13.9`, 2026-08-20, 6/6 nodes,
+`cluster-verify` 11/11, above). No lane has ever run unattended
 to completion; nobody has
 deployed under a non-empty `bucket_suffix`; and the failover — provider A treated
 as gone, the cluster rebuilt on B from B's replica alone — has never been
