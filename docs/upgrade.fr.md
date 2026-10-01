@@ -80,7 +80,8 @@ nœuds.
 
 ```bash
 # modifier kubernetes_version dans envs/<role>-<provider>.tfvars, puis
-task infra-apply ROLE=management PROVIDER=<p>
+task infra-plan  ROLE=management PROVIDER=<p> OUT=tfplan
+task infra-apply ROLE=management PROVIDER=<p> PLAN=tfplan
 ```
 
 Talos réconcilie les static pods et les kubelets ; attendre que chaque nœud
@@ -97,7 +98,8 @@ puis dérouler.
 ```bash
 # modifier talos_version dans le tfvars D'ABORD, puis
 task image-build PROVIDER=<p> VERSION=<new> ENSURE=1
-task infra-apply ROLE=management PROVIDER=<p>
+task infra-plan  ROLE=management PROVIDER=<p> OUT=tfplan
+task infra-apply ROLE=management PROVIDER=<p> PLAN=tfplan
 task cluster-roll PROVIDER=<p> KEY=~/.ssh/<clé> -- --cp-only --upgrade
 task cluster-roll PROVIDER=<p> KEY=~/.ssh/<clé> -- --workers-only --upgrade
 ```

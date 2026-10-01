@@ -140,7 +140,7 @@ Only the `*.tfvars.example` templates are versioned. Copy an example to its real
 `admin_ip`, `bastion_ssh_keys`, etc. The real `*.tfvars` are git-ignored so
 credentials never get committed.
 
-> Local Docker testing (3 CP + 2 workers) is **not** an env file here — it lives in
+> Local Docker testing (3 CP + 3 workers) is **not** an env file here — it lives in
 > [`../../opentofu-local`](../../opentofu-local) (its own root, `TF_VAR_`-driven).
 
 ## Workflow
@@ -155,8 +155,9 @@ task image-build PROVIDER=scaleway               # -> image "talos-scaleway-amd6
 ./scripts/bootstrap/render-bootstrap-manifests.sh
 
 # Phase 1 — infra (IPs land in the state). The task ensures the buckets + inits the
-# per-cluster backend for you. PROVIDER defaults to scaleway (also ovh, outscale, proxmox).
-task infra-apply ROLE=management                 # or: task infra-apply ROLE=management PROVIDER=ovh
+# per-cluster backend for you. PROVIDER is required (scaleway, ovh, outscale or proxmox), and
+# so is PLAN=<file from `task infra-plan … OUT=`> or APPROVE=auto.
+task infra-apply ROLE=management PROVIDER=scaleway APPROVE=auto
 #   manual equivalent:
 #     ./scripts/internal/ensure-buckets.sh envs/management-scaleway.tfvars
 #     tofu init -reconfigure $(./scripts/internal/tf-backend.sh envs/management-scaleway.tfvars)
@@ -175,7 +176,7 @@ task tunnels-down
 ### Deploy workload cluster
 
 ```bash
-task infra-apply ROLE=workload PROVIDER=ovh
+task infra-apply ROLE=workload PROVIDER=ovh APPROVE=auto
 task bootstrap-phase2 ROLE=workload PROVIDER=ovh KEY=~/.ssh/yourkey
 ```
 
@@ -200,7 +201,8 @@ tofu apply -var-file=envs/management-scaleway.tfvars -var talos_bootstrap=true
 ### Teardown (destroy)
 
 ```bash
-task infra-down ROLE=management                # or: ROLE=workload PROVIDER=ovh
+task infra-down-plan ROLE=management PROVIDER=scaleway    # writes destroy.tfplan; read it
+task infra-down      ROLE=management PROVIDER=scaleway PLAN=destroy.tfplan
 ```
 
 Manual equivalent (two steps are required):
@@ -241,7 +243,7 @@ the Phase-2 apply (`backup-artifacts.sh`); the state is replicated **after** the
 apply (`backup-state.sh` / `task backup-state`), because the backend only flushes
 the new state on apply exit.
 
-The four buckets are **auto-provisioned** (idempotent) by `task infra-apply ROLE=management` /
+The four buckets are **auto-provisioned** (idempotent) by `task infra-apply ROLE=management PROVIDER=<p>` /
 `task cluster-up` before it builds anything, and `task infra-apply` again before
 `tofu init` — `scripts/internal/ensure-buckets.sh` derives their names from the
 cluster's tfvars and `aws s3 mb`s any that are missing, each with its own cloud's

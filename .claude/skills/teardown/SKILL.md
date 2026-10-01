@@ -124,8 +124,9 @@ name rather than removing them; that report is the deliverable, not noise.
 `scripts/ops/verify-provider-clean.py` and the purge scripts ask the provider,
 not the state file. Report the counts. A session is not finished until something
 that queries the account says zero. Both exit 0 clean, 1 leftovers found, 2
-could not check (credentials missing or an endpoint refused, `--apply` included:
-a refusal never reads clean); a purge `--apply` exits 3 when a deletion failed.
+could not check (credentials missing, or an endpoint refused with nothing else
+found); a purge `--apply` exits 3 when a deletion failed. A refusal next to
+leftovers or a failed deletion takes their code: never 0, so it never reads clean.
 On Scaleway, `verify-provider-clean.py <cluster> scaleway` reads the purge's own
 listing, scoped to that cluster (the whole name: `edge-1` is not `edge-10`) plus
 any detached IP or volume, block or instance API.

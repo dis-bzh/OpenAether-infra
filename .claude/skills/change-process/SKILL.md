@@ -33,13 +33,13 @@ it go green. A check you have only ever seen pass is a check you have not tested
 
 1. Read `docs/status.md` — it says what runs,
    what is proven on real cloud, and where to pick up.
-2. Read `CLAUDE.md` (repository rules) and `CONTRIBUTING.md` (the three rungs).
+2. Read `CLAUDE.md` (repository rules) and `CONTRIBUTING.md` (the rungs).
 3. If you are touching the Flux DAG in `OpenAether-apps`: `task apps-validate`.
 
 ## While you work
 
-**Prove it, don't assert it.** `CONTRIBUTING.md` defines three rungs — mocked
-(`task test`), emulated (`task feint-*`), real cloud. Say which one you reached
+**Prove it, don't assert it.** `CONTRIBUTING.md` defines the rungs, from
+mocked (`task test`) up to real cloud. Say which one you reached
 **and which you skipped**. "It should pass" is not a rung. Put that sentence in
 the commit body, not only in the PR.
 

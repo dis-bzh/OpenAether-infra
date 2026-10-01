@@ -144,7 +144,7 @@ output "instructions" {
     #   task register-spoke CLUSTER=${var.cluster_name}-${var.environment} PROVIDER=${local.active_provider}
     #
     # ─── Cross-provider failover (2nd management on another cloud) ──
-    #   task failover PROVIDER=ovh
+    #   no command yet — see the cluster README, "Cross-provider failover"
   EOT
 }
 

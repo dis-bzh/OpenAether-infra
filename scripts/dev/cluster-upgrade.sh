@@ -12,7 +12,8 @@
 # keeps a target to move to. Override with UPGRADE_TALOS_TO / UPGRADE_K8S_TO.
 #
 # NOTHING HERE RETRIES. The first apply after a `talos_version` bump is known to
-# fail on OVH and Outscale (backlog: "Provider produced inconsistent final plan").
+# fail on OVH and Outscale ("Provider produced inconsistent final plan", see
+# docs/upgrade.md).
 # A retry would turn that defect into a green run, which is how it survived this
 # long.
 #

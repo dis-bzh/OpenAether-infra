@@ -63,7 +63,7 @@
       pinDigests: true,
     },
     {
-      description: "Talos/Kubernetes gate a running cluster's control plane. Bumping is a one-node-at-a-time `task rolling-replace`, never automated — see docs/backlog.md.",
+      description: "Talos/Kubernetes gate a running cluster's control plane. Bumping is a one-node-at-a-time `task rolling-replace`, never automated — see docs/upgrade.md.",
       matchPackageNames: ["siderolabs/talos", "kubernetes/kubernetes"],
       labels: ["dependencies", "cluster-version"],
     },

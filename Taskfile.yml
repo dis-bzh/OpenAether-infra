@@ -117,6 +117,10 @@ tasks:
         vars: {ROOT: talos-image}
       - task: test
       - task: test-scripts
+      # --warn: a measurement going stale is news, not a broken tree. Exit 2 (an
+      # unreadable table or pin) is the gate itself failing. It runs BEFORE the banner:
+      # a failure after "green" is a banner that lied.
+      - ./scripts/dev/check-evidence-age.sh --warn
       - cmd: |
           echo
           if [ "${RENDER_CHECK_ALLOW_OFFLINE:-0}" = 1 ]; then
@@ -127,7 +131,7 @@ tasks:
           echo "  NOT covered here — only a cloud run can show that the provider accepts these"
           echo "  arguments, that the stored state is ciphertext, that an upgrade keeps the API"
           echo "  up, and that the teardown leaves the account empty. All four HAVE been shown on"
-          echo "  real clouds: see the table in docs/status.md for which, when, and how long."
+          echo "  real clouds: docs/status.md has the table, and task evidence-check says whether it is current."
           fi
 
   lint:
@@ -510,6 +514,9 @@ tasks:
       - ./scripts/dev/test-rung-receipts.sh
       # The inline guards of `fmt`, `lint` and the step below, under the real Taskfile.
       - ./scripts/dev/test-task-guards.sh
+      # check-evidence-age.sh on fixtures and a fixed clock. The real tree must parse, never be
+      # current: a verdict here would turn a required check red with no commit.
+      - ./scripts/dev/test-evidence-age.sh
       - |
         written="$(find infrastructure/opentofu/cluster/envs -newer {{.ENVS_STAMP}})" || exit 1
         [ -z "$written" ] || { echo "✗ a step wrote under envs/:" $written >&2; exit 1; }
@@ -668,10 +675,6 @@ tasks:
           echo "  else in this shell will tell you it is missing until it costs time." >&2
           exit 1
         fi
-        # --preflight adds prod's replica-on-another-cloud rule, for a cluster
-        # with no state object yet. Only here: infra-apply, which cluster-upgrade
-        # and converge-versions call, must keep working on a deployed cluster.
-        ./scripts/internal/ensure-buckets.sh "$TFVARS" --preflight || exit 1
         # The passphrase encrypts the state and both access artifacts, and NOTHING
         # else checks it: without it `tofu` stops to prompt, and with the shipped
         # placeholder — long enough to pass the only validation there is — it
@@ -681,6 +684,10 @@ tasks:
           *change-me*) echo "✗ TF_VAR_encryption_passphrase is still the example from .env.example." >&2
                        echo "  It is public. Replace it: openssl rand -base64 48" >&2; exit 1 ;;
         esac
+        # --preflight adds prod's replica-on-another-cloud rule, for a cluster
+        # with no state object yet. Only here: infra-apply, which cluster-upgrade
+        # and converge-versions call, must keep working on a deployed cluster.
+        ./scripts/internal/ensure-buckets.sh "$TFVARS" --preflight || exit 1
       # image-build reads the pin from ROLE's tfvars. VERSION is blanked because
       # go-task hands it an exported or typed one, and the tfvars is the decision.
       - task: image-build
@@ -1421,6 +1428,14 @@ tasks:
     cmds:
       - ./scripts/dev/check-flux-image-digests.sh {{.CLI_ARGS}}
 
+  evidence-check:
+    desc: >-
+      Date the real-cloud evidence in docs/status.md (#121): exits 1 while a provider's newest row
+      measured another Talos/Kubernetes than the pin, or is too old (OA_EVIDENCE_MAX_AGE_DAYS). Red by
+      design until it is re-measured, so it is in neither `task lint` nor `task test` and records no receipt.
+    cmds:
+      - ./scripts/dev/check-evidence-age.sh
+
   kubeconfig:
     desc: >-
       Retrieve kubeconfig/talosconfig from OpenTofu outputs (re-inits the backend, so this works from a cold
@@ -1532,6 +1547,12 @@ tasks:
     vars:
       ROLE: '{{.ROLE | default "management"}}'
       KEY: '{{.KEY | default "~/.ssh/id_ed25519"}}'
+    # The script reads the environment and a CLI variable is not in it:
+    # `task upgrade DRY_RUN=1` used to start a real upgrade.
+    env:
+      DRY_RUN: '{{.DRY_RUN | default ""}}'
+      UPGRADE_TALOS_TO: '{{.UPGRADE_TALOS_TO | default ""}}'
+      UPGRADE_K8S_TO: '{{.UPGRADE_K8S_TO | default ""}}'
     cmds:
       - defer: *receipt
       # cluster-upgrade.sh was reachable from no target and from no workflow —

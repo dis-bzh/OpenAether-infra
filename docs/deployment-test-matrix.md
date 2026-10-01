@@ -140,13 +140,12 @@ quotas. What it proves and what it does not: `emulated-cloud.md`.
 | `FEINT-scw-plan` | `task feint-plan PROVIDER=scaleway` | The **real** cluster root planned with zero credentials in scope. | 🎭 (CI) |
 | `FEINT-osc-plan` | `task feint-plan PROVIDER=outscale` | Same for Outscale, and it resolves its image through `data.outscale_images` rather than a pinned id — the `images[0]` shape the module carried as an unverified assumption. | 🎭 (CI) |
 | `FEINT-scw-crud` | `task feint-apply PROVIDER=scaleway` | Real create/read/update/delete: security-group rule set, private NIC addressing, server + volume lifecycle, empty re-plan, destroy verified against the API. | 🎭 (CI) |
-| `FEINT-osc-crud` | `task feint-apply PROVIDER=outscale` | Same on Outscale, and since Feint 0.6.0 nearly the whole module: the two-subnet egress plan (internet service, NAT, both route tables), security groups and rules, public IP link, volume link, keypair, three VMs — 27 resources. Only the load balancers are out of reach. | 🎭 (CI) |
-| `FEINT-record` | `task feint-record PROVIDER=…` | Records the real module through `feint proxy` and ranks the operations no pack serves. Measures the gap rather than asserting; the apply behind it is expected to fail on the first unserved call. | 🎭 |
+| `FEINT-osc-crud` | `task feint-apply PROVIDER=outscale` | Same on Outscale, and since Feint 0.6.0 nearly the whole module: the two-subnet egress plan (internet service, NAT, both route tables), security groups and rules, public IP link, volume link, keypair, three VMs — 27 resources. The fixture leaves the load balancers out by design; `feint-apply-root` covers them. | 🎭 (CI) |
+| `FEINT-record` | `task feint-record PROVIDER=…` | Records the real module through `feint proxy` and ranks the operations no pack serves. Measures the gap rather than asserting; the apply behind it has completed end to end since Feint 0.12.0. | 🎭 |
 | `FEINT-guard` | non-loopback endpoint | Negative test: the lane must refuse to drive anything but a local emulator. | 🎭 |
 
-Not reachable in this lane, and why: Scaleway root volume type, Outscale
-`volume_link`, `data.outscale_images` (segfaults the provider). See
-the open issues.
+What this lane still cannot carry: see "Known gaps" in
+[`emulated-cloud.md`](emulated-cloud.md).
 
 ### Cross-cutting operational scenarios
 
