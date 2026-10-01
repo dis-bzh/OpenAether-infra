@@ -439,6 +439,11 @@ tasks:
       # `cluster-up` from first guard to last line, real go-task, stubbed leaves:
       # a failing verifier fails it, and only a passing one prints success (#84).
       - ./scripts/dev/test-cluster-up.sh
+      # A bootstrap the state forgot is imported only when a control plane already
+      # has etcd members (#67); every other answer must change nothing. The second
+      # harness runs the real talos provider offline, which the first can only assume.
+      - ./scripts/dev/test-adopt-bootstrap.sh
+      - ./scripts/dev/test-bootstrap-import.sh
       # The three scripts between a cluster and a lost tfstate or etcd, and the
       # Day-1 seeder whose one rule is never to rotate what exists. Writing
       # these found a retention slice that deleted 28 of 29 snapshots and two
@@ -1022,6 +1027,9 @@ tasks:
     cmds:
       - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
       - SSH_KEY="{{.KEY}}" ../../../scripts/bootstrap/talos-tunnels.sh open .
+      # A bootstrap the state forgot would be re-sent below at a live etcd. Needs
+      # the tunnels just opened; imports only on a positive answer (#67).
+      - ../../../scripts/bootstrap/adopt-bootstrap.sh {{.ROLE}} {{.PROVIDER}}
       - |
         # Phase 2 cannot reuse the phase-1 plan: that one was computed with
         # talos_bootstrap=false, which gates the node counts to zero. So it

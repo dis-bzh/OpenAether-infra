@@ -44,8 +44,8 @@ EOF
 chmod +x "$W/stub"
 for s in internal/talos-version.sh internal/ensure-buckets.sh internal/converge-versions.sh \
          internal/tf-backend.sh internal/explain-failure.sh bootstrap/talos-image.sh \
-         bootstrap/render-bootstrap-manifests.sh bootstrap/talos-tunnels.sh ops/backup-state.sh \
-         dev/infra-verify.sh; do
+         bootstrap/render-bootstrap-manifests.sh bootstrap/talos-tunnels.sh bootstrap/adopt-bootstrap.sh \
+         ops/backup-state.sh dev/infra-verify.sh; do
   ln -s "$W/stub" "$W/scripts/$s"
 done
 ln -s "$W/stub" "$W/bin/tofu"; ln -s "$W/stub" "$W/bin/ssh-keygen"
@@ -93,6 +93,14 @@ v="$(line_of "$O" '^fixture verifier')"; s="$(line_of "$O" '^✓ cluster-up comp
 [ -n "$v" ] && [ -n "$s" ] && [ "$s" -gt "$v" ] \
   && ok "the success line is printed, after the verifier's verdict" \
   || bad "verifier at line ${v:-none}, success line at ${s:-none}"
+# Phase 2 asks the nodes whether a bootstrap the state forgot already ran (#67): after
+# the tunnels it needs are open, before the plan that would re-send the RPC.
+t="$(line_of "$W/calls.log" '^talos-tunnels.sh open')"; a="$(line_of "$W/calls.log" '^adopt-bootstrap.sh ')"
+p="$(line_of "$W/calls.log" '^tofu plan -out=phase2-')"
+[ "$(calls '^adopt-bootstrap.sh ')" = 1 ] && grep -qx 'adopt-bootstrap.sh workload ovh' "$W/calls.log" \
+  && [ -n "$t" ] && [ -n "$p" ] && [ "$t" -lt "$a" ] && [ "$a" -lt "$p" ] \
+  && ok "the adoption check runs once, for workload/ovh (role, then provider), between the tunnels and phase 2's plan" \
+  || bad "adopt-bootstrap.sh was called $(calls '^adopt-bootstrap.sh ') times; tunnels at ${t:-none}, it at ${a:-none}, plan at ${p:-none}"
 # The roll needs a kubeconfig, and so does the verifier after it: every cluster in
 # the checkout writes the same path, so the verifier must not trust the pre-roll copy.
 K='^tofu output -raw kubeconfig'

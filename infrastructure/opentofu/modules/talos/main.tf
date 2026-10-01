@@ -531,12 +531,12 @@ resource "talos_machine_configuration_apply" "worker" {
 # ==============================================================================
 # Bootstrap
 # Triggers the initial etcd/control plane bootstrap on the first CP node.
-# One-shot, and NOT idempotent — the comment here used to claim it was. Once the
-# node is bootstrapped, a create returns `AlreadyExists: etcd data directory is
-# not empty`, so any run whose success was not recorded in state (an interrupted
-# apply, a dropped tunnel) is stuck for good against a perfectly healthy
-# cluster. Recover by adopting the resource instead of re-creating it:
+# One-shot, and NOT idempotent: once the node is bootstrapped, a create returns
+# `AlreadyExists: etcd data directory is not empty`, so a success that never
+# reached state (interrupted apply, dropped tunnel) sticks against a healthy
+# cluster. scripts/bootstrap/adopt-bootstrap.sh adopts it before phase 2; by hand:
 #   tofu import 'module.talos.talos_machine_bootstrap.this[0]' <first-cp-ip>
+# The provider ignores the ID and sends nothing to a node.
 # In 'userdata' mode there are no apply resources to wait on — the provider
 # retries connection until the (USERDATA-configured) node is up.
 # ==============================================================================

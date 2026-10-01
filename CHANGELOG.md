@@ -764,6 +764,28 @@ in git. 0.1.0 is the first entry describing something proven.
   whether `ubuntu` joins `bastion-admins` (the OVH/Outscale collision) is still
   open on that issue.
 
+- **A Talos bootstrap the state forgot is adopted before phase 2 re-sends it
+  (refs #67, refs #40).** An apply that is interrupted after the node accepted
+  the Bootstrap RPC leaves no `talos_machine_bootstrap` in state, so the next
+  phase 2 sends it again at a live etcd: refused with `AlreadyExists`, or, from a
+  control plane with an empty disk, a second etcd. `bootstrap-phase2` now runs
+  the new `scripts/bootstrap/adopt-bootstrap.sh` once the tunnels are open. If
+  the state lacks `module.talos.talos_machine_bootstrap.this[0]` and any control
+  plane answers `talosctl etcd members` with exit 0 and a `:2380` row, it runs
+  `tofu import` on it; otherwise, including a node that does not answer within
+  `ADOPT_PROBE_TIMEOUT` (15s), it changes nothing. A fresh cluster pays up to
+  that timeout per control plane. The import fails the task only after etcd has
+  answered, with the command to run by hand.
+  `test-adopt-bootstrap.sh` (stubbed `tofu` and `talosctl`) holds each of those
+  branches, and `test-cluster-up.sh` the call order. `test-bootstrap-import.sh`
+  runs the pinned talos provider offline: a create against a closed port leaves
+  the resource out of state, an import with any ID succeeds, the plan is an
+  in-place update that applies in under a second with no RPC, and the re-plan is
+  empty. Not observed: what `talosctl etcd members` prints on a real node in each
+  state, so whether the guard ever fires; and whether the import evaluates on the
+  real cluster root. The other control planes' etcd (#40) is not touched, and
+  both issues stay open for a real interrupted bootstrap.
+
 ### Added
 
 - **New `feint-apply-root` lane: an untargeted apply on the REAL cluster
