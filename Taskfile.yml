@@ -1139,6 +1139,9 @@ tasks:
         # attempt, and the LBU was still `provisioning` two hours later. Without
         # a fallback the account keeps billing because it cannot be planned.
         #
+        # The provider modules' image lookups are read on a destroy plan too: a
+        # pinned image that left the account fails the refresh the same way (#69).
+        #
         # The refresh is still tried FIRST: a plan built on stale state can name
         # resources the provider already removed, and reading beats guessing.
         # The fallback is the exit, not the default.
@@ -1147,9 +1150,10 @@ tasks:
           exit 0
         fi
         echo "⚠ the refresh failed — replanning from state alone (-refresh=false)." >&2
-        echo "  Something here no longer answers its provider. The plan below is built" >&2
-        echo "  from what the STATE records, so read it: it may name resources that are" >&2
-        echo "  already gone, and it will not notice one that drifted." >&2
+        echo "  Something here no longer answers its provider, or is gone (a load balancer" >&2
+        echo "  stuck provisioning; the pinned image, whose lookup a destroy plan reads too)." >&2
+        echo "  The plan below is built from what the STATE records, so read it: it may name" >&2
+        echo "  resources that are already gone, and it will not notice one that drifted." >&2
         tofu plan -destroy -refresh=false -out="{{.OUT}}" -var-file="$VARS" -var talos_bootstrap=false
       - |
         # Silent when something else is driving. Called from fleet-down, this
