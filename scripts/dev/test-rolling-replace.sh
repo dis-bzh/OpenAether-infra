@@ -555,21 +555,30 @@ echo "=== the roll's exit checks what it touched, it does not assume (#64) ==="
 FK="$STUB_DIR/fk"; mkdir -p "$FK/bin"
 cat >"$FK/bin/kubectl" <<'FAKE'
 #!/usr/bin/env bash
-S="$FK_STATE"; echo "$*" >>"$S/calls"
+S="$FK_STATE"
+case "${1:-}" in --request-timeout=*) echo "$1" >>"$S/bounded"; shift ;; esac
+echo "$*" >>"$S/calls"
 refuse() { echo "fake apiserver: $1" >&2; exit 1; }
+count() { n=$(( $(cat "$S/$1") + 1 )); echo "$n" >"$S/$1"; }       # -> $n
+from() { [ -n "${1:-}" ] && [ "$n" -ge "$1" ]; }                    # knob set and reached
+[ -z "${FK_SLOW:-}" ] || sleep "$FK_SLOW"
+[ -z "${FK_DOWN:-}" ] || refuse 'connection refused'
+clusters() { for c in ${FK_CLUSTERS:-foundation-databases/zitadel-db}; do echo "${c%/*} ${c#*/}"; done; }
 case "$*" in
   "get crd clusters.postgresql.cnpg.io")
     [ "${FK_CNPG:-1}" = 1 ] || refuse 'Error from server (NotFound)' ;;
   "get clusters.postgresql.cnpg.io -A -o jsonpath="*fluxcd*)   # owner labels
-    [ "${FK_FLUX:-1}" = 1 ] && echo "flux-system cnpg" || echo " " ;;
+    count owners; from "${FK_OWNERS_FAIL_FROM:-}" && refuse 'connection refused'
+    [ "${FK_FLUX:-1}" = 1 ] && clusters | sed 's/.*/flux-system cnpg/' || echo " " ;;
   "get clusters.postgresql.cnpg.io -A -o jsonpath="*)
-    n=$(( $(cat "$S/lists") + 1 )); echo "$n" >"$S/lists"
+    count lists; from "${FK_CLUSTERS_FAIL_FROM:-}" && refuse 'connection refused'
     [ "${FK_LIST_FAIL_ONCE:-0}" = 1 ] && [ "$n" = 1 ] && refuse 'connection refused'
-    echo "foundation-databases zitadel-db" ;;
+    clusters ;;
   "-n "*" get kustomizations."*"-o jsonpath={.spec.suspend}")
     [ "${FK_READ_FAIL:-}" = suspend ] && refuse 'connection refused'
     cat "$S/susp.$5" ;;
   "-n "*" get kustomizations."*)                                # parent labels
+    count parents; from "${FK_PARENT_FAIL_FROM:-}" && refuse "${FK_PARENT_ERR:-connection refused}"
     [ "$5" = cnpg ] && echo "flux-system platform" || echo " " ;;
   "-n "*" patch kustomizations."*)
     [ "$2/$5" = "${FK_PATCH_FAIL:-}" ] && refuse 'webhook refused'
@@ -581,9 +590,10 @@ case "$*" in
     if [ "${FK_OPERATOR:-1}" = 1 ]; then       # the operator follows enablePDB
       if [ "$(cat "$S/pdb")" != true ]; then rm -f "$S/budget"
       elif [ "$(cat "$S/delay")" -gt 0 ]; then echo $(( $(cat "$S/delay") - 1 )) >"$S/delay"
-      else : >"$S/budget"; fi
+      elif [ -n "${FK_BUDGETS+x}" ]; then printf '%s\n' $FK_BUDGETS >"$S/budget"   # what it makes
+      else clusters | sed 's,\(.*\) \(.*\),\1/\2-primary,' >"$S/budget"; fi
     fi
-    [ -e "$S/budget" ] && printf 'foundation-databases/zitadel-db-primary ' ;;
+    [ -e "$S/budget" ] && tr '\n' ' ' <"$S/budget" ;;
   *) refuse "unexpected: $*" ;;
 esac
 exit 0
@@ -597,19 +607,22 @@ done
 
 # The roll ends in the state the script leaves it in when it is done rolling:
 # owner chain suspended, enablePDB=false, budgets gone. FK_* knobs come from the
-# caller's environment; FK_TRAP swaps the exit handler (for the control below).
+# caller's environment; FK_TRAP swaps the exit handler (for the control below) and
+# FK_CMD runs something before the roll exits.
 fk_run() { # <the roll's own exit status>
   FK_STATE="$FK/state"; export FK_STATE; rm -rf "$FK_STATE"; mkdir -p "$FK_STATE"
   echo true >"$FK_STATE/susp.cnpg"; echo true >"$FK_STATE/susp.platform"
-  echo false >"$FK_STATE/pdb"; echo 0 >"$FK_STATE/lists"; : >"$FK_STATE/calls"
+  echo false >"$FK_STATE/pdb"; : >"$FK_STATE/calls"; : >"$FK_STATE/bounded"
+  for c in lists owners parents; do echo 0 >"$FK_STATE/$c"; done
   echo "${FK_OPERATOR_DELAY:-0}" >"$FK_STATE/delay"
   # A subshell: the harness's own ok/die/sleep must not be the ones in play, and
   # `set -e` is on because the roll runs under it.
   OUT="$( ( set -euo pipefail; hash -r; PATH="$FK/bin:$PATH"
     ok() { printf '✓ %s\n' "$*"; }; warn() { printf '⚠ %s\n' "$*" >&2; }
-    info() { :; }; sleep() { :; }; die() { printf '✗ %s\n' "$*" >&2; exit 1; }
-    RESTORE_TIMEOUT=10 RESTORE_POLL=5
-    trap "${FK_TRAP:-finish_roll}" EXIT; exit "$1" ) 2>&1 )"; RC=$?
+    info() { :; }; die() { printf '✗ %s\n' "$*" >&2; exit 1; }
+    sleep() { SECONDS=$((SECONDS + $1)); }   # a clock the roll's own waits move
+    RESTORE_TIMEOUT="${FK_TIMEOUT:-10}" RESTORE_POLL="${FK_POLL:-5}"
+    trap "${FK_TRAP:-finish_roll}" EXIT; ${FK_CMD:-:}; exit "$1" ) 2>&1 )"; RC=$?
 }
 fk() { cat "$FK_STATE/$1"; }
 
@@ -628,12 +641,21 @@ fk_run 0
   && [ "$(fk pdb)" = true ] && [ -e "$FK_STATE/budget" ] \
   && ok "everything restored: exit 0, both owners resumed, the primary budget back" \
   || bad "a clean restore was refused (rc ${RC}): ${OUT}"
+saw "Rolling replacement complete" && ! saw "roll itself finished" \
+  && ok "…and only now does the roll say it is complete" \
+  || bad "a clean roll did not end on the complete line: ${OUT}"
+[ -s "$FK_STATE/calls" ] && [ "$(wc -l <"$FK_STATE/bounded")" = "$(wc -l <"$FK_STATE/calls")" ] \
+  && ok "every kubectl call the exit makes carries --request-timeout" \
+  || bad "an exit-time kubectl call has no --request-timeout: $(tr '\n' '|' <"$FK_STATE/calls")"
 
 FK_PATCH_FAIL=flux-system/platform fk_run 0
 [ "$RC" = 1 ] && saw "flux-system/platform is still suspended" && ! saw "flux-system/cnpg is still" \
   && [ "$(fk susp.platform)" = true ] && [ "$(fk susp.cnpg)" = false ] \
   && ok "a root that would not resume: exit 1, and it is the one named" \
   || bad "a still-suspended root ended the roll clean (rc ${RC}): ${OUT}"
+saw "roll itself finished" && saw "backup-state.sh" && ! saw "Rolling replacement complete" \
+  && ok "…and the roll says it finished, what is not, and what to run — never \"complete\"" \
+  || bad "a failed check printed the wrong closing words: ${OUT}"
 
 # The control: the OLD exit path on the same fake. If it did not fail here, the
 # fake could not produce the state above and none of that would prove anything.
@@ -669,10 +691,60 @@ FK_READ_FAIL=pdb fk_run 0
   && ok "an unanswered budget query is a problem, not a pass" \
   || bad "an unreadable budget list read as restored (rc ${RC}): ${OUT}"
 
+# A read the check makes must fail on its own. From call 2: the restore before
+# the check has already made call 1 and must not be the one that fails.
+unread() { # <what>
+  [ "$RC" = 1 ] && saw "could not be read back" && ! saw "restored" \
+    && ok "$1: exit 1, never a pass" || bad "$1 read as restored (rc ${RC}): ${OUT}"
+}
+FK_CLUSTERS_FAIL_FROM=2 fk_run 0; unread "a cluster listing that fails at check time"
+FK_OWNERS_FAIL_FROM=2 fk_run 0; unread "an owner listing that fails at check time"
+# The root's resume fails and the check's walk cannot read its parent label: the
+# roll must not read the cut-short walk as a clean chain.
+FK_PATCH_FAIL=flux-system/platform FK_PARENT_FAIL_FROM=3 fk_run 0; unread "an owner label unread at check time"
+[ "$(fk susp.platform)" = true ] && ok "…with the root really still suspended" \
+  || bad "the fake did not leave the root suspended"
+FK_PARENT_FAIL_FROM=1 fk_run 0; unread "an owner label unread from the resume on"
+[ "$(fk susp.cnpg)" = true ] && ok "…and nothing was resumed, nothing called restored" \
+  || bad "the resume walk went on past a failed owner read"
+FK_TRAP=: FK_CMD='cnpg_maintenance true' FK_PARENT_FAIL_FROM=1 fk_run 0
+[ "$RC" = 1 ] && saw "cannot read the owner" && ! grep -q patch "$FK_STATE/calls" \
+  && ok "on the way in, an unreadable owner chain refuses the roll before anything is patched" \
+  || bad "the roll went on with a chain it could not see whole (rc ${RC}): ${OUT}"
+FK_PARENT_FAIL_FROM=1 FK_PARENT_ERR='Error from server (NotFound): kustomizations "cnpg" not found' fk_run 0
+[ "$RC" = 0 ] && saw "restored" && [ "$(fk susp.cnpg)" = false ] \
+  && ok "an owner that is gone (NotFound) ends the chain; any other error does not" \
+  || bad "a NotFound owner was not read as the end of the chain (rc ${RC}): ${OUT}"
+
+# One budget, exactly <ns>/<name>-primary, for EACH cluster.
+missing() { # <why> <the one budget named>
+  [ "$RC" = 1 ] && saw "budget $2 is missing" && [ "$(grep -c 'is missing' <<<"$OUT")" = 1 ] \
+    && ok "$1: exit 1, only $2 named" || bad "$1 (rc ${RC}): ${OUT}"
+}
+Z=foundation-databases/zitadel-db G=observability/grafana-db
+FK_BUDGETS=$Z fk_run 0; missing "the replicas budget alone is not the -primary one" $Z-primary
+FK_BUDGETS=other/zitadel-db-primary fk_run 0; missing "another namespace's -primary" $Z-primary
+FK_BUDGETS="x-${Z}-primary ${Z}-primary2" fk_run 0; missing "a name that only contains it" $Z-primary
+FK_CLUSTERS="$Z $G" FK_BUDGETS=$Z-primary fk_run 0; missing "two clusters, the second has none" $G-primary
+FK_CLUSTERS="$Z $G" FK_BUDGETS=$G-primary fk_run 0; missing "two clusters, the first has none" $Z-primary
+FK_CLUSTERS="$Z $G" fk_run 0
+[ "$RC" = 0 ] && saw "restored" && ok "two clusters, both budgets back: exit 0" \
+  || bad "two restored clusters were refused (rc ${RC}): ${OUT}"
+
+# The bound is the clock's, not a count of sleeps, and a problem is said once.
+FK_DOWN=1 FK_SLOW=2 FK_TIMEOUT=2 FK_POLL=1 fk_run 0; N="$(wc -l <"$FK_STATE/calls")"
+[ "$RC" = 1 ] && [ "$N" -le 2 ] \
+  && ok "an apiserver that hangs: the wait ends on the clock (${N} reads, not one per sleep)" \
+  || bad "the wait counted sleeps, not seconds (rc ${RC}, ${N} reads): ${OUT}"
+FK_DOWN=1 fk_run 0
+[ "$RC" = 1 ] && [ "$(grep -c 'cannot tell whether' <<<"$OUT")" -le 2 ] \
+  && ok "an apiserver that is down: the reason is printed once, not once per poll" \
+  || bad "the same reason was repeated per poll (rc ${RC}): ${OUT}"
+
 fk_run 1
-[ "$RC" = 1 ] && saw "restored" \
-  && ok "a roll that failed still exits 1 after a clean restore" \
-  || bad "the roll's own failure was lost (rc ${RC}): ${OUT}"
+[ "$RC" = 1 ] && saw "restored" && ! saw "complete" && ! saw "roll itself finished" \
+  && ok "a roll that failed still exits 1 after a clean restore, and claims neither" \
+  || bad "the roll's own failure was lost or dressed up (rc ${RC}): ${OUT}"
 
 # What the fake cannot see: that the handler is installed, and installed first.
 [ "$(grep -c '^  trap finish_roll EXIT$' "$SUT")" = 1 ] && ! grep -q "trap 'cnpg_maintenance false'" "$SUT" \
@@ -682,6 +754,9 @@ L_TRAP="$(lineno '^  trap finish_roll EXIT$')"
 [ -n "$L_TRAP" ] && [ -n "$L_MAINT" ] && [ "$L_TRAP" -lt "$L_MAINT" ] \
   && ok "…and installed before cnpg_maintenance true, so a death inside it is restored" \
   || bad "trap at line ${L_TRAP:-?}, cnpg_maintenance true at ${L_MAINT:-?}"
+[ "$(grep -c 'Rolling replacement complete' "$SUT")" = 1 ] && extract finish_roll | grep -q 'Rolling replacement complete' \
+  && ok "the complete line is finish_roll's alone, not printed ahead of the check" \
+  || bad "the complete line is printed outside finish_roll, before the check can fail"
 [ "$(grep -v '^[[:space:]]*#' "$SUT" | grep -c 'get pdb -A -l cnpg.io/cluster')" = 1 ] \
   && [ "$(extract cnpg_budgets | grep -c 'get pdb -A -l cnpg.io/cluster')" = 1 ] \
   && ok "one budget query, in cnpg_budgets: the way in and the way out cannot disagree" \

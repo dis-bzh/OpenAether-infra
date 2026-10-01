@@ -159,9 +159,14 @@ c'est-à-dire exactement ce que le redémarrage du nœud allait provoquer quelqu
 secondes plus tard. La fenêtre de maintenance reste posée à côté : c'est elle qui
 dit à l'opérateur de réutiliser le PVC au lieu de reprovisionner une instance
 que le stockage local ne pourrait pas déplacer. En sortie, le roll vérifie la
-restauration : il attend jusqu'à deux minutes la budget `<cluster>-primary` de
-chaque cluster, et sort en erreur en nommant ce qui reste si elle manque ou si
-une Kustomization propriétaire est restée suspendue.
+restauration : il attend environ deux minutes (3,5 mesurées apiserver coupé) le
+budget `<cluster>-primary` de chaque cluster et chaque Kustomization
+propriétaire, puis sort en erreur en nommant ce qui reste. Ce verdict tombe après
+le dernier nœud remplacé : ne pas relancer le mode remplacement pour l'effacer,
+il remplacerait tous les nœuds à nouveau. Corriger à la main ce qui est nommé et
+lancer `scripts/ops/backup-state.sh`, que `task cluster-roll` saute après une
+sortie non nulle. `task cluster-upgrade` s'arrête au premier roll qui finit ainsi :
+si c'est celui des control planes, les workers ne sont pas roulés.
 
 **Tout ce qui a une forme de quorum bloque aussi.** Trois exécutions le
 2026-08-14 se sont arrêtées sur trois pods différents — réplicas CNPG,

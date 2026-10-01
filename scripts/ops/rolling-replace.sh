@@ -333,10 +333,18 @@ cnpg_flux_owners() {
       [[ -n "$ns" && -n "$name" ]] || continue
       grep -qxF "$ns $name" <<<"$seen" && continue
       seen+="${ns} ${name}"$'\n'
-      # A Kustomization with no owner label is the root — stop there.
-      parent="$("${KCTL[@]}" -n "$ns" get kustomizations.kustomize.toolkit.fluxcd.io "$name" \
-        -o jsonpath='{.metadata.labels.kustomize\.toolkit\.fluxcd\.io/namespace}{" "}{.metadata.labels.kustomize\.toolkit\.fluxcd\.io/name}' 2>/dev/null)" || continue
-      read -r pns pname <<<"$parent"
+      # A Kustomization with no owner label is the root — stop there. Only one
+      # that is gone ends the chain too: any other failed read would cut the walk
+      # short and hide an ancestor, so it dies like the listing above. The value
+      # is the last line, in case kubectl printed a warning before it.
+      if ! parent="$("${KCTL[@]}" -n "$ns" get kustomizations.kustomize.toolkit.fluxcd.io "$name" \
+        -o jsonpath='{.metadata.labels.kustomize\.toolkit\.fluxcd\.io/namespace}{" "}{.metadata.labels.kustomize\.toolkit\.fluxcd\.io/name}' 2>&1)"; then
+        case "$parent" in
+          *NotFound* | *"not found"*) continue ;;
+          *) die "cannot read the owner of Kustomization ${ns}/${name}: ${parent%%$'\n'*}" ;;
+        esac
+      fi
+      read -r pns pname <<<"${parent##*$'\n'}"
       [[ -n "$pns" && -n "$pname" ]] || continue
       [[ "$pns $pname" == "$ns $name" ]] && continue   # self-owned root
       next+="${pns} ${pname}"$'\n'
@@ -491,28 +499,40 @@ cnpg_unrestored() {
   return "$rc"
 }
 
-# Polls: the operator recreates the budgets asynchronously.
+# Polls on the clock, not a count of sleeps: the operator recreates the budgets
+# asynchronously, and a read that hangs must not stretch the wait.
 assert_restored() {
-  local waited=0 out rc line
+  local deadline=$((SECONDS + ${RESTORE_TIMEOUT:-120})) out rc line
   while :; do
-    # `$(...)`: a die inside ends only that subshell, and reads as a problem.
-    if out="$(cnpg_unrestored)"; then rc=0; else rc=$?; fi
+    # `$(...)`: a die ends only that subshell and reads as a problem. 2>&1 keeps
+    # its message with the answer, so a reason repeated by every poll prints once.
+    if out="$(cnpg_unrestored 2>&1)"; then rc=0; else rc=$?; fi
     [[ $rc -eq 2 ]] && return 0
     [[ $rc -eq 0 ]] && { ok "CNPG budgets and Flux Kustomizations are restored"; return 0; }
     [[ -n "$out" ]] || out="the restore could not be read back from the apiserver"
-    (( waited >= ${RESTORE_TIMEOUT:-120} )) && break
-    sleep "${RESTORE_POLL:-5}"; waited=$((waited + ${RESTORE_POLL:-5}))
+    (( SECONDS >= deadline )) && break
+    sleep "${RESTORE_POLL:-5}"
   done
-  while read -r line; do warn "$line"; done <<<"$out"
+  while read -r line; do warn "${line#✗ }"; done <<<"$out"
   return 1
 }
 
 # EXIT trap. The restore runs in a subshell so a die in it (apiserver blip) cannot
 # end the trap before the check reads what is left; the roll's own status is kept.
+# Nothing runs after it, so KCTL can be bounded here: a down apiserver must not
+# hold the exit for client-go's own dial timeout on every read.
 finish_roll() {
   local rc=$?
+  KCTL+=(--request-timeout="${RESTORE_REQUEST_TIMEOUT:-10s}")
   ( cnpg_maintenance false ) || warn "the CNPG/Flux restore did not complete"
-  assert_restored || rc=1
+  if assert_restored; then
+    [[ $rc -ne 0 ]] || ok "Rolling replacement complete. Run a state backup:  scripts/ops/backup-state.sh"
+  elif [[ $rc -eq 0 ]]; then
+    rc=1
+    warn "The roll itself finished; only the restore did not. Fix what is named by hand; do NOT re-run"
+    warn "replacement mode (it replaces every node again). Then run scripts/ops/backup-state.sh, which"
+    warn "task cluster-roll skips after a non-zero exit."
+  fi
   exit "$rc"
 }
 
@@ -1551,8 +1571,7 @@ if [[ "$SCOPE" == "all" || "$SCOPE" == "cp" ]]; then
 fi
 
 hr
+# A real run's "complete" line is finish_roll's: it cannot be said before the check.
 if [[ $DRY_RUN -eq 1 ]]; then
   ok "dry-run complete — no changes made"
-else
-  ok "Rolling replacement complete. Run a state backup:  scripts/ops/backup-state.sh"
 fi

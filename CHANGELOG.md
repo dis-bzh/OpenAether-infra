@@ -152,25 +152,42 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
-- **A roll no longer ends "complete" with a Flux Kustomization still suspended
-  or a CNPG budget missing (refs #64).** The exit trap resumed the owner chain
-  and set `enablePDB` back, and nothing looked afterwards: a resume patch that
-  failed was one warning and the roll exited 0, an apiserver blip at exit died
-  before the resume without a word about Flux, and an operator that never
-  recreated the budgets went unnoticed. `finish_roll` now runs the restore in a
-  subshell, then `assert_restored` polls (120s,
-  `RESTORE_TIMEOUT`/`RESTORE_POLL`) until no owner Kustomization is suspended
-  and every cluster's `<name>-primary` budget exists, else exits 1 naming what
-  is left; the roll's own failure status is kept, and a cluster without CNPG is
-  asked the CRD question and nothing else. The wiring assertion "after the
-  maintenance call" matched the per-node re-assert, not the main block; it now
-  matches the main one. Mocked rung only: `test-rolling-replace.sh` 66 → 83
-  assertions against a stateful fake apiserver, red first (rc 127 on the old
-  script, and the old exit path on the same fake leaves the root suspended with
-  rc 0); 11 mutants each turn at least one red. Not observed: a real roll with
-  Flux and CNPG together (0.1.0 ships no Flux), how long the operator takes to
-  recreate the budget, and whether CNPG creates `<name>-primary` for a
-  one-instance cluster. #64 stays open at the real-cloud rung.
+- **A roll exits 1 and names what is left when a Flux Kustomization is still
+  suspended or a CNPG budget is missing (refs #64).** The exit trap resumed the
+  owner chain and set `enablePDB` back, and nothing looked afterwards: a failed
+  resume patch was one warning and exit 0, and budgets the operator never
+  recreated went unnoticed. `finish_roll` now restores in a subshell, then
+  `assert_restored` polls until no owner Kustomization is suspended and every
+  cluster has its `<name>-primary` budget, else exits 1 naming what is left; the
+  roll's own failure status is kept, and a cluster without CNPG is asked the CRD
+  question and nothing else. The wait runs on the clock (`RESTORE_TIMEOUT` 120s,
+  `RESTORE_POLL`), each kubectl call is capped (`RESTORE_REQUEST_TIMEOUT` 10s)
+  and a reason is printed once: with the apiserver unreachable the exit took 3.5
+  minutes, measured with kubectl against an unroutable address. A read that
+  fails is a problem, never a pass: an owner-label read failing other than
+  NotFound now dies instead of cutting the ancestor walk short, so on the way in
+  it also refuses the roll.
+
+  The verdict comes AFTER the last node is replaced. The "complete" line is now
+  `finish_roll`'s and printed only when the check passes; otherwise the exit says
+  the roll finished and only the restore did not, and not to re-run replacement
+  mode (it replaces every node again). Two effects: `task cluster-roll` skips
+  `_backup-state` after the non-zero exit, as it does after any failure, so the
+  exit names `scripts/ops/backup-state.sh`; and `task cluster-upgrade` stops
+  between its `--cp-only` and `--workers-only` rolls, which keeps the second from
+  suspending Flux on top of a first that did not resume it.
+
+  The wiring assertion "after the maintenance call" matched the per-node
+  re-assert, not the main block; it now matches the main one. Mocked rung only:
+  `test-rolling-replace.sh` 66 → 103 assertions against a stateful fake apiserver
+  with two clusters, red first (rc 127 on the old script, and the old exit path
+  on the same fake leaves the root suspended with rc 0); 15 mutants (budget
+  matcher, cluster loop, `;` for `&&`, owner walk, clock, exit words) each turn at
+  least one red. Not observed: a real roll with Flux and CNPG together (0.1.0
+  ships no Flux), how long the operator takes to recreate the budget, whether
+  CNPG creates `<name>-primary` for a one-instance cluster, and the two effects
+  above, since `task cluster-roll` refuses a local run. #64 stays open at the
+  real-cloud rung.
 - **A Scaleway kind that no zone answered is no longer read as clean.**
   `scaleway.py` skipped a kind that every zone answered 404/501 as "not
   offered", so a listing that asked nothing ended "the project is clean" (exit
