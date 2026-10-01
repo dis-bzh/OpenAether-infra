@@ -16,6 +16,36 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
+- **`task evidence-check` dates the real-cloud evidence in `docs/status.md`
+  (refs #121).** Nothing aged the table 0.1.0 rests on, so a measurement stayed
+  "true today" after the versions it measured had moved. The table gains a
+  `measured` column and a Scaleway re-run row (2026-08-20, Talos v1.13.8 to
+  v1.13.9), transcribed from `upgrade.md` and the release checklist. The new
+  `scripts/dev/check-evidence-age.sh` takes the newest row per provider and is
+  red when its Talos or Kubernetes is not the pin, when it is older than 45 days
+  (`OA_EVIDENCE_MAX_AGE_DAYS`), or when the row carries a ❌ or ⚠ (a failed run
+  is no evidence). The pin is the tracked default in `cluster/variables.tf`,
+  read with no tfvars: what a `management-*` example that leaves the pins unset
+  inherits, and the one Renovate bumps. This departs from the issue, which names
+  the `talos_version` / `kubernetes_version` of the `envs/*.tfvars.example`: 9 of
+  the 14 pin `v1.13.3` / `v1.35.3`, they are unwatched and stale, and a
+  workstation's own `envs/*.tfvars` must not change the verdict either. Exit 0
+  current, 1 stale, 2 not verifiable (no table, a bad or future date, a cell
+  with no version), so a broken extractor never reads as stale. On this tree it
+  exits 1: OVH and Outscale measured Talos v1.13.8 against the pin v1.13.9,
+  Scaleway is current (41 days old on 2026-09-30) but goes stale on 2026-10-05.
+  It is in neither `task lint` nor `task test`, where a date-driven red would
+  appear with no commit, and it records no receipt.
+  `task preflight` runs it with `--warn`, before its banner: stale prints a
+  warning and exit 2 fails, so the last lines stay true either way. Mocked rung:
+  `test-evidence-age.sh` (63 assertions, fixtures and an injected clock) sees
+  each verdict red and green, and asserts the real table parses, never that it
+  is current; each of 31 mutations of the gate and of the Taskfile wiring turns
+  it red. Nothing else in a row is read: a row that re-ran only the upgrade
+  counts, and it cannot tell a measured row from a typed one. Turning it green
+  takes, for every provider, a row at the pin dated within the limit: real OVH
+  and Outscale runs, then Scaleway again. The issue stays open until then.
+
 - **A pull request's rung is checked against a receipt the harness wrote
   (#120).** CONTRIBUTING asks every PR to name the rung it reached, but nothing
   recorded that a rung ever ran, so neither a reviewer nor CI could check the
