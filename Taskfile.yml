@@ -522,6 +522,8 @@ tasks:
       - ./scripts/dev/test-rung-receipts.sh
       # The inline guards of `fmt`, `lint` and the step below, under the real Taskfile.
       - ./scripts/dev/test-task-guards.sh
+      # infra-plan/infra-apply's talos_bootstrap answer: an unreadable state is refused, not "false".
+      - ./scripts/dev/test-bootstrap-in-state.sh
       # check-evidence-age.sh on fixtures and a fixed clock. The real tree must parse, never be
       # current: a verdict here would turn a required check red with no commit.
       - ./scripts/dev/test-evidence-age.sh
@@ -877,12 +879,9 @@ tasks:
         # bootstrap-phase2 then recreates them, re-sending the bootstrap RPC against
         # a live etcd, which Talos correctly refuses (AlreadyExists) and which also
         # invalidates the kubeconfig output. Found live 2026-07-30 re-running `task
-        # up` for an idempotency test. Only a truly fresh cluster gets false.
-        if tofu state list 2>/dev/null | grep -q 'module.talos.talos_machine_bootstrap'; then
-          TB=true
-        else
-          TB=false
-        fi
+        # up` for an idempotency test. Only a truly fresh cluster gets false, and a
+        # state that cannot be read is not a fresh cluster: the script refuses.
+        TB="$(../../../scripts/internal/bootstrap-in-state.sh)" || exit 1
         # TB=true means module.talos is in play, and every one of its resources
         # speaks to the Talos API through the localhost tunnels. With them shut the
         # apply does not fail — it WAITS: data.talos_cluster_health reads for 15m,
@@ -956,11 +955,7 @@ tasks:
         # Same talos_bootstrap resolution as `infra`: passing the phase-1 value to
         # an already-bootstrapped cluster zeroes the node counts and the plan then
         # describes a teardown nobody asked for.
-        if tofu state list 2>/dev/null | grep -q 'module.talos.talos_machine_bootstrap'; then
-          TB=true
-        else
-          TB=false
-        fi
+        TB="$(../../../scripts/internal/bootstrap-in-state.sh)" || exit 1
         # On a bootstrapped cluster this plan reads data.talos_cluster_health,
         # whose endpoints are localhost tunnels — so from a shell that did not open
         # them it waits out health_check_timeout and dies on "cluster health check

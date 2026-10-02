@@ -36,6 +36,7 @@ case "\$(basename "\$0") \$*" in
   "talos-version.sh workload-"*) echo v0.0.1-fixture ;;
   talos-version.sh*) echo v0.0.0-fixture ;;
   tf-backend.sh*) echo -backend-config=path=fixture.tfstate ;;
+  bootstrap-in-state.sh*) echo false ;;
   ssh-keygen*) exit 1 ;;
   infra-verify.sh*) echo "fixture verifier \$*: exit \${VERIFY_RC:?}"; exit "\$VERIFY_RC" ;;
   adopt-bootstrap.sh*) exit "\${ADOPT_RC:-0}" ;;
@@ -44,7 +45,7 @@ exit 0
 EOF
 chmod +x "$W/stub"
 for s in internal/talos-version.sh internal/ensure-buckets.sh internal/converge-versions.sh \
-         internal/tf-backend.sh internal/explain-failure.sh bootstrap/talos-image.sh \
+         internal/tf-backend.sh internal/bootstrap-in-state.sh internal/explain-failure.sh bootstrap/talos-image.sh \
          bootstrap/render-bootstrap-manifests.sh bootstrap/talos-tunnels.sh bootstrap/adopt-bootstrap.sh \
          ops/backup-state.sh dev/infra-verify.sh; do
   ln -s "$W/stub" "$W/scripts/$s"
