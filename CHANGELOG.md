@@ -16,6 +16,16 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
+- **Cléa can probe and bump an `action-sha` pin (plumber).** `getplumber/plumber`
+  is pinned as `uses: ...@<sha>  # v0.5.12` and as a release URL; the first shape
+  made `bump` refuse, so its probe was red every day and the dependency could
+  never be proven. The scan now resolves the commit a tag points at (peeling an
+  annotated tag; one lookup per action pin) and the matrix carries it, so `bump
+  --sha` moves the commit and the comment together, only when the `uses:` names
+  the dependency's own repository and the commit is 40 lowercase hex. A refusal
+  at the last site no longer leaves the first one rewritten. A `precommit-rev` is
+  still refused. Mocked rung (`test-clea.sh`); not run on a runner yet.
+
 - **`task evidence-check` dates the real-cloud evidence in `docs/status.md`
   (refs #121).** Nothing aged the table 0.1.0 rests on, so a measurement stayed
   "true today" after the versions it measured had moved. The table gains a
@@ -182,6 +192,24 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **A size change through `cluster-roll` no longer resizes every node at once.**
+  Measured on Scaleway: with `instance_type` raised, `-- --workers-only` replaced
+  worker 0 and its targeted config apply dragged in the in-place resize of all
+  three control planes (API down 56 s); the destroy count could not see it. The
+  roll now plans both steps before the cordon and refuses a plan that changes
+  another node. A size change goes one node at a time, in place:
+  `docs/upgrade.md`, measured with 1 s blips only. Refs #51, #42.
+- **A rejected `CLEA_WORKFLOW_TOKEN` no longer silences Cléa.** From 2026-09-24
+  every `Push probe branches` job failed with `Invalid username or token`: the
+  secret was set but rejected, the script never fell back to `GITHUB_TOKEN`, and
+  its first failure aborted the rest, so the report read "not probed" for probes
+  that had passed. The push is now `scripts/clea/push-probes.sh`: the PAT, then
+  `GITHUB_TOKEN`, and one failed branch does not stop the others; git's whole
+  output reaches the log, without any token. The report opens with a warning when
+  the push job failed or a finished probe job has no verdict on its branch, and
+  names them. Mocked rung (`test-clea-push.sh`, `test-clea.sh`); that the PAT
+  expired is a hypothesis, the secret is not readable from here.
+
 - **`task cluster-up` refuses a missing or placeholder passphrase before it
   creates the buckets.** The check ran after `ensure-buckets.sh --preflight`,
   which creates the four buckets, so the refusal came once resources existed. It
@@ -335,8 +363,8 @@ in git. 0.1.0 is the first entry describing something proven.
   by planning each size change with the real provider binaries against a seeded
   state (Scaleway's plan-time API calls answered by a local stub): every one
   came out `update`. Positive controls on a ForceNew attribute came out
-  `delete, create`. `docs/upgrade.md` now sends a size change through
-  `task cluster-roll`. `node-size-change.tftest.hcl` checks that the size
+  `delete, create`. `docs/upgrade.md` sent a size change through
+  `task cluster-roll`; that was wrong on Scaleway (entry under Fixed). `node-size-change.tftest.hcl` checks that the size
   reaches each node and that nothing turns it into a replacement: Scaleway's
   `replace_on_type_change` stays unset and Proxmox's `reboot_after_update` is
   not false. Setting either one turned its run red. A mock cannot tell

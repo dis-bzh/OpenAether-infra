@@ -477,20 +477,31 @@ printf '%s\n' "$*" >>"$TOFU_LOG"
 case "$1" in
   plan)  for a in "$@"; do [[ "$a" == -out=* ]] && : >"${a#-out=}"; done
          exit "${STUB_PLAN_RC:-0}" ;;
-  show)  printf '%s\n' "$STUB_SHOW" ;;
+  show)  n=$(( $(cat "$TOFU_LOG.show" 2>/dev/null || echo 0) + 1 )); echo "$n" >"$TOFU_LOG.show"
+         [ "${STUB_SHOW_FAIL_ON:-}" = "$n" ] && exit 1
+         printf '%s\n' "$STUB_SHOW" ;;
   apply) exit "${STUB_APPLY_RC:-0}" ;;
 esac
 STUB
 chmod +x "$STUB_DIR/tofu"
 export TOFU_LOG
+eval "$(extract 'foreign_changes')"
 eval "$(extract 'saved_plan_apply')"
 TFVARS=envs/management-test.tfvars
 REPLACE_ONE='{"resource_changes":[{"change":{"actions":["delete","create"]}},{"change":{"actions":["update"]}}]}'
 REPLACE_THREE='{"resource_changes":[{"change":{"actions":["delete","create"]}},{"change":{"actions":["create","delete"]}},{"change":{"actions":["delete"]}}]}'
-spa() { # <show-json> [max]  — run saved_plan_apply against the stub
-  : >"$TOFU_LOG"
+spa() { # <show-json> [max] [t] [i] [mode] — run saved_plan_apply against the stub
+  : >"$TOFU_LOG"; rm -f "$TOFU_LOG.show"
   export STUB_SHOW="$1"
-  OUT="$( ( ok() { :; }; saved_plan_apply n1-instance "${2:-2}" "APPLY FAILED" -target=a -replace=a ) 2>&1 )"; RC=$?
+  OUT="$( ( ok() { :; }; saved_plan_apply n1-instance "${3:-worker}" "${4:-0}" "${2:-2}" "APPLY FAILED" "${5:-apply}" -target=a -replace=a ) 2>&1 )"; RC=$?
+}
+# One managed resource change, the fields the scope check reads.
+rc_() { # <address> <name> <index> <actions-json>
+  printf '{"address":"%s","mode":"managed","name":"%s","index":%s,"change":{"actions":%s}}' "$1" "$2" "$3" "$4"
+}
+plan_of() { printf '{"resource_changes":[%s]}' "$(IFS=,; echo "$*")"; }
+rd_() { # <address> <name> <index> — a data source, which plans as a read
+  printf '{"address":"%s","mode":"data","name":"%s","index":%s,"change":{"actions":["read"]}}' "$1" "$2" "$3"
 }
 out_file() { sed -nE 's/^plan .*-out=([^ ]+).*/\1/p' "$TOFU_LOG"; }
 
@@ -527,10 +538,102 @@ STUB_APPLY_RC=1 spa "$REPLACE_ONE"
   && ok "a failed apply dies with the caller's message" \
   || bad "a failed apply was not reported (rc ${RC}): ${OUT}"
 
+# The scope check: a destroy count cannot see a pending in-place resize that the
+# targeted apply drags in (Scaleway, 2026-10-02: raising instance_type and rolling
+# --workers-only resized all three control planes at once, the API down 56 s).
+W0="$(rc_ module.scw[0].scaleway_instance_server.worker[0] worker 0 '["delete","create"]')"
+W0C="$(rc_ module.talos.talos_machine_configuration_apply.worker[0] worker 0 '["delete","create"]')"
+C1="$(rc_ module.scw[0].scaleway_instance_server.cp[1] cp 1 '["update"]')"
+C1T="$(rc_ module.talos.terraform_data.talos_port_ready_cp[1] talos_port_ready_cp 1 '["delete","create"]')"
+C2="$(rc_ module.talos.talos_machine_configuration_apply.control_plane[2] control_plane 2 '["delete","create"]')"
+W2="$(rc_ module.scw[0].scaleway_instance_server.worker[2] worker 2 '["update"]')"
+SHARED1="$(rc_ module.talos.talos_machine_secrets.this[0] this 0 '["update"]')"
+SHARED2="$(rc_ terraform_data.backup[0] backup 0 '["delete","create"]')"
+READ="$(rc_ module.scw[0].data.scaleway_instance_image.talos[0] talos 0 '["read"]')"
+
+spa "$(plan_of "$W0" "$W0C" "$SHARED1" "$SHARED2" "$READ")" 4
+[ "$RC" = 0 ] && grep -q '^apply ' "$TOFU_LOG" \
+  && ok "a plan that changes only this node and shared resources (secrets, backup) is applied" \
+  || bad "the scope check refused a plan inside the node (rc ${RC}): ${OUT}"
+
+spa "$(plan_of "$W0" "$C1")" 4
+[ "$RC" -ne 0 ] && ! grep -q '^apply' "$TOFU_LOG" && grep -q 'cp\[1\]' <<<"$OUT" \
+  && ok "rolling worker 0, a pending in-place update of control plane 1 is refused, named, and never applied" \
+  || bad "a worker roll let a control plane's resize through (rc ${RC}): ${OUT}"
+
+spa "$(plan_of "$W0" "$W2")" 4
+[ "$RC" -ne 0 ] && ! grep -q '^apply' "$TOFU_LOG" && grep -q 'worker\[2\]' <<<"$OUT" \
+  && ok "…and so is another worker's, by index" \
+  || bad "another worker's change was let through (rc ${RC}): ${OUT}"
+
+C0="$(rc_ module.scw[0].scaleway_instance_server.cp[0] cp 0 '["update"]')"
+spa "$(plan_of "$W0" "$C0")" 4
+[ "$RC" -ne 0 ] && ! grep -q '^apply' "$TOFU_LOG" && grep -q 'cp\[0\]' <<<"$OUT" \
+  && ok "…and a control plane with the SAME index as the worker being rolled is not mistaken for it" \
+  || bad "cp[0] was taken for worker[0] (rc ${RC}): ${OUT}"
+
+spa "$(plan_of "$C1" "$C1T")" 4 cp 1
+[ "$RC" = 0 ] && grep -q '^apply ' "$TOFU_LOG" \
+  && ok "rolling control plane 1, its own server and port guard are inside the scope" \
+  || bad "control plane 1's own resources were refused (rc ${RC}): ${OUT}"
+
+spa "$(plan_of "$C1" "$C2")" 4 cp 1
+[ "$RC" -ne 0 ] && ! grep -q '^apply' "$TOFU_LOG" && grep -q 'control_plane\[2\]' <<<"$OUT" \
+  && ok "…while control_plane[2], named the way module.talos names it, is refused" \
+  || bad "another control plane's config apply was let through (rc ${RC}): ${OUT}"
+
+# What a real plan carries beyond the node: no-ops and reads of the others, which
+# are not changes, and the names the providers really use.
+spa "$(plan_of "$W0" "$(rc_ module.scw[0].scaleway_instance_server.control_plane[1] control_plane 1 '["no-op"]')" \
+  "$(rd_ 'module.talos.data.talos_machine_configuration.worker[1]' worker 1)")" 4
+[ "$RC" = 0 ] && grep -q '^apply ' "$TOFU_LOG" \
+  && ok "another node's no-op and a data source named worker[1] are not changes: applied" \
+  || bad "a no-op or a read of another node was refused (rc ${RC}): ${OUT}"
+REAL_C1="$(rc_ module.scw[0].scaleway_instance_server.control_plane[1] control_plane 1 '["update"]')"
+spa "$(plan_of "$W0" "$REAL_C1")" 4
+[ "$RC" -ne 0 ] && ! grep -q '^apply' "$TOFU_LOG" && grep -q 'control_plane\[1\]' <<<"$OUT" \
+  && ok "…while the real name of the resource that was resized, control_plane[1], is refused" \
+  || bad "scaleway_instance_server.control_plane[1] was let through (rc ${RC}): ${OUT}"
+spa "$(plan_of "$REAL_C1")" 4 cp 1
+[ "$RC" = 0 ] && grep -q '^apply ' "$TOFU_LOG" \
+  && ok "…and when that control plane is the node being rolled, it is accepted" \
+  || bad "the node's own control_plane[1] was refused (rc ${RC}): ${OUT}"
+# Data volumes are keyed "w<worker>-d<disk>", not by number.
+spa "$(plan_of "$W0" "$(rc_ 'module.scw[0].scaleway_block_volume.worker_data[\"w0-d0\"]' worker_data '"w0-d0"' '["update"]')")" 4
+[ "$RC" = 0 ] && grep -q '^apply ' "$TOFU_LOG" \
+  && ok "worker 0's own data volume (w0-d0) is inside worker 0's scope" \
+  || bad "a worker's own string-keyed data volume was refused (rc ${RC}): ${OUT}"
+spa "$(plan_of "$W0" "$(rc_ 'module.scw[0].scaleway_block_volume.worker_data[\"w1-d0\"]' worker_data '"w1-d0"' '["update"]')")" 4
+[ "$RC" -ne 0 ] && ! grep -q '^apply' "$TOFU_LOG" && grep -q 'w1-d0' <<<"$OUT" \
+  && ok "…and worker 1's (w1-d0) is another node's" \
+  || bad "another worker's data volume was let through (rc ${RC}): ${OUT}"
+# Fail closed: a plan that cannot be read for its scope is not read as "no foreign change".
+STUB_SHOW_FAIL_ON=2 spa "$(plan_of "$W0")" 4
+[ "$RC" -ne 0 ] && ! grep -q '^apply' "$TOFU_LOG" && grep -q 'could not read which nodes' <<<"$OUT" \
+  && ok "a plan whose scope cannot be read is refused, never applied" \
+  || bad "an unreadable scope was treated as clean (rc ${RC}): ${OUT}"
+spa "$(plan_of "$W0")" 4 worker x
+[ "$RC" -ne 0 ] && ! grep -q '^apply' "$TOFU_LOG" \
+  && ok "…and so is a non-numeric node index" || bad "a non-numeric index was applied (rc ${RC})"
+
+spa "$(plan_of "$W0" "$C1")" 4 worker 0 check
+[ "$RC" -ne 0 ] && ! grep -q '^apply' "$TOFU_LOG" \
+  && ok "the lookahead (check) refuses the same plan before anything is touched" \
+  || bad "the check mode did not refuse (rc ${RC})"
+spa "$(plan_of "$W0" "$W0C")" 4 worker 0 check
+[ "$RC" = 0 ] && ! grep -q '^apply' "$TOFU_LOG" && [ -z "$(out_file | xargs -r ls 2>/dev/null)" ] \
+  && ok "…and a clean plan passes it without being applied, and its file is removed" \
+  || bad "check mode applied or leaked the plan (rc ${RC}): $(tr '\n' '|' <"$TOFU_LOG")"
+
 # The call sites: the gate above is worthless if replace_node goes around it.
-[ "$(grep -c '^  saved_plan_apply ' "$SUT_R")" = 2 ] \
-  && ok "replace_node goes through it for both applies (instance, then config)" \
-  || bad "expected two saved_plan_apply call sites"
+[ "$(grep -c '^  saved_plan_apply ' "$SUT_R")" = 4 ] \
+  && [ "$(grep -c '^    apply "\${' "$SUT_R")" = 2 ] \
+  && [ "$(grep -c '^  saved_plan_apply .*"" check' "$SUT_R")" = 2 ] \
+  && ok "replace_node goes through it for both applies (instance, then config) and looks ahead at both" \
+  || bad "expected two apply and two check saved_plan_apply call sites"
+extract 'replace_node' | awk '/saved_plan_apply .*"" check/ {c=NR} /cordon_drain "\$node_name"$/ {d=NR} END{exit !(c && d && c < d)}' \
+  && ok "…and the lookahead sits before the cordon of the replacement path" \
+  || bad "the lookahead is not before the cordon"
 [ "$(grep -v '^[[:space:]]*#' "$SUT_R" | grep -c -- '-auto-approve')" = 0 ] \
   && [ "$(grep -cE '^[[:space:]]*tofu apply' "$SUT_R")" = "$(grep -cE '^[[:space:]]*tofu apply "\$pf"' "$SUT_R")" ] \
   && ok "no -auto-approve apply is left, and no tofu apply is handed anything but the plan file" \
