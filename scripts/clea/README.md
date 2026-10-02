@@ -54,6 +54,9 @@ read, or on one whose value is not version-shaped at all:
 | `precommit-rev` | `rev: <sha>  # v4.9.1` |
 | `action-sha` | `uses: owner/action@<sha>  # v7` |
 
+An `action-sha` pin is bumped only with the commit its tag points at (`bump --sha`,
+recorded by the scan); a `precommit-rev` never. The reasons are in `clea.py`.
+
 Because Cléa's list is a superset of what any one declared inventory reaches,
 the difference between the two **is** the set of pins nothing is watching. That
 is `clea coverage`, and it is the check worth having even if you run nothing

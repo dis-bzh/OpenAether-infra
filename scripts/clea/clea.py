@@ -190,9 +190,15 @@ VALUE_FORMS: list[tuple[str, re.Pattern[str]]] = [
 # tag comment and leave the commit it is supposed to describe untouched: a pin
 # that CLAIMS the new version while still RUNNING the old one, which is worse
 # than not tracking it at all — it looks bumped. `cmd_bump` refuses both shapes
-# outright rather than write that. See `renovate-native` in `inventory_coverage`
+# unless it is handed the commit: only `action-sha` can be (`--sha`, recorded by
+# the scan from the tag), and it then moves the commit and the comment together.
+# `precommit-rev` is always refused. See `renovate-native` in `inventory_coverage`
 # for the other half: what makes leaving them untracked unnecessary.
 UNSAFE_BUMP_FORMS = frozenset({"action-sha", "precommit-rev"})
+SHA40 = re.compile(r"[0-9a-f]{40}")
+# `uses: owner/repo[/path]@<commit>  # tag`: the repo the commit belongs to, and the commit.
+ACTION_USES = re.compile(
+    r"^(?P<head>\s*(?:-\s*)?uses:\s*)(?P<repo>[^@\s]+)@(?P<sha>[0-9a-f]{40})(?P<tail>\s*#)")
 
 # How far below the anchor the value may sit. Renovate's own regexes allow one
 # line; three covers a YAML `env:` key that opens its block on the next line.
@@ -397,8 +403,8 @@ def inventory_coverage(root: Path, scan: dict,
     without any anchor, via `helpers:pinGitHubActionDigests` for `action-sha`
     and `pinDigests` for `precommit-rev`. Both update the commit AND the tag
     comment in one write. A `customManagers` entry matching the same line
-    could only ever move the comment — `cmd_bump` refuses exactly these two
-    forms for that reason (`UNSAFE_BUMP_FORMS`) — so routing them through
+    could only ever move the comment — `cmd_bump` moves neither on its own (an
+    action-sha only with the scan's `--sha`; `UNSAFE_BUMP_FORMS`) — so routing them through
     `renovate` coverage would demand the one kind of watcher that is unsafe to
     build, for a dependency a different, safe watcher already has. Naming the
     form here is what keeps this an explicit, per-project claim rather than a
@@ -508,7 +514,7 @@ def http_get(url: str, token: str | None = None, accept: str | None = None) -> b
                 f"GITHUB_TOKEN. Body: {body}"
             ) from exc
         raise CleaError(f"{url} -> HTTP {exc.code}: {body}") from exc
-    except (urllib.error.URLError, TimeoutError) as exc:
+    except (urllib.error.URLError, TimeoutError, ValueError) as exc:
         raise CleaError(f"{url} -> {exc}") from exc
 
 
@@ -516,6 +522,19 @@ def _gh_json(path: str, token: str | None):
     raw = http_get(f"https://api.github.com{path}", token,
                    accept="application/vnd.github+json")
     return json.loads(raw)
+
+
+def resolve_commit(dep: str, tag: str, token: str | None) -> str:
+    """The commit a tag points at, peeling an annotated tag: what `@<sha>` must hold."""
+    data = _gh_json(f"/repos/{dep}/git/ref/tags/{urllib.parse.quote(tag, safe='/')}", token) or {}
+    if data.get("ref") != f"refs/tags/{tag}":
+        raise CleaError(f"{dep}@{tag}: the API answered for another ref ({data.get('ref')!r})")
+    obj = data.get("object") or {}
+    if obj.get("type") == "tag":
+        obj = (_gh_json(f"/repos/{dep}/git/tags/{obj.get('sha', '')}", token) or {}).get("object") or {}
+    if obj.get("type") != "commit" or not SHA40.fullmatch(obj.get("sha", "")):
+        raise CleaError(f"{dep}@{tag}: the tag does not resolve to a commit")
+    return obj["sha"]
 
 
 def latest_github_releases(dep: str, token: str | None, **_) -> dict:
@@ -815,6 +834,7 @@ def cmd_scan(args) -> int:
     # One upstream call per (datasource, dep), not per anchor: helm is pinned in
     # two files here and the API does not need asking twice.
     cache: dict[tuple[str, str], dict | str] = {}
+    commits: dict[tuple[str, str], str] = {}
     deps, errors = [], []
 
     def resolve(datasource: str, name: str, **kwargs) -> dict:
@@ -857,6 +877,17 @@ def cmd_scan(args) -> int:
                          notes_url=upstream.get("notes_url"),
                          behind=is_newer(anchor.value, latest),
                          shape_ok=same_shape(anchor.value, latest))
+            if anchor.form == "action-sha" and entry["behind"] and anchor.datasource in (
+                    "github-releases", "github-tags"):
+                # `bump` cannot move the commit an action pin holds without being
+                # told it; kept off the other anchors so the lookups stay one per pin.
+                try:
+                    key = (anchor.dep, upstream["tag"])
+                    if key not in commits:
+                        commits[key] = resolve_commit(anchor.dep, upstream["tag"], token)
+                    entry["sha"] = commits[key]
+                except CleaError as exc:
+                    errors.append(str(exc))
         except CleaError as exc:
             entry.update(latest=None, error=str(exc), behind=False)
             errors.append(str(exc))
@@ -988,6 +1019,12 @@ def cmd_matrix(args) -> int:
             continue
         key = dep["dep"]
         if key in seen:
+            # The commit sits on the dependency's action anchor, not necessarily the
+            # first, and only counts for the tag this entry bumps to: another tag's
+            # commit under this tag's comment is the lie the old refusal prevented.
+            if (dep.get("sha") and not seen[key]["sha"]
+                    and (dep.get("tag") or dep["latest"]) == seen[key]["version"]):
+                seen[key]["sha"] = dep["sha"]
             continue
         seen[key] = {
             "dep": key,
@@ -997,6 +1034,7 @@ def cmd_matrix(args) -> int:
             # happened to come first — right by luck here, wrong the moment a
             # path changed.
             "version": dep.get("tag") or dep["latest"],
+            "sha": dep.get("sha", ""),
             "slug": slugify(key),
             "installer": tool.get("installer", ""),
             "version_cmd": tool.get("version_cmd", ""),
@@ -1301,26 +1339,48 @@ def cmd_bump(args) -> int:
         print(f"✗ no readable anchor for {args.dep}", file=sys.stderr)
         return 1
 
+    # Every refusal comes before the first write: a site refused last must not
+    # leave the first one rewritten.
+    sha = getattr(args, "sha", None) or ""
+    plan = []
+    for anchor in targets:
+        new_value = apply_extract(args.version, anchor.attrs.get("extractVersion"))
+        where = f"{anchor.path}:{anchor.value_line}"
+        if not same_shape(anchor.value or "", new_value):
+            print(f"✗ {where} — {anchor.value!r} and {new_value!r} do not carry the same v "
+                  "prefix; the consumers of this value read them differently", file=sys.stderr)
+            return 1
+        commit = None  # (the commit to pin, the commit pinned now), for an action-sha site
+        if anchor.form in UNSAFE_BUMP_FORMS:
+            if anchor.form != "action-sha" or not SHA40.fullmatch(sha):
+                hint = (" Pass --sha with the commit the tag points at (the scan records it)."
+                        if anchor.form == "action-sha" else "")
+                print(f"✗ {where} — {anchor.form} pins a commit that this write does not touch: "
+                      f"rewriting the comment to {new_value!r} would claim that version while "
+                      f"still running whatever {anchor.value!r} already points at. Renovate "
+                      "resolves the commit and the comment together "
+                      f"(helpers:pinGitHubActionDigests / pinDigests) — bump this one there, "
+                      f"or by hand.{hint}", file=sys.stderr)
+                return 1
+            lines = (root / anchor.path).read_text(encoding="utf-8").splitlines()
+            uses = ACTION_USES.match(lines[(anchor.value_line or 1) - 1])
+            if not uses:
+                print(f"✗ {where} — this uses: line is not in the shape this bump rewrites "
+                      "(owner/repo@<40 lowercase hex>  # tag): left alone.", file=sys.stderr)
+                return 1
+            if "/".join(uses["repo"].split("/")[:2]).lower() != args.dep.lower():
+                print(f"✗ {where} — this uses: line names another repository than {args.dep}: "
+                      "its commit would be taken from the wrong one.", file=sys.stderr)
+                return 1
+            commit = (sha, uses["sha"])
+        plan.append((anchor, new_value, commit))
+
     # Every site, not the first: one tool, one version, everywhere it is claimed.
     # Leaving a second copy behind is the drift this repository has paid for four
     # times in a week.
     changed = 0
-    for anchor in targets:
-        new_value = apply_extract(args.version, anchor.attrs.get("extractVersion"))
-        if anchor.form in UNSAFE_BUMP_FORMS:
-            print(f"✗ {anchor.path}:{anchor.value_line} — {anchor.form} pins a commit "
-                  f"that this write does not touch: rewriting the comment to "
-                  f"{new_value!r} would claim that version while still running "
-                  f"whatever {anchor.value!r} already points at. Renovate resolves "
-                  "the commit and the comment together (helpers:pinGitHubActionDigests "
-                  "/ pinDigests) — bump this one there, or by hand.", file=sys.stderr)
-            return 1
-        if not same_shape(anchor.value or "", new_value):
-            print(f"✗ {anchor.path}:{anchor.value_line} — {anchor.value!r} and "
-                  f"{new_value!r} do not carry the same v prefix; the consumers of "
-                  "this value read them differently", file=sys.stderr)
-            return 1
-        if anchor.value == new_value:
+    for anchor, new_value, commit in plan:
+        if anchor.value == new_value and (commit is None or commit[0] == commit[1]):
             continue
         path = root / anchor.path
         lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
@@ -1328,6 +1388,9 @@ def cmd_bump(args) -> int:
         start, end = anchor.span or (0, 0)
         line = lines[idx]
         lines[idx] = line[:start] + new_value + line[end:]
+        if commit:
+            lines[idx] = ACTION_USES.sub(
+                lambda m: f"{m['head']}{m['repo']}@{commit[0]}{m['tail']}", lines[idx], count=1)
         path.write_text("".join(lines), encoding="utf-8")
         print(f"  {anchor.path}:{anchor.value_line}  {anchor.value} -> {new_value}")
         changed += 1
@@ -1420,6 +1483,8 @@ def main(argv: list[str] | None = None) -> int:
     p_pick.add_argument("--body-out", help="write the picked issue's body here (empty if none)")
 
     p_bump = sub.add_parser("bump", help="rewrite a pin in place")
+    p_bump.add_argument("--sha", help="the commit the tag points at: what an action-sha "
+                                      "pin needs to move with its comment")
     p_bump.add_argument("dep")
     p_bump.add_argument("version")
 

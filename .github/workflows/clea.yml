@@ -141,6 +141,8 @@ jobs:
       INSTALLER: ${{ matrix.entry.installer }}
       VERSION_CMD: ${{ matrix.entry.version_cmd }}
       INSTALLER_STDIN: ${{ matrix.entry.installer_stdin }}
+      # What an action-sha pin needs to move with its comment; empty for any other dependency.
+      CLEA_SHA: ${{ matrix.entry.sha }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       # persist-credentials: false — the full opt-out, not a partial one.
@@ -176,7 +178,7 @@ jobs:
         run: |
           set -euo pipefail
           git checkout -- .
-          python3 scripts/clea/clea.py bump "$DEP" "$VERSION"
+          python3 scripts/clea/clea.py bump ${CLEA_SHA:+--sha "$CLEA_SHA"} "$DEP" "$VERSION"
 
       # The repository's own installer, not a hand-written list of steps: a
       # second list is a second pin to drift, and this is also the only place

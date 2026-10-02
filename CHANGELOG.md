@@ -16,6 +16,16 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
+- **Cléa can probe and bump an `action-sha` pin (plumber).** `getplumber/plumber`
+  is pinned as `uses: ...@<sha>  # v0.5.12` and as a release URL; the first shape
+  made `bump` refuse, so its probe was red every day and the dependency could
+  never be proven. The scan now resolves the commit a tag points at (peeling an
+  annotated tag; one lookup per action pin) and the matrix carries it, so `bump
+  --sha` moves the commit and the comment together, only when the `uses:` names
+  the dependency's own repository and the commit is 40 lowercase hex. A refusal
+  at the last site no longer leaves the first one rewritten. A `precommit-rev` is
+  still refused. Mocked rung (`test-clea.sh`); not run on a runner yet.
+
 - **`task evidence-check` dates the real-cloud evidence in `docs/status.md`
   (refs #121).** Nothing aged the table 0.1.0 rests on, so a measurement stayed
   "true today" after the versions it measured had moved. The table gains a
