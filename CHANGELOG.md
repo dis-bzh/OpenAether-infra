@@ -182,6 +182,17 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **A rejected `CLEA_WORKFLOW_TOKEN` no longer silences Cléa.** From 2026-09-24
+  every `Push probe branches` job failed with `Invalid username or token`: the
+  secret was set but rejected, the script never fell back to `GITHUB_TOKEN`, and
+  its first failure aborted the rest, so the report read "not probed" for probes
+  that had passed. The push is now `scripts/clea/push-probes.sh`: the PAT, then
+  `GITHUB_TOKEN`, and one failed branch does not stop the others; git's whole
+  output reaches the log, without any token. The report opens with a warning when
+  the push job failed or a finished probe job has no verdict on its branch, and
+  names them. Mocked rung (`test-clea-push.sh`, `test-clea.sh`); that the PAT
+  expired is a hypothesis, the secret is not readable from here.
+
 - **`task cluster-up` refuses a missing or placeholder passphrase before it
   creates the buckets.** The check ran after `ensure-buckets.sh --preflight`,
   which creates the four buckets, so the refusal came once resources existed. It

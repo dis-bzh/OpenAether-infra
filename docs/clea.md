@@ -83,8 +83,14 @@ landed on `main`.
   Measured on this workflow's first real run, 2026-08-24. `GITHUB_TOKEN` cannot
   push that change in any repository, and no `permissions:` grant fixes it.
   A `CLEA_WORKFLOW_TOKEN` secret (classic PAT, scope `workflow`) closes it when
-  set; without one, the report still names the three rather than dropping them
-  silently — see "Probes that could not record a verdict" in its own section.
+  set; without one, the report still names the three, in the warning at its top,
+  rather than dropping them silently.
+
+A token GitHub rejects (an expired PAT) is a fault, not one of these: it does not
+silence the run. `scripts/clea/push-probes.sh` falls back to `GITHUB_TOKEN`, keeps
+pushing the other branches, and the report opens with a warning that names the
+probes whose verdict was lost. A classic PAT expires: give it an expiry you will
+see coming.
 
 ## Running it by hand
 

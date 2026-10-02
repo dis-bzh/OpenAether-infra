@@ -1018,6 +1018,47 @@ def _table(rows: list[list[str]], head: list[str]) -> str:
     return "\n".join(out)
 
 
+def lost_verdicts(state: dict, jobs: list[dict]) -> list[dict]:
+    """Probe jobs that passed in this run whose verdict is on no branch.
+
+    The report reads each verdict from its clea/probe/<slug> branch, so a push
+    that fails leaves the previous run's record in place and the dependency
+    reads "not probed". A verdict counts as recorded only at the exact tag the
+    probe tested: an older record for the same dependency is not this run's.
+    """
+    want: dict[str, set[str]] = {}
+    for d in state.get("deps", []):
+        if d.get("behind"):
+            want.setdefault(d["dep"], set()).add(d.get("tag") or d["latest"])
+    have = {(p["dep"], p["version"]) for p in state.get("probes", [])}
+    lost = []
+    for job in jobs:
+        name = job.get("name", "")
+        dep = name.removeprefix("Probe ")
+        if (name.startswith("Probe ") and job.get("conclusion") == "success"
+                and want.get(dep) and not any((dep, v) in have for v in want[dep])):
+            lost.append({"dep": dep, "job": name, "url": job.get("html_url", "")})
+    return lost
+
+
+def push_notice(state: dict) -> list[str]:
+    """A banner when this run's verdicts did not all reach their branches."""
+    push, lost = state.get("push_result", ""), state.get("lost_verdicts", [])
+    failed = push not in ("", "success", "skipped")
+    if not failed and not lost:
+        return []
+    ended = f" (the push job ended `{push}`)" if failed else ""
+    out = [f"> ⚠️ **This run did not record all its probe verdicts{ended}.** A verdict "
+           "below is the last one that reached a branch, not necessarily this run's, so a "
+           "dependency can read \"not probed\" or \"probe failed\" for a version it has "
+           "since passed. If the job's log says `Invalid username or token`, the "
+           "`CLEA_WORKFLOW_TOKEN` secret was rejected: replace it (`docs/clea.md`)."]
+    if lost:
+        out += ["", "Probe job finished, verdict not recorded:", ""]
+        out += [f"- `{s['dep']}` — [{s['job']}]({s['url']})" for s in lost]
+    return out + [""]
+
+
 def render_report(state: dict) -> str:
     deps = state.get("deps", [])
     behind = [d for d in deps if d.get("behind")]
@@ -1025,6 +1066,7 @@ def render_report(state: dict) -> str:
     lines = [f"_Generated {state.get('generated_at', '?')} by "
              "[Cléa](../blob/main/scripts/clea/README.md). "
              "This issue is rewritten in place; do not open another._", ""]
+    lines += push_notice(state)
 
     lines += ["## Behind upstream", ""]
     if behind:
@@ -1167,8 +1209,8 @@ def render_report(state: dict) -> str:
               "- **A dependency pinned only inside `.github/workflows/` cannot be "
               "probed** unless a `CLEA_WORKFLOW_TOKEN` secret is set (a classic PAT, "
               "scope `workflow`) — GITHUB_TOKEN cannot push such a change in any "
-              "repository, and no `permissions:` grant can fix that. See "
-              "\"Probes that could not record a verdict\" below if this run hit one."]
+              "repository, and no `permissions:` grant can fix that. The warning at "
+              "the top of the report names the ones this run could not push."]
     cluster = state.get("cluster_lane")
     if cluster:
         lines += [f"- Weekly local cluster lane: **{cluster.get('verdict', '?')}**, "
