@@ -152,7 +152,7 @@ directory in fourteen. `provider-contract.md` — the document `CLAUDE.md` calls
 the authority — required a variable no module has ever declared.
 
 **Resume here**: one real Scaleway roll. rolling-replace's two applies now apply
-the plan they counted, a size change goes through the roll, a Service is probed
+the plan they counted, a size change is refused by the roll (one node at a time, in place, instead), a Service is probed
 during the upgrade, and the upgrade fetches its own cluster's kubeconfig and
 talosconfig and moves the Talos pin before it builds the image (run it without
 editing the pin first) — all proven mocked only; one roll gives each its real

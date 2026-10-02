@@ -305,19 +305,29 @@ applique à **tous les nœuds en même temps**. Mesuré sur OVH seulement, le
 injoignable plusieurs minutes. Pour les trois autres, le verdict vient du source
 des providers aux versions résolues le 2026-09-26 et d'un plan hors ligne avec
 les vrais binaires provider, pas d'un changement de taille en réel (#51). La garde « un nœud à la fois » de
-`rolling-replace` ne l'attrape pas non plus : elle compte ce qu'un plan
-DÉTRUIRAIT, et un redimensionnement ne détruit rien.
+`rolling-replace` ne l'attrapait pas : elle comptait ce qu'un plan DÉTRUIRAIT, et
+un redimensionnement ne détruit rien. Elle refuse désormais aussi un plan qui
+change un autre nœud (ci-dessous).
 
-**Le faire passer par le roulement.** Modifier la taille dans le tfvars, **ne
-pas lancer `infra-apply`**, puis lancer `task cluster-roll PROVIDER=<p>` sans
-`--upgrade`. Chaque nœud est drainé, remplacé par `-replace` à la nouvelle
-taille, et contrôlé avant le suivant. Tant que le roulement n'est pas fini, tout
-apply ordinaire redimensionne les nœuds restants tous ensemble. Le mode
-remplacement ne saute aucun nœud : le relancer remplace à nouveau tous les
-nœuds de sa portée, que `--workers-only` ou `--cp-only` restreignent. Il n'a
-tourné en réel que sur Scaleway, jamais sur Proxmox, où un worker remplacé perd
-son disque de données intégré. À défaut, redimensionner en place un nœud à la
-fois avec `-target`, sans drain ni contrôle.
+**Ne pas le faire passer par le roulement.** Mesuré sur Scaleway, le
+2026-10-02 : `instance_type` augmenté, `task cluster-roll -- --workers-only` a
+remplacé le worker 0 puis, dans son étape de configuration, redimensionné les
+trois control planes en place en 25 s ; l'apiserver derrière le load balancer a
+été injoignable 56 s. `-target` entraîne ses dépendances, et le compte des
+destructions ne voit pas un redimensionnement. Le roulement planifie désormais
+ses deux étapes avant de cordonner quoi que ce soit et refuse un plan qui change
+un autre nœud (`foreign_changes`) : sur ce cluster, avec un changement de taille
+en attente sur les six nœuds, il s'est arrêté au worker 0 avant le cordon, en
+nommant les trois control planes et les deux autres workers. Reste non mesuré : si l'étape de configuration ciblée d'OVH, d'Outscale et
+de Proxmox entraîne les autres nœuds ; le même refus les couvre si c'est le cas.
+
+**Procéder nœud par nœud, en place.** `kubectl drain` du nœud, `tofu plan
+-target=<ce serveur>` en vérifiant que c'est exactement une mise à jour,
+appliquer ce fichier, attendre Ready, `kubectl uncordon`, nœud suivant. Mesuré
+sur Scaleway le même jour, trois control planes puis les workers : etcd 3/3
+après chacun, 5 sondes d'une seconde en échec sur 241 et aucune au-delà de 1 s,
+environ une minute par nœud. Aucune garde de budget ni d'etcd en dehors de ce
+qui est vérifié à la main.
 
 Deux cas transformeraient un changement de taille en remplacement : le
 `replace_on_type_change` de Scaleway et, sur OpenStack, un nœud dont le gabarit
