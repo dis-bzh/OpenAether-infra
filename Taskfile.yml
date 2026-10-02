@@ -364,7 +364,11 @@ tasks:
     internal: true
     silent: true
     cmds:
-      - python3 scripts/dev/rung-receipt.py record "{{.TARGET}}" "{{.PROVIDER}}" "{{.RC}}" "{{.START}}"
+      # A dry run (DRY_RUN=1, or `-- --dry-run`) resolves and stops: it is no observation, and a
+      # `real-cloud rc=0` receipt for it would satisfy the rung check with nothing run.
+      - >-
+        {{if or .DRY_RUN (contains "--dry-run" .CLI_ARGS)}}true{{else}}python3 scripts/dev/rung-receipt.py
+        record "{{.TARGET}}" "{{.PROVIDER}}" "{{.RC}}" "{{.START}}"{{end}}
 
   receipts:
     desc: "Print the rung receipts recorded for HEAD, to paste into the pull request body"

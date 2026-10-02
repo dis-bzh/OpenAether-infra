@@ -90,6 +90,17 @@ field() { python3 -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1]).
 PATH="$TMP/bin:$PATH" task --dir "$repo" --dry feint-evidence-verify PROVIDER=outscale >/dev/null 2>&1
 [ ! -e "$receipts" ] && ok "task --dry records nothing: nothing ran" || bad "task --dry wrote a receipt: $(cat "$receipts")"
 
+# A dry run is not an observation (`task cluster-upgrade DRY_RUN=1` exits 0 having touched nothing).
+: >"$TMP/dry.out"; rm -f "$receipts"
+STUB_RC=0 PATH="$TMP/bin:$PATH" task --dir "$repo" feint-evidence-verify PROVIDER=outscale DRY_RUN=1 >"$TMP/dry.out" 2>&1
+[ ! -e "$receipts" ] && ok "DRY_RUN=1 on a rung target records nothing, whatever its rc" \
+  || bad "DRY_RUN=1 wrote a receipt: $(cat "$receipts")"
+STUB_RC=0 PATH="$TMP/bin:$PATH" task --dir "$repo" feint-evidence-verify PROVIDER=outscale -- --dry-run >"$TMP/dry.out" 2>&1
+[ ! -e "$receipts" ] && ok "…and so does a trailing \`-- --dry-run\`" || bad "-- --dry-run wrote a receipt: $(cat "$receipts")"
+STUB_RC=0 PATH="$TMP/bin:$PATH" task --dir "$repo" feint-evidence-verify PROVIDER=outscale DRY_RUN= >"$TMP/dry.out" 2>&1
+[ -e "$receipts" ] && ok "…while an empty DRY_RUN still records" || bad "an empty DRY_RUN suppressed the receipt: $(cat "$TMP/dry.out")"
+rm -f "$receipts"
+
 run 3; rc=$?
 [ "$rc" -ne 0 ] && ok "a red run stays red with the defer (task rc=$rc)" || bad "the receipt defer turned a red run green"
 RED="$(last)"

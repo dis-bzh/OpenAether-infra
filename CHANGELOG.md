@@ -192,6 +192,11 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **A dry run no longer leaves a rung receipt.** `task cluster-upgrade DRY_RUN=1`
+  (and `cluster-roll -- --dry-run`) exits 0 having touched nothing, yet recorded
+  `real-cloud … rc=0`, which satisfies the "Rung receipt" check for that head
+  with nothing run. The receipt task now records nothing when `DRY_RUN` is set or
+  `--dry-run` is passed.
 - **A size change through `cluster-roll` no longer resizes every node at once.**
   Measured on Scaleway: with `instance_type` raised, `-- --workers-only` replaced
   worker 0 and its targeted config apply dragged in the in-place resize of all
