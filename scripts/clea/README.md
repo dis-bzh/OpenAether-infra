@@ -54,6 +54,11 @@ read, or on one whose value is not version-shaped at all:
 | `precommit-rev` | `rev: <sha>  # v4.9.1` |
 | `action-sha` | `uses: owner/action@<sha>  # v7` |
 
+A pin that holds a commit moves with its comment or not at all: an `action-sha`
+is bumped only with the commit its tag points at (`bump --sha`, which the scan
+records and the probe matrix carries), and only when the `uses:` names the
+dependency's own repository. A `precommit-rev` is never bumped by Cléa.
+
 Because Cléa's list is a superset of what any one declared inventory reaches,
 the difference between the two **is** the set of pins nothing is watching. That
 is `clea coverage`, and it is the check worth having even if you run nothing

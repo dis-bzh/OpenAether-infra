@@ -33,7 +33,8 @@ exclude = ["renovate.json5"]
 # (`rev: <sha>  # vY`) pin a commit that the anchor's own value never touches —
 # a customManagers entry matching either shape could only rewrite the trailing
 # comment, leaving the digest stale and the pin lying about what it runs.
-# `cmd_bump` refuses to write either shape for that reason. Renovate's BUILT-IN
+# `cmd_bump` writes neither on its own: an action-sha moves only with the `--sha`
+# the scan records for its tag, a precommit-rev never. Renovate's BUILT-IN
 # managers already update the digest and the comment together — github-actions
 # with `helpers:pinGitHubActionDigests` (extended above), pre-commit with
 # `pinDigests` (packageRules above) — with no anchor needed at all. This is
