@@ -91,6 +91,11 @@ supprime une branche dès que sa montée de version a atterri sur `main`.
   classique, scope `workflow`) referme le trou une fois posé ; sans lui, le
   rapport nomme quand même les trois plutôt que de les faire disparaître — voir
   « Probes that could not record a verdict » dans sa propre section.
+  Un jeton que GitHub rejette (un PAT expiré) ne réduit pas non plus la voie au
+  silence : `scripts/clea/push-probes.sh` se rabat sur `GITHUB_TOKEN`, continue
+  de pousser les autres branches, et le rapport s'ouvre sur un avertissement qui
+  nomme ce qu'il n'a pas pu enregistrer. Un PAT classique expire : donne-lui une
+  échéance que tu verras venir.
 
 ## Le lancer à la main
 

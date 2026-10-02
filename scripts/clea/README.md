@@ -130,8 +130,9 @@ by CI's own `GITHUB_TOKEN`.** GitHub refuses that push outright, in any
 repository, and no `permissions:` grant changes it — there is no such scope.
 The workaround is a classic Personal Access Token with the `workflow` scope,
 stored as a repository secret and named `CLEA_WORKFLOW_TOKEN`; a workflow that
-wires it in falls back to the default token cleanly when the secret is absent,
-so this is opt-in, not a requirement to get everything else running.
+wires it in falls back to the default token cleanly when the secret is absent
+or rejected (`push-probes.sh`), so this is opt-in, not a requirement to get
+everything else running.
 
 ## Configuration
 

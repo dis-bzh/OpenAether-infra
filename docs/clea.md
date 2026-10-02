@@ -85,6 +85,10 @@ landed on `main`.
   A `CLEA_WORKFLOW_TOKEN` secret (classic PAT, scope `workflow`) closes it when
   set; without one, the report still names the three rather than dropping them
   silently — see "Probes that could not record a verdict" in its own section.
+  A token GitHub rejects (an expired PAT) does not silence the run either:
+  `scripts/clea/push-probes.sh` falls back to `GITHUB_TOKEN`, keeps pushing the
+  other branches, and the report opens with a warning naming what it could not
+  record. A classic PAT expires: give it an expiry you will see coming.
 
 ## Running it by hand
 

@@ -496,6 +496,50 @@ PY
 if [ $? -eq 0 ]; then PASS=$((PASS + 7)); else FAIL=$((FAIL + 1)); fi
 
 echo
+echo "=== a probe that passed but never reached its branch is named, not read as 'not probed' ==="
+python3 - "$CLEA" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("clea", sys.argv[1])
+clea = importlib.util.module_from_spec(spec); spec.loader.exec_module(clea)
+
+def dep(name, tag, behind=True):
+    return {"dep": name, "tag": tag, "latest": tag.lstrip("v"), "current": "0", "file": "f", "line": 1,
+            "pinned": True, "behind": behind, "watched": True, "shape_ok": True}
+def job(name, conclusion): return {"name": name, "conclusion": conclusion, "html_url": "https://example.invalid/" + name}
+
+state = {"generated_at": "now",
+         "deps": [dep("opentofu/opentofu", "v1.13.0"), dep("kubernetes/kubernetes", "v1.37.1"),
+                  dep("getplumber/plumber", "v0.5.16"), dep("helm/helm", "v4.3.0", behind=False)],
+         "probes": [{"dep": "kubernetes/kubernetes", "version": "v1.37.1", "green": False, "branch": "b", "run": "r"}]}
+jobs = [job("Probe opentofu/opentofu", "success"), job("Probe kubernetes/kubernetes", "success"),
+        job("Probe getplumber/plumber", "failure"), job("Probe helm/helm", "success")]
+lost = {l["dep"] for l in clea.lost_verdicts(state, jobs)}
+old = dict(state, probes=[{"dep": "opentofu/opentofu", "version": "v1.12.9", "green": True, "branch": "b", "run": "r"}])
+
+def render(**extra): return clea.render_report(dict(state, lost_verdicts=clea.lost_verdicts(state, jobs), **extra))
+checks = [
+    ("passed, no record at its tag -> lost", lost == {"opentofu/opentofu"}),
+    ("passed, recorded at its exact tag -> not lost", "kubernetes/kubernetes" not in lost),
+    ("a failed job is 'stalled', not 'lost'", "getplumber/plumber" not in lost),
+    ("a dependency that is not behind is not lost", "helm/helm" not in lost),
+    ("an OLDER record of the same dependency is not this run's",
+     {l["dep"] for l in clea.lost_verdicts(old, jobs)} >= {"opentofu/opentofu"}),
+    ("a failed push opens the report with a warning that names the cause and the secret",
+     "(the push job ended `failure`)" in render(push_result="failure") and "Invalid username or token" in render(push_result="failure")),
+    ("…and names the dependency whose verdict was lost", "- `opentofu/opentofu` — [Probe opentofu/opentofu]" in render(push_result="failure")),
+    ("a lost verdict warns even when the push job reports success", "did not record all" in render(push_result="success")),
+    ("no loss and a clean push -> no warning",
+     "did not record all" not in clea.render_report(dict(state, push_result="success", lost_verdicts=[]))
+     and "did not record all" not in clea.render_report(dict(state, push_result="skipped", lost_verdicts=[]))),
+    ("the first line is still the one pick-issue recognises",
+     bool(clea.REPORT_MARKER_RE.match(render(push_result="failure").splitlines()[0]))),
+]
+for name, ok in checks:
+    print(("  \033[32m\u2713\033[0m " if ok else "  \033[31m\u2717\033[0m ") + name)
+sys.exit(1 if [c for c in checks if not c[1]] else 0)
+PY
+if [ $? -eq 0 ]; then PASS=$((PASS + 10)); else FAIL=$((FAIL + 1)); fi
+
 echo "=== a rate-limited datasource is an error, never 'up to date' ==="
 python3 - "$CLEA" <<'PY'
 import http.server, importlib.util, socket, sys, threading
