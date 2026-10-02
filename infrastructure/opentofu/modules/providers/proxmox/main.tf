@@ -9,8 +9,8 @@
 # below is static (Talos reads it from the nocloud ip= kernel arg / initial net).
 #
 # ⚠️ cpu/memory are NOT ForceNew: the provider reboots the VM to apply them, so a
-# plain apply reboots EVERY node at once. Change them with `task cluster-roll`
-# (one node at a time) — docs/upgrade.md § A node size change.
+# plain apply reboots EVERY node at once. Change them one node at a time —
+# docs/upgrade.md § A node size change.
 # ==============================================================================
 
 resource "proxmox_virtual_environment_vm" "control_plane" {
