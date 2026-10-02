@@ -461,7 +461,8 @@ tasks:
       # probe branch. Its reader, its writer and its comparator are all places a
       # silent wrong answer would produce a confident report.
       - ./scripts/dev/test-clea.sh
-      # push-probes.sh on real local git remotes: a rejected PAT falls back, a failed branch does not stop the rest.
+      # A rejected PAT once lost every probe verdict for days without a signal: this
+      # drives push-probes.sh over real local remotes so the fallback cannot regress.
       - ./scripts/dev/test-clea-push.sh
       # setup.sh asked whether a tool was present, never which version it was —
       # so it installed the pin once and refused every upgrade after that. Found

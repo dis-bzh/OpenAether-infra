@@ -1054,7 +1054,7 @@ def push_notice(state: dict) -> list[str]:
            "since passed. If the job's log says `Invalid username or token`, the "
            "`CLEA_WORKFLOW_TOKEN` secret was rejected: replace it (`docs/clea.md`)."]
     if lost:
-        out += ["", "Passed in this run, verdict not recorded:", ""]
+        out += ["", "Probe job finished, verdict not recorded:", ""]
         out += [f"- `{s['dep']}` — [{s['job']}]({s['url']})" for s in lost]
     return out + [""]
 
@@ -1209,8 +1209,8 @@ def render_report(state: dict) -> str:
               "- **A dependency pinned only inside `.github/workflows/` cannot be "
               "probed** unless a `CLEA_WORKFLOW_TOKEN` secret is set (a classic PAT, "
               "scope `workflow`) — GITHUB_TOKEN cannot push such a change in any "
-              "repository, and no `permissions:` grant can fix that. See "
-              "\"Probes that could not record a verdict\" below if this run hit one."]
+              "repository, and no `permissions:` grant can fix that. The warning at "
+              "the top of the report names the ones this run could not push."]
     cluster = state.get("cluster_lane")
     if cluster:
         lines += [f"- Weekly local cluster lane: **{cluster.get('verdict', '?')}**, "

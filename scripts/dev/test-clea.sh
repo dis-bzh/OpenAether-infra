@@ -533,13 +533,24 @@ checks = [
      and "did not record all" not in clea.render_report(dict(state, push_result="skipped", lost_verdicts=[]))),
     ("the first line is still the one pick-issue recognises",
      bool(clea.REPORT_MARKER_RE.match(render(push_result="failure").splitlines()[0]))),
+    # The push job also carries the cluster lane's patch, which lost_verdicts never lists.
+    ("a failed push warns on its own, with nothing listed as lost",
+     "(the push job ended `failure`)" in clea.render_report(dict(state, push_result="failure", lost_verdicts=[]))
+     and "verdict not recorded:" not in clea.render_report(dict(state, push_result="failure", lost_verdicts=[]))),
+    ("a dependency without a `tag` key is matched on its `latest`",
+     clea.lost_verdicts({"deps": [dict(dep("x/y", "v1.0.0"), tag=None, latest="1.0.0")],
+                         "probes": [{"dep": "x/y", "version": "1.0.0"}]}, [job("Probe x/y", "success")]) == []),
+    ("one dependency behind in two rows, one of them recorded, is not lost",
+     clea.lost_verdicts({"deps": [dep("x/y", "v1.0.0"), dep("x/y", "v1.0.1")],
+                         "probes": [{"dep": "x/y", "version": "v1.0.1"}]}, [job("Probe x/y", "success")]) == []),
 ]
 for name, ok in checks:
     print(("  \033[32m\u2713\033[0m " if ok else "  \033[31m\u2717\033[0m ") + name)
 sys.exit(1 if [c for c in checks if not c[1]] else 0)
 PY
-if [ $? -eq 0 ]; then PASS=$((PASS + 10)); else FAIL=$((FAIL + 1)); fi
+if [ $? -eq 0 ]; then PASS=$((PASS + 13)); else FAIL=$((FAIL + 1)); fi
 
+echo
 echo "=== a rate-limited datasource is an error, never 'up to date' ==="
 python3 - "$CLEA" <<'PY'
 import http.server, importlib.util, socket, sys, threading
