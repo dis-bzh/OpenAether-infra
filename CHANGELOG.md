@@ -197,6 +197,14 @@ in git. 0.1.0 is the first entry describing something proven.
   `real-cloud … rc=0`, which satisfies the "Rung receipt" check for that head
   with nothing run. The receipt task now records nothing when `DRY_RUN` is set or
   `--dry-run` is passed.
+- **`infra-plan` and `infra-apply` no longer read an unreadable state as "no
+  bootstrap".** `tofu state list 2>/dev/null | grep -q …` answered `false` on any
+  failure to read (an S3 error, a bad credential); on a bootstrapped cluster that
+  zeroes the node counts and drops the bootstrap, machine configs and kubeconfig
+  from the state. A live Scaleway upgrade ended that way, with an empty kubeconfig
+  output. `scripts/internal/bootstrap-in-state.sh` answers only when the state is
+  read or absent. Measured: a wrong secret key now stops it with the provider's
+  message. Why that upgrade's read failed is not established. Refs #67.
 - **A size change through `cluster-roll` no longer resizes every node at once.**
   Measured on Scaleway: with `instance_type` raised, `-- --workers-only` replaced
   worker 0 and its targeted config apply dragged in the in-place resize of all
