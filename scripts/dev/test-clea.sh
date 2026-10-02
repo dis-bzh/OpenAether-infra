@@ -361,23 +361,39 @@ if grep -qx "      - uses: acme/action@${NEW}  # v1.1.0" "$ACT"; then
 else
   bad "the line is: $(grep uses: "$ACT")"
 fi
-for bogus in abc 111111111111111111111111111111111111111 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA 'not-a-commit-sha-at-all-not-a-commit-sha-xx'; do
+SHA41=11111111111111111111111111111111111111111
+SHA64=1111111111111111111111111111111111111111111111111111111111111111
+for bogus in abc 111111111111111111111111111111111111111 "$SHA41" "$SHA64" AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA 'not-a-commit-sha-at-all-not-a-commit-sha-xx'; do
   fresh_pin
-  expect 1 "a --sha of '${bogus:0:12}…' is refused" -- python3 "$CLEA" --root "$TMP/p2" bump --sha "$bogus" acme/action v1.1.0
+  expect 1 "a --sha of '${bogus:0:12}…' (${#bogus} chars) is refused" -- python3 "$CLEA" --root "$TMP/p2" bump --sha "$bogus" acme/action v1.1.0
   grep -q '1111111111111111111111111111111111111111.*# v1.0.0' "$ACT" || bad "a refused --sha still wrote: $(grep uses: "$ACT")"
 done
 fresh_pin
-sed -i 's|uses: acme/action@|uses: other/action@|' "$ACT"
-says "a uses: that names another repository never takes this dependency's commit" "another repository" \
+says "without any --sha the refusal says what to pass" "Pass --sha" -- python3 "$CLEA" --root "$TMP/p2" bump acme/action v1.1.0
+for other in other/action acme/other; do
+  fresh_pin; sed -i "s|uses: acme/action@|uses: $other@|" "$ACT"
+  says "a uses: naming $other never takes this dependency's commit" "another repository" \
+    -- python3 "$CLEA" --root "$TMP/p2" bump --sha "$NEW" acme/action v1.1.0
+  grep -q "$other@1111111111111111111111111111111111111111  # v1.0.0" "$ACT" \
+    && ok "…and the line is untouched" || bad "wrote through a repository mismatch: $(grep uses: "$ACT")"
+done
+fresh_pin; sed -i 's|uses: acme/action@|uses: Acme/Action/sub@|' "$ACT"
+expect 0 "the repository compare ignores case and a subpath (Acme/Action/sub for acme/action)" \
   -- python3 "$CLEA" --root "$TMP/p2" bump --sha "$NEW" acme/action v1.1.0
-grep -q 'other/action@1111111111111111111111111111111111111111  # v1.0.0' "$ACT" \
-  && ok "…and the line is untouched" || bad "wrote through a repository mismatch: $(grep uses: "$ACT")"
+grep -q "Acme/Action/sub@${NEW}  # v1.1.0" "$ACT" && ok "…and keeps what the line named" || bad "the line is: $(grep uses: "$ACT")"
+fresh_pin; sed -i "s|uses: acme/action@1111111111111111111111111111111111111111|uses: 'acme/action@1111111111111111111111111111111111111111'|" "$ACT"
+says "a line shape it does not recognise is refused as that, not as a repository mismatch" "not in the shape" \
+  -- python3 "$CLEA" --root "$TMP/p2" bump --sha "$NEW" acme/action v1.1.0
 fresh_pin
-expect 1 "a pre-commit rev still refuses, even with a --sha: only an action pin has the shape" \
+says "a pre-commit rev still refuses with a --sha, and says why" "pins a commit" \
   -- python3 "$CLEA" --root "$TMP/p2" bump --sha "$NEW" acme/hook v2.1.0
+fresh_pin
+expect 0 "a --sha given for a dependency with no action site is harmless" \
+  -- python3 "$CLEA" --root "$TMP/p2" bump --sha "$NEW" acme/one v1.3.0
+grep -q 'ONE_VERSION="1.3.0"' "$TMP/p2/scripts/install.sh" && ok "…and the plain site is rewritten as usual" || bad "$(grep ONE_VERSION "$TMP/p2/scripts/install.sh")"
 
-# All or nothing across sites: the plain site sorts BEFORE the action site, so a write-as-you-go
-# loop would have changed it by the time the action site refuses.
+# All or nothing across sites: the plain site sorts BEFORE the action site, so a
+# write-as-you-go loop would have changed it by the time the action site refuses.
 rm -rf "$TMP/p3"; cp -r "$TMP/pin0" "$TMP/p3"
 printf 'env:\n  # clea-test: datasource=github-releases depName=acme/pair extractVersion=^v(?<version>.*)$\n  PAIR_VERSION: "1.0.0"\n' > "$TMP/p3/.github/workflows/a-env.yml"
 printf 'jobs:\n  b:\n    steps:\n      # clea-test: datasource=github-releases depName=acme/pair\n      - uses: acme/pair@1111111111111111111111111111111111111111  # v1.0.0\n' > "$TMP/p3/.github/workflows/b-action.yml"
@@ -392,71 +408,151 @@ grep -q 'PAIR_VERSION: "1.1.0"' "$TMP/p3/.github/workflows/a-env.yml" \
   && grep -q "acme/pair@${NEW}  # v1.1.0" "$TMP/p3/.github/workflows/b-action.yml" \
   && ok "plain site 1.1.0, action site at the new commit and v1.1.0" \
   || bad "after the bump: $(grep -h 'PAIR_VERSION\|uses:' "$TMP/p3/.github/workflows/a-env.yml" "$TMP/p3/.github/workflows/b-action.yml")"
+# The v-prefix refusal is a refusal too: it must not leave the first site rewritten either.
+rm -rf "$TMP/p4"; cp -r "$TMP/pin0" "$TMP/p4"
+printf '# clea-test: datasource=github-releases depName=acme/shape extractVersion=^v(?<version>.*)$\nA_VERSION="1.0.0"\n' > "$TMP/p4/scripts/aa.sh"
+printf '# clea-test: datasource=github-releases depName=acme/shape\nZ_VERSION="1.0.0"\n' > "$TMP/p4/scripts/zz.sh"
+expect 1 "two sites that read a v prefix differently: refused" -- python3 "$CLEA" --root "$TMP/p4" bump acme/shape v1.1.0
+grep -q 'A_VERSION="1.0.0"' "$TMP/p4/scripts/aa.sh" && ok "…and the first site is untouched" || bad "partial write: $(grep A_VERSION "$TMP/p4/scripts/aa.sh")"
+# A site whose COMMENT is already at the target may still hold another commit.
+rm -rf "$TMP/p5"; cp -r "$TMP/pin0" "$TMP/p5"
+printf 'env:\n  # clea-test: datasource=github-releases depName=acme/mix extractVersion=^v(?<version>.*)$\n  MIX_VERSION: "1.0.0"\n' > "$TMP/p5/.github/workflows/a-env.yml"
+printf 'jobs:\n  b:\n    steps:\n      # clea-test: datasource=github-releases depName=acme/mix\n      - uses: acme/mix@2222222222222222222222222222222222222222  # v1.1.0\n' > "$TMP/p5/.github/workflows/b-action.yml"
+expect 0 "a site already at the target tag but on another commit" -- python3 "$CLEA" --root "$TMP/p5" bump --sha "$NEW" acme/mix v1.1.0
+grep -q "acme/mix@${NEW}  # v1.1.0" "$TMP/p5/.github/workflows/b-action.yml" \
+  && ok "…is moved onto the commit of its tag" || bad "left on another commit: $(grep uses: "$TMP/p5/.github/workflows/b-action.yml")"
+
+# The seam from the matrix to bump: the two lines that run it, taken out of the workflow and probe.sh
+# and executed, so that dropping --sha from either goes red here and not on a runner.
+grep -qF 'CLEA_SHA: ${{ matrix.entry.sha }}' "$ROOT/.github/workflows/clea.yml" \
+  && ok "the probe job hands the matrix's commit to its steps as CLEA_SHA" || bad "the probe job does not export CLEA_SHA"
+seam() { # <label> <script> <fixed pattern> <how to run the extracted line>
+  local label="$1" file="$2" pat="$3" mode="$4" line
+  line="$(grep -F -- "$pat" "$file" | head -1 | sed 's/^[[:space:]]*//; s/^if ! //; s/; then$//')"
+  [ -n "$line" ] || { bad "$label: the bump line is gone from $file"; return; }
+  fresh_pin
+  mkdir -p "$TMP/p2/scripts/clea"; ln -sf "$CLEA" "$TMP/p2/scripts/clea/clea.py"
+  ( cd "$TMP/p2" && DEP=acme/action VERSION=v1.1.0 CLEA_SHA="$NEW" CLEA="$CLEA" ROOT="$TMP/p2" bash -c "$line" ) >/dev/null 2>&1
+  if grep -q "acme/action@${NEW}  # v1.1.0" "$ACT"; then ok "$label"; else bad "$label: the pin did not move ($line)"; fi
+}
+seam "clea.yml's bump step passes CLEA_SHA through, and the pin moves" "$ROOT/.github/workflows/clea.yml" 'clea.py bump' run
+seam "probe.sh's bump passes CLEA_SHA through, and the pin moves" "$ROOT/scripts/clea/probe.sh" 'bump ${CLEA_SHA' probe
 
 echo
 echo "=== an action-sha pin's commit is resolved at scan time and carried to the bump ==="
-python3 - "$CLEA" "$TMP/pin0" <<'PY'
-import importlib.util, json, os, sys, tempfile
+COUNTFILE="$TMP/count" python3 - "$CLEA" "$TMP/pin0" <<'PY'
+import contextlib, importlib.util, io, json, os, sys, tempfile
 spec = importlib.util.spec_from_file_location("clea", sys.argv[1])
 clea = importlib.util.module_from_spec(spec); spec.loader.exec_module(clea)
 C1, C2 = "a" * 40, "b" * 40
 calls = []
 def fake(path, token):
-    calls.append(path)
-    if path.endswith("/git/ref/tags/v1.1.0"): return {"object": {"type": "commit", "sha": C1}}
-    if path.endswith("/git/ref/tags/v2.0.0"): return {"object": {"type": "tag", "sha": C2}}
+    calls.append((path, token))
+    if "/repos/acme/fails/" in path: raise clea.CleaError("boom: lookup failed for acme/fails")
+    tag = path.rsplit("/", 1)[-1]
+    if path.endswith("/git/ref/tags/v1.1.0"): return {"ref": "refs/tags/v1.1.0", "object": {"type": "commit", "sha": C1}}
+    if path.endswith("/git/ref/tags/v2.0.0"): return {"ref": "refs/tags/v2.0.0", "object": {"type": "tag", "sha": C2}}
     if path.endswith("/git/tags/" + C2): return {"object": {"type": "commit", "sha": C1}}
-    if path.endswith("/git/ref/tags/tree"): return {"object": {"type": "tree", "sha": C1}}
-    if path.endswith("/git/ref/tags/short"): return {"object": {"type": "commit", "sha": "abc"}}
-    if path.endswith("/git/ref/tags/empty"): return {}
+    if path.endswith("/git/ref/tags/tree"): return {"ref": "refs/tags/tree", "object": {"type": "tree", "sha": C1}}
+    if path.endswith("/git/ref/tags/short"): return {"ref": "refs/tags/short", "object": {"type": "commit", "sha": "abc"}}
+    if path.endswith("/git/ref/tags/empty"): return {"ref": "refs/tags/empty"}
+    if path.endswith("/git/ref/tags/mismatch"): return {"ref": "refs/tags/mismatch-rc1", "object": {"type": "commit", "sha": C1}}
+    if path.endswith("/git/ref/tags/v1%232"): return {"ref": "refs/tags/v1#2", "object": {"type": "commit", "sha": C1}}
     raise clea.CleaError("unexpected " + path)
 clea._gh_json = fake
 
 def refuses(tag):
     try: clea.resolve_commit("acme/action", tag, None); return False
     except clea.CleaError: return True
-checks = [
-    ("a lightweight tag resolves to its commit", clea.resolve_commit("acme/action", "v1.1.0", None) == C1),
-    ("an annotated tag is peeled to the commit it names", clea.resolve_commit("acme/action", "v2.0.0", None) == C1),
+checks = [("a lightweight tag resolves to its commit", clea.resolve_commit("acme/action", "v1.1.0", "tk") == C1)]
+checks.append(("…by asking the dependency's own repository, with the token it was given",
+               calls[-1] == ("/repos/acme/action/git/ref/tags/v1.1.0", "tk")))
+calls.clear()
+checks.append(("an annotated tag is peeled to the commit it names", clea.resolve_commit("acme/action", "v2.0.0", "tk") == C1))
+checks.append(("…in the same repository, with the same token",
+               calls == [("/repos/acme/action/git/ref/tags/v2.0.0", "tk"), ("/repos/acme/action/git/tags/" + C2, "tk")]))
+checks += [
     ("a tag that names a tree is refused", refuses("tree")),
     ("a commit id that is not 40 lowercase hex is refused", refuses("short")),
     ("an answer with no object is refused", refuses("empty")),
+    ("an answer for another ref than the one asked is refused", refuses("mismatch")),
 ]
+calls.clear(); got = clea.resolve_commit("acme/action", "v1#2", None)
+checks.append(("a tag with a '#' is percent-encoded in the path, never cut at the fragment",
+               got == C1 and calls[0][0].endswith("/git/ref/tags/v1%232")))
+try:
+    clea.http_get("http://127.0.0.1:9/v1\u00e9")
+    checks.append(("a non-ASCII tag in the path becomes a Cléa error, not a crash", False))
+except clea.CleaError:
+    checks.append(("a non-ASCII tag in the path becomes a Cléa error, not a crash", True))
+except Exception:
+    checks.append(("a non-ASCII tag in the path becomes a Cléa error, not a crash", False))
 
-# the scan, end to end, on a copy of the fixture: the action dependency only
+# the scan, end to end, on a copy of the fixture
 work = tempfile.mkdtemp(); os.system(f"cp -r {sys.argv[2]}/. {work}/")
-# the same action pinned a second time, so that "one lookup" has something to cache across
-open(os.path.join(work, ".github/workflows/action2.yml"), "w").write(
-    "jobs:\n  b:\n    steps:\n      # clea-test: datasource=github-releases depName=acme/action\n"
+def add(path, text): open(os.path.join(work, path), "w").write(text)
+add(".github/workflows/action2.yml", "jobs:\n  b:\n    steps:\n      # clea-test: datasource=github-releases depName=acme/action\n"
     "      - uses: acme/action@" + "2" * 40 + "  # v1.0.0\n")
+add(".github/workflows/fails.yml", "jobs:\n  c:\n    steps:\n      # clea-test: datasource=github-releases depName=acme/fails\n"
+    "      - uses: acme/fails@" + "3" * 40 + "  # v1.0.0\n")
+add(".github/workflows/current.yml", "jobs:\n  d:\n    steps:\n      # clea-test: datasource=github-releases depName=acme/current\n"
+    "      - uses: acme/current@" + "4" * 40 + "  # v1.1.0\n")
+add(".github/workflows/notgh.yml", "jobs:\n  e:\n    steps:\n      # clea-test: datasource=pypi depName=acme-notgh\n"
+    "      - uses: acme-notgh@" + "5" * 40 + "  # v1.0.0\n")
 clea.DATASOURCES["github-releases"] = lambda dep, token, **_: {"tag": "v1.1.0", "released_at": None, "notes_url": None}
+clea.DATASOURCES["pypi"] = lambda dep, token, **_: {"tag": "v1.1.0", "released_at": None, "notes_url": None}
 calls.clear(); state_path = os.path.join(work, "state.json")
-rc = clea.main(["--root", work, "scan", "--state", state_path])
+os.environ["GITHUB_TOKEN"] = "tok-scan"
+clea.main(["--root", work, "scan", "--state", state_path])
 state = json.load(open(state_path))
-by = {d["dep"]: d for d in state["deps"]}
+by = {}
+for d in state["deps"]: by.setdefault(d["dep"], []).append(d)
+looked = [c for c in calls if "/git/ref/tags/" in c[0]]
 checks += [
     ("the scan records the commit on every action-sha anchor of the dependency",
-     [d.get("sha") for d in state["deps"] if d["dep"] == "acme/action"] == [C1, C1]),
+     [d.get("sha") for d in by["acme/action"]] == [C1, C1]),
     ("…and on no other anchor", all("sha" not in d for d in state["deps"] if d["form"] != "action-sha")),
-    ("one lookup per action pin, not one per anchor", sum("/git/ref/tags/" in c for c in calls) == 1),
+    ("one lookup per action pin, not one per anchor, with the scan's own token",
+     [c for c in looked if "/repos/acme/action/" in c[0]] == [("/repos/acme/action/git/ref/tags/v1.1.0", "tok-scan")]),
+    ("an action pin that is not behind is never looked up", not any("/repos/acme/current/" in c[0] for c in calls)),
+    ("an action pin on a datasource that is not GitHub is never looked up",
+     not any("acme-notgh" in c[0] for c in calls) and "sha" not in by["acme-notgh"][0]),
+    ("a failed lookup is an error in the report…", any("boom: lookup failed" in e for e in state["errors"])),
+    ("…the dependency is still behind, with no commit recorded",
+     by["acme/fails"][0]["behind"] is True and "sha" not in by["acme/fails"][0]),
 ]
-# the matrix hands the commit to the probe, from whichever anchor of the dependency holds it
-st = {"deps": [{"dep": "d/e", "behind": True, "pinned": True, "tag": "v2", "latest": "2"},
-               {"dep": "d/e", "behind": True, "pinned": True, "tag": "v2", "latest": "2", "sha": C1},
-               {"dep": "f/g", "behind": True, "pinned": True, "tag": "v3", "latest": "3"}]}
-open(os.path.join(work, "m.json"), "w").write(json.dumps(st))
-import io, contextlib
-buf = io.StringIO()
-with contextlib.redirect_stdout(buf):
-    clea.main(["--root", work, "matrix", "--state", os.path.join(work, "m.json")])
-m = {e["dep"]: e for e in json.loads(buf.getvalue())}
-checks += [("the matrix carries the commit even when it sits on the second anchor", m["d/e"]["sha"] == C1),
-           ("…and an empty one for a dependency without it", m["f/g"]["sha"] == "")]
+# the matrix hands the commit to the probe, only for the tag the entry bumps to
+def matrix(deps):
+    p = os.path.join(work, "m.json"); open(p, "w").write(json.dumps({"deps": deps}))
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf): clea.main(["--root", work, "matrix", "--state", p])
+    return {e["dep"]: e for e in json.loads(buf.getvalue())}
+def row(dep, tag, sha=None):
+    r = {"dep": dep, "behind": True, "pinned": True, "tag": tag, "latest": tag.lstrip("v")}
+    if sha: r["sha"] = sha
+    return r
+checks += [
+    ("the matrix carries the commit of the real case: the action anchor sorts first",
+     matrix([row("p/q", "v2", C1), row("p/q", "v2")])["p/q"]["sha"] == C1),
+    ("…of a dependency with one action anchor", matrix([row("p/q", "v2", C1)])["p/q"]["sha"] == C1),
+    ("…when it sits on a later anchor", matrix([row("p/q", "v2"), row("p/q", "v2", C1)])["p/q"]["sha"] == C1),
+    ("…the first one is kept when a later anchor holds another", matrix([row("p/q", "v2", C1), row("p/q", "v2", C2)])["p/q"]["sha"] == C1),
+    ("…and empty for a dependency without any", matrix([row("p/q", "v2")])["p/q"]["sha"] == ""),
+    ("a commit resolved for ANOTHER tag is never paired with this entry's version",
+     matrix([row("p/q", "v1"), row("p/q", "v2", C1)])["p/q"]["sha"] == ""),
+]
+# without the commit, the bump of that dependency refuses and says what to pass
+err = io.StringIO()
+with contextlib.redirect_stderr(err):
+    rc = clea.main(["--root", work, "bump", "acme/fails", "v1.1.0"])
+checks.append(("…and bump then refuses and says to pass --sha", rc == 1 and "Pass --sha" in err.getvalue()))
 for name, ok in checks:
     print(("  \033[32m\u2713\033[0m " if ok else "  \033[31m\u2717\033[0m ") + name)
+open(os.environ["COUNTFILE"], "w").write(str(len(checks)))
 sys.exit(1 if [c for c in checks if not c[1]] else 0)
 PY
-if [ $? -eq 0 ]; then PASS=$((PASS + 8)); else FAIL=$((FAIL + 1)); fi
+rc=$?
+if [ "$rc" -eq 0 ]; then PASS=$((PASS + $(cat "$TMP/count"))); else FAIL=$((FAIL + 1)); fi
 
 echo
 echo "=== renovate-native: an explicit, per-form claim, not a blanket exemption ==="
