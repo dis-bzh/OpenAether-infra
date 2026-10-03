@@ -16,6 +16,16 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
+- **A lowered node count is refused before anything is applied (refs the 0.2.0 scale-in audit).**
+  Lowering `control_planes` or `workers` made OpenTofu destroy the highest-index machine and its
+  worker data volumes with no drain, no etcd leave and no Node delete, and neither `cluster-up` nor
+  `infra-apply` said so. `scripts/internal/refuse-node-deletes.sh` now reads the saved plan and, on a
+  bootstrapped cluster, stops on any pure delete of a node-class resource; `grow-nodes.sh` runs it in
+  `--creates-only` mode, so a mixed edit cannot delete while adding. `node_distribution` is validated
+  against the counts. Rung: mocked (`test-refuse-node-deletes.sh`, 18 assertions, mutants killed;
+  `node-counts.tftest.hcl`) plus the guard run on two real Scaleway shrink plans (workers 2 to 1,
+  control planes 3 to 2): both refused, nothing applied.
+
 - **`cluster-verify` fails an "HA" cluster whose control planes all sit in one
   failure domain (refs #38, offline half).** Three control planes in one zone
   passed as HA: the verifier counted nodes and never asked where they sit. Each

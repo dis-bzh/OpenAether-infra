@@ -534,6 +534,7 @@ tasks:
       - ./scripts/dev/test-worker-volumes.sh
       # grow-nodes.sh (#59): machines, then tunnels, then only the new nodes' configuration.
       - ./scripts/dev/test-grow-nodes.sh
+      - ./scripts/dev/test-refuse-node-deletes.sh
       # check-evidence-age.sh on fixtures and a fixed clock. The real tree must parse, never be
       # current: a verdict here would turn a required check red with no commit.
       - ./scripts/dev/test-evidence-age.sh
@@ -748,6 +749,14 @@ tasks:
       - |
         PLANFILE="up-{{.ROLE}}-{{.PROVIDER}}.tfplan"
         task infra-plan ROLE={{.ROLE}} PROVIDER={{.PROVIDER}} KEY={{.KEY}} OUT="$PLANFILE" || exit 1
+      # Before the question, not after it: a plan that deletes a node is refused, not offered.
+      - task: _refuse-node-deletes
+        vars:
+          ROLE: "{{.ROLE}}"
+          PROVIDER: "{{.PROVIDER}}"
+          PLAN: "up-{{.ROLE}}-{{.PROVIDER}}.tfplan"
+      - |
+        PLANFILE="up-{{.ROLE}}-{{.PROVIDER}}.tfplan"
         if [ "{{.APPROVE}}" != auto ]; then
           if [ -t 0 ]; then
             printf '\nApply this plan? Only "yes" is accepted: '
@@ -921,6 +930,8 @@ tasks:
             echo "    task infra-plan PROVIDER={{.PROVIDER}} ROLE={{.ROLE}} OUT={{.PLAN}}" >&2
             exit 1
           }
+          # A lowered count plans the deletion of a node and its data volumes: removal is its own command.
+          ../../../scripts/internal/refuse-node-deletes.sh "{{.PLAN}}" || exit 1
           tofu apply "{{.PLAN}}" 2>&1 | tee -a .tofu-run.log
           rm -f "{{.PLAN}}"
         else
@@ -933,6 +944,7 @@ tasks:
           P="auto-{{.ROLE}}-{{.PROVIDER}}.tfplan"
           tofu plan -out="$P" -var-file="envs/{{.ROLE}}-{{.PROVIDER}}.tfvars" \
             -var talos_bootstrap=$TB 2>&1 | tee -a .tofu-run.log
+          ../../../scripts/internal/refuse-node-deletes.sh "$P" || exit 1
           tofu apply "$P" 2>&1 | tee -a .tofu-run.log
           rm -f "$P"
         fi
@@ -1044,6 +1056,17 @@ tasks:
       - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
       - SSH_KEY="{{.KEY}}" ../../../scripts/bootstrap/grow-nodes.sh {{.ROLE}} {{.PROVIDER}}
 
+  _refuse-node-deletes:
+    internal: true
+    desc: "Refuse a saved plan that deletes a node of a bootstrapped cluster"
+    dir: infrastructure/opentofu/cluster
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+    env: *provider-env
+    cmds:
+      - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
+      - ../../../scripts/internal/refuse-node-deletes.sh {{.PLAN}}
+
   bootstrap-phase2:
     desc: >-
       Phase 2: open SSH tunnels (from state) + bootstrap Talos. It computes its OWN plan and
@@ -1086,6 +1109,7 @@ tasks:
         # state has moved, which is what makes "what I read is what ran" true.
         PLANFILE="phase2-{{.ROLE}}-{{.PROVIDER}}.tfplan"
         tofu plan -out="$PLANFILE" -var-file="envs/{{.ROLE}}-{{.PROVIDER}}.tfvars" -var talos_bootstrap=true
+        ../../../scripts/internal/refuse-node-deletes.sh "$PLANFILE" || exit 1
         if [ "{{.APPROVE}}" != auto ]; then
           if [ -t 0 ]; then
             printf '\nApply this plan? Only "yes" is accepted: '

@@ -231,6 +231,13 @@ variable "node_distribution" {
     host_ssh_user           = optional(string, "root")
   }))
   default = {}
+
+  # Workers with no control plane cannot be a cluster, and on a live one that edit deletes every control
+  # plane and drops the bootstrap from the state.
+  validation {
+    condition     = alltrue([for d in values(var.node_distribution) : d.control_planes > 0 || d.workers == 0])
+    error_message = "node_distribution: workers without control planes is not a cluster. Set control_planes to 1 or 3, or workers to 0."
+  }
 }
 
 variable "worker_storage" {

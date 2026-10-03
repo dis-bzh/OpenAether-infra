@@ -210,7 +210,10 @@ Six buckets existent ensuite : l'état et les artefacts, chacun avec son jumeau
 Relancer reprend où ça s'est arrêté. Ajouter un worker aussi : `task cluster-up` crée la
 machine, ouvre les tunnels, puis configure seulement le nouveau nœud
 (`scripts/bootstrap/grow-nodes.sh`), mesuré sur Scaleway en passant de 3 à 5 workers.
-Ajouter un control plane passe par la même étape et n'a pas été mesuré.
+Ajouter un control plane passe par la même étape, mesuré de 1 à 3 sur Scaleway, OVH et
+Outscale. Baisser un compte est refusé : `cluster-up` s'arrête avant d'appliquer un plan qui
+supprime un nœud d'un cluster déjà amorcé, car OpenTofu détruirait la machine d'indice le plus
+haut et ses volumes de données sans drain ni sortie d'etcd (`scripts/internal/refuse-node-deletes.sh`).
 
 ## 5. Joindre le cluster
 

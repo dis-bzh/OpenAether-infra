@@ -204,7 +204,10 @@ plus the image and its staging area.
 Re-running resumes. So does an edit that adds a worker: `task cluster-up` creates the
 machine, opens the tunnels, then configures only the new node
 (`scripts/bootstrap/grow-nodes.sh`), measured on Scaleway going from 3 to 5 workers.
-Adding a control plane goes through the same step and has not been measured.
+Adding a control plane goes through the same step, measured from 1 to 3 on Scaleway, OVH and
+Outscale. Lowering a count is refused: `cluster-up` stops before applying any plan that deletes a
+node of a bootstrapped cluster, because OpenTofu would destroy the highest-index machine and its
+data volumes with no drain and no etcd leave (`scripts/internal/refuse-node-deletes.sh`).
 
 ## 5. Talk to it
 

@@ -47,6 +47,8 @@ NEW="$(tofu show -json "$D/machines.tfplan" 2>/dev/null | jq -r "$NODE_JQ"'
 if [ -n "$NEW" ]; then
   echo "▶ grow-nodes: the config asks for $(wc -l <<<"$NEW") machine resource(s) the state does not hold:"
   sed 's/^/    /' <<<"$NEW"
+  # The plan is applied whole: a delete or a resize that rides along with the creates is not growth.
+  ../../../scripts/internal/refuse-node-deletes.sh --creates-only "$D/machines.tfplan" || exit 1
   t apply -input=false -no-color "$D/machines.tfplan" || die "creating the machines failed"
   echo "✓ machines created"
 fi
