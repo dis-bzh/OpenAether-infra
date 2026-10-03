@@ -43,6 +43,14 @@
   // of nothing to do. If this issue does not appear, the App is not running or
   // it is in `mode: silent`, which also writes no issue and no PR (#88).
   dependencyDashboard: true,
+  // Mend runs this repository in `mode: silent` (hosted job log of 2026-10-03, #88): it scans and writes
+  // nothing, no issue and no PR. This file is merged over that setting, so this turns the App on; the portal
+  // toggle (Silent to Interactive) would do the same. If the next job log still says "running with
+  // mode=silent", the override did not take and the portal is the only way.
+  mode: "full",
+  // Canary for the first full jobs: the dashboard lists every update and none opens a PR until its box is
+  // ticked, so the first wave is chosen, not received. Remove once the dashboard has been seen (#88).
+  dependencyDashboardApproval: true,
   labels: ["dependencies"],
 
   // Off: it reads the SHA in `rev:` as a tag ("Tag <sha> not found") and so can never bump a hook. The custom manager below reads the SHA and its tag comment.

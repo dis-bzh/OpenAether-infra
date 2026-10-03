@@ -272,6 +272,12 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **Renovate is switched from silent to full mode, behind an approval canary (#88).** Mend's hosted job
+  ran with `mode: silent`, so it found 17 updates and wrote no issue and no pull request. `renovate.json5`
+  now sets `mode: "full"` (a repo-level value is merged over Mend's) and `dependencyDashboardApproval: true`:
+  the Dependency Dashboard appears, and nothing opens a PR until its box is ticked. Revert this one commit
+  to go back to silent; the portal's Silent/Interactive switch is the other way.
+
 - **Renovate can bump the pre-commit hooks, and no longer proposes two bumps that break the repository (#88).**
   The hosted job log (2026-10-03) showed the native `pre-commit` manager reading each SHA in
   `rev: <sha>  # v1.2.3` as a tag ("Tag … not found"), so the five hooks were never bumped
