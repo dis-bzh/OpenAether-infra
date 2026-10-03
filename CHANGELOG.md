@@ -207,6 +207,14 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **`workers = N+1` and one `task cluster-up` now work on a bootstrapped cluster (#59).**
+  The apply that created a node also waited for its Talos port through a tunnel that
+  cannot exist before the node, and once the tunnels were opened by hand the next plan
+  blocked 15 minutes on a health check no unconfigured node can pass. `cluster-up` now
+  runs `scripts/bootstrap/grow-nodes.sh` first: it creates the machines (a plan of the
+  provider module alone), refreshes the outputs the tunnels read, opens the tunnels,
+  and configures only the nodes the state has no configuration for. A no-op on a fresh
+  cluster or when no node is new. Measured on Scaleway, 3 to 5 workers.
 - **CI no longer "checks kube-proxy is disabled" by matching an unrelated default.**
   The step grepped `disabled: true` in a config made by plain `talosctl gen config`,
   which carries none of this repository's patches; the line it matched was the

@@ -46,7 +46,7 @@ EOF
 chmod +x "$W/stub"
 for s in internal/talos-version.sh internal/ensure-buckets.sh internal/converge-versions.sh \
          internal/tf-backend.sh internal/bootstrap-in-state.sh internal/explain-failure.sh bootstrap/talos-image.sh \
-         bootstrap/render-bootstrap-manifests.sh bootstrap/talos-tunnels.sh bootstrap/adopt-bootstrap.sh \
+         bootstrap/render-bootstrap-manifests.sh bootstrap/talos-tunnels.sh bootstrap/adopt-bootstrap.sh bootstrap/grow-nodes.sh \
          ops/backup-state.sh dev/infra-verify.sh; do
   ln -s "$W/stub" "$W/scripts/$s"
 done
