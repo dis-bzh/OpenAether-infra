@@ -53,6 +53,8 @@ Talos v1.13.8→v1.13.9 on 6/6 nodes, `cluster-verify` 11/11. Longest outage 2 s
 (13 fails in 577) — see [`upgrade.md`](upgrade.md) for why that does NOT establish
 the leader-last fix: that run moved Talos only, the 5 s one also moved Kubernetes.
 
+**Scaleway, third run, 2026-10-02** (no table row: it measured Talos 1.14.2 and Kubernetes 1.37.1, above the pin, and a row would hide the 1.13.9 evidence from `task evidence-check`), from an empty project and under a fresh `bucket_suffix` (#68): `cluster-up`, `cluster-verify` (12/12: the verifier has gained a check since the August rows) and two `cluster-idempotency` passes. Then `cluster-upgrade` to Talos 1.14.2 and Kubernetes 1.37.1. The Talos step rolled six nodes with the apiserver failing 6 times in 474 one-second probes, longest 1 s. The Kubernetes step failed in our own tooling: `infra-apply` read an unreadable state as "no bootstrap" and dropped the Talos resources from the state (#223). The cluster was untouched; `adopt-bootstrap` (#214) and a plain `cluster-up` brought the state back and ended on 1.37.1 everywhere. Also measured: a size change through the roll resized the three control planes at once and took the API down for 56 s (#222), where one node at a time, in place, costs 1 s blips; a control plane powered off for 80 s (3 failed probes in 360, a write succeeded); a second `plan` refused by the state lock (#56, Scaleway); `cluster-up` red when the verifier is (#84); a node added to a live cluster needing a targeted config apply (#59, still open). Torn down and proven clean the same night.
+
 **What the release delivers besides a cluster.** Every task is `<noun>-<verb>`
 (`cluster-up`, `infra-plan/apply/down`, `tunnels-up`, `cluster-verify/upgrade/roll/down`).
 `APPROVE=auto|ask` names WHO answers the approval, never whether there is one:
@@ -151,10 +153,4 @@ from a billable publish with the pin never verified. `tflint` was linting one
 directory in fourteen. `provider-contract.md` — the document `CLAUDE.md` calls
 the authority — required a variable no module has ever declared.
 
-**Resume here**: one real Scaleway roll. rolling-replace's two applies now apply
-the plan they counted, a size change is refused by the roll (one node at a time, in place, instead), a Service is probed
-during the upgrade, and the upgrade fetches its own cluster's kubeconfig and
-talosconfig and moves the Talos pin before it builds the image (run it without
-editing the pin first) — all proven mocked only; one roll gives each its real
-rung (#55, #51, #41) and re-measures the interruption regression
-([`upgrade.md`](upgrade.md), #70).
+**Resume here**: the first real Scaleway roll since August ran on 2026-10-02 (above). Still unseen on a real cloud: a Service probed through an upgrade (#41: its probe was blind, for want of a kubeconfig), a Talos 1.14 cluster with a Longhorn volume (#181, which needs data disks on the workers), an interrupted bootstrap (#40, #67), a node added by `cluster-up` (#59), and every one of these on OVH and Outscale, whose rows still read Talos 1.13.8.
