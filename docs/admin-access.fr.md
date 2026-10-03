@@ -157,7 +157,11 @@ CA du cluster. Traiter ce fichier comme le secret qu'il est — il est aussi dan
 le tfstate et dans les deux stores d'artefacts. Pour le travail en lecture
 seule, porter moins : `task talosconfig-new PROVIDER=…` émet un talosconfig
 `os:reader` qui expire en heures et ne peut pas s'en forger un d'admin (prouvé
-par `task local-rbac`).
+par `task local-rbac`). Aussi joué à travers les tunnels sur un vrai cluster OVH
+(2026-10-03) : `TALOSCONFIG=<ce fichier> task cluster-verify PROVIDER=…` passe 13/13
+avec lui, alors que `talosctl get machineconfig` est refusé. En émettre un et le
+réutiliser jusqu'à son expiration plutôt qu'un par exécution : émettre est une
+écriture sur l'API Talos, et une lecture ne devrait pas en demander.
 
 ## 7. SSO Grafana via Zitadel (OIDC)
 

@@ -9,6 +9,11 @@ output "worker_private_ips" {
   value       = [for ip in scaleway_ipam_ip.worker : split("/", ip.address)[0]]
 }
 
+output "control_plane_zones" {
+  description = "Zone of each control plane, in control_plane_private_ips order"
+  value       = scaleway_instance_server.control_plane[*].zone
+}
+
 # Load Balancer IPs
 output "k8s_lb_ip" {
   description = "Public IP of the Kubernetes API LB (6443), or the private Talos VIP when k8s_lb_mode = \"vip\""

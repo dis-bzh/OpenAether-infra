@@ -10,6 +10,11 @@ output "worker_private_ips" {
   value       = local.worker_ips
 }
 
+output "control_plane_zones" {
+  description = "Hypervisor host each control plane runs on, in control_plane_private_ips order"
+  value       = proxmox_virtual_environment_vm.control_plane[*].node_name
+}
+
 # No cloud LB on a single Proxmox host: the Kubernetes API is fronted by the
 # Talos VIP (owned by the control plane), injected into the machineconfig by
 # modules/talos; here we only surface the address.
