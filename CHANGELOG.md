@@ -207,6 +207,12 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **CI no longer "checks kube-proxy is disabled" by matching an unrelated default.**
+  The step grepped `disabled: true` in a config made by plain `talosctl gen config`,
+  which carries none of this repository's patches; the line it matched was the
+  Kubernetes discovery registry's own, which Talos 1.14 stopped writing, so the step
+  went red on the pin bump and had never tested kube-proxy. `test-kube-proxy-disabled.sh`
+  reads the patches the Talos module builds, for control planes and workers.
 - **The roll no longer deadlocks on Longhorn when it has as many replicas as workers.**
   `rolling-replace` waited for Longhorn to be healthy and only then uncordoned the
   node it had just rebuilt, but Longhorn does not put a replica on a cordoned node:
