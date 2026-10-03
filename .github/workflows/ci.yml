@@ -198,7 +198,7 @@ jobs:
         uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4  # v2
         with:
           # renovate: datasource=github-releases depName=opentofu/opentofu extractVersion=^v(?<version>.*)$
-          tofu_version: "1.12.6"
+          tofu_version: "1.13.1"
 
       # Same installer as setup.sh and the session-start hook, for the same reason
       # as Task below: one pinned version, verified against the project's own
@@ -340,7 +340,7 @@ jobs:
         uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4  # v2
         with:
           # renovate: datasource=github-releases depName=opentofu/opentofu extractVersion=^v(?<version>.*)$
-          tofu_version: "1.12.6"
+          tofu_version: "1.13.1"
 
       - name: Setup Task
         if: needs.changes.outputs.code == 'true'
@@ -370,7 +370,7 @@ jobs:
         uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4  # v2
         with:
           # renovate: datasource=github-releases depName=opentofu/opentofu extractVersion=^v(?<version>.*)$
-          tofu_version: "1.12.6"
+          tofu_version: "1.13.1"
 
       - name: Setup Task
         run: ./scripts/internal/install-task.sh
@@ -415,7 +415,7 @@ jobs:
         uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4  # v2
         with:
           # renovate: datasource=github-releases depName=opentofu/opentofu extractVersion=^v(?<version>.*)$
-          tofu_version: "1.12.6"
+          tofu_version: "1.13.1"
 
       - name: Setup Task
         if: needs.changes.outputs.code == 'true'
@@ -476,7 +476,7 @@ jobs:
         uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4  # v2
         with:
           # renovate: datasource=github-releases depName=opentofu/opentofu extractVersion=^v(?<version>.*)$
-          tofu_version: "1.12.6"
+          tofu_version: "1.13.1"
 
       - name: Setup Task
         if: needs.changes.outputs.code == 'true'

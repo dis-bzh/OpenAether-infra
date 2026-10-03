@@ -33,7 +33,7 @@ fi
 # other major. check-version-drift.sh compares all of them.
 #
 # renovate: datasource=github-releases depName=opentofu/opentofu extractVersion=^v(?<version>.*)$
-TOFU_VERSION="1.12.6"
+TOFU_VERSION="1.13.1"
 # renovate: datasource=github-releases depName=fluxcd/flux2 extractVersion=^v(?<version>.*)$
 FLUX_VERSION="2.9.3"
 # The flux-schema plugin `task lint`'s check-flux-schema.sh needs (#114). Same
