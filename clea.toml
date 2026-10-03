@@ -36,10 +36,12 @@ exclude = ["renovate.json5"]
 # `cmd_bump` writes neither on its own: an action-sha moves only with the `--sha`
 # the scan records for its tag, a precommit-rev never. Renovate's BUILT-IN
 # managers already update the digest and the comment together — github-actions
-# with `helpers:pinGitHubActionDigests` (extended above), pre-commit with
-# `pinDigests` (packageRules above) — with no anchor needed at all. This is
-# that fact, declared: the two forms it names are watched by that native
-# manager, not by anything in renovate.json5's customManagers.
+# with `helpers:pinGitHubActionDigests` (extended above). The pre-commit one does
+# NOT (it reads the SHA as a tag and never bumps it: measured on the hosted job,
+# 2026-10-03), so renovate.json5 carries a custom manager that matches a
+# `rev: <sha>  # tag` hook and writes the digest and the tag together, because it
+# captures both (`currentDigest`, `currentValue`). The two forms are declared
+# watched: no anchor is needed for either.
 [[inventory]]
 kind = "renovate-native"
 forms = ["action-sha", "precommit-rev"]

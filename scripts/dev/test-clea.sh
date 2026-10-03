@@ -1015,6 +1015,37 @@ PY
 if [ $? -eq 0 ]; then PASS=$((PASS + 2)); else FAIL=$((FAIL + 1)); fi
 
 echo
+echo "=== renovate.json5 reads every SHA-pinned pre-commit hook (#88) ==="
+# The native pre-commit manager reads the SHA in `rev: <sha>  # vX` as a tag and
+# can never bump it (hosted job log 2026-10-03: "Tag <sha> not found", five times),
+# so a custom manager carries them. Run against the real files; RENOVATE_CFG and
+# PRECOMMIT_CFG point the same checks at a mutated copy.
+RENOVATE_CFG="${RENOVATE_CFG:-$ROOT/renovate.json5}" PRECOMMIT_CFG="${PRECOMMIT_CFG:-$ROOT/.pre-commit-config.yaml}" python3 - <<'PY'
+import json, os, re, sys
+cfg = open(os.environ["RENOVATE_CFG"]).read()
+hooks = open(os.environ["PRECOMMIT_CFG"]).read()
+lits = re.findall(r'"((?:[^"\\\n]|\\.)*currentDigest(?:[^"\\\n]|\\.)*)"', cfg)
+pat = re.compile(re.sub(r"\(\?<(\w+)>", r"(?P<\1>", json.loads('"' + lits[0] + '"'))) if lits else None
+found = list(pat.finditer(hooks)) if pat else []
+pinned = len(re.findall(r"^\s*rev:\s*[0-9a-f]{40}\b", hooks, re.M))
+checks = [
+    ("a custom manager names currentDigest and a tag", pat is not None),
+    ("it reads every SHA-pinned hook of .pre-commit-config.yaml", pinned > 0 and len(found) == pinned),
+    ("each match carries owner/repo, a 40-hex digest and a version tag",
+     bool(found) and all("/" in m["depName"] and re.fullmatch(r"[0-9a-f]{40}", m["currentDigest"])
+                         and re.match(r"v?\d", m["currentValue"]) for m in found)),
+    ("the `repo: local` block is not read as a dependency", all(m["depName"] != "local" for m in found)),
+    ("it looks the tags up as github-tags", re.search(r'datasourceTemplate:\s*"github-tags"', cfg) is not None),
+    ("the native pre-commit manager is off, so it cannot fail on the same lines",
+     re.search(r'"pre-commit":\s*\{\s*enabled:\s*false\s*\}', cfg) is not None),
+]
+for name, ok in checks:
+    print(("  \033[32m\u2713\033[0m " if ok else "  \033[31m\u2717\033[0m ") + name)
+sys.exit(1 if [c for c in checks if not c[1]] else 0)
+PY
+if [ $? -eq 0 ]; then PASS=$((PASS + 6)); else FAIL=$((FAIL + 1)); fi
+
+echo
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 # A floor, not just a verdict: `FAIL -eq 0` is also true when the harness died
 # before asserting anything, which is the shape this repository keeps meeting.

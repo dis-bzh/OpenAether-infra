@@ -500,8 +500,9 @@ resource "talos_machine_configuration_apply" "control_plane" {
     # Replacing costs nothing here: this resource's destroy is a no-op (a config
     # cannot be un-applied) and its create re-sends the same config the update
     # would have. Nodes reboot in `rolling-replace --upgrade`, never here.
-    # Fixed upstream in the 0.12.0 pre-release line only; we pin 0.11.0, the
-    # newest stable. Remove this when 0.12 stabilises.
+    # Fixed upstream in 0.12.0, which we cannot adopt yet (#241); still needed on
+    # 0.11. A bump 1.13.9 to 1.13.11 under 0.12.0 passed with it still in, so it
+    # is not shown redundant (#83).
     replace_triggered_by = [terraform_data.machine_config_version[0]]
   }
 
