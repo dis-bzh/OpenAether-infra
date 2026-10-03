@@ -248,8 +248,9 @@ assert_roll_gates() {
   awk '
     { line = $0; sub(/^[[:space:]]+/, "", line) }
     line ~ /^#/ { next }
-    line ~ /\$running/ && line ~ /TALOS_IMAGE##\*:/ && line ~ /==/ { hit = NR }
-    hit && NR > hit && NR <= hit + 4 && line ~ /^return[[:space:]]+0/ { ok = 1 }
+    skip { if (hit && line ~ /^return[[:space:]]+0/) ok = 1; skip = 0 }
+    line ~ /\$running/ && line ~ /TALOS_IMAGE##\*:/ && line ~ /==/ && !hit { hit = NR }
+    hit && line ~ /already runs/ && line ~ /skipping/ { skip = 1 }
     END { exit !ok }' "$ROLL" ||
     die "rolling-replace.sh no longer skips nodes already on the target version:
   the \`running == TALOS_IMAGE\` early return in its --upgrade path is gone (or

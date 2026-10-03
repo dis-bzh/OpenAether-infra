@@ -218,6 +218,11 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **The roll's gates and helpers live in `scripts/lib/roll-gates.sh`, moved verbatim.** The scale-in
+  command needs the same drain, CNPG, PDB, etcd and plan gates, and a copy would drift. The original
+  `rolling-replace.sh` rebuilds byte for byte from the new script with the logging block and the function
+  region spliced back in; the harnesses that extract or grep by name now read both files. No behaviour change.
+
 - **The shipped Scaleway examples meet the sizing floor; the Outscale ones say why they do not (#72).**
   Scaleway's examples move to `POP2-4C-16G` (4 vCPU / 16 GB; `DEV1-M` was a local-SSD type
   absent from `fr-par-3`) and stop pinning `talos-scaleway-amd64-v1.13.3`, an image the lane no
@@ -281,6 +286,11 @@ in git. 0.1.0 is the first entry describing something proven.
   without a token. The token path rests on CI's "Pipeline audit" job.
 
 ### Fixed
+
+- **`roll-lab.sh self-test` was red on main.** Its check that the upgrade path still skips a node already on
+  the target version looked four lines past the comparison for the `return 0`, and the schematic check added
+  later put it ten lines down. It now asks for the `return 0` right after the "already runs … skipping" line;
+  deleting that `return` or commenting the line out fails it.
 
 - **The roll finds a worker's attach/link resources, and `task --list` stops advertising it for a resize.**
   `node_targets` matched `worker_data[<n>]`, but the OVH attach and Outscale link resources are keyed
