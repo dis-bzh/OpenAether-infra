@@ -47,7 +47,7 @@ eval "$(awk '
   /^[a-z_]+\(\) \{/ { name = $1; sub(/\(\).*/, "", name); inside = (name in want) }
   inside { print }
   inside && /^\}/ { inside = 0 }
-' "$ROOT/scripts/ops/rolling-replace.sh")"
+' "$ROOT/scripts/lib/roll-gates.sh")"
 KCTL=(kubectl)
 info() { :; }
 warn() { :; }

@@ -82,6 +82,7 @@ export TF_VAR_talos_tunnel_port_offset="$OFFSET"
 # the lab has to stand where the roll stands.
 CLUSTER_DIR="$ROOT/infrastructure/opentofu/cluster"
 ROLL="$ROOT/scripts/ops/rolling-replace.sh"
+ROLL_LIB="$ROOT/scripts/lib/roll-gates.sh"   # where the gates it borrows are defined
 cd "$CLUSTER_DIR" || die "no cluster root at $CLUSTER_DIR"
 TFVARS="envs/management-${PROVIDER}.tfvars"
 KUBECONFIG_FILE="${KUBECONFIG:-./kubeconfig}"
@@ -189,7 +190,7 @@ cnpg_list() {
 # The injection is only worth anything if it produces the state the roll's own
 # unstick fires on, and `status` only means something if the budgets it prints
 # are the ones the roll's gate waits on — so borrow THAT code, extracted from
-# rolling-replace.sh the way scripts/dev/test-rolling-replace.sh does. A local
+# roll-gates.sh the way scripts/dev/test-rolling-replace.sh does. A local
 # copy would drift, and a drifted lab is worse than none.
 #
 # Extraction alone proves nothing: a detector that can no longer fire answers
@@ -228,11 +229,11 @@ assert_roll_gates() {
     BEGIN { n = split(fns, a, " "); for (i = 1; i <= n; i++) want[a[i]] = 1 }
     /^[a-z_]+\(\) \{/ { name = $1; sub(/\(\).*/, "", name); inside = (name in want) }
     inside { print }
-    inside && /^\}/ { inside = 0 }' "$ROLL")"
+    inside && /^\}/ { inside = 0 }' "$ROLL_LIB")"
   for fn in "${ROLL_GATES[@]}"; do
     declare -F "$fn" >/dev/null || missing+="${fn} "
   done
-  [[ -z "$missing" ]] || die "rolling-replace.sh no longer defines: ${missing}
+  [[ -z "$missing" ]] || die "roll-gates.sh no longer defines: ${missing}
   This lab must exercise the roll's own gates, not a copy of them — update
   ROLL_GATES here (and scripts/dev/test-rolling-replace.sh) to match."
 
@@ -247,8 +248,9 @@ assert_roll_gates() {
   awk '
     { line = $0; sub(/^[[:space:]]+/, "", line) }
     line ~ /^#/ { next }
-    line ~ /\$running/ && line ~ /TALOS_IMAGE##\*:/ && line ~ /==/ { hit = NR }
-    hit && NR > hit && NR <= hit + 4 && line ~ /^return[[:space:]]+0/ { ok = 1 }
+    skip { if (hit && line ~ /^return[[:space:]]+0/) ok = 1; skip = 0 }
+    line ~ /\$running/ && line ~ /TALOS_IMAGE##\*:/ && line ~ /==/ && !hit { hit = NR }
+    hit && line ~ /already runs/ && line ~ /skipping/ { skip = 1 }
     END { exit !ok }' "$ROLL" ||
     die "rolling-replace.sh no longer skips nodes already on the target version:
   the \`running == TALOS_IMAGE\` early return in its --upgrade path is gone (or
