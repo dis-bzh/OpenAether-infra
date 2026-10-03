@@ -186,6 +186,14 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **Talos v1.14.2 and Kubernetes v1.37.1 are the default pin (#181).** Both roots
+  (`cluster` and `opentofu-local`) move together. On a real Scaleway cluster, with a
+  Longhorn volume attached and a Service probe running, `cluster-upgrade` took
+  v1.13.9 / v1.36.3 to this pair in place: six nodes, no failed Service probe, the
+  data written before the climb read back identically, `cluster-verify` 13/13. The
+  Longhorn question the bump waited on is answered on the pair the issue names
+  (v1.14.1 / v1.37.0). OVH and Outscale have not seen 1.14: their rows still read
+  Talos 1.13.8.
 - **`getplumber/plumber` v0.4.51 → v0.5.12** in `security.yml` (SHA and comment
   together) and `install-plumber.sh`, by hand: `clea bump` refuses an
   `action-sha` pin, so Cléa's daily run had been red on it since at least
@@ -199,6 +207,12 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **CI no longer "checks kube-proxy is disabled" by matching an unrelated default.**
+  The step grepped `disabled: true` in a config made by plain `talosctl gen config`,
+  which carries none of this repository's patches; the line it matched was the
+  Kubernetes discovery registry's own, which Talos 1.14 stopped writing, so the step
+  went red on the pin bump and had never tested kube-proxy. `test-kube-proxy-disabled.sh`
+  reads the patches the Talos module builds, for control planes and workers.
 - **A stale state lock is now named, with the command that releases it.** A run
   killed hard (SIGKILL, a crashed runner, a closed laptop) never releases its state
   lock, and every later `cluster-up`, plan and apply stopped on `Error acquiring the
