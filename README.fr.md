@@ -43,6 +43,8 @@ piliers sur chacun. Scaleway depuis un compte vide le 2026-08-19 : déploiement
 en 8 min 50 pour 72 ressources, `cluster-verify` 11/11, idempotence 3/3,
 Kubernetes v1.36.2 → v1.36.3 puis Talos v1.13.7 → v1.13.8, confirmés sur 6/6
 nœuds par l'API Talos de chaque nœud. OVH le même jour, Outscale le 2026-08-20.
+Ce 11/11 est antérieur au contrôle des domaines de panne (#38) : OVH (une zone)
+et Outscale sont désormais rouges, voir [`docs/status.md`](docs/status.md).
 Un upgrade n'est pas transparent : coupure d'apiserver la plus longue 5 s sur
 Scaleway, 7 s sur OVH, 8 s sur Outscale — toutes trois pires que les meilleurs
 chiffres jamais relevés par ce projet, pour une raison qui n'est pas établie.

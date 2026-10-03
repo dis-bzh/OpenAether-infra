@@ -65,6 +65,11 @@ output "control_plane_private_ips" {
   value       = local.control_plane_ips
 }
 
+output "control_plane_zones" {
+  description = "Failure domain of each control plane, in control_plane_private_ips order, as placed and not measured (read by infra-verify.sh)"
+  value       = local.control_plane_zones
+}
+
 output "worker_private_ips" {
   description = "Private IPs of worker nodes"
   value       = local.worker_ips

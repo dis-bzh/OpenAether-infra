@@ -43,6 +43,8 @@ node_distribution = {
     # image_id optional — defaults to looking up "talos-outscale-amd64-<talos_version>" by
     # name (published by talos-image). Override only if you use a different name/OMI:
     # image_id           = "TALOS_OMI_ID"
+    # Only availability_zones[0] is used (#58): every node lands in one subregion, so
+    # 3 control planes end `cluster-verify` red (#38) whatever this list holds.
     availability_zones = ["eu-west-2a", "eu-west-2b", "eu-west-2c"]
   }
 }

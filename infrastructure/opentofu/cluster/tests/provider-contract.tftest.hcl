@@ -148,6 +148,11 @@ run "no_active_provider_safe_defaults" {
     condition     = length(output.worker_private_ips) == 0
     error_message = "With no active provider, worker_private_ips must be empty."
   }
+
+  assert {
+    condition     = output.control_plane_zones == []
+    error_message = "With no active provider, control_plane_zones must be empty."
+  }
 }
 
 # ==============================================================================
@@ -190,6 +195,11 @@ run "scaleway_active_junction_point" {
     condition     = length(output.control_plane_private_ips) == 3
     error_message = "Must have 3 control plane IPs from SCW."
   }
+
+  assert {
+    condition     = output.control_plane_zones == ["fr-par-1", "fr-par-2", "fr-par-1"]
+    error_message = "control_plane_zones must be the zones the SCW module placed the control planes in."
+  }
 }
 
 # ==============================================================================
@@ -217,6 +227,12 @@ run "ovh_active_junction_point" {
   assert {
     condition     = output.active_provider == "ovh"
     error_message = "active_provider must be 'ovh' when OVH is configured."
+  }
+
+  # Root pass-through only (values: control-plane-zones); a dropped concat() entry leaves [].
+  assert {
+    condition     = length(output.control_plane_zones) == 3
+    error_message = "control_plane_zones must reach the root from the OVH module, one entry per control plane."
   }
 }
 
@@ -262,6 +278,12 @@ run "outscale_active_junction_point" {
   assert {
     condition     = module.outscale[0].control_plane_zone_index == [0, 1, 2]
     error_message = "three control planes over three zones must land in three different zones."
+  }
+
+  # Root pass-through only (values: control-plane-zones); a dropped concat() entry leaves [].
+  assert {
+    condition     = length(output.control_plane_zones) == 3
+    error_message = "control_plane_zones must reach the root from the Outscale module, one entry per control plane."
   }
 }
 

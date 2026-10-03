@@ -30,6 +30,14 @@ rests on.
 | OVH | 2026-08-19 | ✅ | ✅ 11/11 | ✅ 3/3 | ✅ 1.36.2→1.36.3 | ✅ 6/6 nodes 1.13.7→1.13.8 | 7 s (9-10 in ~540) |
 | Outscale | 2026-08-20 | ✅ 51 resources, then 17 | ✅ 11/11 | ✅ 3/3 | ✅ 1.36.2→1.36.3 | ✅ 6/6 nodes 1.13.7→1.13.8 | 8 s (59 in 1179) |
 
+That `cluster-verify` column predates the failure-domain check (#38, offline half
+only). It now ends red on OVH's default `nova` (3 control planes in one zone) and
+on Outscale (every node in one subregion, #58), and so do `cluster-up`,
+`cluster-idempotency` and `cluster-upgrade` there. Scaleway over 2 zones is a 2+1
+split: it still scores 11/11, with a warning, because the zone holding two takes
+etcd's quorum with it; the third zone has no instance type this project uses.
+No real account has re-run the check.
+
 Three things about that table are the point of it:
 
 - **Versions were read from the kubelets and from each node's own Talos API**,

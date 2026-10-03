@@ -40,7 +40,9 @@ of them ever ran — **0.1.0 is the first release that ships something proven**.
 pillars on each. Scaleway from an empty account on 2026-08-19: deploy 8 min 50
 for 72 resources, `cluster-verify` 11/11, idempotency 3/3, Kubernetes v1.36.2
 → v1.36.3 then Talos v1.13.7 → v1.13.8, confirmed on 6/6 nodes by each node's
-own Talos API. OVH the same day, Outscale on 2026-08-20. An upgrade is not
+own Talos API. OVH the same day, Outscale on 2026-08-20. That 11/11 predates the
+failure-domain check (#38): OVH's one zone and Outscale now read red, see
+[`docs/status.md`](docs/status.md). An upgrade is not
 seamless: longest apiserver outage 5 s on Scaleway, 7 s on OVH, 8 s on Outscale
 — all three worse than the best figures this project ever recorded, for a
 reason that is not established. Proxmox has **never been applied on real

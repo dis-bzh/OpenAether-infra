@@ -16,6 +16,28 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
+- **`cluster-verify` fails an "HA" cluster whose control planes all sit in one
+  failure domain (refs #38, offline half).** Three control planes in one zone
+  passed as HA: the verifier counted nodes and never asked where they sit. Each
+  provider module now outputs `control_plane_zones`, read from its control-plane
+  resources (`zone`, `availability_zone`, `placement_subregion_name`,
+  `node_name`); it is a required row of `provider-contract.md`, which the
+  contract check enforces, and the root passes it through. `infra-verify.sh`
+  fails when they all share one domain, and its red line names the knob that
+  clears it. A missing, short, null or empty-named output is UNCHECKED, never a
+  pass; only the missing one suggests an apply (`infra-plan` then `infra-apply`).
+  **Behaviour change:** 3 control planes in one zone now end red: OVH on the
+  default `nova`, every Outscale cluster (all nodes in `availability_zones[0]`,
+  #58: no setting clears it), Proxmox on one host. `cluster-up` ends at its
+  verify, so `cluster-idempotency` and `cluster-upgrade` end non-zero there.
+  **Known limit:** a 2+1 split (Scaleway over 2 zones, the topology 0.1.0 was
+  measured on) passes, still 11/11, with a warning: losing the zone holding two
+  loses etcd quorum.
+  The value is what was placed, not measured: whether OVH reads its zone back or
+  echoes the config is unknown, and no real account has re-run the check.
+  Mocked rung: `control-plane-zones.tftest.hcl` (5 runs; `task test` 71 → 76), a
+  root assertion for each provider, and cases in `test-cluster-checks.sh`
+  (77 → 93) run against a stub `tofu` for the first time.
 - **`cluster-verify` reads the workers' encrypted data volumes back (#62).**
   `worker_storage` asks for LUKS2 user volumes on each worker and nothing checked
   one existed. The verifier now asks each worker's own Talos API, through the

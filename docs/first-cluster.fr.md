@@ -6,7 +6,8 @@ D'une machine nue et d'un compte cloud vide jusqu'à un cluster Talos que tu peu
 joindre, mettre à jour et détruire. Scaleway sert d'exemple ; OVH et Outscale
 n'en diffèrent que par leurs identifiants et leur fichier tfvars, sauf à
 l'étape 4 où leurs load balancers sont plus lents — et où Outscale a une réserve
-qui lui est propre.
+qui lui est propre. L'étape 6 peut aussi y finir en rouge : leurs exemples placent
+les control planes dans un même domaine de panne.
 
 **Lis la note d'honnêteté en fin de page avant de dépenser quoi que ce soit.**
 Elle dit ce qui a été mesuré, sur quel cloud et quand — et ce qui ne l'a pas été.
@@ -249,8 +250,9 @@ task cluster-verify PROVIDER=scaleway
 `task cluster-up` s'est déjà terminé par cette commande ; lance-la seule à tout
 moment ensuite. Elle interroge le cluster, pas l'outil : l'apiserver répond,
 chaque nœud est Ready, le nombre de control planes correspond à ce que tu as
-demandé, Cilium tourne sur chacun, CoreDNS sert, il n'y a pas de `flux-system`, pas de load balancer
-applicatif, un réplica de l'état existe dans le magasin de sauvegarde — et les
+demandé et qu'ils ne sont pas tous dans une même zone ou sur un même hôte, Cilium
+tourne sur chacun, CoreDNS sert, il n'y a pas de `flux-system`, pas de load
+balancer applicatif, un réplica de l'état existe dans le magasin de sauvegarde — et les
 4 premiers Kio de cet objet sont ouverts : ce doit être une enveloppe OpenTofu
 `encrypted_data`, pas un état lisible. Hors `dev`, le réplica doit en outre être
 hors du cloud du primaire (pour un S3 qu'il ne sait pas nommer, un autre endpoint).
@@ -261,6 +263,12 @@ rouge : un control plane qui n'est pas HA, ou un réplica de `dev` sur le
 cloud du primaire. Et `?` signifie que le vérificateur n'a pas pu effectuer
 le contrôle du tout, ce qui **est** fatal — rien n'est certifié sur une question
 que personne n'a pu poser, et c'est en général des identifiants S3 manquants.
+
+La répartition des control planes est demandée à l'état (`control_plane_zones`) :
+tous dans une même zone ou sur un même hôte, c'est `✗` ; un 2+1 sur deux zones,
+c'est `~`. Sur OVH, avec la zone `nova` unique de l'exemple, et sur Outscale (tous
+les nœuds dans une seule subregion, #58), c'est `✗` : la note d'honnêteté
+ci-dessous donne la suite.
 
 ## 7. Mettre à jour
 
@@ -338,7 +346,10 @@ quelque chose de prouvé, et c'est la raison d'être de ce document.
 Ce qui **est** mesuré, avec les dates (`docs/status.md`) :
 
 - `task cluster-verify` donne **11/11 sur Scaleway, sur OVH et sur Outscale** —
-  les deux premiers le 2026-08-19, Outscale le 2026-08-20.
+  les deux premiers le 2026-08-19, Outscale le 2026-08-20. C'est antérieur au
+  contrôle des domaines de panne (#38) : OVH (une zone) et Outscale sont
+  désormais rouges, Scaleway (2 zones) reste à 11/11 avec un avertissement — voir
+  `docs/status.md`.
 - **L'idempotence, ce sont trois assertions**, et les trois ont tenu 3/3 sur les
   trois clouds : un plan vide, les *mêmes* nœuds (nom et `creationTimestamp`), et
   un kubeconfig qui joint encore l'apiserver. Deux des trois peuvent passer alors
