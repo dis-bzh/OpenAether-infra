@@ -50,15 +50,16 @@ report() { printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"; [ "$PASS" -gt 0 ] 
 # so this harness can never drift into testing its own copy of them.
 eval "$(awk '
   BEGIN { split("cnpg_installed,cnpg_flux_owners,cnpg_clusters,cnpg_flux_suspend," \
-                "cnpg_maintenance,cnpg_pod_state,cnpg_deadlocked,cnpg_pending," \
-                "wait_cnpg_whole", a, ",")
+                "cnpg_maintenance,cnpg_budgets,cnpg_pod_state,cnpg_deadlocked," \
+                "cnpg_pending,wait_cnpg_whole", a, ",")
           for (i in a) want[a[i]] = 1 }
   /^[a-z_]+\(\) \{/ { name = $1; sub(/\(\).*/, "", name); inside = (name in want) }
   inside { print }
   inside && /^\}/ { inside = 0 }
 ' "$RR_SRC")"
 for f in cnpg_installed cnpg_flux_owners cnpg_clusters cnpg_flux_suspend \
-         cnpg_maintenance cnpg_pod_state cnpg_deadlocked cnpg_pending wait_cnpg_whole; do
+         cnpg_maintenance cnpg_budgets cnpg_pod_state cnpg_deadlocked cnpg_pending \
+         wait_cnpg_whole; do
   declare -F "$f" >/dev/null || { echo "✗ $f was not extracted from $RR_SRC" >&2; exit 1; }
 done
 KCTL=(kubectl)
