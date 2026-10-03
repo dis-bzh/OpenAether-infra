@@ -37,17 +37,20 @@ variable "worker_storage" {
 }
 
 variable "availability_zones" {
-  # ⚠️ ONLY THE FIRST ENTRY IS USED. On Outscale a node's placement comes from its
-  # SUBNET, and this module creates one private and one public subnet, both in
-  # `availability_zones[0]` — so every node, volume and NAT lands in one
-  # subregion whatever this list contains. scw and ovh round-robin their nodes
-  # with `element(...)`; outscale does not. A 3-control-plane cluster here is HA
-  # against a node failure and not against a subregion failure.
-  # Fixing it means one subnet per subregion, which moves resource addresses and
-  # therefore rebuilds the cluster — see the GitHub issues.
-  description = "Subregions. NOTE: only the first is used — this module does not spread nodes (see the comment above)"
+  # One private and one public subnet per entry (#58): control planes and workers are spread over
+  # the private ones by index (node i goes to zone i modulo the list), a worker's data volumes
+  # live in its zone, and the load balancers span every public subnet. The bastion and the NAT
+  # service stay in the first zone: losing it costs admin access and node egress, not the API.
+  # A node's zone is fixed when it is created (lifecycle ignore_changes), so a cluster built
+  # before this layout keeps where its nodes are.
+  description = "Subregions, one subnet pair per entry; nodes are spread over them by index"
   type        = list(string)
   default     = ["eu-west-2a", "eu-west-2b", "eu-west-2c"]
+
+  validation {
+    condition     = length(var.availability_zones) >= 1 && length(distinct(var.availability_zones)) == length(var.availability_zones)
+    error_message = "availability_zones must list at least one subregion, each once."
+  }
 }
 
 variable "control_plane_count" {

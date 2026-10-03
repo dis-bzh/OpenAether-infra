@@ -186,6 +186,14 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **Outscale spreads its nodes over the subregions in `availability_zones` (#58).**
+  The module read only the first entry, so three control planes shared one
+  subregion. It now builds a private and a public subnet per entry (the first pair
+  keeps `10.0.0.0/24` and `10.0.1.0/24`), places control planes and workers by index,
+  keeps a worker's data volumes in its subregion and gives the load balancers every
+  public subnet. A node's subnet is ignored after creation, so a cluster built before
+  this keeps its layout; bastion and NAT stay in the first subregion.
+
 - **`opentofu/opentofu` 1.12.6 → 1.13.1** (`ci.yml` ×5, `setup.sh`) and
   **`fluxcd/flux-schema` 0.13.0 → 0.15.0** (`ci.yml`, `setup.sh`), both probed
   green by Cléa (#91). Proven with the real binaries, not the sandbox's cached

@@ -20,7 +20,7 @@ resource "outscale_security_group_rule" "bastion_ssh" {
   ip_range          = each.value
 }
 
-# Egress restricted to private subnet + DNS + NTP + apt.
+# Egress restricted to the Net (every private subnet) + DNS + NTP + apt.
 # nftables (in-VM) is the hard enforcement; these SG rules provide defence-in-depth.
 resource "outscale_security_group_rule" "bastion_egress_private" {
   flow              = "Outbound"
@@ -28,7 +28,7 @@ resource "outscale_security_group_rule" "bastion_egress_private" {
   ip_protocol       = "tcp"
   from_port_range   = 0
   to_port_range     = 65535
-  ip_range          = "10.0.0.0/24"
+  ip_range          = local.net_cidr
 }
 
 resource "outscale_security_group_rule" "bastion_egress_dns_udp" {
@@ -72,7 +72,7 @@ resource "outscale_public_ip" "bastion" {}
 resource "outscale_vm" "bastion" {
   image_id           = coalesce(var.bastion_image_id, try(data.outscale_image.ubuntu[0].image_id, null))
   vm_type            = var.bastion_vm_type
-  subnet_id          = outscale_subnet.public.subnet_id
+  subnet_id          = outscale_subnet.public[0].subnet_id
   security_group_ids = [outscale_security_group.bastion.security_group_id]
 
   user_data = base64encode(templatefile("${path.module}/../_shared/bastion-cloud-init.yaml.tftpl", {
@@ -83,7 +83,7 @@ resource "outscale_vm" "bastion" {
     # bug as the one hit on OVH with "ubuntu" (2026-07-26). Dedicated name, as on SCW.
     bastion_user      = "bastion"
     ssh_keys          = var.bastion_ssh_keys
-    private_cidr      = "10.0.0.0/24"
+    private_cidr      = local.net_cidr
     extra_packages    = []
     extra_write_files = []
     extra_runcmd      = []

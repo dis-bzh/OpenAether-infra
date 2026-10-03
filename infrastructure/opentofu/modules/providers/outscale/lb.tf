@@ -28,8 +28,14 @@ resource "outscale_load_balancer" "k8s" {
     load_balancer_protocol = "TCP"
   }
 
-  subnets         = [outscale_subnet.public.subnet_id]
+  # Every zone's public subnet: an API endpoint in one subregion is down with it, whatever the nodes do.
+  subnets         = outscale_subnet.public[*].subnet_id
   security_groups = [outscale_security_group.this.security_group_id]
+
+  # A cluster built with one public subnet keeps it: its load balancer is the thing that must not be rebuilt.
+  lifecycle {
+    ignore_changes = [subnets]
+  }
 
   tags {
     key   = "Name"
@@ -88,8 +94,14 @@ resource "outscale_load_balancer" "app" {
     load_balancer_protocol = "TCP"
   }
 
-  subnets         = [outscale_subnet.public.subnet_id]
+  # Every zone's public subnet: an API endpoint in one subregion is down with it, whatever the nodes do.
+  subnets         = outscale_subnet.public[*].subnet_id
   security_groups = [outscale_security_group.this.security_group_id]
+
+  # A cluster built with one public subnet keeps it: its load balancer is the thing that must not be rebuilt.
+  lifecycle {
+    ignore_changes = [subnets]
+  }
 
   tags {
     key   = "Name"

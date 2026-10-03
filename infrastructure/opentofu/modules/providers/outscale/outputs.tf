@@ -27,3 +27,29 @@ output "bastion_ip" {
   description = "Public IP of the bastion host (SSH access)"
   value       = outscale_public_ip.bastion.public_ip
 }
+
+# Not part of the provider contract: the subnet layout of #58, readable by a test.
+output "private_subnet_zones" {
+  description = "Subregion of each private subnet, in node-placement order"
+  value       = outscale_subnet.private[*].subregion_name
+}
+
+output "private_subnet_cidrs" {
+  description = "CIDR of each private subnet"
+  value       = outscale_subnet.private[*].ip_range
+}
+
+output "public_subnet_cidrs" {
+  description = "CIDR of each public subnet (the load balancers span all of them)"
+  value       = outscale_subnet.public[*].ip_range
+}
+
+output "control_plane_zone_index" {
+  description = "Index into the private subnets of each control plane (its zone)"
+  value       = local.cp_zone_index
+}
+
+output "worker_zone_index" {
+  description = "Index into the private subnets of each worker (its zone, and its data volumes')"
+  value       = local.worker_zone_index
+}
