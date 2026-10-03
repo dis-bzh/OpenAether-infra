@@ -23,6 +23,10 @@ data "outscale_images" "talos" {
 }
 
 locals {
+  # The placement rule: node i of a kind goes to zone i modulo the number of zones (#58).
+  cp_zone_index     = [for i in range(var.control_plane_count) : i % length(var.availability_zones)]
+  worker_zone_index = [for i in range(var.worker_count) : i % length(var.availability_zones)]
+
   resolved_image_id = coalesce(var.image_id, try(data.outscale_images.talos[0].images[0].image_id, null))
 }
 
@@ -32,12 +36,15 @@ resource "outscale_vm" "control_plane" {
 
   # Boot image = initial medium only; talosctl upgrade owns the live version.
   # See provider-contract.md § "Node image drift".
+  # subnet_id too: a node's placement is decided when it is created. Moving it is a rebuild, and
+  # a cluster built when every node shared one subnet must not have two of its three control planes
+  # replaced because availability_zones now spreads them (#58); new nodes follow the new layout.
   lifecycle {
-    ignore_changes = [image_id]
+    ignore_changes = [image_id, subnet_id]
   }
   vm_type = var.instance_type
 
-  subnet_id = outscale_subnet.private.subnet_id
+  subnet_id = outscale_subnet.private[local.cp_zone_index[count.index]].subnet_id
 
   security_group_ids = [outscale_security_group.this.security_group_id]
 
@@ -63,12 +70,15 @@ resource "outscale_vm" "worker" {
 
   # Boot image = initial medium only; talosctl upgrade owns the live version.
   # See provider-contract.md § "Node image drift".
+  # subnet_id too: a node's placement is decided when it is created. Moving it is a rebuild, and
+  # a cluster built when every node shared one subnet must not have two of its three control planes
+  # replaced because availability_zones now spreads them (#58); new nodes follow the new layout.
   lifecycle {
-    ignore_changes = [image_id]
+    ignore_changes = [image_id, subnet_id]
   }
   vm_type = var.instance_type
 
-  subnet_id = outscale_subnet.private.subnet_id
+  subnet_id = outscale_subnet.private[local.worker_zone_index[count.index]].subnet_id
 
   security_group_ids = [outscale_security_group.this.security_group_id]
 
@@ -91,8 +101,7 @@ resource "outscale_vm" "worker" {
 # ==============================================================================
 # Dedicated data disks per worker (worker × disk matrix). Each worker_storage.disks
 # entry becomes one BSU volume per worker, linked to the VM. device_name follows
-# the disk index (/dev/sdb, /dev/sdc, …). Volumes live in the workers' subregion
-# (the private subnet's AZ). Used for Longhorn / local-path (Talos mounts under
+# the disk index (/dev/sdb, /dev/sdc, …). Volumes live in their worker's subregion. Used for Longhorn / local-path (Talos mounts under
 # /var/mnt via UserVolumeConfig).
 # ==============================================================================
 
@@ -113,8 +122,14 @@ locals {
 resource "outscale_volume" "worker_data" {
   for_each = { for disk in local.worker_data_disks : disk.key => disk }
 
-  subregion_name = var.availability_zones[0]
+  # The subregion of the subnet its worker is built in (same index rule as the VM). Fixed at
+  # creation, like the VM's subnet: a different subregion would replace the volume and its data.
+  subregion_name = outscale_subnet.private[local.worker_zone_index[each.value.worker]].subregion_name
   size           = each.value.size_gb
+
+  lifecycle {
+    ignore_changes = [subregion_name]
+  }
 
   tags {
     key   = "Name"
