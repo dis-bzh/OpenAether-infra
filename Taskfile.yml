@@ -528,6 +528,8 @@ tasks:
       - ./scripts/dev/test-task-guards.sh
       # infra-plan/infra-apply's talos_bootstrap answer: an unreadable state is refused, not "false".
       - ./scripts/dev/test-bootstrap-in-state.sh
+      # Cilium replaces kube-proxy: every machine config the module builds must disable it.
+      - ./scripts/dev/test-kube-proxy-disabled.sh
       # infra-verify.sh's worker data-volume check (#62): names from the tfvars, verdicts from the nodes.
       - ./scripts/dev/test-worker-volumes.sh
       # grow-nodes.sh (#59): machines, then tunnels, then only the new nodes' configuration.
