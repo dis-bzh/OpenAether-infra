@@ -11,18 +11,12 @@ resource "outscale_security_group" "this" {
 
 # Kubernetes API — from LB subnet (health checks) + admin IPs
 resource "outscale_security_group_rule" "k8s_api_private" {
-  count             = length(outscale_subnet.public)
   flow              = "Inbound"
   security_group_id = outscale_security_group.this.security_group_id
   from_port_range   = 6443
   to_port_range     = 6443
   ip_protocol       = "tcp"
-  ip_range          = outscale_subnet.public[count.index].ip_range
-}
-
-moved {
-  from = outscale_security_group_rule.k8s_api_private
-  to   = outscale_security_group_rule.k8s_api_private[0]
+  ip_range          = outscale_subnet.public.ip_range
 }
 
 resource "outscale_security_group_rule" "k8s_api_admin" {
@@ -55,23 +49,23 @@ resource "outscale_security_group_rule" "talos_api" {
 # Tied to the app LB: with no LB on that subnet, these two only widen the
 # nodes' inbound surface for a caller that does not exist.
 resource "outscale_security_group_rule" "http" {
-  count             = var.deploy_app_lb ? length(outscale_subnet.public) : 0
+  count             = var.deploy_app_lb ? 1 : 0
   flow              = "Inbound"
   security_group_id = outscale_security_group.this.security_group_id
   from_port_range   = var.app_lb_node_ports.http
   to_port_range     = var.app_lb_node_ports.http
   ip_protocol       = "tcp"
-  ip_range          = outscale_subnet.public[count.index].ip_range
+  ip_range          = outscale_subnet.public.ip_range
 }
 
 resource "outscale_security_group_rule" "https" {
-  count             = var.deploy_app_lb ? length(outscale_subnet.public) : 0
+  count             = var.deploy_app_lb ? 1 : 0
   flow              = "Inbound"
   security_group_id = outscale_security_group.this.security_group_id
   from_port_range   = var.app_lb_node_ports.https
   to_port_range     = var.app_lb_node_ports.https
   ip_protocol       = "tcp"
-  ip_range          = outscale_subnet.public[count.index].ip_range
+  ip_range          = outscale_subnet.public.ip_range
 }
 
 # WireGuard — Cilium inter-node encryption (UDP 51820)

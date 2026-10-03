@@ -39,9 +39,9 @@ output "private_subnet_cidrs" {
   value       = outscale_subnet.private[*].ip_range
 }
 
-output "public_subnet_cidrs" {
-  description = "CIDR of each public subnet (the load balancers span all of them)"
-  value       = outscale_subnet.public[*].ip_range
+output "public_subnet_cidr" {
+  description = "CIDR of the single public subnet (bastion, NAT service, load balancers)"
+  value       = outscale_subnet.public.ip_range
 }
 
 output "control_plane_zone_index" {

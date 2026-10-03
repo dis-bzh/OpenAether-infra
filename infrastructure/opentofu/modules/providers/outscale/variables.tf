@@ -37,13 +37,13 @@ variable "worker_storage" {
 }
 
 variable "availability_zones" {
-  # One private and one public subnet per entry (#58): control planes and workers are spread over
-  # the private ones by index (node i goes to zone i modulo the list), a worker's data volumes
-  # live in its zone, and the load balancers span every public subnet. The bastion and the NAT
-  # service stay in the first zone: losing it costs admin access and node egress, not the API.
-  # A node's zone is fixed when it is created (lifecycle ignore_changes), so a cluster built
-  # before this layout keeps where its nodes are.
-  description = "Subregions, one subnet pair per entry; nodes are spread over them by index"
+  # One private subnet per entry (#58): control planes and workers are spread over them by index
+  # (node i goes to zone i modulo the list) and a worker's data volumes live in its zone. The
+  # public subnet, with the bastion, the NAT service and the load balancers (which take one subnet
+  # and still reach every subregion), stays in the first zone: losing it takes the public API
+  # endpoint, admin access and node egress, but not the etcd quorum. A node's zone is fixed when
+  # it is created (lifecycle ignore_changes), so a cluster built before this layout keeps it.
+  description = "Subregions, one private subnet per entry; nodes are spread over them by index"
   type        = list(string)
   default     = ["eu-west-2a", "eu-west-2b", "eu-west-2c"]
 

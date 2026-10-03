@@ -246,7 +246,7 @@ run "outscale_active_junction_point" {
     error_message = "active_provider must be 'outscale' when Outscale is configured."
   }
 
-  # #58: one private and one public subnet per subregion, so the control planes can sit in three.
+  # #58: one private subnet per subregion, so the control planes can sit in three; one public subnet.
   assert {
     condition     = module.outscale[0].private_subnet_zones == ["eu-west-2a", "eu-west-2b", "eu-west-2c"]
     error_message = "Outscale must build one private subnet per availability zone, in the order given."
@@ -256,8 +256,8 @@ run "outscale_active_junction_point" {
     error_message = "the first private subnet must keep 10.0.0.0/24 and the others take 10.0.2.0/24 and 10.0.3.0/24."
   }
   assert {
-    condition     = module.outscale[0].public_subnet_cidrs == ["10.0.1.0/24", "10.0.4.0/24", "10.0.5.0/24"]
-    error_message = "the first public subnet must keep 10.0.1.0/24 and the others take 10.0.4.0/24 and 10.0.5.0/24."
+    condition     = module.outscale[0].public_subnet_cidr == "10.0.1.0/24"
+    error_message = "the public subnet must keep 10.0.1.0/24, whatever the number of subregions."
   }
   assert {
     condition     = module.outscale[0].control_plane_zone_index == [0, 1, 2]
@@ -306,7 +306,7 @@ run "outscale_one_zone_keeps_the_original_layout" {
   }
 
   assert {
-    condition     = module.outscale[0].private_subnet_cidrs == ["10.0.0.0/24"] && module.outscale[0].public_subnet_cidrs == ["10.0.1.0/24"]
+    condition     = module.outscale[0].private_subnet_cidrs == ["10.0.0.0/24"] && module.outscale[0].public_subnet_cidr == "10.0.1.0/24"
     error_message = "one availability zone must give the single-zone layout this module always had (10.0.0.0/24 and 10.0.1.0/24)."
   }
   assert {

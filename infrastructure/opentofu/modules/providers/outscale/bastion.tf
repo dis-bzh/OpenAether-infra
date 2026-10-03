@@ -72,7 +72,7 @@ resource "outscale_public_ip" "bastion" {}
 resource "outscale_vm" "bastion" {
   image_id           = coalesce(var.bastion_image_id, try(data.outscale_image.ubuntu[0].image_id, null))
   vm_type            = var.bastion_vm_type
-  subnet_id          = outscale_subnet.public[0].subnet_id
+  subnet_id          = outscale_subnet.public.subnet_id
   security_group_ids = [outscale_security_group.bastion.security_group_id]
 
   user_data = base64encode(templatefile("${path.module}/../_shared/bastion-cloud-init.yaml.tftpl", {
