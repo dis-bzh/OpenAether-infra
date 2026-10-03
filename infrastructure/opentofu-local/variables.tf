@@ -24,7 +24,7 @@ variable "talos_version" {
 variable "kubernetes_version" {
   type = string
   # renovate: datasource=github-releases depName=kubernetes/kubernetes
-  default = "v1.36.3"
+  default = "v1.37.1"
 }
 
 variable "talos_bootstrap" {
