@@ -219,6 +219,14 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **The Outscale purge reports this account's images, not just its snapshots (#107).**
+  `purge-orphans` listed leftover snapshots but never images, because `ReadImages`
+  answers every OMI the account may launch (646 of 64 owners on a real account, 2
+  ours). It now reads the account id first and scopes the call with `AccountIds`;
+  a refused `ReadAccounts` or `ReadImages` is "unverified", never an unscoped list
+  nor a clean. Images are still never deleted here. Seen on a real account: exactly
+  its two OMIs, read-only.
+
 - **`workers = N+1` and one `task cluster-up` now work on a bootstrapped cluster (#59).**
   The apply that created a node also waited for its Talos port through a tunnel that
   cannot exist before the node, and once the tunnels were opened by hand the next plan
