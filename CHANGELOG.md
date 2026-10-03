@@ -226,6 +226,11 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **The OVH examples and defaults name AZs OVH accepts (#72).** They said `["nova"]`;
+  on EU-WEST-PAR, Nova tolerates it but Cinder rejects it, so the first apply died
+  creating the workers' data volumes. The examples, the cluster default and the module
+  default now name `eu-west-par-a/b/c`. Seen on a real OVH account: all three zones
+  deploy and verify.
 - **The Outscale purge reports this account's images, not just its snapshots (#107).**
   `purge-orphans` listed leftover snapshots but never images, because `ReadImages`
   answers every OMI the account may launch (646 of 64 owners on a real account, 2
