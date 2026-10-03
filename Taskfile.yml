@@ -530,6 +530,8 @@ tasks:
       - ./scripts/dev/test-bootstrap-in-state.sh
       # infra-verify.sh's worker data-volume check (#62): names from the tfvars, verdicts from the nodes.
       - ./scripts/dev/test-worker-volumes.sh
+      # grow-nodes.sh (#59): machines, then tunnels, then only the new nodes' configuration.
+      - ./scripts/dev/test-grow-nodes.sh
       # check-evidence-age.sh on fixtures and a fixed clock. The real tree must parse, never be
       # current: a verdict here would turn a required check red with no commit.
       - ./scripts/dev/test-evidence-age.sh
@@ -727,6 +729,14 @@ tasks:
       # output` failing truncates the file it writes to, and overwriting a good
       # kubeconfig to print a notice is a bad trade.
       - ./scripts/internal/converge-versions.sh {{.PROVIDER}} {{.ROLE}} {{.KEY}} --check
+      # A node added to a cluster that is already bootstrapped cannot be built and configured in
+      # the apply below (#59): its Talos port is reachable only through a tunnel that opens after
+      # it exists. A no-op unless the config asks for a node the state does not hold.
+      - task: _grow-nodes
+        vars:
+          ROLE: "{{.ROLE}}"
+          PROVIDER: "{{.PROVIDER}}"
+          KEY: "{{.KEY}}"
       # The first of the journey's two checkpoints (bootstrap-phase2 holds the other,
       # for its own plan). `up` plans, shows it, asks, then applies EXACTLY that plan:
       # never a different plan, and never a silent apply. APPROVE=auto skips the
@@ -1019,6 +1029,18 @@ tasks:
       # search. Verified 2026-08-17 on a live cluster.
       - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
       - SSH_KEY="{{.KEY}}" ../../../scripts/bootstrap/talos-tunnels.sh open .
+
+  _grow-nodes:
+    internal: true
+    desc: "Create and configure nodes the state does not hold yet (#59): see scripts/bootstrap/grow-nodes.sh"
+    dir: infrastructure/opentofu/cluster
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+      KEY: '{{.KEY | default "~/.ssh/id_ed25519"}}'
+    env: *provider-env
+    cmds:
+      - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
+      - SSH_KEY="{{.KEY}}" ../../../scripts/bootstrap/grow-nodes.sh {{.ROLE}} {{.PROVIDER}}
 
   bootstrap-phase2:
     desc: >-
