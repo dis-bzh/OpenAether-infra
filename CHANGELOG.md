@@ -208,6 +208,16 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **`talosctl upgrade-k8s` and the read-only talosconfig were each tried on a real cloud, and the answers are written down (#70, #80).**
+  `upgrade-k8s` measured no gentler than the config-driven Kubernetes step
+  (`docs/upgrade.md`); the `os:reader` talosconfig minted through the tunnels runs
+  `cluster-verify` green (`docs/admin-access.md`), so mint one and reuse it.
+
+- **Two decisions are written down instead of left as questions (#82, #56).** The
+  bastion stays and is hardened in place until there are two operators or a restore
+  that has been run (`docs/admin-access.md`). Outscale has no state lock by design, so
+  its rule is one operator at a time (`docs/release-checklist.md`); Scaleway and OVH
+  refuse a second run by name, seen on both through the project's own tasks.
 - **Outscale spreads its nodes over the subregions in `availability_zones` (#58).**
   The module read only the first entry, so three control planes shared one
   subregion. It now builds a private subnet per entry (the first keeps `10.0.0.0/24`),

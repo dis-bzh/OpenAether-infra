@@ -148,7 +148,11 @@ expires, and the only remedy is rotating the cluster CA. Treat the file as the
 secret it is — it is also in the tfstate and in both artifact stores. For
 read-only work, carry less: `task talosconfig-new PROVIDER=… ` issues an
 `os:reader` talosconfig that expires in hours and cannot mint an admin one
-(proven by `task local-rbac`).
+(proven by `task local-rbac`). Also run through the tunnels on a real OVH cluster
+(2026-10-03): `TALOSCONFIG=<that file> task cluster-verify PROVIDER=…` passes 13/13
+with it, while `talosctl get machineconfig` is refused. Mint one and reuse it until it
+expires rather than one per run: minting is a write against the Talos API, and a read
+should not need one.
 
 ## 7. Grafana SSO through Zitadel (OIDC)
 
