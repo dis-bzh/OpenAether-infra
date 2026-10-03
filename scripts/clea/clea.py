@@ -1359,7 +1359,7 @@ def cmd_bump(args) -> int:
                       f"rewriting the comment to {new_value!r} would claim that version while "
                       f"still running whatever {anchor.value!r} already points at. Renovate "
                       "resolves the commit and the comment together "
-                      f"(helpers:pinGitHubActionDigests / pinDigests) — bump this one there, "
+                      f"(helpers:pinGitHubActionDigests, or renovate.json5's pre-commit manager) — bump this one there, "
                       f"or by hand.{hint}", file=sys.stderr)
                 return 1
             lines = (root / anchor.path).read_text(encoding="utf-8").splitlines()

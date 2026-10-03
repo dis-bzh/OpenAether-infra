@@ -272,6 +272,16 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **Renovate can bump the pre-commit hooks, and no longer proposes two bumps that break the repository (#88).**
+  The hosted job log (2026-10-03) showed the native `pre-commit` manager reading each SHA in
+  `rev: <sha>  # v1.2.3` as a tag ("Tag … not found"), so the five hooks were never bumped
+  (`commitizen` sat at v4.9.1, 4.19.1 exists). A custom manager now reads the SHA and its tag
+  comment and moves both. The same log showed what the first PR flood would have contained:
+  the Scaleway cap `< 2.83.0` widened to `< 2.85.0` (the Feint lane, #179) and the Talos
+  provider moved to 0.12 (a 1.14 cluster, #241); both are ruled out, and `tofu_version` is no
+  longer tracked twice (native and anchored). `clea.toml` no longer
+  claims the native manager covered pre-commit revs.
+
 - **A roll exits 1 and names what is left when a Flux Kustomization is still
   suspended or a CNPG budget is missing (refs #64).** The exit trap resumed the
   owner chain and set `enablePDB` back, and nothing looked afterwards: a failed
