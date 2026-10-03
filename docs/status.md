@@ -28,15 +28,15 @@ rests on.
 | Scaleway, re-run | 2026-08-20 | — | ✅ 11/11 | ✅ `No changes.` ×2, one after the upgrade | unchanged at 1.36.3 | ✅ 6/6 nodes 1.13.8→1.13.9 | 2 s (13 fails in 577), Talos only, not comparable: [`upgrade.md`](upgrade.md) |
 | Scaleway, 1.14 | 2026-10-03 | ✅ from an empty project, a fresh `bucket_suffix` and encrypted worker data disks | ✅ 13/13 | ✅ `No changes.` after the climb | ✅ 1.36.3→1.37.1 | ✅ 6/6 nodes 1.13.9→1.14.2, in place, a Longhorn volume attached | 2 s (6 fails in 764, Talos step; 9 in 805, Kubernetes step) |
 | OVH | 2026-08-19 | ✅ | ✅ 11/11 | ✅ 3/3 | ✅ 1.36.2→1.36.3 | ✅ 6/6 nodes 1.13.7→1.13.8 | 7 s (9-10 in ~540) |
+| OVH, 1.14 | 2026-10-03 | ✅ 3+3 across `eu-west-par-a/b/c` with encrypted worker data disks (the first attempt died on the example's `nova` zone, #236) | ✅ 13/13, also with an `os:reader` talosconfig | ✅ plan empty after the climb and after the Kubernetes pin | ✅ 1.36.3→1.37.1 through `talosctl upgrade-k8s`, then the pin (#70) | ✅ 6/6 nodes 1.13.9→1.14.2 with Flux and a CNPG cluster in place (#64) | 1 s (3 in 583, Talos step); `upgrade-k8s` 10 s (11 in 430) |
 | Outscale | 2026-08-20 | ✅ 51 resources, then 17 | ✅ 11/11 | ✅ 3/3 | ✅ 1.36.2→1.36.3 | ✅ 6/6 nodes 1.13.7→1.13.8 | 8 s (59 in 1179) |
+| Outscale, 1.14 | 2026-10-03 | ✅ 3+3 `tinav5.c2r4p1` with encrypted worker data disks | ✅ 13/13 | ✅ `No changes.` ×3, one after the climb | ✅ 1.36.3→1.37.1 | ✅ 6/6 nodes 1.13.9→1.14.2 | 9 s (68 in 1535: 3 s on the Talos step, 9 s on Kubernetes); service probe 40 failed + 20 blind of 1490, longest 3 s |
 
-That `cluster-verify` column predates the failure-domain check (#38, offline half
-only). It now ends red on OVH's default `nova` (3 control planes in one zone) and
-on Outscale (every node in one subregion, #58), and so do `cluster-up`,
-`cluster-idempotency` and `cluster-upgrade` there. Scaleway over 2 zones is a 2+1
-split: it still scores 11/11, with a warning, because the zone holding two takes
-etcd's quorum with it; the third zone has no instance type this project uses.
-No real account has re-run the check.
+The August rows predate the failure-domain check (#38, merged). It was read on real accounts on
+2026-10-03: red on Outscale in one subregion (`3 of 3 control planes share one failure domain`), green
+with three control planes in three subregions there and in three OVH availability zones. Scaleway over
+2 zones is a 2+1 split: still green, with a warning, because the zone holding two takes etcd's quorum
+with it.
 
 Three things about that table are the point of it:
 
@@ -145,13 +145,17 @@ no container, volume, network or credential.
 [#87](https://github.com/dis-bzh/OpenAether-infra/issues/87) is closed on that
 basis; what it does not answer is below.
 
-**Not proven**: `v1.13.9`, the cloud root's pin, on OVH and Outscale: the
-three-cloud table above stops at `v1.13.8` for them (`task evidence-check` says
-which rows trail the pin). On Scaleway it was reached once, by upgrading Talos
-only (`v1.13.8`→`v1.13.9`, 2026-08-20, 6/6 nodes, `cluster-verify` 11/11,
-above). No lane has ever run unattended to completion; nobody has deployed under
-a non-empty `bucket_suffix`; and the failover — provider A treated as gone, the
-cluster rebuilt on B from B's replica alone — has never been attempted.
+**Not proven**: a failover (provider A treated as gone, the cluster rebuilt on B from B's replica
+alone, #57; only `restore-artifacts` was read back byte-identical, on one provider); no lane has ever run
+unattended to completion; and a control-plane roll with zero failed probes has not happened on any cloud
+(#42: 1 s on Scaleway and OVH, 3 s on Outscale, 9 s once Kubernetes moves there).
+
+**Talos provider 0.12.0 cannot carry a 1.14 cluster yet.** At `talos_version` 1.14.x it renders Talos's
+multi-document config and the module's v1alpha1 patches conflict (seven errors on every config apply,
+measured on OVH). Inside the 1.13 contract it works: a fresh deploy and a bump 1.13.9→1.13.11 ran through
+on OVH and on Outscale (13/13, plan empty after), though with our `replace_triggered_by` workaround still
+in, so it does not show that the upstream fix alone suffices (#83, closed). The pin stays on 0.11.0 until
+the patches move to 1.14 documents ([#241](https://github.com/dis-bzh/OpenAether-infra/issues/241)).
 
 **Six gates were green on something they had stopped checking**, found on
 2026-08-28 by auditing what the pipeline actually constrains rather than what it
@@ -164,4 +168,8 @@ from a billable publish with the pin never verified. `tflint` was linting one
 directory in fourteen. `provider-contract.md` — the document `CLAUDE.md` calls
 the authority — required a variable no module has ever declared.
 
-**Resume here**: the pin is 1.14.2 / 1.37.1 and Scaleway's row says so. Still unseen on a real cloud: a control plane added by `cluster-up` (#59 was measured on workers, 3 to 6), a control-plane roll with zero failed probes (#42), the state lock on OVH (#56), and everything on OVH and Outscale, whose rows still read Talos 1.13.8.
+**Resume here**: the pin is 1.14.2 / 1.37.1 and every cloud's newest row says so. Still unseen on a real
+cloud: the failover (#57), a roll with zero failed probes (#42), a Proxmox apply (#48, #201: no hardware),
+and the CA mismatch of #66 (the version flip is refused by `prevent_destroy`; the interrupted-apply path
+was not broken). Standing items only a person can close are in the issues: #43 (Outscale support), #61,
+#73 (two old staging buckets, a delete the owner runs), #88.
