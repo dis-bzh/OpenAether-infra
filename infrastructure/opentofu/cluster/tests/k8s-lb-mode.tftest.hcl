@@ -196,7 +196,7 @@ run "ovh_vip_mode_plan" {
         flavor_name        = "b3-8"
         image_id           = "dummy-talos-ovh-image"
         network_name       = "Ext-Net"
-        availability_zones = ["nova"]
+        availability_zones = ["eu-west-par-a"]
         k8s_lb_mode        = "vip"
       }
     }
