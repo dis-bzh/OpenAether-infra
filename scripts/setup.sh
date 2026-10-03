@@ -40,7 +40,7 @@ FLUX_VERSION="2.9.3"
 # pin as ci.yml's lint job, installed through `flux plugin install`, which
 # does its own checksum verification (fluxcd/flux2 RFC 0013).
 # renovate: datasource=github-releases depName=fluxcd/flux-schema extractVersion=^v(?<version>.*)$
-FLUX_SCHEMA_VERSION="0.13.0"
+FLUX_SCHEMA_VERSION="0.15.0"
 # renovate: datasource=github-releases depName=helm/helm extractVersion=^v(?<version>.*)$
 HELM_VERSION="4.3.0"
 
