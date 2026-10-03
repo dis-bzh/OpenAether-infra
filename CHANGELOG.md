@@ -197,6 +197,14 @@ in git. 0.1.0 is the first entry describing something proven.
   that has been run (`docs/admin-access.md`). Outscale has no state lock by design, so
   its rule is one operator at a time (`docs/release-checklist.md`); Scaleway and OVH
   refuse a second run by name, seen on both through the project's own tasks.
+- **Outscale spreads its nodes over the subregions in `availability_zones` (#58).**
+  The module read only the first entry, so three control planes shared one
+  subregion. It now builds a private subnet per entry (the first keeps `10.0.0.0/24`),
+  places control planes and workers by index and keeps a worker's data volumes in its
+  subregion. A node's subnet is ignored after creation, so a cluster built before this
+  keeps its layout. The public subnet, bastion, NAT and load balancers stay in the first
+  subregion: a load balancer takes one subnet ("multiple subnets is not implemented",
+  measured) and still reaches nodes in every subregion.
 
 - **`opentofu/opentofu` 1.12.6 → 1.13.1** (`ci.yml` ×5, `setup.sh`) and
   **`fluxcd/flux-schema` 0.13.0 → 0.15.0** (`ci.yml`, `setup.sh`), both probed
