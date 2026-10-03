@@ -1439,11 +1439,14 @@ replace_node() { # <type: cp|worker> <index>
     wait_etcd_healthy "${#CP_IPS[@]}" || die "etcd did not return to ${#CP_IPS[@]}/${#CP_IPS[@]} healthy — STOP (do NOT replace another CP)"
   fi
 
-  # 7. Longhorn rebuild complete (no degraded/faulted)
-  wait_longhorn_healthy || die "Longhorn not healthy after replacing ${node_name} — STOP"
-
-  # 8. back into rotation
+  # 7. back into rotation, BEFORE the Longhorn gate: Longhorn does not schedule a
+  # replica onto a cordoned node, so with as many replicas as workers (the default 3
+  # on 3) the node this gate waits for is the one it keeps from rebuilding. Measured
+  # on Scaleway 2026-10-03: degraded for 600 s until a manual uncordon, healthy 63 s later.
   "${KCTL[@]}" uncordon "$node_name" || warn "uncordon failed for ${node_name} (re-run manually)"
+
+  # 8. Longhorn rebuild complete (no degraded/faulted) before the next node is touched
+  wait_longhorn_healthy || die "Longhorn not healthy after replacing ${node_name} — STOP"
   ok "Node ${node_name} $([[ $UPGRADE -eq 1 ]] && echo upgraded || echo replaced) and back in rotation"
 }
 
