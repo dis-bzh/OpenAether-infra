@@ -89,8 +89,14 @@ supprime une branche dès que sa montée de version a atterri sur `main`.
   `GITHUB_TOKEN` ne peut pousser ce changement dans aucun dépôt, et aucune
   permission `permissions:` ne le corrige. Un secret `CLEA_WORKFLOW_TOKEN` (PAT
   classique, scope `workflow`) referme le trou une fois posé ; sans lui, le
-  rapport nomme quand même les trois plutôt que de les faire disparaître — voir
-  « Probes that could not record a verdict » dans sa propre section.
+  rapport nomme quand même les trois, dans l'avertissement qui l'ouvre, plutôt que
+  de les faire disparaître.
+
+Un jeton que GitHub rejette (un PAT expiré) est une panne, pas l'un de ces cas : il
+ne réduit pas la voie au silence. `scripts/clea/push-probes.sh` se rabat sur
+`GITHUB_TOKEN`, continue de pousser les autres branches, et le rapport s'ouvre sur
+un avertissement qui nomme les probes dont le verdict a été perdu. Un PAT classique
+expire : donne-lui une échéance que tu verras venir.
 
 ## Le lancer à la main
 

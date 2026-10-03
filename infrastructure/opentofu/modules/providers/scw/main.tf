@@ -42,8 +42,9 @@ data "scaleway_instance_image" "worker" {
 }
 
 # ⚠ `type` is NOT ForceNew: the provider stops, retypes and restarts the server,
-# so a plain apply takes EVERY node down at once. Change instance_type with
-# `task cluster-roll` (one node at a time) — docs/upgrade.md § A node size change.
+# so a plain apply takes EVERY node down at once; the roll's targeted apply would
+# drag the same update in, so the roll refuses. One node at a time, in place:
+# docs/upgrade.md § A node size change.
 resource "scaleway_instance_server" "control_plane" {
   count = var.control_plane_count
   name  = "${var.cluster_name}-cp-${count.index}"

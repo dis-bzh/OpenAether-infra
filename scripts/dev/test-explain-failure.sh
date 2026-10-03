@@ -60,6 +60,45 @@ JSON
 stub; OUT="$(run)"
 [ -z "$OUT" ] && ok "prints nothing at all" || bad "printed on a clean state: '${OUT:0:60}'"
 
+echo "--- a stale state lock is named, with the exact command that releases it ---"
+# The lock error as OpenTofu writes it into a transcript: boxed, coloured, one block.
+lockbox() { # <id> <who>
+  printf '\033[31m╷\033[0m\n\033[31m│\033[0m \033[1m\033[31mError: \033[0m\033[1mError acquiring the state lock\033[0m\n\033[31m│\033[0m \n'
+  printf '\033[31m│\033[0m Error message: operation error S3: PutObject, StatusCode: 412\n\033[31m│\033[0m Lock Info:\n'
+  printf '\033[31m│\033[0m   ID:        %s\n\033[31m│\033[0m   Path:      bucket/key.tfstate\n' "$1"
+  printf '\033[31m│\033[0m   Operation: OperationTypeApply\n\033[31m│\033[0m   Who:       %s\n' "$2"
+  printf '\033[31m│\033[0m   Version:   1.12.6\n\033[31m│\033[0m   Created:   2026-10-03 10:38:13 +0000 UTC\n\033[31m│\033[0m   Info:      \n\033[31m│\033[0m \n'
+  printf '\033[31m│\033[0m OpenTofu acquires a state lock to protect the state from being written\n\033[31m╵\033[0m\n'
+}
+printf '{"resources":[]}\n' >"$SB/state.json"; stub
+{ lockbox 11111111-2222-3333-4444-555555555555 alice@host; } >"$LOG"
+OUT="$(TF_DATA_DIR=.terraform-management-scaleway run)"
+grep -q 'tofu force-unlock -force 11111111-2222-3333-4444-555555555555' <<<"$OUT" \
+  && ok "the exact force-unlock command, with the holder's lock ID" || bad "no force-unlock command: ${OUT:0:200}"
+grep -q 'TF_DATA_DIR=.terraform-management-scaleway' <<<"$OUT" \
+  && ok "…with the data dir the run used, so it unlocks the right backend" || bad "the data dir is missing from the command"
+grep -q 'Who:.*alice@host' <<<"$OUT" && grep -q 'Operation: OperationTypeApply' <<<"$OUT" \
+  && ok "…and who holds it and doing what, so the operator can check it is dead" || bad "the holder is not shown"
+grep -qi 'make sure that run' <<<"$OUT" && ok "…after saying to check the holder is gone first" || bad "no warning before unlocking"
+{ lockbox 99999999-0000-0000-0000-000000000000 old@host; lockbox 22222222-2222-2222-2222-222222222222 new@host; } >"$LOG"
+OUT="$(run)"
+grep -q 'force-unlock -force 22222222-2222-2222-2222-222222222222' <<<"$OUT" && ! grep -q '99999999' <<<"$OUT" \
+  && ok "an older lock error in an appended transcript is not offered" || bad "the stale first lock error was used"
+OUT="$(run)"
+grep -q 'force-unlock -force' <<<"$OUT" && grep -q 'TF_DATA_DIR=.terraform ' <<<"$OUT" \
+  && ok "without TF_DATA_DIR in the environment it falls back to .terraform" || bad "no data-dir fallback"
+# The lock error needs no state: it must still be explained when the state cannot be pulled.
+{ lockbox 33333333-3333-3333-3333-333333333333 carol@host; } >"$LOG"
+printf '#!/usr/bin/env bash\nexit 1\n' >"$SB/tofu"; chmod +x "$SB/tofu"
+OUT="$(run)"
+grep -q 'force-unlock -force 33333333-3333-3333-3333-333333333333' <<<"$OUT" \
+  && ok "it is explained even when `tofu state pull` itself fails" || bad "the lock hint depends on reading state: ${OUT:0:100}"
+printf '{"resources":[]}\n' >"$SB/state.json"; stub
+box 'some other failure' >"$LOG"; OUT="$(run)"
+[ -z "$OUT" ] && ok "a failure that is not a lock stays silent" || bad "printed on a non-lock failure: ${OUT:0:80}"
+printf '\033[31m│\033[0m Error: Error acquiring the state lock\n' >"$LOG"; OUT="$(run)"
+! grep -q 'force-unlock' <<<"$OUT" && ok "a lock error with no Lock Info block gives no command: no ID to guess" || bad "it invented a command: ${OUT:0:100}"
+
 echo "--- never breaks the caller, whatever it meets ---"
 printf '#!/usr/bin/env bash\nexit 1\n' >"$SB/tofu"; chmod +x "$SB/tofu"
 run >/dev/null 2>&1; [ $? -eq 0 ] && ok "a tofu that fails still exits 0" || bad "it propagated a failure"

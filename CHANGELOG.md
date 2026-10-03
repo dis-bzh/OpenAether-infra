@@ -16,6 +16,23 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
+- **`cluster-verify` reads the workers' encrypted data volumes back (#62).**
+  `worker_storage` asks for LUKS2 user volumes on each worker and nothing checked
+  one existed. The verifier now asks each worker's own Talos API, through the
+  first control plane's tunnel, for every volume the tfvars name: `ready` and
+  `luks2`, or red. A worker no tunnel reaches is a warning. Seen on a real
+  Scaleway cluster: green, and red (3 failed) with a volume named that the
+  workers do not carry.
+- **Cléa can probe and bump an `action-sha` pin (plumber).** `getplumber/plumber`
+  is pinned as `uses: ...@<sha>  # v0.5.12` and as a release URL; the first shape
+  made `bump` refuse, so its probe was red every day and the dependency could
+  never be proven. The scan now resolves the commit a tag points at (peeling an
+  annotated tag; one lookup per action pin) and the matrix carries it, so `bump
+  --sha` moves the commit and the comment together, only when the `uses:` names
+  the dependency's own repository and the commit is 40 lowercase hex. A refusal
+  at the last site no longer leaves the first one rewritten. A `precommit-rev` is
+  still refused. Mocked rung (`test-clea.sh`); not run on a runner yet.
+
 - **`task evidence-check` dates the real-cloud evidence in `docs/status.md`
   (refs #121).** Nothing aged the table 0.1.0 rests on, so a measurement stayed
   "true today" after the versions it measured had moved. The table gains a
@@ -169,6 +186,33 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **`opentofu/opentofu` 1.12.6 → 1.13.1** (`ci.yml` ×5, `setup.sh`) and
+  **`fluxcd/flux-schema` 0.13.0 → 0.15.0** (`ci.yml`, `setup.sh`), both probed
+  green by Cléa (#91). Proven with the real binaries, not the sandbox's cached
+  ones: OpenTofu 1.13.1 (sha256 OK) first on the PATH and `flux plugin install
+  schema@0.15.0` (`flux schema version` = 0.15.0), then `task lint`,
+  `render-check`, `test-scripts`, `validate` (both roots) and `task test` (71/71)
+  green, plus checkov (32/0), its custom checks (6/0) and gitleaks. `trivy` not
+  run in this sandbox — relies on CI. Left out: `getplumber/plumber` v0.5.17
+  (probed green, but `clea bump` refuses its `action-sha` pin, same as #170);
+  `go-task` 3.54.0 and the `kubectl-cnpg` plugin 1.30.1 are in #226;
+  `fluxcd/flux2` v2.9.6 and `siderolabs/talos` v1.14.2 not probed;
+  `kubernetes/kubernetes` v1.37.1 probe failed (`versions-guard.tf`, #181).
+- **Talos v1.14.2 and Kubernetes v1.37.1 are the default pin (#181).** Both roots
+  (`cluster` and `opentofu-local`) move together. On a real Scaleway cluster, with a
+  Longhorn volume attached and a Service probe running, `cluster-upgrade` took
+  v1.13.9 / v1.36.3 to this pair in place: six nodes, no failed Service probe, the
+  data written before the climb read back identically, `cluster-verify` 13/13. The
+  Longhorn question the bump waited on is answered on the pair the issue names
+  (v1.14.1 / v1.37.0). OVH and Outscale have not seen 1.14: their rows still read
+  Talos 1.13.8.
+- **`go-task/task` 3.53.1 → 3.54.0** (`install-task.sh`) and the
+  **`kubectl-cnpg` plugin 1.30.0 → 1.30.1** (`install-kubectl-cnpg.sh`), the two
+  of Cléa's #91 rows that sit outside `.github/`. Both installed from the pinned
+  release with their checksum verified; `task lint`, `test-scripts` (33
+  harnesses, 1262 passed), `test`, `render-check` and both `validate` roots pass
+  with `task` 3.54.0 first on the PATH. The release notes were not read.
+
 - **`getplumber/plumber` v0.4.51 → v0.5.12** in `security.yml` (SHA and comment
   together) and `install-plumber.sh`, by hand: `clea bump` refuses an
   `action-sha` pin, so Cléa's daily run had been red on it since at least
@@ -229,6 +273,77 @@ in git. 0.1.0 is the first entry describing something proven.
   then 11 more on the final head (failed roll and failed restore, stopped roll,
   signals, owner warning, empty cluster list, the three defaults), each turn at
   least one assertion red.
+- **The OVH examples and defaults name AZs OVH accepts (#72).** They said `["nova"]`;
+  on EU-WEST-PAR, Nova tolerates it but Cinder rejects it, so the first apply died
+  creating the workers' data volumes. The examples, the cluster default and the module
+  default now name `eu-west-par-a/b/c`. Seen on a real OVH account: all three zones
+  deploy and verify.
+- **The Outscale purge reports this account's images, not just its snapshots (#107).**
+  `purge-orphans` listed leftover snapshots but never images, because `ReadImages`
+  answers every OMI the account may launch (646 of 64 owners on a real account, 2
+  ours). It now reads the account id first and scopes the call with `AccountIds`;
+  a refused `ReadAccounts` or `ReadImages` is "unverified", never an unscoped list
+  nor a clean. Images are still never deleted here. Seen on a real account: exactly
+  its two OMIs, read-only.
+
+- **`workers = N+1` and one `task cluster-up` now work on a bootstrapped cluster (#59).**
+  The apply that created a node also waited for its Talos port through a tunnel that
+  cannot exist before the node, and once the tunnels were opened by hand the next plan
+  blocked 15 minutes on a health check no unconfigured node can pass. `cluster-up` now
+  runs `scripts/bootstrap/grow-nodes.sh` first: it creates the machines (a plan of the
+  provider module alone), refreshes the outputs the tunnels read, opens the tunnels,
+  and configures only the nodes the state has no configuration for. A no-op on a fresh
+  cluster or when no node is new. Measured on Scaleway, 3 to 5 workers.
+- **CI no longer "checks kube-proxy is disabled" by matching an unrelated default.**
+  The step grepped `disabled: true` in a config made by plain `talosctl gen config`,
+  which carries none of this repository's patches; the line it matched was the
+  Kubernetes discovery registry's own, which Talos 1.14 stopped writing, so the step
+  went red on the pin bump and had never tested kube-proxy. `test-kube-proxy-disabled.sh`
+  reads the patches the Talos module builds, for control planes and workers.
+- **A stale state lock is now named, with the command that releases it.** A run
+  killed hard (SIGKILL, a crashed runner, a closed laptop) never releases its state
+  lock, and every later `cluster-up`, plan and apply stopped on `Error acquiring the
+  state lock` while nothing in the repository mentioned `tofu force-unlock`.
+  `explain-failure.sh` now prints the holder (ID, operation, who, when), says to
+  check that run is really gone first, and gives the exact command for the data dir
+  the run used. Measured on a live Scaleway cluster, after a `SIGKILL` of phase 2.
+- **The roll no longer deadlocks on Longhorn when it has as many replicas as workers.**
+  `rolling-replace` waited for Longhorn to be healthy and only then uncordoned the
+  node it had just rebuilt, but Longhorn does not put a replica on a cordoned node:
+  with 3 replicas on 3 workers the volume stayed degraded for the whole 600 s gate
+  and the roll stopped (Scaleway: healthy 63 s after a manual uncordon). The node is
+  uncordoned first; the gate still holds the roll before the next node.
+- **A dry run no longer leaves a rung receipt.** `task cluster-upgrade DRY_RUN=1`
+  (and `cluster-roll -- --dry-run`) exits 0 having touched nothing, yet recorded
+  `real-cloud … rc=0`, which satisfies the "Rung receipt" check for that head
+  with nothing run. The receipt task now records nothing when `DRY_RUN` is set or
+  `--dry-run` is passed.
+- **`infra-plan` and `infra-apply` no longer read an unreadable state as "no
+  bootstrap".** `tofu state list 2>/dev/null | grep -q …` answered `false` on any
+  failure to read (an S3 error, a bad credential); on a bootstrapped cluster that
+  zeroes the node counts and drops the bootstrap, machine configs and kubeconfig
+  from the state. A live Scaleway upgrade ended that way, with an empty kubeconfig
+  output. `scripts/internal/bootstrap-in-state.sh` answers only when the state is
+  read or absent. Measured: a wrong secret key now stops it with the provider's
+  message. Why that upgrade's read failed is not established. Refs #67.
+- **A size change through `cluster-roll` no longer resizes every node at once.**
+  Measured on Scaleway: with `instance_type` raised, `-- --workers-only` replaced
+  worker 0 and its targeted config apply dragged in the in-place resize of all
+  three control planes (API down 56 s); the destroy count could not see it. The
+  roll now plans both steps before the cordon and refuses a plan that changes
+  another node. A size change goes one node at a time, in place:
+  `docs/upgrade.md`, measured with 1 s blips only. Refs #51, #42.
+- **A rejected `CLEA_WORKFLOW_TOKEN` no longer silences Cléa.** From 2026-09-24
+  every `Push probe branches` job failed with `Invalid username or token`: the
+  secret was set but rejected, the script never fell back to `GITHUB_TOKEN`, and
+  its first failure aborted the rest, so the report read "not probed" for probes
+  that had passed. The push is now `scripts/clea/push-probes.sh`: the PAT, then
+  `GITHUB_TOKEN`, and one failed branch does not stop the others; git's whole
+  output reaches the log, without any token. The report opens with a warning when
+  the push job failed or a finished probe job has no verdict on its branch, and
+  names them. Mocked rung (`test-clea-push.sh`, `test-clea.sh`); that the PAT
+  expired is a hypothesis, the secret is not readable from here.
+
 - **`task cluster-up` refuses a missing or placeholder passphrase before it
   creates the buckets.** The check ran after `ensure-buckets.sh --preflight`,
   which creates the four buckets, so the refusal came once resources existed. It
@@ -382,8 +497,8 @@ in git. 0.1.0 is the first entry describing something proven.
   by planning each size change with the real provider binaries against a seeded
   state (Scaleway's plan-time API calls answered by a local stub): every one
   came out `update`. Positive controls on a ForceNew attribute came out
-  `delete, create`. `docs/upgrade.md` now sends a size change through
-  `task cluster-roll`. `node-size-change.tftest.hcl` checks that the size
+  `delete, create`. `docs/upgrade.md` sent a size change through
+  `task cluster-roll`; that was wrong on Scaleway (entry under Fixed). `node-size-change.tftest.hcl` checks that the size
   reaches each node and that nothing turns it into a replacement: Scaleway's
   `replace_on_type_change` stays unset and Proxmox's `reboot_after_update` is
   not false. Setting either one turned its run red. A mock cannot tell
@@ -849,6 +964,40 @@ in git. 0.1.0 is the first entry describing something proven.
   whether `ubuntu` joins `bastion-admins` (the OVH/Outscale collision) is still
   open on that issue.
 
+- **A Talos bootstrap the state forgot is adopted before phase 2 re-sends it
+  (refs #67, refs #40).** An apply that is interrupted after the node accepted
+  the Bootstrap RPC leaves no `talos_machine_bootstrap` in state, so the next
+  phase 2 sends it again at a live etcd, which refuses it with `AlreadyExists`.
+  `bootstrap-phase2` now runs the new `scripts/bootstrap/adopt-bootstrap.sh`
+  once the tunnels are open. If
+  the state lacks `module.talos.talos_machine_bootstrap.this[0]` and any control
+  plane answers `talosctl etcd members` with exit 0 and a `:2380` row, it runs
+  `tofu import -var skip_health_check=true` on it (the import also reads the
+  cluster-health data source, which runs to its 15m timeout and fails it when no
+  healthy cluster answers);
+  otherwise, including a node that does not answer within `ADOPT_PROBE_TIMEOUT`
+  (15s), it changes nothing. A fresh cluster pays up to that timeout per control
+  plane. The import fails the task only after etcd has answered, with the command
+  to run by hand. A successful import writes state BEFORE phase 2's approval
+  prompt, and declining that plan does not undo it (the state is not backed up
+  first): `tofu state rm 'module.talos.talos_machine_bootstrap.this[0]'` does,
+  and the script prints it.
+  `test-adopt-bootstrap.sh` (stubbed `tofu` and `talosctl`) holds each of those
+  branches, and `test-cluster-up.sh` the call order. `test-bootstrap-import.sh`
+  runs the pinned talos provider offline: a create against a closed port leaves
+  the resource out of state, an import reads the health data source and fails on
+  its timeout unless that is skipped, an import with any ID then succeeds, the
+  plan is an in-place update that applies in under a second with no RPC, and the
+  re-plan is empty. Not observed: what `talosctl etcd members` prints on a real
+  node in each state, so whether the guard ever fires; the import on the real
+  cluster root (the scratch config holds only the provider and that data source,
+  with the real module's `count` line, which the harness refuses to run without
+  `skip_health_check`); the data source against a reachable, unhealthy cluster
+  (seen only against a closed port); that a control plane with an empty disk accepts a
+  second Bootstrap and forks etcd (upstream behaviour, and the reason every
+  control plane is asked and any member row counts). The other control planes'
+  etcd (#40) is not touched, and both issues stay open for a real interrupted
+  bootstrap.
 - **`task infra-down-plan` is tested against a pinned image that is gone (refs
   #69).** #69 says such a cluster cannot be destroyed, because the destroy plan
   still evaluates the image lookup. The `-refresh=false` fallback, added for the

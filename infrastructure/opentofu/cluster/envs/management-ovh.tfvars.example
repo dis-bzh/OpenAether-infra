@@ -53,7 +53,8 @@ node_distribution = {
     # name (published by talos-image). Override only if you use a different name/UUID:
     # image_id           = "TALOS_IMAGE_ID"
     network_name       = "Ext-Net"
-    availability_zones = ["nova"]
+    # One AZ per control plane; must exist in `region` (EU-WEST-PAR has no "nova": Cinder rejects it).
+    availability_zones = ["eu-west-par-a", "eu-west-par-b", "eu-west-par-c"]
     bastion_image_id   = "Ubuntu 22.04"
   }
 }

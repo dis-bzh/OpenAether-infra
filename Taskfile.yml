@@ -364,7 +364,11 @@ tasks:
     internal: true
     silent: true
     cmds:
-      - python3 scripts/dev/rung-receipt.py record "{{.TARGET}}" "{{.PROVIDER}}" "{{.RC}}" "{{.START}}"
+      # A dry run (DRY_RUN=1, or `-- --dry-run`) resolves and stops: it is no observation, and a
+      # `real-cloud rc=0` receipt for it would satisfy the rung check with nothing run.
+      - >-
+        {{if or .DRY_RUN (contains "--dry-run" .CLI_ARGS)}}true{{else}}python3 scripts/dev/rung-receipt.py
+        record "{{.TARGET}}" "{{.PROVIDER}}" "{{.RC}}" "{{.START}}"{{end}}
 
   receipts:
     desc: "Print the rung receipts recorded for HEAD, to paste into the pull request body"
@@ -443,6 +447,11 @@ tasks:
       # `cluster-up` from first guard to last line, real go-task, stubbed leaves:
       # a failing verifier fails it, and only a passing one prints success (#84).
       - ./scripts/dev/test-cluster-up.sh
+      # A bootstrap the state forgot is imported only when a control plane already
+      # has etcd members (#67); every other answer must change nothing. The second
+      # harness runs the real talos provider offline, which the first can only assume.
+      - ./scripts/dev/test-adopt-bootstrap.sh
+      - ./scripts/dev/test-bootstrap-import.sh
       # The three scripts between a cluster and a lost tfstate or etcd, and the
       # Day-1 seeder whose one rule is never to rotate what exists. Writing
       # these found a retention slice that deleted 28 of 29 snapshots and two
@@ -461,6 +470,9 @@ tasks:
       # probe branch. Its reader, its writer and its comparator are all places a
       # silent wrong answer would produce a confident report.
       - ./scripts/dev/test-clea.sh
+      # A rejected PAT once lost every probe verdict for days without a signal: this
+      # drives push-probes.sh over real local remotes so the fallback cannot regress.
+      - ./scripts/dev/test-clea-push.sh
       # setup.sh asked whether a tool was present, never which version it was —
       # so it installed the pin once and refused every upgrade after that. Found
       # by the Cléa probe, guarded here so it does not need Docker to stay fixed.
@@ -514,6 +526,14 @@ tasks:
       - ./scripts/dev/test-rung-receipts.sh
       # The inline guards of `fmt`, `lint` and the step below, under the real Taskfile.
       - ./scripts/dev/test-task-guards.sh
+      # infra-plan/infra-apply's talos_bootstrap answer: an unreadable state is refused, not "false".
+      - ./scripts/dev/test-bootstrap-in-state.sh
+      # Cilium replaces kube-proxy: every machine config the module builds must disable it.
+      - ./scripts/dev/test-kube-proxy-disabled.sh
+      # infra-verify.sh's worker data-volume check (#62): names from the tfvars, verdicts from the nodes.
+      - ./scripts/dev/test-worker-volumes.sh
+      # grow-nodes.sh (#59): machines, then tunnels, then only the new nodes' configuration.
+      - ./scripts/dev/test-grow-nodes.sh
       # check-evidence-age.sh on fixtures and a fixed clock. The real tree must parse, never be
       # current: a verdict here would turn a required check red with no commit.
       - ./scripts/dev/test-evidence-age.sh
@@ -711,6 +731,14 @@ tasks:
       # output` failing truncates the file it writes to, and overwriting a good
       # kubeconfig to print a notice is a bad trade.
       - ./scripts/internal/converge-versions.sh {{.PROVIDER}} {{.ROLE}} {{.KEY}} --check
+      # A node added to a cluster that is already bootstrapped cannot be built and configured in
+      # the apply below (#59): its Talos port is reachable only through a tunnel that opens after
+      # it exists. A no-op unless the config asks for a node the state does not hold.
+      - task: _grow-nodes
+        vars:
+          ROLE: "{{.ROLE}}"
+          PROVIDER: "{{.PROVIDER}}"
+          KEY: "{{.KEY}}"
       # The first of the journey's two checkpoints (bootstrap-phase2 holds the other,
       # for its own plan). `up` plans, shows it, asks, then applies EXACTLY that plan:
       # never a different plan, and never a silent apply. APPROVE=auto skips the
@@ -869,12 +897,9 @@ tasks:
         # bootstrap-phase2 then recreates them, re-sending the bootstrap RPC against
         # a live etcd, which Talos correctly refuses (AlreadyExists) and which also
         # invalidates the kubeconfig output. Found live 2026-07-30 re-running `task
-        # up` for an idempotency test. Only a truly fresh cluster gets false.
-        if tofu state list 2>/dev/null | grep -q 'module.talos.talos_machine_bootstrap'; then
-          TB=true
-        else
-          TB=false
-        fi
+        # up` for an idempotency test. Only a truly fresh cluster gets false, and a
+        # state that cannot be read is not a fresh cluster: the script refuses.
+        TB="$(../../../scripts/internal/bootstrap-in-state.sh)" || exit 1
         # TB=true means module.talos is in play, and every one of its resources
         # speaks to the Talos API through the localhost tunnels. With them shut the
         # apply does not fail — it WAITS: data.talos_cluster_health reads for 15m,
@@ -948,11 +973,7 @@ tasks:
         # Same talos_bootstrap resolution as `infra`: passing the phase-1 value to
         # an already-bootstrapped cluster zeroes the node counts and the plan then
         # describes a teardown nobody asked for.
-        if tofu state list 2>/dev/null | grep -q 'module.talos.talos_machine_bootstrap'; then
-          TB=true
-        else
-          TB=false
-        fi
+        TB="$(../../../scripts/internal/bootstrap-in-state.sh)" || exit 1
         # On a bootstrapped cluster this plan reads data.talos_cluster_health,
         # whose endpoints are localhost tunnels — so from a shell that did not open
         # them it waits out health_check_timeout and dies on "cluster health check
@@ -1011,10 +1032,24 @@ tasks:
       - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
       - SSH_KEY="{{.KEY}}" ../../../scripts/bootstrap/talos-tunnels.sh open .
 
+  _grow-nodes:
+    internal: true
+    desc: "Create and configure nodes the state does not hold yet (#59): see scripts/bootstrap/grow-nodes.sh"
+    dir: infrastructure/opentofu/cluster
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+      KEY: '{{.KEY | default "~/.ssh/id_ed25519"}}'
+    env: *provider-env
+    cmds:
+      - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
+      - SSH_KEY="{{.KEY}}" ../../../scripts/bootstrap/grow-nodes.sh {{.ROLE}} {{.PROVIDER}}
+
   bootstrap-phase2:
     desc: >-
       Phase 2: open SSH tunnels (from state) + bootstrap Talos. It computes its OWN plan and
       needs an approval — APPROVE=auto answers it, for CI and for a shell that cannot be asked.
+      Before the plan, a bootstrap the state forgot is imported (#67): that writes state BEFORE
+      the approval, and declining the plan does not undo it (the message prints the `tofu state rm`).
       Usage: task bootstrap-phase2 ROLE=management|workload
       [PROVIDER=scaleway|ovh|outscale|proxmox] [KEY=~/.ssh/yourkey] [APPROVE=auto]
     dir: infrastructure/opentofu/cluster
@@ -1029,6 +1064,10 @@ tasks:
     cmds:
       - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
       - SSH_KEY="{{.KEY}}" ../../../scripts/bootstrap/talos-tunnels.sh open .
+      # A bootstrap the state forgot would be re-sent below at a live etcd. Needs
+      # the tunnels just opened; imports only on a positive answer (#67). That
+      # writes state before the approval below, and declining the plan keeps it.
+      - ../../../scripts/bootstrap/adopt-bootstrap.sh {{.ROLE}} {{.PROVIDER}}
       - |
         # Phase 2 cannot reuse the phase-1 plan: that one was computed with
         # talos_bootstrap=false, which gates the node counts to zero. So it

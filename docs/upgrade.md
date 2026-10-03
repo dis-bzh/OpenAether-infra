@@ -294,18 +294,27 @@ on OVH only, on 2026-08-15: six nodes went into `VERIFY_RESIZE` together and the
 apiserver was unreachable for several minutes. For the other three, the verdict
 comes from the provider source at the versions resolved on 2026-09-26 and from
 an offline plan with the real provider binaries, not from a live bump (#51). `rolling-replace`'s "one node at a time"
-guard does not catch it either: that guard counts what a plan would DESTROY, and
-a resize destroys nothing.
+guard did not catch it: it counted what a plan would DESTROY, and a resize
+destroys nothing. It now also refuses a plan that changes another node (below).
 
-**Route it through the roll.** Edit the size in the tfvars, **do not run
-`infra-apply`**, then run `task cluster-roll PROVIDER=<p>` without `--upgrade`.
-Each node is drained, replaced by `-replace` at the new size and gated before
-the next one. Until the roll ends, any plain apply resizes the remaining nodes
-all at once. Replacement mode skips nothing: a re-run replaces every node in
-scope again, and `--workers-only` or `--cp-only` narrows it. It has run live
-only on Scaleway. It has never run on Proxmox, where a replaced worker loses its
-inline data disk. The fallback is an in-place resize one node at a time with
-`-target`, which gets no drain and no gates.
+**Do not route it through the roll.** Measured on Scaleway, 2026-10-02: with
+`instance_type` raised, `task cluster-roll -- --workers-only` replaced worker 0
+and then, in its config step, resized all three control planes in place within
+25 s; the apiserver behind the load balancer was unreachable for 56 s. `-target`
+pulls in dependencies, and the destroy count cannot see a resize. The roll now
+plans both steps before it cordons anything and refuses a plan that changes
+another node (`foreign_changes`): against that cluster, with a size change
+pending on all six nodes, it stopped at worker 0 before the cordon, naming the
+three control planes and the other two workers.
+Whether OVH's, Outscale's and Proxmox's targeted config step drags other nodes
+along has not been measured; the same refusal covers them if it does.
+
+**Go one node at a time, in place.** `kubectl drain` the node, `tofu plan
+-target=<that server>` and check it is exactly one update, apply that file, wait
+for Ready, `kubectl uncordon`, next node. Measured on Scaleway the same day,
+three control planes then workers: etcd 3/3 after each, 5 failed one-second
+probes in 241 and none longer than 1 s, about a minute per node. It has no
+budget or etcd gate beyond what you check by hand.
 
 Two cases would turn a size change into a replacement: Scaleway's
 `replace_on_type_change`, and on OpenStack a node whose recorded flavour is

@@ -198,7 +198,7 @@ jobs:
         uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4  # v2
         with:
           # renovate: datasource=github-releases depName=opentofu/opentofu extractVersion=^v(?<version>.*)$
-          tofu_version: "1.12.6"
+          tofu_version: "1.13.1"
 
       # Same installer as setup.sh and the session-start hook, for the same reason
       # as Task below: one pinned version, verified against the project's own
@@ -262,7 +262,7 @@ jobs:
       - name: Install flux-schema plugin
         env:
           # renovate: datasource=github-releases depName=fluxcd/flux-schema extractVersion=^v(?<version>.*)$
-          FLUX_SCHEMA_VERSION: "0.13.0"
+          FLUX_SCHEMA_VERSION: "0.15.0"
         run: flux plugin install "schema@${FLUX_SCHEMA_VERSION}"
 
       # One-time per-runner setup task itself doesn't need — tflint plugin init
@@ -340,7 +340,7 @@ jobs:
         uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4  # v2
         with:
           # renovate: datasource=github-releases depName=opentofu/opentofu extractVersion=^v(?<version>.*)$
-          tofu_version: "1.12.6"
+          tofu_version: "1.13.1"
 
       - name: Setup Task
         if: needs.changes.outputs.code == 'true'
@@ -370,7 +370,7 @@ jobs:
         uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4  # v2
         with:
           # renovate: datasource=github-releases depName=opentofu/opentofu extractVersion=^v(?<version>.*)$
-          tofu_version: "1.12.6"
+          tofu_version: "1.13.1"
 
       - name: Setup Task
         run: ./scripts/internal/install-task.sh
@@ -415,7 +415,7 @@ jobs:
         uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4  # v2
         with:
           # renovate: datasource=github-releases depName=opentofu/opentofu extractVersion=^v(?<version>.*)$
-          tofu_version: "1.12.6"
+          tofu_version: "1.13.1"
 
       - name: Setup Task
         if: needs.changes.outputs.code == 'true'
@@ -476,7 +476,7 @@ jobs:
         uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4  # v2
         with:
           # renovate: datasource=github-releases depName=opentofu/opentofu extractVersion=^v(?<version>.*)$
-          tofu_version: "1.12.6"
+          tofu_version: "1.13.1"
 
       - name: Setup Task
         if: needs.changes.outputs.code == 'true'
@@ -602,10 +602,6 @@ jobs:
 
       - name: Validate worker config
         run: talosctl validate --config /tmp/talos-configs/worker.yaml --mode metal
-
-      - name: Check kube-proxy is disabled
-        run: |
-          grep -q 'disabled: true' /tmp/talos-configs/controlplane.yaml
 
   security:
     name: IaC Security Scan

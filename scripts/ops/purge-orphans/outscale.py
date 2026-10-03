@@ -2,8 +2,7 @@
 """Purges an orphaned Outscale Net (CAPI): dependencies first, then the Net.
 Order imposed by Outscale: LBU → NAT → route tables → internet service →
 security groups → subnets → net. Also REPORTS (never deletes) leftover
-snapshots — see the ARTIFACTS block below. Images are deliberately NOT
-enumerated here yet; see that block for why.
+snapshots and images — see the ARTIFACTS block below.
 Usage: purge-orphans-osc.py [--apply]"""
 import datetime
 import hashlib
@@ -123,14 +122,9 @@ for net in call('ReadNets').get('Nets', []):
 # purpose"). Rebuilding one costs about an hour on Outscale; a wrong guess
 # here is not recoverable the way a re-run of the delete loop above is.
 #
-# Images are NOT enumerated here, on purpose, unlike snapshots: ReadImages'
-# documented default scope is every OMI you hold LAUNCH PERMISSIONS on, which
-# — unlike a Net or a security group — can include Outscale's own public
-# catalogue. An unscoped call risks flooding this report with images that were
-# never this account's to begin with, teaching an operator to ignore it. That
-# needs an account-id filter verified against a live account before it is
-# safe to add (#107); snapshots have no such public-catalogue precedent and
-# are scoped the same way every other Read* call in this file already is.
+# Images (OMIs) too, but only this account's: ReadImages defaults to every OMI the account may
+# launch, public catalogue included (646 images, 64 owners, 2 ours). So ReadAccounts comes first and
+# its id scopes the call; if either is refused the images are UNVERIFIED, never listed unscoped (#107).
 #
 # What THIS closes: a duplicate snapshot from a failed image build sat in the
 # account while this script never looked, so "account is clean" was true of
@@ -145,12 +139,45 @@ for net in call('ReadNets').get('Nets', []):
 _unreachable_before_artifacts = UNREACHABLE
 ARTIFACTS = call('ReadSnapshots').get('Snapshots', [])
 ARTIFACTS_UNVERIFIED = UNREACHABLE > _unreachable_before_artifacts
+
+
+def read_own_images():
+    """(images, asked): this account's own OMIs. asked is False when the account id could not be
+    read or a page was refused: the unscoped catalogue is never a fallback."""
+    before = UNREACHABLE
+    accounts = call('ReadAccounts').get('Accounts', [])
+    account_id = accounts[0].get('AccountId') if accounts else None
+    if not account_id or UNREACHABLE > before:
+        return [], False
+    found, token = [], None
+    while True:
+        payload = {'Filters': {'AccountIds': [account_id]}}
+        if token:
+            payload['NextPageToken'] = token
+        page = call('ReadImages', payload)
+        if UNREACHABLE > before:
+            return [], False
+        found += page.get('Images', [])
+        token = page.get('NextPageToken')
+        if not token:
+            return found, True
+
+
+IMAGES, IMAGES_ASKED = read_own_images()
+ARTIFACTS_UNVERIFIED = ARTIFACTS_UNVERIFIED or not IMAGES_ASKED
+HELD = len(ARTIFACTS) + len(IMAGES)
 if ARTIFACTS:
     print(f"\n⚠ {len(ARTIFACTS)} snapshot(s) present — never auto-purged, review by hand:")
     for s in ARTIFACTS:
         print(f"    snapshot {s.get('SnapshotId')} ({s.get('State', '?')}, {s.get('VolumeSize', '?')}GB)")
+if IMAGES:
+    print(f"\n⚠ {len(IMAGES)} image(s) of this account present — never auto-purged, review by hand:")
+    for i in IMAGES:
+        print(f"    image {i.get('ImageId')} {i.get('ImageName', '?')} ({i.get('State', '?')})")
+if ARTIFACTS_UNVERIFIED and not HELD:
+    print("\n⚠ snapshot or image visibility was refused — cannot confirm the account holds none.")
 elif ARTIFACTS_UNVERIFIED:
-    print("\n⚠ snapshot visibility was refused — cannot confirm the account holds none.")
+    print("\n⚠ snapshot or image visibility was refused for part of the account — what is listed may not be all.")
 
 # TOTAL>0 is NOT "dirty" on its own — a successful purge (below, FAILED==0)
 # with TOTAL>0 is the ordinary clean-after-work case, same as before this
@@ -161,10 +188,12 @@ elif ARTIFACTS_UNVERIFIED:
 # flag was tried here first and wrongly turned a plain, fully successful
 # purge into a false "not fully clean" — a second bug shaped like the first.
 def _artifact_reason():
-    return f"{len(ARTIFACTS)} snapshot(s)" if ARTIFACTS else "snapshot visibility (refused, unconfirmed)"
+    if not HELD:
+        return "snapshot or image visibility (refused, unconfirmed)"
+    return f"{len(ARTIFACTS)} snapshot(s) and {len(IMAGES)} image(s)"
 
 
-if UNREACHABLE and TOTAL == 0 and not ARTIFACTS:
+if UNREACHABLE and TOTAL == 0 and not HELD:
     # Nothing else was found ANYWHERE and something refused to answer — fires
     # whether the refusal was the snapshot call or an earlier one. A
     # CONFIRMED snapshot below already proves dirty on its own and takes
@@ -173,7 +202,7 @@ if UNREACHABLE and TOTAL == 0 and not ARTIFACTS:
     print(f"\n✗ {UNREACHABLE} call(s) refused — found nothing, but nothing was actually asked.")
     print("  This is NOT an all-clear: check OUTSCALE_ACCESS_KEY_ID / _SECRET_KEY and re-run.")
     sys.exit(2)
-if TOTAL == 0 and not ARTIFACTS and not ARTIFACTS_UNVERIFIED:
+if TOTAL == 0 and not HELD and not ARTIFACTS_UNVERIFIED:
     print("Nothing to purge — the account is clean.")
 elif TOTAL == 0:
     print(f"\n{_artifact_reason()} present — the account is NOT fully clean (see above).")
@@ -186,7 +215,7 @@ elif not APPLY:
 elif FAILED:
     print(f"\n✗ {FAILED} of {TOTAL} deletion(s) failed — the account is NOT clean.")
     sys.exit(3)
-elif ARTIFACTS or ARTIFACTS_UNVERIFIED:
+elif HELD or ARTIFACTS_UNVERIFIED:
     # TOTAL>0, APPLY, nothing failed — this is the branch reviewers found
     # unreachable: a refused ReadSnapshots after some OTHER resource was
     # deleted used to fall straight to the final "clean" else below with

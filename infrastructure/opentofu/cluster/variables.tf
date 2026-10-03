@@ -147,14 +147,14 @@ variable "talos_version" {
   description = "Talos Linux version"
   type        = string
   # renovate: datasource=github-releases depName=siderolabs/talos
-  default = "v1.13.9"
+  default = "v1.14.2"
 }
 
 variable "kubernetes_version" {
   description = "Kubernetes version"
   type        = string
   # renovate: datasource=github-releases depName=kubernetes/kubernetes
-  default = "v1.36.3"
+  default = "v1.37.1"
 }
 
 variable "node_distribution" {
@@ -173,7 +173,7 @@ variable "node_distribution" {
     OVH-specific:
       flavor_name         - OpenStack flavor (e.g. "b3-8")
       network_name        - External network name for floating IPs (default "Ext-Net")
-      availability_zones  - OpenStack AZ list (default ["nova"])
+      availability_zones  - OpenStack AZ list (default: the three EU-WEST-PAR zones)
 
     Outscale-specific:
       instance_type      - VM type (e.g. "tinav5.c2r4p1")
