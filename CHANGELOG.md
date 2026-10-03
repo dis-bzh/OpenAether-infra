@@ -16,6 +16,13 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
+- **`cluster-verify` reads the workers' encrypted data volumes back (#62).**
+  `worker_storage` asks for LUKS2 user volumes on each worker and nothing checked
+  one existed. The verifier now asks each worker's own Talos API, through the
+  first control plane's tunnel, for every volume the tfvars name: `ready` and
+  `luks2`, or red. A worker no tunnel reaches is a warning. Seen on a real
+  Scaleway cluster: green, and red (3 failed) with a volume named that the
+  workers do not carry.
 - **Cléa can probe and bump an `action-sha` pin (plumber).** `getplumber/plumber`
   is pinned as `uses: ...@<sha>  # v0.5.12` and as a release URL; the first shape
   made `bump` refuse, so its probe was red every day and the dependency could

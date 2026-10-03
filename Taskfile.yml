@@ -528,6 +528,8 @@ tasks:
       - ./scripts/dev/test-task-guards.sh
       # infra-plan/infra-apply's talos_bootstrap answer: an unreadable state is refused, not "false".
       - ./scripts/dev/test-bootstrap-in-state.sh
+      # infra-verify.sh's worker data-volume check (#62): names from the tfvars, verdicts from the nodes.
+      - ./scripts/dev/test-worker-volumes.sh
       # check-evidence-age.sh on fixtures and a fixed clock. The real tree must parse, never be
       # current: a verdict here would turn a required check red with no commit.
       - ./scripts/dev/test-evidence-age.sh
