@@ -192,6 +192,11 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **A dry run no longer leaves a rung receipt.** `task cluster-upgrade DRY_RUN=1`
+  (and `cluster-roll -- --dry-run`) exits 0 having touched nothing, yet recorded
+  `real-cloud … rc=0`, which satisfies the "Rung receipt" check for that head
+  with nothing run. The receipt task now records nothing when `DRY_RUN` is set or
+  `--dry-run` is passed.
 - **`infra-plan` and `infra-apply` no longer read an unreadable state as "no
   bootstrap".** `tofu state list 2>/dev/null | grep -q …` answered `false` on any
   failure to read (an S3 error, a bad credential); on a bootstrapped cluster that
