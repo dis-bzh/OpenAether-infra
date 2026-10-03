@@ -287,6 +287,16 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **Documents that still described the 0.1.0 measurements as the latest.** The README's "Honest status",
+  layer table, providers table, roadmap and document index; `docs/status.md` (#59 "still open", the
+  Renovate cause); `docs/first-cluster.md` (a control plane could not be added, nobody had used a
+  `bucket_suffix`, the image's "staging area"); `docs/upgrade.md` (no roll had produced a number, the first
+  apply after a bump fails once); the test matrix (header, OVH and storage rows, priorities; new rows for
+  growing and for the refused shrink); `docs/capacity.md`. Nine example tfvars hard-pinned Talos v1.13.3 and
+  Kubernetes v1.35.3, a pair never measured on a cloud; they now inherit the tracked defaults, as the
+  management examples do. Renovate's note for Cilium and Flux bumps named `task up FORCE=1`, a cloud
+  bring-up; it now names `task render-manifests`. French twins follow.
+
 - **`roll-lab.sh self-test` was red on main.** Its check that the upgrade path still skips a node already on
   the target version looked four lines past the comparison for the `return 0`, and the schematic check added
   later put it ten lines down. It now asks for the `return 0` right after the "already runs … skipping" line;

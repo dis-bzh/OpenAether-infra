@@ -9,7 +9,7 @@
 >
 > ✅ testé par apply réel · 🎭 émulé (Feint : vrai provider, vrai HTTP, sans
 > compte) · ⛔ bloqué en amont · 🧪 testé unitairement (mocké) · ⬜ non testé.
-> Revue 2026-08-20.
+> Revue 2026-10-03.
 >
 > Un ✅ est le compte rendu d'un run à sa date, pas une revendication de la
 > 0.1.0. Ce sur quoi cette version repose, c'est le management HA Scaleway et OVH
@@ -90,13 +90,13 @@ Deux couches de réglages orthogonales :
 | `SCW-mgmt-ha-2az` | mgmt | 3+3 | managed | 2 AZ | **disques+volumes** | Ce sur quoi repose réellement la 0.1.0. etcd sur 2 zones, en round-robin. | ✅ 2026-08-19, puis 2026-08-20 — 3 control planes sur 2 zones font un 2+1, dont `cluster-verify` (#38) avertit désormais |
 | `SCW-vip` | mgmt | 3+1 | **vip** | multi-AZ | aucun | Supprime le LB ; VIP Talos Layer2 ; API privée via tunnel ; anti-spoofing. | ✅ *(2026-07-15)* |
 | `SCW-work-ha` | workload | 3+3 | managed | 3 AZ | aucun | Chemin d'amorçage Flux du rôle workload. | ⬜ |
-| `SCW-storage` | workload | 3+3 | managed | 3 AZ | **disques+volumes** | Volumes blocs SBS + `UserVolumeConfig` chiffré (LUKS2). | ⬜ sur le rôle *workload*. Les volumes blocs et les patchs UserVolumeConfig ONT bien été appliqués sur `SCW-mgmt-ha-2az` — 3 × `scaleway_block_volume.worker_data` dans l'état — mais **rien n'a relu qu'ils étaient formatés en LUKS2 et montés** : `cluster-verify` n'interroge aucun volume |
+| `SCW-storage` | workload | 3+3 | managed | 3 AZ | **disques+volumes** | Volumes blocs SBS + `UserVolumeConfig` chiffré (LUKS2). | ⬜ sur le rôle *workload*. Les volumes blocs et les patchs UserVolumeConfig ONT bien été appliqués sur `SCW-mgmt-ha-2az` — 3 × `scaleway_block_volume.worker_data` dans l'état — et depuis le 2026-10-03 `cluster-verify` relit le volume de données de chaque worker depuis le nœud (`ready luks2`), 13/13 sur Scaleway, OVH et Outscale |
 
 ### OVH (OpenStack)
 
 | ID | Rôle | CP/W | k8s_lb_mode | Ce qu'il exerce en propre | Statut |
 |---|---|---|---|---|---|
-| `OVH-mgmt-ha` | mgmt | 3+3 | managed | LB Octavia + floating IP ; ports OpenStack ; bastion Ubuntu ; egress routeur SNAT. | ✅ *(2026-07-27/28, plusieurs cycles)* — avant le contrôle des domaines de panne (#38) : sur `nova` par défaut `cluster-verify` le refuse désormais, il faut des `availability_zones` distinctes |
+| `OVH-mgmt-ha` | mgmt | 3+3 | managed | LB Octavia + floating IP ; ports OpenStack ; bastion Ubuntu ; egress routeur SNAT. | ✅ *(2026-07-27/28, plusieurs cycles)* — avant le contrôle des domaines de panne (#38) ; ✅ 2026-10-03 : 3+3 sur `eu-west-par-a/b/c` avec des disques de données workers chiffrés, `cluster-verify` 13/13. Une zone unique échoue le contrôle |
 | `OVH-vip` | mgmt | 3+2 | **vip** | `allowed_address_pairs` sur les ports CP pour l'anti-spoof Neutron (mécanisme distinct de Scaleway). | 🧪 |
 | `OVH-work-ha` | workload | 3+3 | managed | Rôle workload sur OVH. | ⬜ |
 | `OVH-storage` | workload | 3+3 | managed | Attachement de volumes Cinder. | ⬜ |
@@ -159,19 +159,22 @@ Ce que cette voie ne sait pas encore porter : voir « Manques connus » dans
 | `OP-destroy` | `task cluster-down` / `task infra-down` | Chemin de destruction ordonné (enfants puis management). | ✅ |
 | `OP-tftest` | mocké | Suite de tests unitaires (sans credentials). | ✅ (CI) |
 | `OP-backup` | `backup_enabled=true`, réplica cross-provider (`<MAGASIN>_AWS_*`) | DR : tfstate + kube/talosconfig vers primaire et réplica ; restic chiffré client. | ✅ *(local + cloud réel SCW+OVH)* |
-| `OP-rolling-replace` | `task cluster-roll` | Un nœud à la fois (evict etcd, cordon/drain). Pas « sans coupure » : l'API est injoignable 5 à 8 s, cf. les issues ouvertes. | ✅ *(Scaleway et OVH le 2026-08-19, Outscale le 2026-08-20 — il porte l'upgrade Talos)* |
+| `OP-rolling-replace` | `task cluster-roll` | Un nœud à la fois (evict etcd, cordon/drain). Pas « sans coupure » : l'API était injoignable 5 à 8 s en août, et 1 à 2 s (étape Talos) puis 9 à 10 s (étape Kubernetes) le 2026-10-03, cf. les issues ouvertes. | ✅ *(Scaleway et OVH le 2026-08-19, Outscale le 2026-08-20 — il porte l'upgrade Talos)* |
+| `OP-grow-nodes` | `task cluster-up` avec un compte relevé | D'abord les machines, puis les tunnels, puis la configuration des seuls nouveaux nœuds (#59). | ✅ *(2026-10-03 : workers 3→6 et control planes 1→3 sur Scaleway ; control planes 1→3 sur OVH et Outscale)* |
+| `OP-refuse-node-delete` | un compte abaissé via `cluster-up` / `infra-apply` | Refusé avant tout apply : retirer un nœud détruit ses volumes de données sans drain ni sortie d'etcd. | ✅ *(plan seul, 2026-10-03 : deux vrais plans de réduction Scaleway, workers 2→1 et control planes 3→2, refusés)* |
 
 ## C) Priorités (plus forte valeur, non testé, apply réel)
 
 1. **Apply réel Proxmox** (`PMX-*`) — jamais exécuté sur un hôte réel.
 2. **HA multi-AZ en cloud** (`SCW-mgmt-ha`) — etcd 3 CP réparti sur plusieurs
-   zones jamais appliqué sous cette forme exacte. `OSC-mgmt-ha` en sera un quand sa
-   disposition répartie (#58) aura tourné.
+   zones jamais appliqué sous cette forme exacte. `OSC-mgmt-ha` a tourné avec sa
+   disposition répartie le 2026-10-03.
 3. **`OVH-vip`** — le mode vip n'a jamais été appliqué sur OVH (mécanisme
    Neutron `allowed_address_pairs`, distinct de Scaleway).
 4. **Apply réel du rôle workload** (`*-work-*`) — seul le management est exercé.
-5. **`worker_storage` en réel** (`*-storage`) — LUKS2 `UserVolumeConfig` et
-   attachement de volumes jamais appliqués.
+5. **`worker_storage` sur le rôle workload** (`*-work-*`) — LUKS2 `UserVolumeConfig` et
+   attachement de volumes ont été appliqués et relus sur le rôle management des trois
+   clouds le 2026-10-03, pas sur un rôle workload.
 6. **`OP-failover`** — chemin DR non prouvé.
 
 ## D) Constats — apply réel `SCW-vip` (2026-07-15)

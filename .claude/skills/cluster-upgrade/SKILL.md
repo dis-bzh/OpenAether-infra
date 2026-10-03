@@ -53,20 +53,18 @@ The upgrade harness stubbed `task`, which hid that order: a stub between two
 scripts hides their contract. Its three Talos-step scenarios now run the real
 `talos-image.sh`.
 
-## Expect two applies, and know why
+## One apply per bump, and why
 
 Bumping `talos_version` and applying puts the new installer into the machine
-configs; nothing reboots yet. That first apply fails once with "Provider produced
-inconsistent final plan" on OVH and Outscale. Run it again.
-
-Not a sign you did something wrong, and no longer a mystery: upstream
-`siderolabs/terraform-provider-talos` #352. When `machine_configuration_input` is
-unknown at plan time, the provider keeps the old `machine_configuration_hash` in
-the plan and recomputes it at apply. The second run works because the first
-resolved whatever was unknown. Fixed upstream in the 0.12.0 pre-release line
-only — we pin 0.11.0, the newest stable. **Do not "fix" it locally without
-proving the fix on a real cloud**, and do not add a retry: `cluster-upgrade.sh`
-deliberately has none, because a retry turns the defect green.
+configs; nothing reboots yet. That apply used to fail once with "Provider produced
+inconsistent final plan" on OVH and Outscale: upstream
+`siderolabs/terraform-provider-talos` #352 (the provider keeps the old
+`machine_configuration_hash` when the config input is unknown at plan time).
+`modules/talos` now replaces each machine-config apply on a version change
+(`replace_triggered_by`), and the 2026-10-03 climbs went through `cluster-upgrade`
+in one apply on all three clouds. Do not add a retry: `cluster-upgrade.sh`
+deliberately has none, because a retry turns a defect green. The workaround is not
+shown redundant under provider 0.12.0 (#83), so leave it in.
 
 ## What to watch, beyond "it came back"
 

@@ -6,8 +6,9 @@ D'une machine nue et d'un compte cloud vide jusqu'à un cluster Talos que tu peu
 joindre, mettre à jour et détruire. Scaleway sert d'exemple ; OVH et Outscale
 n'en diffèrent que par leurs identifiants et leur fichier tfvars, sauf à
 l'étape 4 où leurs load balancers sont plus lents — et où Outscale a une réserve
-qui lui est propre. L'étape 6 peut aussi y finir en rouge : leurs exemples placent
-les control planes dans un même domaine de panne.
+qui lui est propre. L'étape 6 finit en rouge sur n'importe lequel si les control
+planes partagent un même domaine de panne ; les exemples et le module Outscale les
+répartissent.
 
 **Lis la note d'honnêteté en fin de page avant de dépenser quoi que ce soit.**
 Elle dit ce qui a été mesuré, sur quel cloud et quand — et ce qui ne l'a pas été.
@@ -205,7 +206,7 @@ qu'aucune lecture ne renvoie ; seul le fournisseur peut la lever, et une seconde
 demande est ouverte pour cela.
 
 Six buckets existent ensuite : l'état et les artefacts, chacun avec son jumeau
-`-backup`, plus l'image et sa zone de préparation.
+`-backup`, plus l'image et sa zone d'import.
 
 Relancer reprend où ça s'est arrêté. Ajouter un worker aussi : `task cluster-up` crée la
 machine, ouvre les tunnels, puis configure seulement le nouveau nœud
@@ -382,12 +383,11 @@ Ce qui reste ouvert :
 - **Le kubeconfig et le talosconfig n'ont jamais été récupérés depuis un vrai
   bucket.** L'aller-retour est prouvé hors ligne, `enc()` contre `dec()` octet
   pour octet (`scripts/dev/test-restore.sh`), et le transport du tfstate est
-  prouvé — mais `task restore-artifacts` lui-même n'a jamais tourné que sur des
-  fichiers locaux.
-- **Personne n'a déployé avec un `bucket_suffix` non vide.** Six dérivations
-  concordent en tests unitaires ; le jour où quelqu'un en posera un sera le
-  premier où le backend, la construction d'image et le vérificateur devront
-  s'accorder pour de vrai.
+  prouvé — et `task restore-artifacts` a été relu octet pour octet sur un vrai
+  bucket chez un provider (`docs/status.md`), pas chez chacun des trois.
+- **Un `bucket_suffix` non vide n'a été déployé que sur Scaleway** (depuis un projet
+  vide, 2026-10-02, #68) : le backend, la construction d'image et le vérificateur
+  s'y sont accordés. OVH et Outscale n'en ont aucune trace.
 - **Un control plane repartait sur la version précédente après un upgrade, sur
   OVH.** La cause était la nôtre : `siderolabs/qemu-guest-agent` dans le
   schematic ne démarre jamais sur une image sans `hw_qemu_guest_agent`, si bien

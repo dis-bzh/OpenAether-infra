@@ -6,8 +6,9 @@
 > Measured by hand on **Scaleway, OVH and Outscale** — the first two on
 > 2026-08-19, Outscale on 2026-08-20 — HA topologies, every node upgraded **in
 > place** rather than replaced and each node's own Talos API asked what it runs.
-> Earlier runs on Outscale and on OVH reverted on the next reboot, and
-> the open issues say why.
+> On 2026-10-03 all three went on to Talos 1.14.2 and Kubernetes 1.37.1 through
+> `task cluster-upgrade` (`docs/status.md` has the figures). Earlier runs on Outscale
+> and on OVH reverted on the next reboot, and the open issues say why.
 >
 > The scripted version of this same procedure is `task cluster-upgrade`
 > ([`scripts/dev/cluster-upgrade.sh`](../scripts/dev/cluster-upgrade.sh)). It is
@@ -65,7 +66,8 @@ also runs a second probe for the whole roll: a 2-replica workload behind a
 Service (with a PDB when two nodes can take it), polled through the apiserver
 proxy, reported as FAIL count and longest outage, then deleted. Samples taken
 while the apiserver is down are counted apart as BLIND. It is reported, not
-gated, and no real roll has produced its number yet (#41). How it works:
+gated. Real numbers, 2026-10-03: 0 failed on Scaleway, 40 failed and 20 blind of
+1490 on Outscale (`docs/status.md`). How it works:
 [`cluster-upgrade.sh` § The service probe](../scripts/dev/cluster-upgrade.sh).
 
 ## Kubernetes first
@@ -104,8 +106,8 @@ The pin moves before the build: the image lane keeps one image per provider, so
 it refuses a version that any `envs/*-<p>.tfvars` does not pin, as it would
 replace the image that cluster still uses (#93). It names the file that blocks.
 A build that fails after its apply has already replaced the old image, so leave
-the pin at the new version and re-run. The last live upgrade predates that
-guard, so this order is proven mocked only.
+the pin at the new version and re-run. The 2026-10-03 climbs ran through that
+order on all three clouds.
 
 **On Outscale the image build dominates the whole upgrade.** The image is
 registered from a snapshot imported through a provider-side queue: 8 min on
@@ -218,11 +220,12 @@ kubectl delete pod <targetPrimary> -n <ns>
 pins, it exits 0, prints "will be promoted" and leaves `targetPrimary`
 untouched. Open as an issue.
 
-⚠️ **The first apply after a `talos_version` bump fails on OVH and Outscale**
-with "Provider produced inconsistent final plan", once per machine config.
-Nothing is left half-applied; re-run it. This is upstream
+The first apply after a `talos_version` bump used to fail once on OVH and
+Outscale with "Provider produced inconsistent final plan" (upstream
 `siderolabs/terraform-provider-talos` #352, fixed only in the 0.12.0 pre-release
-line — details and the decision still open as an issue.
+line). The module now replaces each machine-config apply on a version change
+(`replace_triggered_by`), so the bump goes through in one apply: the 2026-10-03
+climbs ran through `cluster-upgrade`, which has no retry, on all three clouds.
 
 ## What to check, beyond "it came back"
 

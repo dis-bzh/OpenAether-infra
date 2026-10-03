@@ -149,7 +149,7 @@ credentials never get committed.
 
 ```bash
 # Phase 0 — build the Talos image once per version (separate state, reused by all clusters)
-task image-build PROVIDER=scaleway               # -> image "talos-scaleway-amd64-v1.13.3" (or PROVIDER=ovh)
+task image-build PROVIDER=scaleway               # -> image "talos-scaleway-amd64-v1.14.2" (or PROVIDER=ovh)
 
 # Generate bootstrap manifests (Cilium, Flux)
 ./scripts/bootstrap/render-bootstrap-manifests.sh

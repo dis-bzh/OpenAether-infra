@@ -40,8 +40,8 @@
 cluster_name       = "openaether"
 environment        = "prod"
 cluster_role       = "management"
-talos_version      = "v1.13.3"
-kubernetes_version = "v1.35.3"
+# talos_version / kubernetes_version: leave unset to inherit the tracked defaults of
+# cluster/variables.tf (the pair each release measures); pin them here only to hold a cluster back.
 talos_bootstrap    = false # Set to true after infra is up
 
 node_distribution = {

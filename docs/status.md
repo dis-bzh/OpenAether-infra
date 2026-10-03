@@ -62,7 +62,7 @@ Talos v1.13.8→v1.13.9 on 6/6 nodes, `cluster-verify` 11/11. Longest outage 2 s
 (13 fails in 577) — see [`upgrade.md`](upgrade.md) for why that does NOT establish
 the leader-last fix: that run moved Talos only, the 5 s one also moved Kubernetes.
 
-**Scaleway, third run, 2026-10-02**, from an empty project and under a fresh `bucket_suffix` (#68): `cluster-up`, `cluster-verify` (12/12: the verifier has gained a check since the August rows) and two `cluster-idempotency` passes. Then `cluster-upgrade` to Talos 1.14.2 and Kubernetes 1.37.1. The Talos step rolled six nodes with the apiserver failing 6 times in 474 one-second probes, longest 1 s. The Kubernetes step failed in our own tooling: `infra-apply` read an unreadable state as "no bootstrap" and dropped the Talos resources from the state (#223). The cluster was untouched; `adopt-bootstrap` (#214) and a plain `cluster-up` brought the state back and ended on 1.37.1 everywhere. Also measured: a size change through the roll resized the three control planes at once and took the API down for 56 s (#222), where one node at a time, in place, costs 1 s blips; a control plane powered off for 80 s (3 failed probes in 360, a write succeeded); a second `plan` refused by the state lock (#56, Scaleway); `cluster-up` red when the verifier is (#84); a node added to a live cluster needing a targeted config apply (#59, still open). Torn down and proven clean the same night.
+**Scaleway, third run, 2026-10-02**, from an empty project and under a fresh `bucket_suffix` (#68): `cluster-up`, `cluster-verify` (12/12: the verifier has gained a check since the August rows) and two `cluster-idempotency` passes. Then `cluster-upgrade` to Talos 1.14.2 and Kubernetes 1.37.1. The Talos step rolled six nodes with the apiserver failing 6 times in 474 one-second probes, longest 1 s. The Kubernetes step failed in our own tooling: `infra-apply` read an unreadable state as "no bootstrap" and dropped the Talos resources from the state (#223). The cluster was untouched; `adopt-bootstrap` (#214) and a plain `cluster-up` brought the state back and ended on 1.37.1 everywhere. Also measured: a size change through the roll resized the three control planes at once and took the API down for 56 s (#222), where one node at a time, in place, costs 1 s blips; a control plane powered off for 80 s (3 failed probes in 360, a write succeeded); a second `plan` refused by the state lock (#56, Scaleway); `cluster-up` red when the verifier is (#84); a node added to a live cluster needing a targeted config apply (#59, since fixed: `grow-nodes.sh`, run live three times on 2026-10-03 and merged as #232). Torn down and proven clean the same night.
 
 **Scaleway, the 1.14 climb, 2026-10-03**, from an empty project with encrypted worker data disks. `cluster-up` was interrupted twice on purpose in phase 2 and recovered each time (#40 and #67, closed): the tunnels killed before the bootstrap call (a plain re-run resumed), and `SIGKILL` right after it (`adopt-bootstrap` found 3 etcd members and imported the bootstrap; the stale state lock the kill left needed a `tofu force-unlock`, which `explain-failure.sh` now names). Longhorn 1.13 on the encrypted user volumes at Talos 1.13.9, a 5 MiB blob written, then `cluster-upgrade` 1.13.9/1.36.3 → 1.14.2/1.37.1 with a one-replica stateful pod and a Service probe running: 6 failed apiserver probes in 764 for the Talos step and 9 in 805 for the Kubernetes step (longest 2 s each), the Service 0 failed, the blob's hash unchanged, the stateful pod gapped 20 s and 16 s. The roll stopped once on a defect of ours, the Longhorn gate waiting for a rebuild its own cordon prevented (#229). The same day, on the exact pair #181 names (Talos 1.14.1, Kubernetes 1.37.0): Longhorn written, read from other workers and across a node reboot, and the worker volumes read back by `cluster-verify` (#62). A worker was then added by one `task cluster-up` three times running, 3 to 6 (`grow-nodes.sh`, #59). This row is what moved the pin to 1.14.2 / 1.37.1.
 
@@ -121,8 +121,10 @@ It found nine of twenty-one version anchors inert (Renovate had never been told
 to read them, now fixed), and that Renovate had proposed nothing since its
 config landed — its nine pull requests predate `renovate.json5` by three hours,
 and helm 4.2.4 (published 2026-08-13) and flux 2.9.4 (2026-08-07) both sat
-unproposed through their scheduled windows. The schedule is now daily; whether
-that alone was the cause is [#88](https://github.com/dis-bzh/OpenAether-infra/issues/88).
+unproposed through their scheduled windows. The cause was not the schedule: Mend's
+hosted job ran in `mode: silent`, so it found the updates and wrote no issue and no
+pull request (#88, closed). `renovate.json5` now sets `mode: "full"` behind a
+Dependency Dashboard approval box, and the dashboard appeared within a minute of the merge.
 
 Running it, on a workstation rather than only in CI, found five more defects
 that a green pipeline never showed: `command -v sudo` asking whether sudo
@@ -172,4 +174,5 @@ the authority — required a variable no module has ever declared.
 cloud: the failover (#57), a roll with zero failed probes (#42), a Proxmox apply (#48, #201: no hardware),
 and the CA mismatch of #66 (the version flip is refused by `prevent_destroy`; the interrupted-apply path
 was not broken). Standing items only a person can close are in the issues: #43 (Outscale support), #61,
-#73 (two old staging buckets, a delete the owner runs), #88.
+#73 (two old staging buckets, a delete the owner runs). Upstream, Feint's fix for #179 is on its `main`
+and waits for their next release.

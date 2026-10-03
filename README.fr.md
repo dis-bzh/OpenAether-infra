@@ -43,11 +43,14 @@ piliers sur chacun. Scaleway depuis un compte vide le 2026-08-19 : déploiement
 en 8 min 50 pour 72 ressources, `cluster-verify` 11/11, idempotence 3/3,
 Kubernetes v1.36.2 → v1.36.3 puis Talos v1.13.7 → v1.13.8, confirmés sur 6/6
 nœuds par l'API Talos de chaque nœud. OVH le même jour, Outscale le 2026-08-20.
-Ce 11/11 est antérieur au contrôle des domaines de panne (#38) : OVH (une zone)
-et Outscale sont désormais rouges, voir [`docs/status.md`](docs/status.md).
 Un upgrade n'est pas transparent : coupure d'apiserver la plus longue 5 s sur
-Scaleway, 7 s sur OVH, 8 s sur Outscale — toutes trois pires que les meilleurs
-chiffres jamais relevés par ce projet, pour une raison qui n'est pas établie.
+Scaleway, 7 s sur OVH, 8 s sur Outscale. Le terrain de la version suivante, relevé
+le 2026-10-03 et hors 0.1.0 : les trois clouds sont montés à Talos v1.14.2 et
+Kubernetes v1.37.1, `cluster-verify` 13/13 avec les control planes répartis sur
+trois zones (le contrôle des domaines de panne, #38, passe sur OVH et Outscale ;
+les deux zones de Scaleway font un 2+1, vert avec un avertissement), l'étape Talos
+coûtant 1 à 2 s d'API et l'étape Kubernetes 9 à 10 s. Chiffres et dates :
+[`docs/status.md`](docs/status.md).
 Proxmox n'a **jamais été appliqué sur matériel réel**. Points ouverts :
 [les issues ouvertes](https://github.com/dis-bzh/OpenAether-infra/issues).
 
@@ -85,8 +88,8 @@ version qui le fera : **[docs/capi-bootstrap.fr.md](docs/capi-bootstrap.fr.md)**
 
 | Couche | Technologie | Statut |
 |--------|-------------|--------|
-| **IaC** | OpenTofu 1.12.x | ✅ |
-| **OS** | Talos Linux v1.13.x (immuable) | ✅ |
+| **IaC** | OpenTofu 1.13.x | ✅ |
+| **OS** | Talos Linux v1.14.x (immuable) | ✅ |
 | **CNI** | Cilium 1.20.2 (WireGuard) | ✅ livré, manifeste inline — toute la plateforme de la 0.1.0 |
 | **GitOps** | Flux v2.9.3 | ⬜ code présent, `deploy_flux = false` — redeviendra un choix dans une version ultérieure |
 
@@ -103,9 +106,9 @@ Talos/cluster est provider-agnostique. Détail : `docs/deployment-test-matrix.fr
 
 | Provider | Statut | Région / cible | Notes |
 |----------|--------|----------------|-------|
-| **Scaleway** | ✅ cinq piliers mesurés le 2026-08-19 | fr-par (3 AZ) | Implémentation de référence ; déploiement, vérification, idempotence et les deux upgrades |
-| **OVH** | ✅ les mêmes cinq, le même jour | EU-WEST-PAR (OpenStack) | LB Octavia, floating IPs, routeur SNAT, réseau privé |
-| **Outscale / Numspot** | ✅ les mêmes cinq, mesurés le 2026-08-20 | eu-west-2 | Redéployé sur un **Net neuf** après un timeout interne du service LBU en amont, qui en avait laissé un coincé en `provisioning` (demande 399530, close). Deux cicatrices : un Net créé avant ce correctif refuse toujours la suppression et seul le provider peut le lever, et son object store ignore `If-None-Match`, donc le verrou d'état `use_lockfile` est délibérément désactivé ici |
+| **Scaleway** | ✅ cinq piliers mesurés le 2026-08-19, la montée en 1.14 le 2026-10-03 | fr-par | Implémentation de référence ; déploiement, vérification, idempotence et les deux upgrades. Mesuré sur 2 zones ; la forme à 3 zones ne l'est pas |
+| **OVH** | ✅ les mêmes cinq, le même jour, et la montée en 1.14 le 2026-10-03 sur trois zones | EU-WEST-PAR (OpenStack) | LB Octavia, floating IPs, routeur SNAT, réseau privé |
+| **Outscale / Numspot** | ✅ les mêmes cinq, mesurés le 2026-08-20, et la montée en 1.14 le 2026-10-03 sur trois subregions | eu-west-2 | Redéployé sur un **Net neuf** après un timeout interne du service LBU en amont, qui en avait laissé un coincé en `provisioning` (demande 399530, close). Deux cicatrices : un Net créé avant ce correctif refuse toujours la suppression et seul le provider peut le lever, et son object store ignore `If-None-Match`, donc le verrou d'état `use_lockfile` est délibérément désactivé ici |
 | **Proxmox (on-prem)** | 🧪 code-complet, testé unitairement — **jamais appliqué en réel** | PVE mono/multi-hôte | VIP Talos (pas de LB managé), NAT/DNAT nftables, prérequis manuels |
 | **Local (Docker)** | ✅ validé (`task local-up`) | WSL2 / Docker | 3 CP + 3 workers, quorum etcd, Cilium — preuve sans credentials de `modules/talos` |
 
@@ -270,10 +273,12 @@ task security            # contrôles de durcissement
 | [docs/admin-access.fr.md](docs/admin-access.fr.md) | Parcours jour-1 de la plateforme applicative : escrow, PKI offline, accès UIs, tests navigateur. **Inutile pour un cluster d'infrastructure seule** |
 | [docs/capi-bootstrap.fr.md](docs/capi-bootstrap.fr.md) | Amorcer un management par CAPI et le rendre autogéré |
 | [docs/deployment-test-matrix.fr.md](docs/deployment-test-matrix.fr.md) | Ce qui est validé, où, et comment |
+| [docs/capacity.fr.md](docs/capacity.fr.md) | Ce qu'un cluster consomme par provider, et le plancher de taille |
+| [docs/clea.fr.md](docs/clea.fr.md) | Ce que le rapport de dépendances épingle, et ce qu'un rapport vert peut affirmer |
 | [docs/emulated-cloud.fr.md](docs/emulated-cloud.fr.md) | Tester Scaleway/Outscale contre un émulateur local — et les limites de l'exercice |
 | [docs/upgrade.fr.md](docs/upgrade.fr.md) | Faire bouger Kubernetes et Talos sur un cluster qui doit rester debout |
 | [docs/release-checklist.md](docs/release-checklist.md) | Ce qu'il faut lancer avant de taguer, dans l'ordre qui échoue le moins cher |
-| [docs/status.md](docs/status.md) | **Source de vérité** : état courant, dette, améliorations (anglais seulement) |
+| [docs/status.md](docs/status.md) | **Source de vérité** : ce qui tourne, ce qui est mesuré sur un compte réel et depuis quand (anglais seulement ; le travail ouvert est dans les issues) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | **À lire avant une première pull request** : ce qui compte comme preuve, les quatre barreaux, les trailers de commit, les contributions assistées par IA |
 
 ## Sécurité
@@ -294,7 +299,8 @@ task security            # contrôles de durcissement
 | Version | Livrable | Statut |
 |---------|----------|--------|
 | **0.1.0** | Un cluster Talos + Cilium sur Scaleway, OVH ou Outscale, état et artefacts chiffrés, upgrades en place | ✅ publiée le 2026-08-20 (pré-version) |
-| suivante | Flux redevenu un choix utilisateur, puis la pioche modulaire dans `OpenAether-apps` | ⏳ prévu |
+| 0.2.0 | Talos v1.14 et Kubernetes v1.37 sur les trois clouds, ajout de nœuds à un cluster vivant, le contrôle des domaines de panne | ⏳ en cours, voir la section `[Unreleased]` de [`CHANGELOG.md`](CHANGELOG.md) |
+| ensuite | Flux redevenu un choix utilisateur, puis la pioche modulaire dans `OpenAether-apps` | ⏳ prévu |
 | plus tard | Surcouche CAPI : un cluster de management pilotant des enfants | ⏳ prévu |
 | ouvert | Proxmox sur matériel réel, le failover cross-provider complet, le Net Outscale que seul le provider peut supprimer | ⏳ |
 

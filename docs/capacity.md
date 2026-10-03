@@ -22,8 +22,8 @@ from a run.
 So the floor for a cluster that will carry the platform is **workers of at
 least 4 vCPU / 8 GB, enough of them to lose one**. Each cloud module takes one
 instance type for control planes and workers alike, so the floor applies to
-both. A bare cluster (Cilium only, the 0.1.0 scope) needs less; no run has
-measured how much less.
+both. A bare cluster (Cilium only, the 0.1.0 scope) needs less: a bare 3+3 on Outscale's
+`tinav5.c2r4p1` (2 vCPU / 4 GB) deployed and verified on 2026-10-03, which is the one point measured.
 
 ## What each provider creates
 
@@ -75,5 +75,5 @@ Also against the examples:
   ([`deployment-test-matrix.md`](deployment-test-matrix.md), `OSC-mgmt-ha`;
   issue #72). A path to the floor within that quota is untested, and Outscale
   changes `vm_type` with a stop/start — resize one node at a time.
-- The real-cloud runs in [`status.md`](status.md) do not record the instance
-  types they used, so they establish no floor.
+- The real-cloud runs in [`status.md`](status.md) record the instance type only for Outscale
+  (`tinav5.c2r4p1`), so Scaleway's and OVH's establish no floor.

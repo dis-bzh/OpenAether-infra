@@ -6,8 +6,8 @@ From a bare machine and an empty cloud account to a Talos cluster you can reach,
 upgrade and destroy. Scaleway is used throughout; OVH and Outscale differ only
 in their credentials and their tfvars file, except in step 4 where their load
 balancers are slower — and where Outscale carries one caveat of its own. Step 6
-can also end red on them: their examples put the control planes in one failure
-domain.
+ends red on any of them if the control planes share one failure domain; the
+examples and the Outscale module spread them.
 
 **Read the honesty note at the bottom before you spend anything.** It says what
 has been measured, on which cloud and when — and what has not.
@@ -199,7 +199,7 @@ Net from before the fix still refuses deletion on a dependency no read returns;
 only the provider can clear that, and a second request is open for it.
 
 Six buckets exist afterwards: state and artifacts, each with a `-backup` twin,
-plus the image and its staging area.
+plus the image and its import area.
 
 Re-running resumes. So does an edit that adds a worker: `task cluster-up` creates the
 machine, opens the tunnels, then configures only the new node
@@ -372,10 +372,11 @@ What is still open:
 - **The kubeconfig and the talosconfig have never been fetched back out of a
   real bucket.** The round trip is proven offline, `enc()` against `dec()` byte
   for byte (`scripts/dev/test-restore.sh`), and the tfstate's transport is proven
-  — but `task restore-artifacts` itself has only ever run against local files.
-- **Nobody has deployed with a non-empty `bucket_suffix`.** Six derivations agree
-  in unit tests; the day someone sets one is the first day the backend, the image
-  build and the verifier must agree on it for real.
+  — and `task restore-artifacts` was read back byte-identical against a real
+  bucket on one provider (`docs/status.md`), not on each of the three.
+- **A non-empty `bucket_suffix` has been deployed on Scaleway only** (from an empty
+  project, 2026-10-02, #68): the backend, the image build and the verifier agreed on
+  it there. OVH and Outscale have no record of one.
 - **A control plane used to revert after an upgrade on OVH.** The cause was ours
   — `siderolabs/qemu-guest-agent` in the schematic never starts on an image with
   no `hw_qemu_guest_agent`, so Talos never reached `Running` and never disarmed
