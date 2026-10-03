@@ -16,6 +16,7 @@ C="$W/infrastructure/opentofu/cluster"
 mkdir -p "$C/envs" "$W/scripts"/{lib,internal,bootstrap} "$W/bin"
 cp "$ROOT/scripts/lib/common.sh" "$W/scripts/lib/"
 cp "$SUT" "$W/scripts/bootstrap/grow-nodes.sh"
+cp "$ROOT/scripts/internal/refuse-node-deletes.sh" "$W/scripts/internal/"
 : >"$C/envs/management-scaleway.tfvars"
 
 cat >"$W/scripts/internal/bootstrap-in-state.sh" <<'STUB'
@@ -104,6 +105,18 @@ run STUB_STATE="$STATE3" STUB_STATE_AFTER="$STATE4" STUB_MACHINES="$(plan_of "$S
 { [ "$RC" -ne 0 ] && ! grep -q '^apply config' "$CALLS" && grep -q 'worker\[1\]' <<<"$OUT"; } \
   && ok "a configuration plan that also replaces another node's config is refused, named, and never applied" \
   || bad "an existing node's config was let through (rc ${RC}): ${OUT}"
+
+# The machines plan is applied whole, so what rides along with the creates is judged first.
+WDEL1="$(change 'module.scw[0].scaleway_instance_server.worker[2]' worker 2 '["delete"]')"
+WUPD0="$(change 'module.scw[0].scaleway_instance_server.worker[0]' worker 0 '["update"]')"
+run STUB_STATE="$STATE3" STUB_STATE_AFTER="$STATE4" STUB_MACHINES="$(plan_of "$SRV3" "$WDEL1")" STUB_CONFIG="$(plan_of "$CFG3")"
+{ [ "$RC" -ne 0 ] && ! grep -q '^apply' "$CALLS" && grep -q 'worker\[2\]' <<<"$OUT"; } \
+  && ok "a growth edited together with a lowered count: the worker delete is refused before anything is applied" \
+  || bad "a delete rode along with a growth (rc ${RC}): ${OUT}"
+run STUB_STATE="$STATE3" STUB_STATE_AFTER="$STATE4" STUB_MACHINES="$(plan_of "$SRV3" "$WUPD0")" STUB_CONFIG="$(plan_of "$CFG3")"
+{ [ "$RC" -ne 0 ] && ! grep -q '^apply' "$CALLS" && grep -q 'worker\[0\] (update)' <<<"$OUT"; } \
+  && ok "a growth with a pending resize of another node (the #222 class) is refused, named, nothing applied" \
+  || bad "a resize rode along with a growth (rc ${RC}): ${OUT}"
 
 run STUB_STATE="$STATE3" STUB_STATE_AFTER="$STATE4" STUB_MACHINES="$(plan_of "$SRV3")" STUB_CONFIG="$(plan_of "$CFG3")" STUB_APPLY_RC=1
 { [ "$RC" -ne 0 ] && ! grep -q '^tunnels' "$CALLS" && grep -q 'creating the machines failed' <<<"$OUT"; } \

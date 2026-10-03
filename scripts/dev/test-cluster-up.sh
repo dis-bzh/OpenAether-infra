@@ -46,7 +46,7 @@ EOF
 chmod +x "$W/stub"
 for s in internal/talos-version.sh internal/ensure-buckets.sh internal/converge-versions.sh \
          internal/tf-backend.sh internal/bootstrap-in-state.sh internal/explain-failure.sh bootstrap/talos-image.sh \
-         bootstrap/render-bootstrap-manifests.sh bootstrap/talos-tunnels.sh bootstrap/adopt-bootstrap.sh bootstrap/grow-nodes.sh \
+         bootstrap/render-bootstrap-manifests.sh bootstrap/talos-tunnels.sh bootstrap/adopt-bootstrap.sh bootstrap/grow-nodes.sh internal/refuse-node-deletes.sh \
          ops/backup-state.sh dev/infra-verify.sh; do
   ln -s "$W/stub" "$W/scripts/$s"
 done
@@ -92,6 +92,18 @@ grep -q 'cluster-up complete' "$O" \
   && bad "the success line was printed (or echoed) on a failing verifier" \
   || ok "the success line is nowhere in the output"
 # Without this, a journey that died on an earlier step would pass both above.
+# A plan that deletes a node is refused before the question and before any apply (the stub answers 0 here,
+# the real script's verdicts are test-refuse-node-deletes.sh's).
+r1="$(grep -n '^refuse-node-deletes.sh up-' "$W/calls.log" | head -1 | cut -d: -f1)"
+pl="$(grep -n '^tofu plan -out=up-' "$W/calls.log" | head -1 | cut -d: -f1)"
+ap="$(grep -n '^tofu apply up-' "$W/calls.log" | head -1 | cut -d: -f1)"
+{ [ -n "$r1" ] && [ -n "$pl" ] && [ -n "$ap" ] && [ "$pl" -lt "$r1" ] && [ "$r1" -lt "$ap" ]; } \
+  && ok "the node-delete guard runs after the plan is written and before anything is applied" \
+  || bad "the node-delete guard is misplaced: plan at ${pl:-none}, guard at ${r1:-none}, apply at ${ap:-none}"
+# Three places, none redundant: cluster-up before its question, infra-apply before its apply, phase 2 before its question.
+{ [ "$(calls '^refuse-node-deletes.sh up-')" = 2 ] && [ "$(calls '^refuse-node-deletes.sh phase2-')" = 1 ]; } \
+  && ok "the guard is called by cluster-up and infra-apply on the phase-1 plan, and by phase 2 on its own" \
+  || bad "the guard was called: $(grep '^refuse-node-deletes' "$W/calls.log" | tr '\n' '|')"
 [ "$(calls '^infra-verify.sh ')" = 1 ] && grep -qx 'infra-verify.sh scaleway management' "$W/calls.log" \
   && ok "the verifier ran once, for scaleway/management — it is what failed the run" \
   || bad "the verifier was not what failed: $(tail_of)"
