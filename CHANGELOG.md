@@ -186,6 +186,11 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **`talosctl upgrade-k8s` and the read-only talosconfig were each tried on a real cloud, and the answers are written down (#70, #80).**
+  `upgrade-k8s` measured no gentler than the config-driven Kubernetes step
+  (`docs/upgrade.md`); the `os:reader` talosconfig minted through the tunnels runs
+  `cluster-verify` green (`docs/admin-access.md`), so mint one and reuse it.
+
 - **Two decisions are written down instead of left as questions (#82, #56).** The
   bastion stays and is hardened in place until there are two operators or a restore
   that has been run (`docs/admin-access.md`). Outscale has no state lock by design, so

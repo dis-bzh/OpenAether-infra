@@ -79,8 +79,12 @@ task infra-apply ROLE=management PROVIDER=<p> PLAN=tfplan
 ```
 
 Talos reconciles the static pods and the kubelets; wait for every node to report
-the new version before moving on. Note that this bypasses `talosctl upgrade-k8s`,
-which sequences those components behind health checks — see the open issues.
+the new version before moving on. This bypasses `talosctl upgrade-k8s` on purpose.
+Measured on a real OVH cluster (2026-10-03, 1.36.3 to 1.37.1), `upgrade-k8s` left the
+apiserver unreachable for up to 10 s and the probe service for 6 s; this step measured
+2 s on Scaleway and 9 s on Outscale on the same move. It is no gentler, it needs a
+`talosctl` that matches the fleet (a 1.13 client refuses 1.36 to 1.37), and the pin
+still has to be bumped and applied afterwards.
 
 ## Then Talos, in place
 
