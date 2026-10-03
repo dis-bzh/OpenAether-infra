@@ -647,6 +647,16 @@ grep -q 'would: tofu plan -out=' "$SUT_R" && ! grep -qE 'would: tofu apply .*-ta
   && ok "replace_node does not reuse \$t (its cp|worker role) as a loop variable" \
   || bad "replace_node loops over \$t again — the etcd gate after it is skipped for CPs"
 
+# A replaced node is uncordoned BEFORE the Longhorn gate. Longhorn does not schedule a replica
+# onto a cordoned node, so with as many replicas as workers the gate waited for a rebuild its
+# own cordon prevented (Scaleway, 2026-10-03: degraded 600 s, healthy 63 s after an uncordon).
+extract 'replace_node' | awk '
+  /"\$\{KCTL\[@\]\}" uncordon "\$node_name" \|\|/ { u = NR }
+  /wait_longhorn_healthy \|\| die/                   { l = NR }
+  END { exit !(u && l && u < l) }' \
+  && ok "replace_node uncordons the node before it waits for Longhorn to rebuild" \
+  || bad "replace_node waits for Longhorn before the uncordon: a cordoned node cannot take its replica back"
+
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 # A floor, not just a verdict: `FAIL -eq 0` is also true when the harness died
 # before asserting anything, which is the shape this repository keeps meeting.

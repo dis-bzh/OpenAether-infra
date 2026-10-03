@@ -192,6 +192,12 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **The roll no longer deadlocks on Longhorn when it has as many replicas as workers.**
+  `rolling-replace` waited for Longhorn to be healthy and only then uncordoned the
+  node it had just rebuilt, but Longhorn does not put a replica on a cordoned node:
+  with 3 replicas on 3 workers the volume stayed degraded for the whole 600 s gate
+  and the roll stopped (Scaleway: healthy 63 s after a manual uncordon). The node is
+  uncordoned first; the gate still holds the roll before the next node.
 - **A dry run no longer leaves a rung receipt.** `task cluster-upgrade DRY_RUN=1`
   (and `cluster-roll -- --dry-run`) exits 0 having touched nothing, yet recorded
   `real-cloud … rc=0`, which satisfies the "Rung receipt" check for that head
