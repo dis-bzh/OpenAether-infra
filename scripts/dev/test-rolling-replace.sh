@@ -962,6 +962,35 @@ else
   echo "  - no kubectl on PATH: the real-kubectl template checks were skipped"
 fi
 
+# --- node_targets: a worker's attach/link resources, with the REAL state keys --
+# The data-volume resources are for_each-keyed "w<worker>-d<disk>"; a pattern
+# written for numeric keys never matched them, so an OVH or Outscale worker came
+# back from a replacement without its disk until the next full apply.
+nt_state() { # <module> <attach-type> <volume-type> <server-type>
+  printf '%s\n' \
+    "module.$1[0].$4.worker[0]" "module.$1[0].$4.worker[1]" \
+    "module.$1[0].$2.worker_data[\"w0-d0\"]" "module.$1[0].$2.worker_data[\"w0-d1\"]" \
+    "module.$1[0].$2.worker_data[\"w1-d0\"]" "module.$1[0].$2.worker_data[\"w10-d0\"]" \
+    "module.$1[0].$3.worker_data[\"w0-d0\"]" "module.$1[0].$4.control_plane[0]"
+}
+nt() { # <module> <state> — node_targets worker 0 against a fake `tofu state list`
+  (
+    MOD="$1"; STATE="$2"
+    tofu() { printf '%s\n' "$STATE"; }
+    eval "$(extract node_targets)"
+    node_targets worker 0
+  )
+}
+for c in 'ovh|openstack_compute_volume_attach_v2|openstack_blockstorage_volume_v3|openstack_compute_instance_v2' \
+         'outscale|outscale_volume_link|outscale_volume|outscale_vm'; do
+  IFS='|' read -r m att vol srv <<<"$c"
+  got="$(nt "$m" "$(nt_state "$m" "$att" "$vol" "$srv")")"
+  want="$(printf '%s\n' "module.${m}[0].${srv}.worker[0]" "module.${m}[0].${att}.worker_data[\"w0-d0\"]" "module.${m}[0].${att}.worker_data[\"w0-d1\"]")"
+  [ "$got" = "$want" ] \
+    && ok "$m: worker 0's server and BOTH its attach/link resources are targeted, not worker 1's, 10's or the volumes" \
+    || bad "$m: node_targets worker 0 returned '${got//$'\n'/ }'"
+done
+
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 # A floor, not just a verdict: `FAIL -eq 0` is also true when the harness died
 # before asserting anything, which is the shape this repository keeps meeting.

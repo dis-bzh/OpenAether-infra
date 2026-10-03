@@ -282,6 +282,16 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **The roll finds a worker's attach/link resources, and `task --list` stops advertising it for a resize.**
+  `node_targets` matched `worker_data[<n>]`, but the OVH attach and Outscale link resources are keyed
+  `"w<worker>-d<disk>"`, so a replaced worker came back without its data disk until the next full apply
+  (inferred from the graph, not run). The pattern now matches the real keys, tested against OVH and Outscale
+  state with worker 10 beside worker 1. The `cluster-roll` description and the script header said to use it for
+  a node size change; `docs/upgrade.md` measured the opposite and they now point there.
+- **Outscale's red-HA hint and example tfvars stopped saying only `availability_zones[0]` is used (#58).**
+  The layout landed; a single-zone list is what is left red, and the hint and the three examples say so.
+  `test-cluster-checks.sh` pinned the old wording and follows.
+
 - **Renovate is switched from silent to full mode, behind an approval canary (#88).** Mend's hosted job
   ran with `mode: silent`, so it found 17 updates and wrote no issue and no pull request. `renovate.json5`
   now sets `mode: "full"` (a repo-level value is merged over Mend's) and `dependencyDashboardApproval: true`:

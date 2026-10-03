@@ -263,8 +263,9 @@ that is usually missing S3 credentials.
 
 The control-plane spread is asked of the state (`control_plane_zones`): all
 control planes in one zone or host is `✗`, and a 2+1 split over two zones is `~`.
-On OVH, with the example's single `nova` zone, and on Outscale (every node in one
-subregion, #58) it is `✗`: the honesty note below has the rest.
+On OVH, with the example's single `nova` zone, it is `✗`: the honesty note below has
+the rest. Outscale spreads the nodes over `availability_zones` (#58) and is `✗` only
+when that list has one entry.
 
 ## 7. Upgrade
 
