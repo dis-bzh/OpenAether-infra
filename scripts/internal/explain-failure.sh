@@ -10,6 +10,11 @@
 #   ip in state; every plan then died on "http error 404 Not Found", naming
 #   neither the ghost nor `tofu state rm`. Forty minutes, three paid runs.
 #
+#   LOCKED — a run killed hard (SIGKILL, a crashed runner, a closed laptop) never
+#   releases its state lock, and every later plan and apply stops on it. The
+#   transcript names the holder; nothing said that a dead holder is the usual
+#   reason, nor what releases the lock. Seen 2026-10-03 on a live cluster.
+#
 # State cannot tell the second shape by itself — it records what OpenTofu
 # BELIEVES. Only the provider's own words say otherwise, and they survive in the
 # transcript the Taskfile tees ($LOG): no transcript, no such diagnosis, never a
@@ -26,6 +31,33 @@ set -uo pipefail
 cd "${1:-.}" 2>/dev/null || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 LOG=.tofu-run.log
+
+# The lock needs the transcript only, so it comes before anything that reads state.
+# The LAST lock error in the file: the transcript is appended to across runs.
+LOCK=""
+[ -f "$LOG" ] && LOCK="$(sed -E 's/\x1b\[[0-9;]*m//g; s/^[│[:space:]]+//' "$LOG" 2>/dev/null | awk '
+  /Error acquiring the state lock/ { blk = ""; f = 1; next }
+  f && /^(ID|Operation|Who|Created):/ { blk = blk $0 "\n" }
+  f && /OpenTofu acquires a state lock/ { last = blk; f = 0 }
+  END { printf "%s", last }')"
+if [ -n "$LOCK" ]; then
+  LOCKID="$(awk '/^ID:/ { print $2; exit }' <<<"$LOCK")"
+  printf '\n\033[33m─── the state is locked ───\033[0m\n' >&2
+  printf 'A run holds the state lock:\n\n' >&2
+  sed 's/^/    /' <<<"$LOCK" >&2
+  cat >&2 <<TXT
+
+  A run killed hard (SIGKILL, a crashed runner, a closed laptop) never releases
+  its lock, and every later plan and apply stops here. First make sure that run
+  is really gone: it is live while its process (on the host named in Who) or its
+  CI job still runs, and releasing a lock a live apply holds lets two writers
+  corrupt the state. If it is gone, release exactly that lock, from $(pwd) with
+  the S3 credentials of .env.sh exported:
+
+    TF_DATA_DIR=${TF_DATA_DIR:-.terraform} tofu force-unlock -force ${LOCKID:-<ID>}
+
+TXT
+fi
 
 STATE="$(timeout 90 tofu state pull 2>/dev/null)" || exit 0
 [ -n "$STATE" ] || exit 0
