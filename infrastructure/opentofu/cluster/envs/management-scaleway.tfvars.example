@@ -29,7 +29,7 @@ node_distribution = {
     workers        = 2
     region         = "fr-par"
     zone           = "fr-par-1"
-    instance_type  = "POP2-2C-8G" # block-storage, dedicated CPU, in all 3 fr-par zones (DEV1-M is l_ssd + not in fr-par-3; DEV1-L isn't in fr-par-3 either — verify any instance_type change against the API before assuming 3-zone coverage)
+    instance_type  = "POP2-4C-16G" # 4 vCPU / 16 GB: meets the sizing floor (docs/capacity.md). Block-storage, dedicated CPU, in all 3 fr-par zones (DEV1-M is l_ssd + not in fr-par-3; DEV1-L isn't in fr-par-3 either — verify any instance_type change against the API before assuming 3-zone coverage)
     # image_name left unset — auto-derives to "talos-scaleway-amd64-${talos_version}".
     zones = ["fr-par-1", "fr-par-2", "fr-par-3"]
   }

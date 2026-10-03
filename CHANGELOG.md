@@ -186,6 +186,12 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **The shipped Scaleway examples meet the sizing floor; the Outscale ones say why they do not (#72).**
+  Scaleway's examples move to `POP2-4C-16G` (4 vCPU / 16 GB; `DEV1-M` was a local-SSD type
+  absent from `fr-par-3`) and stop pinning `talos-scaleway-amd64-v1.13.3`, an image the lane no
+  longer holds. Outscale stays at `tinav5.c2r4p1`: the floor on five nodes plus the bastion is 22
+  vCPU against a 20 vCPU default quota, so a bare cluster only (`docs/capacity.md`).
+
 - **Two decisions are written down instead of left as questions (#82, #56).** The
   bastion stays and is hardened in place until there are two operators or a restore
   that has been run (`docs/admin-access.md`). Outscale has no state lock by design, so

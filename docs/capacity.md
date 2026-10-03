@@ -52,17 +52,21 @@ IPs, LBs or security groups.
 
 | Example | Nodes × type (vCPU / RAM) | Inst. | vCPU | RAM | Meets the floor? | `task preflight-quotas PROVIDER=… --` |
 |---|---|---|---|---|---|---|
-| `management-`, `failover-scaleway` | 3+2 × `POP2-2C-8G` (2 / 8 GB) | 6 | 12 | 42 GB | **No** — 2 vCPU | no Scaleway backend |
-| `workload-scaleway` | 3+3 × `DEV1-M` (3 / 4 GB) | 7 | 20 | 26 GB | **No** — 4 GB | no Scaleway backend |
+| `management-`, `failover-scaleway` | 3+2 × `POP2-4C-16G` (4 / 16 GB) | 6 | 22 | 82 GB | Type yes; headroom on 2 workers unmeasured | no Scaleway backend |
+| `workload-scaleway` | 3+3 × `POP2-4C-16G` | 7 | 26 | 98 GB | Yes | no Scaleway backend |
 | `management-`, `failover-ovh` | 3+2 × `c3-8` (4 / 8 GB) | 6 | 22 | 48 GB | Type yes; headroom on 2 workers unmeasured | `--add-vms 6 --add-cores 22 --add-ram-gb 48` |
 | `workload-ovh` | 3+3 × `c3-8` | 7 | 26 | 56 GB | Yes | `--add-vms 7 --add-cores 26 --add-ram-gb 56` |
-| `management-`, `failover-outscale` | 3+2 × `tinav5.c2r4p1` (2 / 4 GB) | 6 | 12 | 22 GB | **No** | `--add-vms 6 --add-cores 12 --add-ram-gb 22` |
-| `workload-outscale` | 3+3 × `tinav5.c2r4p1` | 7 | 14 | 26 GB | **No** | `--add-vms 7 --add-cores 14 --add-ram-gb 26` |
+| `management-`, `failover-outscale` | 3+2 × `tinav5.c2r4p1` (2 / 4 GB) | 6 | 12 | 22 GB | **No, on purpose** — see below | `--add-vms 6 --add-cores 12 --add-ram-gb 22` |
+| `workload-outscale` | 3+3 × `tinav5.c2r4p1` | 7 | 14 | 26 GB | **No, on purpose** | `--add-vms 7 --add-cores 14 --add-ram-gb 26` |
 | `*-proxmox` | 1+1 × 4 vCPU / 8 GiB, 20 GiB disk | 2 | 8 | 16 GiB | Type yes; one worker cannot be drained without downtime | host capacity, not a quota |
 
 Also against the examples:
 
-- `workload-scaleway`'s `DEV1-M` is a local-SSD type, while the module always
+- **Why the Outscale examples stay below the floor.** The default account quota is 20 vCPU / 40 GB.
+  The module takes one type for every node, so the floor (4 vCPU / 8 GB) on 5 nodes plus the
+  bastion is 22 vCPU: it does not fit. A bare cluster (Talos + Cilium) deployed and verified on
+  `tinav5.c2r4p1` at 3+3 on 2026-10-03; carrying the platform there needs a higher quota first.
+- Scaleway's old `workload` example used `DEV1-M`, a local-SSD type, while the module always
   asks for an `sbs_volume` root, and its `zones` include `fr-par-3`, where the
   management example's comment says `DEV1-M` is not offered. No run is recorded.
 - **Measured** on Outscale: 3+3 of `tinav5.c2r7p2` does not fit the test
