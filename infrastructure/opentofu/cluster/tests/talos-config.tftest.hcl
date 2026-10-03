@@ -255,7 +255,7 @@ run "installer_image_uses_talos_version" {
 
   variables {
     talos_bootstrap = true
-    talos_version   = "v1.13.3"
+    talos_version   = "v1.14.1"
   }
 
   # This used to assert `var.talos_version == "v1.13.3"` — that the variable the
@@ -274,7 +274,7 @@ run "installer_image_uses_talos_version" {
   # different image. Last moved 2026-08-19, dropping qemu-guest-agent — see
   # talos-image/schematic.yaml for why that extension had to go.
   assert {
-    condition     = module.talos.installer_image == "factory.talos.dev/installer/613e1592b2da41ae5e265e8789429f22e121aab91cb4deb6bc3c0b6262961245:v1.13.3"
+    condition     = module.talos.installer_image == "factory.talos.dev/installer/613e1592b2da41ae5e265e8789429f22e121aab91cb4deb6bc3c0b6262961245:v1.14.1"
     error_message = "the machine config must install from the Image Factory schematic, pinned to var.talos_version"
   }
 }

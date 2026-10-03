@@ -186,6 +186,14 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **Talos v1.14.2 and Kubernetes v1.37.1 are the default pin (#181).** Both roots
+  (`cluster` and `opentofu-local`) move together. On a real Scaleway cluster, with a
+  Longhorn volume attached and a Service probe running, `cluster-upgrade` took
+  v1.13.9 / v1.36.3 to this pair in place: six nodes, no failed Service probe, the
+  data written before the climb read back identically, `cluster-verify` 13/13. The
+  Longhorn question the bump waited on is answered on the pair the issue names
+  (v1.14.1 / v1.37.0). OVH and Outscale have not seen 1.14: their rows still read
+  Talos 1.13.8.
 - **`getplumber/plumber` v0.4.51 → v0.5.12** in `security.yml` (SHA and comment
   together) and `install-plumber.sh`, by hand: `clea bump` refuses an
   `action-sha` pin, so Cléa's daily run had been red on it since at least
