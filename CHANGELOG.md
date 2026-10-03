@@ -179,6 +179,13 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **`go-task/task` 3.53.1 → 3.54.0** (`install-task.sh`) and the
+  **`kubectl-cnpg` plugin 1.30.0 → 1.30.1** (`install-kubectl-cnpg.sh`), the two
+  of Cléa's #91 rows that sit outside `.github/`. Both installed from the pinned
+  release with their checksum verified; `task lint`, `test-scripts` (33
+  harnesses, 1262 passed), `test`, `render-check` and both `validate` roots pass
+  with `task` 3.54.0 first on the PATH. The release notes were not read.
+
 - **`getplumber/plumber` v0.4.51 → v0.5.12** in `security.yml` (SHA and comment
   together) and `install-plumber.sh`, by hand: `clea bump` refuses an
   `action-sha` pin, so Cléa's daily run had been red on it since at least
