@@ -822,9 +822,9 @@ zones_verify '["z1","z1","z2"]'
   && ok "a 2+1 split across two zones warns, and scores what the spread run scored" \
   || bad "a 2+1 split failed the run or said nothing (failed=$(tally 2), spread run had ${BASE_FAIL}): $RUN_OUT"
 
-# The red line says what clears it, per provider: Outscale has no knob yet (#58).
+# The red line says what clears it, per provider.
 for c in 'scaleway|node_distribution.scaleway.zones' 'ovh|node_distribution.ovh.availability_zones' \
-         'proxmox|node_distribution.proxmox.node_names' 'outscale|until #58'; do
+         'proxmox|node_distribution.proxmox.node_names' 'outscale|2+ subregions in availability_zones'; do
   PROVIDER="${c%%|*}" zones_verify '["z1","z1","z1"]'
   grep 'share one failure domain' <<<"$RUN_OUT" | grep -qF "${c#*|}" \
     && ok "a shared failure domain on ${c%%|*} names what clears it" \

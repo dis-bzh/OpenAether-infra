@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # OpenAether — rolling node replacement (zero-downtime ForceNew apply)
 #
-# `instance_type` and the Talos image change what a node must boot, and a plain
-# `tofu apply` acts on every node AT ONCE → the 3 control planes go together →
-# etcd loses quorum. This script does one node at a time: cordon+drain →
-# targeted apply → wait for etcd/Longhorn → uncordon.
+# The Talos image changes what a node must boot, and a plain `tofu apply` acts on
+# every node AT ONCE → the 3 control planes go together → etcd loses quorum. This
+# script does one node at a time: cordon+drain → targeted apply → wait for
+# etcd/Longhorn → uncordon. Not for a node size change: an in-place update of
+# every node that the roll refuses to mix in (foreign_changes); see docs/upgrade.md.
 #
 # Each node takes TWO applies: the instance first, then its Talos config once the
 # new VM exists. The graph does not order those — modules/talos reads each node's
@@ -1167,12 +1168,12 @@ wait_longhorn_healthy() {
 
 # All state resources of THIS node under module.<mod>[0]: the VM/instance and its
 # NIC/port (named exactly <tf_t>[i]) plus, for workers, the volume attach/link
-# resources (named worker_data[i]) — but NOT the data volumes themselves, which
+# resources (named worker_data["w<i>-d<k>"]) — but NOT the data volumes themselves, which
 # must survive the replacement.
 node_targets() { # <tf_t> <index>
   tofu state list 2>/dev/null | grep -F "module.${MOD}[0]." | awk -v t="$1" -v i="$2" '
     $0 ~ ("\\." t "\\[" i "\\]$") { print; next }
-    t == "worker" && $0 ~ ("\\.worker_data\\[" i "\\]$") \
+    t == "worker" && $0 ~ ("\\.worker_data\\[\"w" i "-d[0-9]+\"\\]$") \
       && $0 !~ /(scaleway_block_volume|openstack_blockstorage_volume_v3|outscale_volume)\./ { print }
   '
 }

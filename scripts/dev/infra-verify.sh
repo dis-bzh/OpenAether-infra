@@ -133,7 +133,7 @@ if [ "$PROVIDER" != local ]; then
         scaleway | scw) clears="spread node_distribution.scaleway.zones" ;;
         ovh)            clears="spread node_distribution.ovh.availability_zones" ;;
         proxmox)        clears="spread node_distribution.proxmox.node_names" ;;
-        outscale)       clears="the module only uses availability_zones[0] until #58" ;;
+        outscale)       clears="list 2+ subregions in availability_zones (a node's zone is fixed when it is created)" ;;
         *)              clears="spread the control planes" ;;
       esac
       bad "${worst} of ${got_cp} control planes share one failure domain (${names}) — losing it loses the control plane: HA against a node, not against a zone; ${clears}"

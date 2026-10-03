@@ -269,9 +269,9 @@ que personne n'a pu poser, et c'est en général des identifiants S3 manquants.
 
 La répartition des control planes est demandée à l'état (`control_plane_zones`) :
 tous dans une même zone ou sur un même hôte, c'est `✗` ; un 2+1 sur deux zones,
-c'est `~`. Sur OVH, avec la zone `nova` unique de l'exemple, et sur Outscale (tous
-les nœuds dans une seule subregion, #58), c'est `✗` : la note d'honnêteté
-ci-dessous donne la suite.
+c'est `~`. Sur OVH, avec la zone `nova` unique de l'exemple, c'est `✗` : la note
+d'honnêteté ci-dessous donne la suite. Outscale répartit les nœuds sur
+`availability_zones` (#58) et n'est `✗` que si cette liste n'a qu'une entrée.
 
 ## 7. Mettre à jour
 
