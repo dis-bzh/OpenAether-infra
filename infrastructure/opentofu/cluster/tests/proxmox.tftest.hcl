@@ -106,6 +106,11 @@ run "verify_provider_contract" {
   }
 
   assert {
+    condition     = output.control_plane_zones == ["pve1"]
+    error_message = "control_plane_zones should be the Proxmox host running the control plane."
+  }
+
+  assert {
     condition     = length(output.worker_private_ips) == 1 && output.worker_private_ips[0] == "10.0.0.20"
     error_message = "Worker IP should be cidrhost(network_cidr, worker_ip_offset)."
   }
@@ -272,6 +277,11 @@ run "verify_proxmox_ha_round_robin" {
   assert {
     condition     = length(var.node_distribution.proxmox.node_names) == 3
     error_message = "HA requires 3 distinct node_names (1 CP per physical host)."
+  }
+
+  assert {
+    condition     = output.control_plane_zones == ["pve1", "pve2", "pve3"]
+    error_message = "control_plane_zones should list one distinct host per control plane."
   }
 }
 

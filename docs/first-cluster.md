@@ -5,7 +5,9 @@
 From a bare machine and an empty cloud account to a Talos cluster you can reach,
 upgrade and destroy. Scaleway is used throughout; OVH and Outscale differ only
 in their credentials and their tfvars file, except in step 4 where their load
-balancers are slower — and where Outscale carries one caveat of its own.
+balancers are slower — and where Outscale carries one caveat of its own. Step 6
+can also end red on them: their examples put the control planes in one failure
+domain.
 
 **Read the honesty note at the bottom before you spend anything.** It says what
 has been measured, on which cloud and when — and what has not.
@@ -241,9 +243,10 @@ task cluster-verify PROVIDER=scaleway
 
 `task cluster-up` already ended with this; run it on its own at any time after.
 It asks the cluster, not the tool: the apiserver answers, every node is Ready, the
-number of control planes matches what you asked for, Cilium runs on each of
-them, CoreDNS serves, there is no `flux-system`, no application load balancer, a
-state replica exists in the backup store — and the first 4 KB of that object is
+number of control planes matches what you asked for and they are not all in one
+zone or host, Cilium runs on each of them, CoreDNS serves,
+there is no `flux-system`, no application load balancer, a state replica
+exists in the backup store — and the first 4 KB of that object is
 opened and must be an OpenTofu `encrypted_data` envelope rather than readable
 state. Outside `dev`, the replica must also be off the primary's cloud (for an
 S3 it cannot name, another endpoint).
@@ -254,6 +257,11 @@ the run red: a control plane that is not HA, or a `dev` replica on the
 primary's cloud. And `?` means the verifier could not perform the check at
 all, which IS fatal — nothing is certified on a question nobody could ask, and
 that is usually missing S3 credentials.
+
+The control-plane spread is asked of the state (`control_plane_zones`): all
+control planes in one zone or host is `✗`, and a 2+1 split over two zones is `~`.
+On OVH, with the example's single `nova` zone, and on Outscale (every node in one
+subregion, #58) it is `✗`: the honesty note below has the rest.
 
 ## 7. Upgrade
 
@@ -329,7 +337,9 @@ proven, and the reason this document exists.
 What **is** measured, with dates (`docs/status.md`):
 
 - `task cluster-verify` scores **11/11 on Scaleway, on OVH and on Outscale** —
-  the first two on 2026-08-19, Outscale on 2026-08-20.
+  the first two on 2026-08-19, Outscale on 2026-08-20. That predates the
+  failure-domain check (#38): OVH (one zone) and Outscale now read red, and
+  Scaleway (2 zones) 11/11 with a warning — see `docs/status.md`.
 - **Idempotency is three assertions**, and all three held 3/3 on all three
   clouds: an empty plan, the *same* nodes (name and `creationTimestamp`), and a
   kubeconfig that still reaches the apiserver. Two of the three can pass while

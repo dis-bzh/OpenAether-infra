@@ -11,6 +11,11 @@ output "worker_private_ips" {
   value       = openstack_compute_instance_v2.worker[*].access_ip_v4
 }
 
+output "control_plane_zones" {
+  description = "Availability zone of each control plane, in control_plane_private_ips order"
+  value       = openstack_compute_instance_v2.control_plane[*].availability_zone
+}
+
 # Load Balancer IPs (floating IPs)
 output "k8s_lb_ip" {
   description = "Public IP of the Kubernetes API LB (6443), or the private Talos VIP when k8s_lb_mode = \"vip\""

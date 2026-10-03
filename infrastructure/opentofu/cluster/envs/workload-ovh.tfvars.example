@@ -34,7 +34,8 @@ node_distribution = {
     # name (published by talos-image). Override only if you use a different name/UUID:
     # image_id           = "TALOS_IMAGE_ID"
     network_name       = "Ext-Net"
-    # One AZ per control plane; must exist in `region` (EU-WEST-PAR has no "nova": Cinder rejects it).
+    # One AZ per control plane: one zone puts them all in one failure domain and `cluster-verify` ends
+    # red (#38). Zones must exist in `region` (EU-WEST-PAR has no "nova": Cinder rejects it).
     availability_zones = ["eu-west-par-a", "eu-west-par-b", "eu-west-par-c"]
     bastion_image_id   = "Ubuntu 22.04"
   }
