@@ -333,10 +333,18 @@ cnpg_flux_owners() {
       [[ -n "$ns" && -n "$name" ]] || continue
       grep -qxF "$ns $name" <<<"$seen" && continue
       seen+="${ns} ${name}"$'\n'
-      # A Kustomization with no owner label is the root — stop there.
-      parent="$("${KCTL[@]}" -n "$ns" get kustomizations.kustomize.toolkit.fluxcd.io "$name" \
-        -o jsonpath='{.metadata.labels.kustomize\.toolkit\.fluxcd\.io/namespace}{" "}{.metadata.labels.kustomize\.toolkit\.fluxcd\.io/name}' 2>/dev/null)" || continue
-      read -r pns pname <<<"$parent"
+      # A Kustomization with no owner label is the root — stop there. Only one
+      # that is gone ends the chain too: any other failed read would cut the walk
+      # short and hide an ancestor, so it dies like the listing above. The value
+      # is the last line, in case kubectl printed a warning before it.
+      if ! parent="$("${KCTL[@]}" -n "$ns" get kustomizations.kustomize.toolkit.fluxcd.io "$name" \
+        -o jsonpath='{.metadata.labels.kustomize\.toolkit\.fluxcd\.io/namespace}{" "}{.metadata.labels.kustomize\.toolkit\.fluxcd\.io/name}' 2>&1)"; then
+        case "$parent" in
+          *NotFound* | *"not found"*) continue ;;
+          *) die "cannot read the owner of Kustomization ${ns}/${name}: ${parent%%$'\n'*}" ;;
+        esac
+      fi
+      read -r pns pname <<<"${parent##*$'\n'}"
       [[ -n "$pns" && -n "$pname" ]] || continue
       [[ "$pns $pname" == "$ns $name" ]] && continue   # self-owned root
       next+="${pns} ${pname}"$'\n'
@@ -417,9 +425,7 @@ cnpg_maintenance() { # <true|false>
     warn "could not restore enablePDB on ${ns}/${name}: ${err%%$'\n'*}"
   done <<<"$list"
   # Resume AFTER restoring, so Flux finds the objects already back where git
-  # wants them. Leaving a Kustomization suspended is the failure mode this
-  # function must not have, and since the full-platform verifier went with the
-  # staging lane, nothing checks it any more — see the GitHub issues.
+  # wants them. assert_restored, from the EXIT trap, checks the resume took.
   [[ "$on" == "true" ]] || cnpg_flux_suspend false
 
   # ⚠️ The patch returning 0 is not the setting taking effect. On OVH
@@ -430,9 +436,7 @@ cnpg_maintenance() { # <true|false>
   # patch applied by hand afterwards removed them in under thirty seconds, so the
   # mechanism is right and only the confirmation was missing.
   #
-  # Confirm on the way IN only: on the way out the budgets coming back is Flux's
-  # and the operator's business. Nothing checks that end state now that the
-  # full-platform verifier is gone — see the GitHub issues.
+  # Confirm on the way IN only; the way out is assert_restored's.
   [[ "$on" == "true" ]] || return 0
   local waited=0 left rc
   while [[ $waited -lt 120 ]]; do
@@ -447,8 +451,7 @@ cnpg_maintenance() { # <true|false>
     # exits the shell AT the assignment, so the rc branch below was dead code —
     # the very defect this block was added to fix, one layer down. Only a
     # compound command's failure is exempt from `set -e`.
-    if ! left="$("${KCTL[@]}" get pdb -A -l cnpg.io/cluster \
-      -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name} {end}' 2>/dev/null)"; then
+    if ! left="$(cnpg_budgets)"; then
       rc=1
     else
       rc=0
@@ -464,6 +467,87 @@ cnpg_maintenance() { # <true|false>
   The patch reported success and the operator did not act on it. Draining now
   would retry evictions for ${DRAIN_TIMEOUT} and fail — see docs/upgrade.md
   § 'What actually blocks a drain'. Check the operator in cnpg-system."
+}
+
+# The one budget query: the way in (gone?) and the way out (back?) read the same.
+cnpg_budgets() {
+  "${KCTL[@]}" get pdb -A -l cnpg.io/cluster \
+    -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name} {end}' 2>/dev/null
+}
+
+# What the roll left undone, one problem per line. 2 = no CNPG, nothing to check.
+# Scoped to what this script suspends and removes: the owner chain and each
+# cluster's -primary budget. A read that fails is a problem, never a pass.
+cnpg_unrestored() {
+  local owners clusters budgets ns name s rc=0
+  cnpg_installed || return 2
+  owners="$(cnpg_flux_owners)" && clusters="$(cnpg_clusters)" && budgets="$(cnpg_budgets)" ||
+    { echo "the restore could not be read back from the apiserver"; return 1; }
+  while read -r ns name; do
+    [[ -n "$ns" && -n "$name" ]] || continue
+    if ! s="$("${KCTL[@]}" -n "$ns" get kustomizations.kustomize.toolkit.fluxcd.io "$name" \
+      -o jsonpath='{.spec.suspend}' 2>/dev/null)"; then
+      echo "Kustomization ${ns}/${name} could not be read"; rc=1
+    elif [[ "$s" == "true" ]]; then
+      echo "Kustomization ${ns}/${name} is still suspended"; rc=1
+    fi
+  done <<<"$owners"
+  while read -r ns name; do
+    [[ -n "$ns" && -n "$name" ]] || continue
+    [[ " $budgets" == *" ${ns}/${name}-primary "* ]] || { echo "budget ${ns}/${name}-primary is missing"; rc=1; }
+  done <<<"$clusters"
+  return "$rc"
+}
+
+# Polls on the clock, not a count of sleeps: the operator recreates the budgets
+# asynchronously, and a read that hangs must not stretch the wait.
+assert_restored() {
+  local deadline=$((SECONDS + ${RESTORE_TIMEOUT:-120})) out rc line
+  while :; do
+    # `$(...)`: a die ends only that subshell and reads as a problem. 2>&1 keeps
+    # its message with the answer, so a reason repeated by every poll prints once.
+    if out="$(cnpg_unrestored 2>&1)"; then rc=0; else rc=$?; fi
+    [[ $rc -eq 2 ]] && return 0
+    [[ $rc -eq 0 ]] && { ok "CNPG budgets and Flux Kustomizations are restored"; return 0; }
+    [[ -n "$out" ]] || out="the restore could not be read back from the apiserver"
+    (( SECONDS >= deadline )) && break
+    sleep "${RESTORE_POLL:-5}"
+  done
+  while read -r line; do warn "${line#✗ }"; done <<<"$out"
+  return 1
+}
+
+# EXIT trap. The restore runs in a subshell so a die in it (apiserver blip) cannot
+# end the trap before the check reads what is left; the roll's own status is kept.
+# Nothing runs after it, so KCTL can be bounded here: a down apiserver must not
+# hold the exit for client-go's own dial timeout on every read.
+# Signals: ignored during the restore (a subshell dies on one and abandons it),
+# and ending the wait, which runs minutes, instead of queueing behind it.
+finish_roll() {
+  local rc=$? stopped=$STOP_REQUESTED
+  KCTL+=(--request-timeout="${RESTORE_REQUEST_TIMEOUT:-10s}")
+  trap '' INT TERM
+  ( cnpg_maintenance false ) || warn "the CNPG/Flux restore did not complete"
+  trap 'warn "interrupted: the restore is NOT verified; check the Flux Kustomizations and the CNPG budgets by hand"; exit 130' INT TERM
+  if assert_restored; then
+    if [[ $rc -ne 0 ]]; then :
+    elif (( stopped )); then
+      warn "Stop requested: the roll is not reported complete. A 'stopping before' line above says what is left."
+    else
+      ok "Rolling replacement complete. Run a state backup:  scripts/ops/backup-state.sh"
+    fi
+  elif [[ $rc -eq 0 ]]; then
+    rc=1
+    if (( stopped )); then
+      warn "The roll stopped on request and the restore did not complete. Fix what is named by hand, then"
+      warn "re-run to continue; only --upgrade skips the nodes already done."
+    else
+      warn "The roll itself finished; only the restore did not. Fix what is named by hand; do NOT re-run"
+      warn "replacement mode (it replaces every node again). Then run scripts/ops/backup-state.sh, which"
+      warn "task cluster-roll skips after a non-zero exit."
+    fi
+  fi
+  exit "$rc"
 }
 
 # The CNPG primary used to be switched off the node here, with `kubectl cnpg
@@ -1521,7 +1605,7 @@ if [[ $DRY_RUN -eq 0 ]]; then
   # the trap after the call leaves a suspended Kustomization and relaxed budgets
   # behind with nothing to restore them. Restoring a cluster that was never
   # changed is a no-op; not restoring one that was is the failure that matters.
-  trap 'cnpg_maintenance false' EXIT
+  trap finish_roll EXIT
   cnpg_maintenance true
   # Now that the budgets are actually gone, ask everything else that is knowable
   # before the first node is touched — see preflight_roll.
@@ -1544,8 +1628,7 @@ if [[ "$SCOPE" == "all" || "$SCOPE" == "cp" ]]; then
 fi
 
 hr
+# A real run's "complete" line is finish_roll's: it cannot be said before the check.
 if [[ $DRY_RUN -eq 1 ]]; then
   ok "dry-run complete — no changes made"
-else
-  ok "Rolling replacement complete. Run a state backup:  scripts/ops/backup-state.sh"
 fi

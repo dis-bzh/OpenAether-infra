@@ -235,6 +235,53 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **A roll exits 1 and names what is left when a Flux Kustomization is still
+  suspended or a CNPG budget is missing (refs #64).** The exit trap resumed the
+  owner chain and set `enablePDB` back, and nothing looked afterwards: a failed
+  resume patch was one warning and exit 0, and budgets the operator never
+  recreated went unnoticed. `finish_roll` now restores in a subshell, then
+  `assert_restored` polls until no owner Kustomization is suspended and every
+  cluster has its `<name>-primary` budget, else exits 1 naming what is left. The
+  roll's own failure status is kept, and a cluster without CNPG is asked the CRD
+  question and nothing else. A read that fails is a problem, never a pass: an
+  owner-label read failing other than NotFound now dies instead of cutting the
+  ancestor walk short, so on the way in it also refuses the roll.
+
+  What the operator sees at the exit. The wait runs on the clock
+  (`RESTORE_TIMEOUT` 120s, `RESTORE_POLL`, each call capped by
+  `RESTORE_REQUEST_TIMEOUT` 10s) and takes up to 211s, measured with an
+  unreachable apiserver. Ctrl+C or SIGTERM ends the wait (exit 130, "restore NOT
+  verified"); during the restore itself they are ignored, since a signal kills
+  its subshell half way. A roll stopped between nodes is not called complete: it
+  says a stop was requested and keeps its status (0 when the restore verifies,
+  else 1). The "complete" line is `finish_roll`'s alone, printed only once the
+  check passes; otherwise the exit says the roll finished and only the restore
+  did not, and not to re-run replacement mode (it replaces every node again).
+  Two effects follow a non-zero exit after the last node: `task cluster-roll`
+  skips `_backup-state`, as after any failure, so the exit names
+  `scripts/ops/backup-state.sh`; and `task cluster-upgrade` stops between its
+  `--cp-only` and `--workers-only` rolls, which keeps the second from suspending
+  Flux on top of a first that did not resume it.
+
+  Not observed, with its consequence: whether CNPG creates `<name>-primary` for a
+  ONE-instance cluster. If it does not, every roll of a cluster with a
+  single-instance database exits 1 after the full wait naming that budget as
+  missing, skips `_backup-state` and stops `task cluster-upgrade` between its
+  rolls, although the roll itself succeeded. Also not observed: a real roll with
+  Flux and CNPG together (0.1.0 ships no Flux), how long the operator takes to
+  recreate the budget, a real terminal Ctrl+C (the test signals a process
+  group), and the two task effects, since `task cluster-roll` refuses a local
+  run. #64 stays open at the real-cloud rung.
+
+  The wiring assertion "after the maintenance call" matched the per-node
+  re-assert, not the main block; it now matches the main one. Mocked rung only:
+  `test-rolling-replace.sh` 66 → 114 assertions against a stateful fake
+  apiserver with two clusters, red first (rc 127 on the old script, and the old
+  exit path on the same fake leaves the root suspended with rc 0); 15 mutants
+  (budget matcher, cluster loop, `;` for `&&`, owner walk, clock, exit words),
+  then 11 more on the final head (failed roll and failed restore, stopped roll,
+  signals, owner warning, empty cluster list, the three defaults), each turn at
+  least one assertion red.
 - **The OVH examples and defaults name AZs OVH accepts (#72).** They said `["nova"]`;
   on EU-WEST-PAR, Nova tolerates it but Cinder rejects it, so the first apply died
   creating the workers' data volumes. The examples, the cluster default and the module
