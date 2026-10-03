@@ -23,7 +23,7 @@ Le plancher d'un cluster qui portera la plateforme est donc **des workers d'au
 moins 4 vCPU / 8 Go, assez nombreux pour en perdre un**. Chaque module cloud
 prend un seul type d'instance pour control planes et workers : le plancher vaut
 pour les deux. Un cluster nu (Cilium seul, le périmètre de la 0.1.0) demande
-moins ; aucun run n'a mesuré combien.
+moins : un 3+3 nu sur le `tinav5.c2r4p1` d'Outscale (2 vCPU / 4 Go) a été déployé et vérifié le 2026-10-03, seul point mesuré.
 
 ## Ce que crée chaque provider
 
@@ -77,5 +77,5 @@ script ne vérifie IP, LB ni security groups.
   ([`deployment-test-matrix.fr.md`](deployment-test-matrix.fr.md), `OSC-mgmt-ha` ;
   issue #72). Un chemin vers le plancher dans ce quota n'est pas testé, et
   Outscale change `vm_type` par un stop/start — un nœud à la fois.
-- Les runs sur cloud réel de [`status.md`](status.md) ne consignent pas les
-  types d'instance utilisés : ils n'établissent aucun plancher.
+- Les runs sur cloud réel de [`status.md`](status.md) ne consignent le type d'instance
+  que pour Outscale (`tinav5.c2r4p1`) : ceux de Scaleway et d'OVH n'établissent aucun plancher.

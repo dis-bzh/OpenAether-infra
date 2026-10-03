@@ -6,8 +6,10 @@
 > la seconde. Mesurée à la main sur **Scaleway, OVH et Outscale** — les deux
 > premiers le 2026-08-19, Outscale le 2026-08-20 — en topologie HA, chaque nœud
 > mis à niveau **sur place** plutôt que remplacé et l'API Talos de chaque nœud
-> interrogée sur ce qu'il exécute. Les runs antérieurs sur Outscale et sur OVH
-> revenaient en arrière au redémarrage suivant, et les issues ouvertes disent pourquoi.
+> interrogée sur ce qu'il exécute. Le 2026-10-03, les trois sont montés à Talos 1.14.2
+> et Kubernetes 1.37.1 par `task cluster-upgrade` (`docs/status.md` a les chiffres).
+> Les runs antérieurs sur Outscale et sur OVH revenaient en arrière au redémarrage
+> suivant, et les issues ouvertes disent pourquoi.
 >
 > La version scriptée de cette même procédure est `task cluster-upgrade`
 > ([`scripts/dev/cluster-upgrade.sh`](../scripts/dev/cluster-upgrade.sh)). Elle
@@ -70,7 +72,8 @@ charge à 2 réplicas derrière un Service (avec un PDB quand deux nœuds peuven
 l'accueillir), interrogée via le proxy de l'apiserver, rapportée en nombre de
 FAIL et plus longue coupure, puis supprimée. Les échantillons pris pendant que
 l'apiserver est lui-même tombé sont comptés à part, en BLIND. Elle est rapportée,
-pas bloquante, et aucun roulement réel n'a encore produit son chiffre (#41).
+pas bloquante, et les chiffres réels du 2026-10-03 sont 0 échec sur Scaleway, 40 échecs et 20 aveugles
+sur 1490 sur Outscale (`docs/status.md`).
 Fonctionnement : [`cluster-upgrade.sh` § The service probe](../scripts/dev/cluster-upgrade.sh).
 
 ## Kubernetes d'abord
@@ -111,8 +114,8 @@ Le pin bouge avant le build : la voie image garde une image par provider, donc
 elle refuse une version que l'un des `envs/*-<p>.tfvars` ne pinne pas, car elle
 remplacerait l'image que ce cluster utilise encore (#93). Elle nomme le fichier
 qui bloque. Un build qui échoue après son apply a déjà remplacé l'ancienne
-image : laisser le pin sur la nouvelle version et relancer. Le dernier upgrade
-réel précède ce garde-fou : cet ordre n'est prouvé qu'en mocké.
+image : laisser le pin sur la nouvelle version et relancer. Les montées du 2026-10-03
+ont suivi cet ordre sur les trois clouds.
 
 **Sur Outscale, la construction de l'image domine tout l'upgrade.** L'image est
 enregistrée depuis un snapshot importé via une file côté provider : 8 min le
@@ -233,12 +236,13 @@ kubectl delete pod <targetPrimary> -n <ns>
 épingle, il sort 0, affiche « will be promoted » et laisse `targetPrimary`
 inchangé. Ouvert en issue.
 
-⚠️ **Le premier apply après un bump de `talos_version` échoue sur OVH et
-Outscale** avec « Provider produced inconsistent final plan », une fois par
-machine config. Rien n'est laissé à moitié appliqué ; relancer. C'est l'issue
-amont `siderolabs/terraform-provider-talos` #352, corrigée seulement dans la
-ligne 0.12.0 en pré-version — détails et décision encore ouverte dans
-les issues ouvertes.
+Le premier apply après un bump de `talos_version` échouait une fois sur OVH et
+Outscale avec « Provider produced inconsistent final plan » (issue amont
+`siderolabs/terraform-provider-talos` #352, corrigée seulement dans la ligne
+0.12.0 en pré-version). Le module remplace désormais chaque application de machine
+config lors d'un changement de version (`replace_triggered_by`), donc le bump passe
+en un seul apply : les montées du 2026-10-03 sont passées par `cluster-upgrade`, qui
+n'a aucun retry, sur les trois clouds.
 
 ## Ce qu'il faut vérifier, au-delà de « c'est revenu »
 

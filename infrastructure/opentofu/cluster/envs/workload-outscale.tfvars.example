@@ -11,8 +11,8 @@
 cluster_name       = "openaether-outscale"
 environment        = "prod"
 cluster_role       = "workload"
-talos_version      = "v1.13.3"
-kubernetes_version = "v1.35.3"
+# talos_version / kubernetes_version: leave unset to inherit the tracked defaults of
+# cluster/variables.tf (the pair each release measures); pin them here only to hold a cluster back.
 talos_bootstrap    = true
 node_distribution = {
   outscale = {
