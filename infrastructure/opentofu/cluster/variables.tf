@@ -173,7 +173,7 @@ variable "node_distribution" {
     OVH-specific:
       flavor_name         - OpenStack flavor (e.g. "b3-8")
       network_name        - External network name for floating IPs (default "Ext-Net")
-      availability_zones  - OpenStack AZ list (default ["nova"])
+      availability_zones  - OpenStack AZ list (default: the three EU-WEST-PAR zones)
 
     Outscale-specific:
       instance_type      - VM type (e.g. "tinav5.c2r4p1")

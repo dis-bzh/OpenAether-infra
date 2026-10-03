@@ -47,7 +47,7 @@ Deux couches de réglages orthogonales :
 | Mode LB k8s | `node_distribution.<p>.k8s_lb_mode` | `managed`, `vip` | `managed` | **scw, ovh** seulement ; outscale = managed seul (rejette vip) ; proxmox = toujours VIP ; local = ni l'un ni l'autre | `vip` (EXPÉRIMENTAL) : pas de LB, adresse IPAM privée + VIP Talos Layer2 → **API privée uniquement, via tunnel bastion**. |
 | VIP apiserver | `local.apiserver_vip` → `module.talos.apiserver_vip` ; proxmox `apiserver_vip` (requis) + `apiserver_vip_interface` | IP / null | null (cloud) ; requis (proxmox) | proxmox toujours ; scw/ovh en mode vip | Injecté en `machine.network.interfaces[].vip` + certSANs. Ignoré en mode conteneur. |
 | LB applicatif | `deploy_app_lb` | `true`/`false` | `false` | scw/ovh/outscale ; proxmox = DNAT hôte ; local = `127.0.0.1` | Ses backends sont les NodePorts fixes de la Gateway : un cluster infra seule paierait un LB qui ne pointe sur rien. Désactivé ⇒ `app_lb_ip` vaut null (`N/A` à la racine). |
-| Zones / AZ | scw `.zone`+`.zones` et ovh `.availability_zones` en round-robin via `element(...)` ; **outscale ne lit que `availability_zones[0]`** — un seul sous-réseau, une seule subregion, quoi que dise la liste ; proxmox `.node_names` (round-robin) | ex. scw `["fr-par-1","fr-par-2","fr-par-3"]` | selon exemple | cloud + proxmox | Mono vs multi-AZ. Proxmox : 1 hôte = non-HA, 3 hôtes = **vraie** HA ; 3 CP sur 1 hôte = fausse HA (à éviter). |
+| Zones / AZ | scw `.zone`+`.zones` et ovh `.availability_zones` en round-robin via `element(...)` ; outscale crée un sous-réseau privé et un public par entrée de `.availability_zones` et place les nœuds par index, comme les autres (#58) ; proxmox `.node_names` (round-robin) | ex. scw `["fr-par-1","fr-par-2","fr-par-3"]` | selon exemple | cloud + proxmox | Mono vs multi-AZ. Proxmox : 1 hôte = non-HA, 3 hôtes = **vraie** HA ; 3 CP sur 1 hôte = fausse HA (à éviter). |
 | Bastion | proxmox `enable_bastion` | `true` (VM) / `false` (hôte-bastion) | `false` | bascule proxmox ; scw/ovh/outscale = toujours une VM dédiée ; local = aucun | Le contrat exige `bastion_ip`. |
 | Stockage workers | `worker_storage.disks[]` + `worker_storage.volumes[]` (LUKS2 `UserVolumeConfig`) | aucun, ou disques+volumes | `{disks=[],volumes=[]}` | scw/ovh/outscale/proxmox ; local forcé à off | `disks` → module provider ; `volumes` → `modules/talos`. |
 | Phase d'amorçage | `talos_bootstrap` | `false` (phase 1 infra), `true` (phase 2 config+etcd+Flux) | `true` | tous | `task infra-apply` → `task bootstrap-phase2`. |
@@ -105,7 +105,7 @@ Deux couches de réglages orthogonales :
 
 | ID | Rôle | CP/W | k8s_lb_mode | Ce qu'il exerce en propre | Statut |
 |---|---|---|---|---|---|
-| `OSC-mgmt-ha` | mgmt | 3+1 | managed | Le LB renvoie un **nom DNS**, pas une IP ; utilisateur SSH outscale. 3+3 ne tient pas dans le quota de 40 Go de RAM, donc HA ici ne concerne que le control plane — et **tous les nœuds sont en eu-west-2a**, le module ne lisant jamais au-delà de la première subregion. Trois control planes, un seul domaine de panne. | ✅ *(2026-08-20, sur un Net **neuf** — LB `active` avec 3 backends. Le blocage venait d'un timeout interne au service LBU d'Outscale, demande 399530 close ; le Net antérieur au correctif refuse toujours d'être supprimé. Le ✅ du 2026-08-13 ne tient pas : son upgrade Talos est revenu en arrière au redémarrage suivant, cf. les issues ouvertes)* — avant le contrôle des domaines de panne (#38) : `cluster-verify` le refuse désormais, et rien n'y remédie avant #58 |
+| `OSC-mgmt-ha` | mgmt | 3+1 | managed | Le LB renvoie un **nom DNS**, pas une IP ; utilisateur SSH outscale. 3+3 ne tient pas dans le quota de 40 Go de RAM, donc HA ici ne concerne que le control plane — les trois control planes sont dans trois subregions (`availability_zones`, #58). | ✅ *(2026-10-03 : trois control planes en `eu-west-2a/b/c` plus deux workers, obtenus depuis un seul control plane par un `cluster-up` ; `cluster-verify` 13/13, le load balancer `UP` sur les trois. Le ✅ du 2026-08-20 était l'ancienne disposition à une seule subregion, sur un Net **neuf** — LB `active` avec 3 backends. Le blocage venait d'un timeout interne au service LBU d'Outscale, demande 399530 close ; le Net antérieur au correctif refuse toujours d'être supprimé. Le ✅ du 2026-08-13 ne tient pas : son upgrade Talos est revenu en arrière au redémarrage suivant, cf. les issues ouvertes)* |
 | `OSC-work-ha` | workload | 3+3 | managed | Rôle workload ; volumes BSU si couplé au stockage. | ⬜ |
 | `OSC-vip-reject` | — | tout | vip | Test négatif : la validation doit rejeter `vip`. | 🧪 |
 
@@ -165,8 +165,8 @@ Ce que cette voie ne sait pas encore porter : voir « Manques connus » dans
 
 1. **Apply réel Proxmox** (`PMX-*`) — jamais exécuté sur un hôte réel.
 2. **HA multi-AZ en cloud** (`SCW-mgmt-ha`) — etcd 3 CP réparti sur plusieurs
-   zones jamais appliqué sous cette forme exacte. `OSC-mgmt-ha` ne peut pas en
-   être un : une seule subregion.
+   zones jamais appliqué sous cette forme exacte. `OSC-mgmt-ha` en sera un quand sa
+   disposition répartie (#58) aura tourné.
 3. **`OVH-vip`** — le mode vip n'a jamais été appliqué sur OVH (mécanisme
    Neutron `allowed_address_pairs`, distinct de Scaleway).
 4. **Apply réel du rôle workload** (`*-work-*`) — seul le management est exercé.

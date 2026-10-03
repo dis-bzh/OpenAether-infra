@@ -279,7 +279,9 @@ your leak, and it must not hide one. And this object store does not honour
 conditional writes: measured with the same client that got a refusal from
 Scaleway and OVH, it accepts the second one — so `use_lockfile` is on for those
 two and deliberately **off** here, where it would claim a state lock and hold
-nothing. Nothing stops two concurrent runs against an Outscale cluster's state.
+nothing. Nothing stops two concurrent runs against an Outscale cluster's state, so
+there the rule is one operator at a time (re-measured 2026-10-03: no `.tflock` object
+appears while an apply waits; on OVH the second run was refused, HTTP 412).
 
 ## 7. Upgrades — Kubernetes and Talos, on a cluster that has to stay up
 

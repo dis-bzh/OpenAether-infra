@@ -208,6 +208,27 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **Outscale spreads its nodes over the subregions in `availability_zones` (#58).**
+  The module read only the first entry, so three control planes shared one
+  subregion. It now builds a private subnet per entry (the first keeps `10.0.0.0/24`),
+  places control planes and workers by index and keeps a worker's data volumes in its
+  subregion. A node's subnet is ignored after creation, so a cluster built before this
+  keeps its layout. The public subnet, bastion, NAT and load balancers stay in the first
+  subregion: a load balancer takes one subnet ("multiple subnets is not implemented",
+  measured) and still reaches nodes in every subregion.
+
+- **`opentofu/opentofu` 1.12.6 → 1.13.1** (`ci.yml` ×5, `setup.sh`) and
+  **`fluxcd/flux-schema` 0.13.0 → 0.15.0** (`ci.yml`, `setup.sh`), both probed
+  green by Cléa (#91). Proven with the real binaries, not the sandbox's cached
+  ones: OpenTofu 1.13.1 (sha256 OK) first on the PATH and `flux plugin install
+  schema@0.15.0` (`flux schema version` = 0.15.0), then `task lint`,
+  `render-check`, `test-scripts`, `validate` (both roots) and `task test` (71/71)
+  green, plus checkov (32/0), its custom checks (6/0) and gitleaks. `trivy` not
+  run in this sandbox — relies on CI. Left out: `getplumber/plumber` v0.5.17
+  (probed green, but `clea bump` refuses its `action-sha` pin, same as #170);
+  `go-task` 3.54.0 and the `kubectl-cnpg` plugin 1.30.1 are in #226;
+  `fluxcd/flux2` v2.9.6 and `siderolabs/talos` v1.14.2 not probed;
+  `kubernetes/kubernetes` v1.37.1 probe failed (`versions-guard.tf`, #181).
 - **Talos v1.14.2 and Kubernetes v1.37.1 are the default pin (#181).** Both roots
   (`cluster` and `opentofu-local`) move together. On a real Scaleway cluster, with a
   Longhorn volume attached and a Service probe running, `cluster-upgrade` took
@@ -216,6 +237,13 @@ in git. 0.1.0 is the first entry describing something proven.
   Longhorn question the bump waited on is answered on the pair the issue names
   (v1.14.1 / v1.37.0). OVH and Outscale have not seen 1.14: their rows still read
   Talos 1.13.8.
+- **`go-task/task` 3.53.1 → 3.54.0** (`install-task.sh`) and the
+  **`kubectl-cnpg` plugin 1.30.0 → 1.30.1** (`install-kubectl-cnpg.sh`), the two
+  of Cléa's #91 rows that sit outside `.github/`. Both installed from the pinned
+  release with their checksum verified; `task lint`, `test-scripts` (33
+  harnesses, 1262 passed), `test`, `render-check` and both `validate` roots pass
+  with `task` 3.54.0 first on the PATH. The release notes were not read.
+
 - **`getplumber/plumber` v0.4.51 → v0.5.12** in `security.yml` (SHA and comment
   together) and `install-plumber.sh`, by hand: `clea bump` refuses an
   `action-sha` pin, so Cléa's daily run had been red on it since at least
@@ -228,6 +256,66 @@ in git. 0.1.0 is the first entry describing something proven.
   without a token. The token path rests on CI's "Pipeline audit" job.
 
 ### Fixed
+
+- **A roll exits 1 and names what is left when a Flux Kustomization is still
+  suspended or a CNPG budget is missing (refs #64).** The exit trap resumed the
+  owner chain and set `enablePDB` back, and nothing looked afterwards: a failed
+  resume patch was one warning and exit 0, and budgets the operator never
+  recreated went unnoticed. `finish_roll` now restores in a subshell, then
+  `assert_restored` polls until no owner Kustomization is suspended and every
+  cluster has its `<name>-primary` budget, else exits 1 naming what is left. The
+  roll's own failure status is kept, and a cluster without CNPG is asked the CRD
+  question and nothing else. A read that fails is a problem, never a pass: an
+  owner-label read failing other than NotFound now dies instead of cutting the
+  ancestor walk short, so on the way in it also refuses the roll.
+
+  What the operator sees at the exit. The wait runs on the clock
+  (`RESTORE_TIMEOUT` 120s, `RESTORE_POLL`, each call capped by
+  `RESTORE_REQUEST_TIMEOUT` 10s) and takes up to 211s, measured with an
+  unreachable apiserver. Ctrl+C or SIGTERM ends the wait (exit 130, "restore NOT
+  verified"); during the restore itself they are ignored, since a signal kills
+  its subshell half way. A roll stopped between nodes is not called complete: it
+  says a stop was requested and keeps its status (0 when the restore verifies,
+  else 1). The "complete" line is `finish_roll`'s alone, printed only once the
+  check passes; otherwise the exit says the roll finished and only the restore
+  did not, and not to re-run replacement mode (it replaces every node again).
+  Two effects follow a non-zero exit after the last node: `task cluster-roll`
+  skips `_backup-state`, as after any failure, so the exit names
+  `scripts/ops/backup-state.sh`; and `task cluster-upgrade` stops between its
+  `--cp-only` and `--workers-only` rolls, which keeps the second from suspending
+  Flux on top of a first that did not resume it.
+
+  Not observed, with its consequence: whether CNPG creates `<name>-primary` for a
+  ONE-instance cluster. If it does not, every roll of a cluster with a
+  single-instance database exits 1 after the full wait naming that budget as
+  missing, skips `_backup-state` and stops `task cluster-upgrade` between its
+  rolls, although the roll itself succeeded. Also not observed: a real roll with
+  Flux and CNPG together (0.1.0 ships no Flux), how long the operator takes to
+  recreate the budget, a real terminal Ctrl+C (the test signals a process
+  group), and the two task effects, since `task cluster-roll` refuses a local
+  run. #64 stays open at the real-cloud rung.
+
+  The wiring assertion "after the maintenance call" matched the per-node
+  re-assert, not the main block; it now matches the main one. Mocked rung only:
+  `test-rolling-replace.sh` 66 → 114 assertions against a stateful fake
+  apiserver with two clusters, red first (rc 127 on the old script, and the old
+  exit path on the same fake leaves the root suspended with rc 0); 15 mutants
+  (budget matcher, cluster loop, `;` for `&&`, owner walk, clock, exit words),
+  then 11 more on the final head (failed roll and failed restore, stopped roll,
+  signals, owner warning, empty cluster list, the three defaults), each turn at
+  least one assertion red.
+- **The OVH examples and defaults name AZs OVH accepts (#72).** They said `["nova"]`;
+  on EU-WEST-PAR, Nova tolerates it but Cinder rejects it, so the first apply died
+  creating the workers' data volumes. The examples, the cluster default and the module
+  default now name `eu-west-par-a/b/c`. Seen on a real OVH account: all three zones
+  deploy and verify.
+- **The Outscale purge reports this account's images, not just its snapshots (#107).**
+  `purge-orphans` listed leftover snapshots but never images, because `ReadImages`
+  answers every OMI the account may launch (646 of 64 owners on a real account, 2
+  ours). It now reads the account id first and scopes the call with `AccountIds`;
+  a refused `ReadAccounts` or `ReadImages` is "unverified", never an unscoped list
+  nor a clean. Images are still never deleted here. Seen on a real account: exactly
+  its two OMIs, read-only.
 
 - **`workers = N+1` and one `task cluster-up` now work on a bootstrapped cluster (#59).**
   The apply that created a node also waited for its Talos port through a tunnel that

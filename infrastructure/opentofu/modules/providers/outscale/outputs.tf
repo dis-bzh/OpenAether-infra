@@ -11,8 +11,8 @@ output "worker_private_ips" {
   value       = outscale_vm.worker[*].private_ip
 }
 
-# Read from the VM, not var.availability_zones: only [0] is used (#58), so the
-# variable would claim a spread that does not exist.
+# Read from the VM, not var.availability_zones: where a VM actually landed is the fact,
+# and the variable is only what was asked for.
 output "control_plane_zones" {
   description = "Subregion of each control plane VM, in control_plane_private_ips order"
   value       = outscale_vm.control_plane[*].placement_subregion_name
@@ -33,4 +33,30 @@ output "app_lb_ip" {
 output "bastion_ip" {
   description = "Public IP of the bastion host (SSH access)"
   value       = outscale_public_ip.bastion.public_ip
+}
+
+# Not part of the provider contract: the subnet layout of #58, readable by a test.
+output "private_subnet_zones" {
+  description = "Subregion of each private subnet, in node-placement order"
+  value       = outscale_subnet.private[*].subregion_name
+}
+
+output "private_subnet_cidrs" {
+  description = "CIDR of each private subnet"
+  value       = outscale_subnet.private[*].ip_range
+}
+
+output "public_subnet_cidr" {
+  description = "CIDR of the single public subnet (bastion, NAT service, load balancers)"
+  value       = outscale_subnet.public.ip_range
+}
+
+output "control_plane_zone_index" {
+  description = "Index into the private subnets of each control plane (its zone)"
+  value       = local.cp_zone_index
+}
+
+output "worker_zone_index" {
+  description = "Index into the private subnets of each worker (its zone, and its data volumes')"
+  value       = local.worker_zone_index
 }

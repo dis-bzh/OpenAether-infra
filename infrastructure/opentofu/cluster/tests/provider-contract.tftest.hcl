@@ -218,7 +218,7 @@ run "ovh_active_junction_point" {
         flavor_name        = "b3-8"
         image_id           = "dummy-talos-ovh-image"
         network_name       = "Ext-Net"
-        availability_zones = ["nova"]
+        availability_zones = ["eu-west-par-a"]
         bastion_image_id   = "Ubuntu 22.04"
       }
     }
@@ -262,10 +262,78 @@ run "outscale_active_junction_point" {
     error_message = "active_provider must be 'outscale' when Outscale is configured."
   }
 
+  # #58: one private subnet per subregion, so the control planes can sit in three; one public subnet.
+  assert {
+    condition     = module.outscale[0].private_subnet_zones == ["eu-west-2a", "eu-west-2b", "eu-west-2c"]
+    error_message = "Outscale must build one private subnet per availability zone, in the order given."
+  }
+  assert {
+    condition     = module.outscale[0].private_subnet_cidrs == ["10.0.0.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+    error_message = "the first private subnet must keep 10.0.0.0/24 and the others take 10.0.2.0/24 and 10.0.3.0/24."
+  }
+  assert {
+    condition     = module.outscale[0].public_subnet_cidr == "10.0.1.0/24"
+    error_message = "the public subnet must keep 10.0.1.0/24, whatever the number of subregions."
+  }
+  assert {
+    condition     = module.outscale[0].control_plane_zone_index == [0, 1, 2]
+    error_message = "three control planes over three zones must land in three different zones."
+  }
+
   # Root pass-through only (values: control-plane-zones); a dropped concat() entry leaves [].
   assert {
     condition     = length(output.control_plane_zones) == 3
     error_message = "control_plane_zones must reach the root from the Outscale module, one entry per control plane."
+  }
+}
+
+run "outscale_two_zones_wrap_around" {
+  command = plan
+
+  variables {
+    node_distribution = {
+      outscale = {
+        control_planes     = 3
+        workers            = 3
+        region             = "eu-west-2"
+        instance_type      = "tinav5.c2r4p1"
+        image_id           = "dummy-talos-osc-image"
+        availability_zones = ["eu-west-2a", "eu-west-2b"]
+        bastion_image_id   = "ami-ubuntu-mock"
+      }
+    }
+  }
+
+  assert {
+    condition     = module.outscale[0].control_plane_zone_index == [0, 1, 0] && module.outscale[0].worker_zone_index == [0, 1, 0]
+    error_message = "three nodes over two zones must wrap: zones 0, 1, 0 (a 2+1 split, which the verifier reports as a warning)."
+  }
+}
+
+run "outscale_one_zone_keeps_the_original_layout" {
+  command = plan
+
+  variables {
+    node_distribution = {
+      outscale = {
+        control_planes     = 3
+        workers            = 1
+        region             = "eu-west-2"
+        instance_type      = "tinav5.c2r4p1"
+        image_id           = "dummy-talos-osc-image"
+        availability_zones = ["eu-west-2a"]
+        bastion_image_id   = "ami-ubuntu-mock"
+      }
+    }
+  }
+
+  assert {
+    condition     = module.outscale[0].private_subnet_cidrs == ["10.0.0.0/24"] && module.outscale[0].public_subnet_cidr == "10.0.1.0/24"
+    error_message = "one availability zone must give the single-zone layout this module always had (10.0.0.0/24 and 10.0.1.0/24)."
+  }
+  assert {
+    condition     = module.outscale[0].control_plane_zone_index == [0, 0, 0] && module.outscale[0].worker_zone_index == [0]
+    error_message = "with one zone every node must stay in it."
   }
 }
 

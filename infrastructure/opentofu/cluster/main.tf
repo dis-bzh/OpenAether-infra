@@ -112,7 +112,7 @@ locals {
     image_id           = null
     image_name         = null
     network_name       = "Ext-Net"
-    availability_zones = ["nova"]
+    availability_zones = ["eu-west-par-a", "eu-west-par-b", "eu-west-par-c"]
     bastion_image_id   = "Ubuntu 22.04"
     k8s_lb_mode        = "managed"
   }, try(var.node_distribution["ovh"], {}))
