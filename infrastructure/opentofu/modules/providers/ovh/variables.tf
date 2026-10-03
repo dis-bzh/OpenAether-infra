@@ -67,9 +67,9 @@ variable "network_name" {
 }
 
 variable "availability_zones" {
-  description = "Availability zones for node distribution"
+  description = "Availability zones for node distribution; each must exist in the region (EU-WEST-PAR: eu-west-par-a/b/c, not \"nova\", which Cinder rejects)"
   type        = list(string)
-  default     = ["nova"]
+  default     = ["eu-west-par-a", "eu-west-par-b", "eu-west-par-c"]
 }
 
 variable "control_plane_count" {

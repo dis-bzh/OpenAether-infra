@@ -219,6 +219,12 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **The OVH examples and defaults name AZs OVH accepts (#72).** They said `["nova"]`;
+  on EU-WEST-PAR, Nova tolerates it but Cinder rejects it, so the first apply died
+  creating the workers' data volumes. The examples, the cluster default and the module
+  default now name `eu-west-par-a/b/c`. Seen on a real OVH account: all three zones
+  deploy and verify.
+
 - **`workers = N+1` and one `task cluster-up` now work on a bootstrapped cluster (#59).**
   The apply that created a node also waited for its Talos port through a tunnel that
   cannot exist before the node, and once the tunnels were opened by hand the next plan

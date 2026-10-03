@@ -397,7 +397,7 @@ run "verify_ovh_module_activation" {
         flavor_name        = "b3-8"
         image_id           = "dummy-talos-ovh-image"
         network_name       = "Ext-Net"
-        availability_zones = ["nova"]
+        availability_zones = ["eu-west-par-a"]
       }
     }
   }
