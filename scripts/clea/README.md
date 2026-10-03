@@ -54,6 +54,9 @@ read, or on one whose value is not version-shaped at all:
 | `precommit-rev` | `rev: <sha>  # v4.9.1` |
 | `action-sha` | `uses: owner/action@<sha>  # v7` |
 
+An `action-sha` pin is bumped only with the commit its tag points at (`bump --sha`,
+recorded by the scan); a `precommit-rev` never. The reasons are in `clea.py`.
+
 Because Cléa's list is a superset of what any one declared inventory reaches,
 the difference between the two **is** the set of pins nothing is watching. That
 is `clea coverage`, and it is the check worth having even if you run nothing
@@ -130,8 +133,9 @@ by CI's own `GITHUB_TOKEN`.** GitHub refuses that push outright, in any
 repository, and no `permissions:` grant changes it — there is no such scope.
 The workaround is a classic Personal Access Token with the `workflow` scope,
 stored as a repository secret and named `CLEA_WORKFLOW_TOKEN`; a workflow that
-wires it in falls back to the default token cleanly when the secret is absent,
-so this is opt-in, not a requirement to get everything else running.
+wires it in falls back to the default token cleanly when the secret is absent
+or rejected (`push-probes.sh`), so this is opt-in, not a requirement to get
+everything else running.
 
 ## Configuration
 

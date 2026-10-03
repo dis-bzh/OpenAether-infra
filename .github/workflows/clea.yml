@@ -141,6 +141,8 @@ jobs:
       INSTALLER: ${{ matrix.entry.installer }}
       VERSION_CMD: ${{ matrix.entry.version_cmd }}
       INSTALLER_STDIN: ${{ matrix.entry.installer_stdin }}
+      # What an action-sha pin needs to move with its comment; empty for any other dependency.
+      CLEA_SHA: ${{ matrix.entry.sha }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       # persist-credentials: false — the full opt-out, not a partial one.
@@ -176,7 +178,7 @@ jobs:
         run: |
           set -euo pipefail
           git checkout -- .
-          python3 scripts/clea/clea.py bump "$DEP" "$VERSION"
+          python3 scripts/clea/clea.py bump ${CLEA_SHA:+--sha "$CLEA_SHA"} "$DEP" "$VERSION"
 
       # The repository's own installer, not a hand-written list of steps: a
       # second list is a second pin to drift, and this is also the only place
@@ -413,39 +415,16 @@ jobs:
         if: steps.download.outcome == 'success'
         env:
           # Optional. GITHUB_TOKEN cannot push a change to a file under
-          # .github/workflows/ — three anchors live there (commitizen,
-          # opentofu/opentofu, siderolabs/talos, all in ci.yml) — and no
-          # `permissions:` grant exists for it; only a classic PAT with the
-          # `workflow` scope can. Falls back to the default token when unset,
-          # which still pushes every OTHER probe branch fine.
+          # .github/workflows/ (no `permissions:` grant exists for it); only a
+          # classic PAT with the `workflow` scope can. The script falls back to
+          # the default token when this is unset OR rejected, which still pushes
+          # every other probe branch.
           CLEA_WORKFLOW_TOKEN: ${{ secrets.CLEA_WORKFLOW_TOKEN }}
-          # The checkout above does not persist a credential — see that step.
-          # This job builds its own explicitly, this one included.
+          # The checkout above does not persist a credential: the script builds
+          # its own, this one included.
           DEFAULT_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          token="${CLEA_WORKFLOW_TOKEN:-$DEFAULT_TOKEN}"
-          remote="https://x-access-token:${token}@github.com/${{ github.repository }}.git"
-          for patch in patches/*.patch; do
-            slug="$(basename "$patch" .patch)"
-            branch="clea/probe/${slug}"
-            git checkout -q -B "$branch" "${{ github.sha }}"
-            git am -q "$patch"
-            # --force, not --force-with-lease: this checkout never fetched the
-            # branch it is about to overwrite (only the default branch is
-            # fetched), so the lease has nothing to compare against and
-            # refuses every push once the branch already exists from a prior
-            # run — "! [rejected] ... (stale info)", on EVERY dependency, seen
-            # on this workflow's second-ever run (2026-08-24). The lease
-            # exists to stop clobbering someone else's concurrent work; nobody
-            # but this workflow ever writes to clea/probe/*, so there is
-            # nothing to protect against, and the branch is meant to always
-            # reflect only the latest probe.
-            git push --force "$remote" "HEAD:${branch}"
-            git checkout -q "${{ github.sha }}"
-          done
+          REPO: ${{ github.repository }}
+        run: ./scripts/clea/push-probes.sh "${{ github.sha }}" patches
 
   report:
     name: Report
@@ -466,12 +445,15 @@ jobs:
         env:
           STATE: ${{ needs.scan.outputs.state }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUSH_RESULT: ${{ needs.push.result }}
         run: |
           set -euo pipefail
           printf '%s' "$STATE" > clea-state.json
           git fetch -q origin "+refs/heads/clea/probe/*:refs/remotes/origin/clea/probe/*" || true
           python3 - <<'PY'
-          import json, os, subprocess, urllib.request
+          import json, os, subprocess, sys, urllib.request
+          sys.path.insert(0, "scripts/clea")
+          import clea
           state = json.load(open("clea-state.json"))
           refs = subprocess.run(["git", "for-each-ref", "--format=%(refname:short)",
                                  "refs/remotes/origin/clea/probe/*"],
@@ -517,6 +499,10 @@ jobs:
               if j["name"].startswith("Probe ") and j["conclusion"] == "failure"
               and j["name"].removeprefix("Probe ") not in got]
           state["stalled_probes"] = stalled
+          # A probe that PASSED but whose verdict reached no branch (the push
+          # job failed): the report would otherwise read "not probed".
+          state["push_result"] = os.environ.get("PUSH_RESULT", "")
+          state["lost_verdicts"] = clea.lost_verdicts(state, jobs)
 
           json.dump(state, open("clea-state.json", "w"), indent=2)
           print(f"{len(probes)} probe verdict(s), {len(stalled)} stalled, "

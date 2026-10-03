@@ -1093,12 +1093,32 @@ node_targets() { # <tf_t> <index>
   '
 }
 
-# Plan to a file, count what THAT file destroys, apply THAT file. An
-# `apply -auto-approve` re-plans, so the count guarded a plan nobody applied, and
-# OpenTofu cannot refuse a plan whose state moved unless it is handed the file.
-saved_plan_apply() { # <label> <max-destroy> <on-apply-failure> <tofu plan args…>
-  local label="$1" max="$2" fail="$3"; shift 3
-  local dir pf doomed
+# Node-scoped resources (cp/worker, by name) of any node but <t> <i> that a plan
+# changes. `-target` pulls in dependencies, and a pending in-place update of the
+# other nodes rides along: raising instance_type and rolling `--workers-only`
+# resized all three control planes at once (Scaleway, 2026-10-02, API down 56 s).
+# The destroy count cannot see it: a resize destroys nothing.
+foreign_changes() { # <planfile> <t: cp|worker> <i>
+  tofu show -json "$1" 2>/dev/null | jq -r --arg t "$2" --argjson i "$3" '
+    def cls: if test("(^|_)(cp|control_plane)(_|$)") then "cp"
+             elif test("(^|_)worker(_|$)") then "worker" else empty end;
+    # A data volume is keyed "w<worker>-d<disk>": it belongs to that worker.
+    def node: if (.index | type) == "string"
+              then ((.index | capture("^w(?<n>[0-9]+)-d[0-9]+$").n | tonumber) // -1)
+              else (.index // -1) end;
+    .resource_changes[]?
+    | select(.mode == "managed" and (.change.actions | any(. != "no-op")))
+    | select(((.name // "") | cls) as $c | $c != $t or node != $i)
+    | .address' 2>/dev/null
+}
+
+# Plan to a file, count what THAT file destroys, refuse a change to any other
+# node, apply THAT file. An `apply -auto-approve` re-plans, so the count guarded
+# a plan nobody applied, and OpenTofu cannot refuse a plan whose state moved
+# unless it is handed the file. `check` plans and judges only, applying nothing.
+saved_plan_apply() { # <label> <t> <i> <max-destroy> <on-apply-failure> <apply|check> <tofu plan args…>
+  local label="$1" t="$2" i="$3" max="$4" fail="$5" mode="$6"; shift 6
+  local dir pf doomed foreign
   dir="$(mktemp -d)"; pf="${dir}/${label}.tfplan"   # 0700: a plan holds secrets
   # `if !`, not `x="$(…)" || …` alone: under set -e a failed plan must reach die.
   if ! tofu plan -out="$pf" "$@" -var-file="$TFVARS" -var talos_bootstrap=true \
@@ -1117,6 +1137,19 @@ saved_plan_apply() { # <label> <max-destroy> <on-apply-failure> <tofu plan args�
   Something outside this node is being pulled in; a module-level depends_on has
   done exactly that before. Inspect with:
     tofu plan $* -var-file='${TFVARS}' -var talos_bootstrap=true"
+  fi
+  foreign="$(foreign_changes "$pf" "$t" "$i")" \
+    || { rm -rf "$dir"; die "could not read which nodes the saved plan for ${label} changes — refusing to apply blind"; }
+  if [[ -n "$foreign" ]]; then
+    rm -rf "$dir"
+    die "plan ${label} also changes other nodes — refusing, nothing applied:
+$(sed 's/^/    /' <<<"$foreign")
+  A pending in-place change (an instance_type raised in the tfvars) rides along
+  with the targeted apply and would hit those nodes all at once. Put the tfvars
+  back as the cluster runs, or change one node at a time (docs/upgrade.md)."
+  fi
+  if [[ "$mode" == check ]]; then
+    rm -rf "$dir"; ok "plan ${label} stays inside ${t}[${i}]"; return 0
   fi
   ok "plan ${label} destroys ${doomed} resource(s), at most ${max} expected — applying that plan"
   tofu apply "$pf" || { rm -rf "$dir"; die "$fail"; }
@@ -1333,6 +1366,13 @@ replace_node() { # <type: cp|worker> <index>
     ok "${node_name} upgraded, waiting for it to come back"
   else
 
+  # 0. Both plans of step 2, made now and applied to nothing: the second one only
+  # shows what it drags in once the node exists, and refusing then would leave a
+  # fresh VM with no config.
+  saved_plan_apply "${node_name}-instance" "$t" "$i" "${#infra_targets[@]}" "" check \
+    "${infra_targets[@]}" -replace="$inst_addr"
+  saved_plan_apply "${node_name}-config" "$t" "$i" "$cfg_max" "" check "${cfg_targets[@]}"
+
   # 1. cordon + drain (evacuate workloads, trigger Longhorn rebuild / app failover)
   cordon_drain "$node_name"
 
@@ -1362,14 +1402,14 @@ replace_node() { # <type: cp|worker> <index>
   # apply replaced all three control planes together, taking etcd down.
   info "tofu 1/2 — recreate ${node_name} (instance, NIC/IP)…"
   info "targets: ${infra_targets[*]#-target=}"
-  saved_plan_apply "${node_name}-instance" "${#infra_targets[@]}" \
+  saved_plan_apply "${node_name}-instance" "$t" "$i" "${#infra_targets[@]}" \
     "tofu apply (instance) failed for ${node_name} — cluster left with ${node_name} cordoned; investigate before retrying" \
-    "${infra_targets[@]}" -replace="$inst_addr"
+    apply "${infra_targets[@]}" -replace="$inst_addr"
 
   info "tofu 2/2 — wait for the new node, then apply its Talos config…"
-  saved_plan_apply "${node_name}-config" "$cfg_max" \
+  saved_plan_apply "${node_name}-config" "$t" "$i" "$cfg_max" \
     "tofu apply (config) failed for ${node_name} — the VM exists but is unconfigured (maintenance mode); re-run to resume" \
-    "${cfg_targets[@]}"
+    apply "${cfg_targets[@]}"
 
   fi  # end of the replacement path
 
@@ -1399,11 +1439,14 @@ replace_node() { # <type: cp|worker> <index>
     wait_etcd_healthy "${#CP_IPS[@]}" || die "etcd did not return to ${#CP_IPS[@]}/${#CP_IPS[@]} healthy — STOP (do NOT replace another CP)"
   fi
 
-  # 7. Longhorn rebuild complete (no degraded/faulted)
-  wait_longhorn_healthy || die "Longhorn not healthy after replacing ${node_name} — STOP"
-
-  # 8. back into rotation
+  # 7. back into rotation, BEFORE the Longhorn gate: Longhorn does not schedule a
+  # replica onto a cordoned node, so with as many replicas as workers (the default 3
+  # on 3) the node this gate waits for is the one it keeps from rebuilding. Measured
+  # on Scaleway 2026-10-03: degraded for 600 s until a manual uncordon, healthy 63 s later.
   "${KCTL[@]}" uncordon "$node_name" || warn "uncordon failed for ${node_name} (re-run manually)"
+
+  # 8. Longhorn rebuild complete (no degraded/faulted) before the next node is touched
+  wait_longhorn_healthy || die "Longhorn not healthy after replacing ${node_name} — STOP"
   ok "Node ${node_name} $([[ $UPGRADE -eq 1 ]] && echo upgraded || echo replaced) and back in rotation"
 }
 

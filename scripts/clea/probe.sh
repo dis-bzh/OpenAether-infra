@@ -105,7 +105,7 @@ else
 fi
 
 # --- 2. the bump itself, on the host: the container has no Python -------------
-if ! python3 "$CLEA" --root "$ROOT" bump "$DEP" "$VERSION"; then
+if ! python3 "$CLEA" --root "$ROOT" bump ${CLEA_SHA:+--sha "$CLEA_SHA"} "$DEP" "$VERSION"; then
   bad "clea bump refused — nothing was rewritten, so a probe here would test the tree it started with"
   echo; printf '%s passed, %s failed\n' "$PASS" "$FAIL"; exit 1
 fi

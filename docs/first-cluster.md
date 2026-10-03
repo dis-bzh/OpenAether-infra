@@ -201,8 +201,10 @@ only the provider can clear that, and a second request is open for it.
 Six buckets exist afterwards: state and artifacts, each with a `-backup` twin,
 plus the image and its staging area.
 
-Re-running resumes — **except when your edit adds a node**, which is a known
-open defect (see the issues), not something you did wrong.
+Re-running resumes. So does an edit that adds a worker: `task cluster-up` creates the
+machine, opens the tunnels, then configures only the new node
+(`scripts/bootstrap/grow-nodes.sh`), measured on Scaleway going from 3 to 5 workers.
+Adding a control plane goes through the same step and has not been measured.
 
 ## 5. Talk to it
 

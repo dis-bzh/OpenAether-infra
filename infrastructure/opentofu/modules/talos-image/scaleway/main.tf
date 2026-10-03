@@ -57,6 +57,12 @@ resource "terraform_data" "build_and_upload" {
 # Import the staged QCOW2 as a Block Storage (SBS) snapshot in every target zone.
 # Block storage is the current-gen, all-zones, durable path (l_ssd/DEV1 is
 # deprecated). Snapshots are zonal, so HA across fr-par-1/2/3 needs one per zone.
+# The staged object is read once, at import. Measured 2026-10-02 (Scaleway): deleting the
+# current version's object and planning the image lane again gave "No changes", so it is a
+# cache, not a plan-stability requirement. It is kept on purpose, not purged: it spares a
+# re-download and a conversion if a snapshot is ever re-imported (unmeasured: whether that
+# re-stages it by itself). One ~220 MB object per Talos version stays in the bucket; empty
+# it by hand. Outscale deletes its copy because the OMI stands alone.
 resource "scaleway_block_snapshot" "talos" {
   for_each = toset(var.zones)
 

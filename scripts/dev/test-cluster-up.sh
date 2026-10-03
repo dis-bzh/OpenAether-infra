@@ -36,16 +36,18 @@ case "\$(basename "\$0") \$*" in
   "talos-version.sh workload-"*) echo v0.0.1-fixture ;;
   talos-version.sh*) echo v0.0.0-fixture ;;
   tf-backend.sh*) echo -backend-config=path=fixture.tfstate ;;
+  bootstrap-in-state.sh*) echo false ;;
   ssh-keygen*) exit 1 ;;
   infra-verify.sh*) echo "fixture verifier \$*: exit \${VERIFY_RC:?}"; exit "\$VERIFY_RC" ;;
+  adopt-bootstrap.sh*) exit "\${ADOPT_RC:-0}" ;;
 esac
 exit 0
 EOF
 chmod +x "$W/stub"
 for s in internal/talos-version.sh internal/ensure-buckets.sh internal/converge-versions.sh \
-         internal/tf-backend.sh internal/explain-failure.sh bootstrap/talos-image.sh \
-         bootstrap/render-bootstrap-manifests.sh bootstrap/talos-tunnels.sh ops/backup-state.sh \
-         dev/infra-verify.sh; do
+         internal/tf-backend.sh internal/bootstrap-in-state.sh internal/explain-failure.sh bootstrap/talos-image.sh \
+         bootstrap/render-bootstrap-manifests.sh bootstrap/talos-tunnels.sh bootstrap/adopt-bootstrap.sh bootstrap/grow-nodes.sh \
+         ops/backup-state.sh dev/infra-verify.sh; do
   ln -s "$W/stub" "$W/scripts/$s"
 done
 ln -s "$W/stub" "$W/bin/tofu"; ln -s "$W/stub" "$W/bin/ssh-keygen"
@@ -68,6 +70,18 @@ calls() { grep -c "$1" "$W/calls.log"; }
 # Last matching line; converge-versions' --check dry run is not the roll.
 line_of() { grep -n "$2" "$1" | grep -v -- '--check$' | tail -1 | cut -d: -f1; }
 tail_of() { tail -n 4 "$O" | tr '\n' ' '; }
+# Phase 2 asks the nodes whether a bootstrap the state forgot already ran (#67): once,
+# for this role then provider, after the tunnels it needs and before the plan that would
+# re-send the RPC. A hardcoded role or provider reaches another cluster's tfvars.
+adopted_once() { # <role> <provider>
+  local t a p
+  t="$(line_of "$W/calls.log" '^talos-tunnels.sh open')"; a="$(line_of "$W/calls.log" '^adopt-bootstrap.sh ')"
+  p="$(line_of "$W/calls.log" '^tofu plan -out=phase2-')"
+  [ "$(calls '^adopt-bootstrap.sh ')" = 1 ] && grep -qx "adopt-bootstrap.sh $1 $2" "$W/calls.log" \
+    && [ -n "$t" ] && [ -n "$a" ] && [ -n "$p" ] && [ "$t" -lt "$a" ] && [ "$a" -lt "$p" ] \
+    && ok "the adoption check runs once, for $1/$2 (role, then provider), between the tunnels and phase 2's plan" \
+    || bad "adopt-bootstrap.sh was called $(calls '^adopt-bootstrap.sh ') times, got: $(grep '^adopt-bootstrap' "$W/calls.log"); tunnels at ${t:-none}, it at ${a:-none}, plan at ${p:-none}"
+}
 UP=(cluster-up KEY="$W/key" APPROVE=auto)
 
 
@@ -81,6 +95,7 @@ grep -q 'cluster-up complete' "$O" \
 [ "$(calls '^infra-verify.sh ')" = 1 ] && grep -qx 'infra-verify.sh scaleway management' "$W/calls.log" \
   && ok "the verifier ran once, for scaleway/management — it is what failed the run" \
   || bad "the verifier was not what failed: $(tail_of)"
+adopted_once management scaleway
 
 
 echo "--- a passing verifier lets cluster-up say so ---"
@@ -94,6 +109,7 @@ v="$(line_of "$O" '^fixture verifier')"; s="$(line_of "$O" '^✓ cluster-up comp
 [ -n "$v" ] && [ -n "$s" ] && [ "$s" -gt "$v" ] \
   && ok "the success line is printed, after the verifier's verdict" \
   || bad "verifier at line ${v:-none}, success line at ${s:-none}"
+adopted_once workload ovh
 # The roll needs a kubeconfig, and so does the verifier after it: every cluster in
 # the checkout writes the same path, so the verifier must not trust the pre-roll copy.
 K='^tofu output -raw kubeconfig'
@@ -102,6 +118,20 @@ c="$(line_of "$W/calls.log" '^converge-versions.sh ')"; i="$(line_of "$W/calls.l
 [ "$(calls "$K")" = 2 ] && [ -n "$c" ] && [ -n "$i" ] && [ "${k1:-0}" -lt "$c" ] && [ "$c" -lt "${k2:-0}" ] && [ "$k2" -lt "$i" ] \
   && ok "kubeconfig is fetched before the roll, and again between the roll and the verifier" \
   || bad "fetches: $(calls "$K"), first ${k1:-none}, last ${k2:-none}; roll at ${c:-none}; verify at ${i:-none}"
+
+
+echo "--- a failing adoption stops phase 2 before its plan ---"
+# The script exits 1 only after etcd answered and its import failed: planning on would
+# re-send the Bootstrap it exists to prevent.
+EXTRA=ADOPT_RC=1 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" != 0 ] && [ "$(calls '^adopt-bootstrap.sh ')" = 1 ] && ok "cluster-up exits $rc after the adoption failed" \
+  || bad "exit $rc, adoption calls: $(calls '^adopt-bootstrap.sh ')"
+[ "$(calls '^tofu plan -out=phase2-')" = 0 ] && [ "$(calls '^tofu apply phase2-')" = 0 ] \
+  && ok "phase 2 never planned nor applied" \
+  || bad "phase 2 went on: $(grep -E '^tofu (plan -out=phase2-|apply phase2-)' "$W/calls.log" | tr '\n' '|')"
+[ "$(calls '^infra-verify.sh ')" = 0 ] && ! grep -q 'cluster-up complete' "$O" \
+  && ok "the verifier is not reached and no success line is printed" \
+  || bad "the journey went on: $(tail_of)"
 
 
 echo "--- the image is the one ROLE's tfvars pins ---"

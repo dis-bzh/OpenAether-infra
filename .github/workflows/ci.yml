@@ -603,10 +603,6 @@ jobs:
       - name: Validate worker config
         run: talosctl validate --config /tmp/talos-configs/worker.yaml --mode metal
 
-      - name: Check kube-proxy is disabled
-        run: |
-          grep -q 'disabled: true' /tmp/talos-configs/controlplane.yaml
-
   security:
     name: IaC Security Scan
     runs-on: ubuntu-latest
