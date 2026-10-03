@@ -206,8 +206,10 @@ demande est ouverte pour cela.
 Six buckets existent ensuite : l'état et les artefacts, chacun avec son jumeau
 `-backup`, plus l'image et sa zone de préparation.
 
-Relancer reprend où ça s'est arrêté — **sauf si ta modification ajoute un nœud**,
-qui est un défaut ouvert connu (voir les issues), pas une erreur de ta part.
+Relancer reprend où ça s'est arrêté. Ajouter un worker aussi : `task cluster-up` crée la
+machine, ouvre les tunnels, puis configure seulement le nouveau nœud
+(`scripts/bootstrap/grow-nodes.sh`), mesuré sur Scaleway en passant de 3 à 5 workers.
+Ajouter un control plane passe par la même étape et n'a pas été mesuré.
 
 ## 5. Joindre le cluster
 

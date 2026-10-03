@@ -16,6 +16,13 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
+- **`cluster-verify` reads the workers' encrypted data volumes back (#62).**
+  `worker_storage` asks for LUKS2 user volumes on each worker and nothing checked
+  one existed. The verifier now asks each worker's own Talos API, through the
+  first control plane's tunnel, for every volume the tfvars name: `ready` and
+  `luks2`, or red. A worker no tunnel reaches is a warning. Seen on a real
+  Scaleway cluster: green, and red (3 failed) with a volume named that the
+  workers do not carry.
 - **Cléa can probe and bump an `action-sha` pin (plumber).** `getplumber/plumber`
   is pinned as `uses: ...@<sha>  # v0.5.12` and as a release URL; the first shape
   made `bump` refuse, so its probe was red every day and the dependency could
@@ -191,6 +198,14 @@ in git. 0.1.0 is the first entry describing something proven.
   `go-task` 3.54.0 and the `kubectl-cnpg` plugin 1.30.1 are in #226;
   `fluxcd/flux2` v2.9.6 and `siderolabs/talos` v1.14.2 not probed;
   `kubernetes/kubernetes` v1.37.1 probe failed (`versions-guard.tf`, #181).
+- **Talos v1.14.2 and Kubernetes v1.37.1 are the default pin (#181).** Both roots
+  (`cluster` and `opentofu-local`) move together. On a real Scaleway cluster, with a
+  Longhorn volume attached and a Service probe running, `cluster-upgrade` took
+  v1.13.9 / v1.36.3 to this pair in place: six nodes, no failed Service probe, the
+  data written before the climb read back identically, `cluster-verify` 13/13. The
+  Longhorn question the bump waited on is answered on the pair the issue names
+  (v1.14.1 / v1.37.0). OVH and Outscale have not seen 1.14: their rows still read
+  Talos 1.13.8.
 - **`getplumber/plumber` v0.4.51 → v0.5.12** in `security.yml` (SHA and comment
   together) and `install-plumber.sh`, by hand: `clea bump` refuses an
   `action-sha` pin, so Cléa's daily run had been red on it since at least
@@ -204,6 +219,33 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **`workers = N+1` and one `task cluster-up` now work on a bootstrapped cluster (#59).**
+  The apply that created a node also waited for its Talos port through a tunnel that
+  cannot exist before the node, and once the tunnels were opened by hand the next plan
+  blocked 15 minutes on a health check no unconfigured node can pass. `cluster-up` now
+  runs `scripts/bootstrap/grow-nodes.sh` first: it creates the machines (a plan of the
+  provider module alone), refreshes the outputs the tunnels read, opens the tunnels,
+  and configures only the nodes the state has no configuration for. A no-op on a fresh
+  cluster or when no node is new. Measured on Scaleway, 3 to 5 workers.
+- **CI no longer "checks kube-proxy is disabled" by matching an unrelated default.**
+  The step grepped `disabled: true` in a config made by plain `talosctl gen config`,
+  which carries none of this repository's patches; the line it matched was the
+  Kubernetes discovery registry's own, which Talos 1.14 stopped writing, so the step
+  went red on the pin bump and had never tested kube-proxy. `test-kube-proxy-disabled.sh`
+  reads the patches the Talos module builds, for control planes and workers.
+- **A stale state lock is now named, with the command that releases it.** A run
+  killed hard (SIGKILL, a crashed runner, a closed laptop) never releases its state
+  lock, and every later `cluster-up`, plan and apply stopped on `Error acquiring the
+  state lock` while nothing in the repository mentioned `tofu force-unlock`.
+  `explain-failure.sh` now prints the holder (ID, operation, who, when), says to
+  check that run is really gone first, and gives the exact command for the data dir
+  the run used. Measured on a live Scaleway cluster, after a `SIGKILL` of phase 2.
+- **The roll no longer deadlocks on Longhorn when it has as many replicas as workers.**
+  `rolling-replace` waited for Longhorn to be healthy and only then uncordoned the
+  node it had just rebuilt, but Longhorn does not put a replica on a cordoned node:
+  with 3 replicas on 3 workers the volume stayed degraded for the whole 600 s gate
+  and the roll stopped (Scaleway: healthy 63 s after a manual uncordon). The node is
+  uncordoned first; the gate still holds the roll before the next node.
 - **A dry run no longer leaves a rung receipt.** `task cluster-upgrade DRY_RUN=1`
   (and `cluster-roll -- --dry-run`) exits 0 having touched nothing, yet recorded
   `real-cloud … rc=0`, which satisfies the "Rung receipt" check for that head

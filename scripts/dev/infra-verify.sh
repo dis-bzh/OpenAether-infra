@@ -279,6 +279,70 @@ else
 fi
 fi
 
+# --- The workers carry the data volumes the config names (#62) -------------------
+#
+# worker_storage asks for Talos user volumes, LUKS2-encrypted, on each worker, and
+# until now nothing read one back: a volume that was never created, or created
+# without encryption, left every other check green. The node's own Talos API is
+# the only witness (`talosctl get volumestatus u-<name>`), so this needs the
+# tunnels: `warn` when none answers, `bad` only for a node that answered and
+# does not carry the volume as configured.
+worker_volume_names() { # <tfvars> — each `name = "…"` inside the worker_storage block
+  awk '
+    /^[[:space:]]*worker_storage[[:space:]]*=/ { on = 1 }
+    on {
+      line = $0; sub(/#.*/, "", line)
+      o = gsub(/\{/, "{", line); c = gsub(/\}/, "}", line); depth += o - c; seen = seen || o > 0
+      while (match(line, /(^|[^A-Za-z0-9_])name[[:space:]]*=[[:space:]]*"[^"]+"/)) {
+        v = substr(line, RSTART, RLENGTH); sub(/^[^"]*"/, "", v); sub(/"$/, "", v); print v
+        line = substr(line, RSTART + RLENGTH)
+      }
+      if (seen && depth <= 0) exit
+    }' "$1" 2>/dev/null
+}
+
+worker_volume_check() { # <volume names, one per line> — read each back from each worker
+  # A worker's apid does not forward ("no request forwarding"), so each one is asked
+  # through the first control plane's tunnel, naming the worker as the node.
+  local ip v out checked=0 failed=0 ips TUN="127.0.0.1:$((50000 + ${TF_VAR_talos_tunnel_port_offset:-0}))"
+  ips="$(K get nodes -l '!node-role.kubernetes.io/control-plane' \
+           -o jsonpath='{range .items[*]}{.status.addresses[?(@.type=="InternalIP")].address}{"\n"}{end}' 2>/dev/null)"
+  if [ -z "$ips" ]; then
+    unk "no worker node answered — the data volumes are UNCHECKED"; return
+  fi
+  for ip in $ips; do
+    if ! timeout 20 talosctl get nodename -e "$TUN" -n "$ip" >/dev/null 2>&1; then
+      warn "worker ${ip}: not reachable through the Talos tunnel on ${TUN} — its data volumes are unchecked (run 'task tunnels-up PROVIDER=${PROVIDER}')"
+      continue
+    fi
+    for v in $1; do
+      out="$(timeout 20 talosctl get volumestatus "u-${v}" -e "$TUN" -n "$ip" -o json 2>/dev/null |
+             jq -r '.spec | "\(.phase) \(.encryptionProvider // "none")"' 2>/dev/null)" || out=""
+      checked=$((checked + 1))
+      case "$out" in
+        "ready luks2") ;;
+        "") bad "worker ${ip} has no volume u-${v}: the config asks for it and the node does not carry it"
+            failed=$((failed + 1)) ;;
+        *) bad "worker ${ip} volume u-${v} is '${out}', expected 'ready luks2': the data is not encrypted at rest as configured"
+           failed=$((failed + 1)) ;;
+      esac
+    done
+  done
+  if [ "$checked" -gt 0 ] && [ "$failed" -eq 0 ]; then
+    ok "every worker carries its data volume(s), ready and LUKS2-encrypted (${checked} read back from the nodes)"
+  fi
+}
+
+if [ "$PROVIDER" != local ]; then
+info "The workers' data volumes are the ones the config names"
+VOLS="$(worker_volume_names "$VER_TFVARS")"
+if [ -z "$VOLS" ]; then
+  ok "no worker data volumes configured — nothing to read back"
+else
+  worker_volume_check "$VOLS"
+fi
+fi
+
 info "The state is backed up"
 
 if [ "$PROVIDER" = local ]; then
