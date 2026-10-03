@@ -141,6 +141,14 @@ le bastion devient injoignable. `admin_ip` refuse désormais une liste vide, une
 adresse sans préfixe et un `/0` — c'est la liste d'autorisation devant sshd du
 bastion ET devant 6443.
 
+**Le bastion reste, durci sur place (décision, #82, 2026-10-03).** Un émetteur OIDC
+pour l'apiserver, une CA SSH ou un plan de contrôle WireGuard demanderaient chacun un
+hôte toujours allumé hors de tout cluster. OpenAether n'a aujourd'hui qu'un opérateur,
+et aucune restauration éprouvée de bout en bout sur un cloud réel (#57) : cet hôte
+serait une chose de plus à garder en vie pour rien. Les quatre `bastion.tf` et
+`admin_ip` restent dans le contrat provider. À rouvrir avec deux opérateurs ou plus,
+ou un service à état dont la restauration a été jouée.
+
 ⚠️ **Le kubeconfig n'est pas révocable.** `talosctl kubeconfig` émet un
 certificat client pour `O=system:masters`, qui court-circuite RBAC, et
 Kubernetes ne sait pas révoquer un certificat client : un kubeconfig qui fuite

@@ -193,6 +193,11 @@ in git. 0.1.0 is the first entry describing something proven.
   keeps a worker's data volumes in its subregion and gives the load balancers every
   public subnet. A node's subnet is ignored after creation, so a cluster built before
   this keeps its layout; bastion and NAT stay in the first subregion.
+- **Two decisions are written down instead of left as questions (#82, #56).** The
+  bastion stays and is hardened in place until there are two operators or a restore
+  that has been run (`docs/admin-access.md`). Outscale has no state lock by design, so
+  its rule is one operator at a time (`docs/release-checklist.md`); Scaleway and OVH
+  refuse a second run by name, seen on both through the project's own tasks.
 
 - **`opentofu/opentofu` 1.12.6 → 1.13.1** (`ci.yml` ×5, `setup.sh`) and
   **`fluxcd/flux-schema` 0.13.0 → 0.15.0** (`ci.yml`, `setup.sh`), both probed
@@ -214,6 +219,13 @@ in git. 0.1.0 is the first entry describing something proven.
   Longhorn question the bump waited on is answered on the pair the issue names
   (v1.14.1 / v1.37.0). OVH and Outscale have not seen 1.14: their rows still read
   Talos 1.13.8.
+- **`go-task/task` 3.53.1 → 3.54.0** (`install-task.sh`) and the
+  **`kubectl-cnpg` plugin 1.30.0 → 1.30.1** (`install-kubectl-cnpg.sh`), the two
+  of Cléa's #91 rows that sit outside `.github/`. Both installed from the pinned
+  release with their checksum verified; `task lint`, `test-scripts` (33
+  harnesses, 1262 passed), `test`, `render-check` and both `validate` roots pass
+  with `task` 3.54.0 first on the PATH. The release notes were not read.
+
 - **`getplumber/plumber` v0.4.51 → v0.5.12** in `security.yml` (SHA and comment
   together) and `install-plumber.sh`, by hand: `clea bump` refuses an
   `action-sha` pin, so Cléa's daily run had been red on it since at least
@@ -226,6 +238,19 @@ in git. 0.1.0 is the first entry describing something proven.
   without a token. The token path rests on CI's "Pipeline audit" job.
 
 ### Fixed
+
+- **The OVH examples and defaults name AZs OVH accepts (#72).** They said `["nova"]`;
+  on EU-WEST-PAR, Nova tolerates it but Cinder rejects it, so the first apply died
+  creating the workers' data volumes. The examples, the cluster default and the module
+  default now name `eu-west-par-a/b/c`. Seen on a real OVH account: all three zones
+  deploy and verify.
+- **The Outscale purge reports this account's images, not just its snapshots (#107).**
+  `purge-orphans` listed leftover snapshots but never images, because `ReadImages`
+  answers every OMI the account may launch (646 of 64 owners on a real account, 2
+  ours). It now reads the account id first and scopes the call with `AccountIds`;
+  a refused `ReadAccounts` or `ReadImages` is "unverified", never an unscoped list
+  nor a clean. Images are still never deleted here. Seen on a real account: exactly
+  its two OMIs, read-only.
 
 - **`workers = N+1` and one `task cluster-up` now work on a bootstrapped cluster (#59).**
   The apply that created a node also waited for its Talos port through a tunnel that

@@ -208,7 +208,7 @@ run "ovh_active_junction_point" {
         flavor_name        = "b3-8"
         image_id           = "dummy-talos-ovh-image"
         network_name       = "Ext-Net"
-        availability_zones = ["nova"]
+        availability_zones = ["eu-west-par-a"]
         bastion_image_id   = "Ubuntu 22.04"
       }
     }

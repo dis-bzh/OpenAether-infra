@@ -205,7 +205,7 @@ fi
 # The core of #71: a duplicate snapshot from a failed image build sat in the
 # account while outscale.py never even asked ReadSnapshots, so "account is
 # clean" was true of everything it looked at and false of the account. Images
-# are deliberately out of scope here — see the comment in outscale.py for why.
+# are listed too, scoped to this account (#107, scenarios 6-10 below).
 #
 # Five scenarios: #1 is the regression guard (must not cry wolf on the
 # ordinary empty case), #2 is #71 itself, #3 is its twin in the --apply
@@ -215,16 +215,34 @@ fi
 echo
 echo "=== outscale.py: snapshot artifacts are seen, not silently skipped ==="
 
+# ReadImages like the real API: unscoped it answers the public catalogue too, with Filters.AccountIds
+# only that account's. CANNED['ReadImages']['Pages'] (a list) serves one page per NextPageToken.
+OSC_IMAGES_FAKE="$(cat <<'PYFAKE'
+def read_images(req):
+    body = json.loads(req.data or b'{}')
+    ids = (body.get('Filters') or {}).get('AccountIds')
+    canned = CANNED.get('ReadImages', {})
+    pages = canned.get('Pages') or [canned.get('Images', [])]
+    n = int(body.get('NextPageToken') or 0)
+    out = {'Images': [i for i in pages[n] if not ids or i.get('AccountId') in ids]}
+    if n + 1 < len(pages):
+        out['NextPageToken'] = str(n + 1)
+    return out
+PYFAKE
+)"
+
 run_osc_canned() { # <CANNED python-dict-literal as a string> [extra argv...]
   local canned="$1"; shift
   env OUTSCALE_ACCESS_KEY_ID=stub OUTSCALE_SECRET_KEY=stub OSC_REGION=eu-west-2 \
       python3 - "$ROOT/scripts/ops/purge-orphans/outscale.py" "$@" <<PY 2>&1
 import runpy, sys, json, io, urllib.request, urllib.error
 
-CANNED = $canned
-
+CANNED = {'ReadAccounts': {'Accounts': [{'AccountId': 'ACCT-OWN'}]}, **$canned}
+$OSC_IMAGES_FAKE
 def fake(req, *a, **k):
     action = req.full_url.rsplit('/', 1)[-1]
+    if action == 'ReadImages':
+        return io.BytesIO(json.dumps(read_images(req)).encode())
     return io.BytesIO(json.dumps(CANNED.get(action, {})).encode())
 
 urllib.request.urlopen = fake
@@ -245,14 +263,16 @@ run_osc_canned_fail() { # <CANNED python-dict-literal> <FAIL_ACTIONS python-list
       python3 - "$ROOT/scripts/ops/purge-orphans/outscale.py" "$@" <<PY 2>&1
 import runpy, sys, json, io, urllib.request, urllib.error
 
-CANNED = $canned
+CANNED = {'ReadAccounts': {'Accounts': [{'AccountId': 'ACCT-OWN'}]}, **$canned}
 FAIL_ACTIONS = $fail_actions
-
+$OSC_IMAGES_FAKE
 def fake(req, *a, **k):
     action = req.full_url.rsplit('/', 1)[-1]
     if action in FAIL_ACTIONS:
         raise urllib.error.HTTPError(req.full_url, 403, 'Forbidden', {},
                                      io.BytesIO(b'{"message":"denied"}'))
+    if action == 'ReadImages':
+        return io.BytesIO(json.dumps(read_images(req)).encode())
     return io.BytesIO(json.dumps(CANNED.get(action, {})).encode())
 
 urllib.request.urlopen = fake
@@ -356,6 +376,61 @@ if grep -qiE 'deletion\(s\) failed' <<<"$out"; then
 else
   bad "outscale.py --apply: the failed-deletion message is missing when a snapshot is also present"
 fi
+
+# --- images (#107): this account's OMIs are named, the public catalogue is not
+OWN='ACCT-OWN'
+MINE="{\"ImageId\": \"ami-ours\", \"ImageName\": \"talos-build\", \"State\": \"available\", \"AccountId\": \"$OWN\"}"
+OTHERS='{"ImageId": "ami-public", "ImageName": "ubuntu", "State": "available", "AccountId": "ACCT-OTHER"}'
+
+# 6. The account's own image, nothing else: non-zero, named, and the catalogue stays out.
+out="$(run_osc_canned "{\"ReadImages\": {\"Images\": [$MINE, $OTHERS]}}")"; rc=$?
+[ "$rc" -ne 0 ] && ok "outscale.py: a leftover own image exits non-zero (rc=${rc})" \
+  || bad "outscale.py: a leftover own image and it exited 0"
+grep -q 'ami-ours' <<<"$out" && ok "outscale.py: it names the own image" \
+  || bad "outscale.py: the own image was found but never named"
+grep -q 'ami-public' <<<"$out" && bad "outscale.py: it listed an image of another account — the unscoped catalogue" \
+  || ok "outscale.py: it does not list the public catalogue"
+grep -qiE 'account is clean' <<<"$out" && bad "outscale.py: it said clean while an own image sat there" \
+  || ok "outscale.py: it does not claim clean while an own image is present"
+
+# 7. Only catalogue images visible (none ours): still clean.
+out="$(run_osc_canned "{\"ReadImages\": {\"Images\": [$OTHERS]}}")"; rc=$?
+[ "$rc" -eq 0 ] && grep -qiE 'account is clean' <<<"$out" \
+  && ok "outscale.py: the public catalogue alone leaves the account clean" \
+  || bad "outscale.py: the public catalogue alone made the account look dirty (rc=${rc})"
+
+# 8. ReadAccounts refused: the id is unknown, so images are unverified — and ReadImages must not
+#    even be asked unscoped (it would answer the catalogue).
+out="$(run_osc_canned_fail "{\"ReadImages\": {\"Images\": [$MINE, $OTHERS]}}" "['ReadAccounts']")"; rc=$?
+[ "$rc" -ne 0 ] && ok "outscale.py: ReadAccounts refused exits non-zero (rc=${rc})" \
+  || bad "outscale.py: ReadAccounts refused and it exited 0 — read as clean"
+grep -qiE 'visibility was refused' <<<"$out" && ok "outscale.py: it says image visibility was refused" \
+  || bad "outscale.py: a refused ReadAccounts left no trace"
+grep -q 'ami-' <<<"$out" && bad "outscale.py: it listed images without an account scope" \
+  || ok "outscale.py: it listed no image without an account scope"
+
+# 9. ReadAccounts answers nothing usable: same as refused (an empty answer is not an id).
+out="$(run_osc_canned '{"ReadAccounts": {"Accounts": []}}')"; rc=$?
+[ "$rc" -ne 0 ] && ! grep -qiE 'account is clean' <<<"$out" \
+  && ok "outscale.py: an account with no id is unverified, not clean" \
+  || bad "outscale.py: no account id and it still said clean (rc=${rc})"
+
+# 10. ReadImages refused (account id fine): unverified, and a snapshot found alongside is still named.
+out="$(run_osc_canned_fail '{"ReadSnapshots": {"Snapshots": [{"SnapshotId": "snap-both", "State": "completed"}]}}' "['ReadImages']")"; rc=$?
+[ "$rc" -ne 0 ] && grep -q 'snap-both' <<<"$out" && grep -qiE 'may not be all' <<<"$out" \
+  && ok "outscale.py: ReadImages refused keeps the snapshot and says the list may be incomplete" \
+  || bad "outscale.py: ReadImages refused lost the snapshot or the warning (rc=${rc})"
+
+# 11. Paged answer: an image on page 2 is still found.
+PAGED="{\"ReadImages\": {\"Pages\": [[$OTHERS], [$MINE]]}}"
+out="$(run_osc_canned "$PAGED")"; rc=$?
+[ "$rc" -ne 0 ] && grep -q 'ami-ours' <<<"$out" && ok "outscale.py: an image on the second page is found" \
+  || bad "outscale.py: an image on page 2 was missed (rc=${rc})"
+
+# 12. A failed deletion still wins over a leftover image (exit 3, not 1).
+out="$(run_osc_canned_fail "{\"ReadNets\": {\"Nets\": [{\"NetId\": \"vpc-stub\", \"IpRange\": \"10.0.0.0/16\"}]}, \"ReadImages\": {\"Images\": [$MINE]}}" "['DeleteNet']" --apply)"; rc=$?
+[ "$rc" -eq 3 ] && ok "outscale.py --apply: a failed deletion beside an own image exits 3" \
+  || bad "outscale.py --apply: expected exit 3 beside an image, got rc=${rc}"
 
 # --- Credentials missing or refused: "could not check" (2), never "found" (1) -
 # A bare os.environ[...] raised KeyError and exited 1, the code callers read as
