@@ -134,6 +134,13 @@ key rotation — those stay with the offline root token, deliberate and rare.
 becomes unreachable. `admin_ip` refuses an empty list, a bare address and a `/0`
 since it validates — it is the allowlist in front of both bastion sshd and 6443.
 
+**The bastion stays, hardened in place (decision, #82, 2026-10-03).** An OIDC issuer
+for the apiserver, an SSH CA or a WireGuard control plane would each need an always-on
+host outside every cluster. OpenAether has one operator today, and no restore tested
+end to end on a real cloud yet (#57), so that host would be one more thing to keep
+alive for nothing. The four `bastion.tf` and `admin_ip` stay in the provider contract.
+Revisit with two or more operators, or a stateful service whose restore has been run.
+
 ⚠️ **The kubeconfig cannot be revoked.** `talosctl kubeconfig` issues a client
 certificate for `O=system:masters`, which bypasses RBAC, and Kubernetes has no
 revocation for client certificates: a leaked kubeconfig is valid until it

@@ -186,6 +186,12 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **Two decisions are written down instead of left as questions (#82, #56).** The
+  bastion stays and is hardened in place until there are two operators or a restore
+  that has been run (`docs/admin-access.md`). Outscale has no state lock by design, so
+  its rule is one operator at a time (`docs/release-checklist.md`); Scaleway and OVH
+  refuse a second run by name, seen on both through the project's own tasks.
+
 - **`opentofu/opentofu` 1.12.6 → 1.13.1** (`ci.yml` ×5, `setup.sh`) and
   **`fluxcd/flux-schema` 0.13.0 → 0.15.0** (`ci.yml`, `setup.sh`), both probed
   green by Cléa (#91). Proven with the real binaries, not the sandbox's cached
