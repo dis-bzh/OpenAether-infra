@@ -1,10 +1,13 @@
 # ==============================================================================
 # Outscale — Network (AWS-style two-subnet layout for node egress)
 #
-#   private subnet (10.0.0.0/24) — cluster control planes + workers.
+#   private subnets (one per availability zone; the first is 10.0.0.0/24) — cluster
+#     control planes + workers, spread over the zones by index (#58).
 #     Default route -> NAT service, so the nodes (which have NO public IP) still
 #     reach the internet for image pulls and NTP.
-#   public  subnet (10.0.1.0/24) — bastion, NAT service, internet-facing LBs.
+#   public  subnet (10.0.1.0/24, first zone) — bastion, NAT service, internet-facing LBs.
+#     A load balancer takes one subnet ("multiple subnets is not implemented", measured
+#     2026-10-03) and still reaches nodes in every subregion.
 #     Default route -> Internet Gateway.
 #
 # A bare Internet Gateway only NATs instances that own a public IP (1:1), so a
@@ -12,8 +15,16 @@
 # the other providers already have (Scaleway public-gateway, OVH router SNAT).
 # ==============================================================================
 
+locals {
+  net_cidr = "10.0.0.0/16"
+  # One private subnet per entry of availability_zones. The numbers are the /24 slots inside the
+  # Net: the first zone keeps the 10.0.0.0/24 this module always used (10.0.1.0/24 stays the
+  # public subnet), the others take 10.0.2.0/24, 10.0.3.0/24 and so on.
+  private_netnums = [for i in range(length(var.availability_zones)) : i == 0 ? 0 : 1 + i]
+}
+
 resource "outscale_net" "this" {
-  ip_range = "10.0.0.0/16"
+  ip_range = local.net_cidr
 
   tags {
     key   = "Name"
@@ -21,22 +32,28 @@ resource "outscale_net" "this" {
   }
 }
 
-# --- Private subnet: cluster nodes (egress via the NAT service) ---
+# --- Private subnets: cluster nodes (egress via the NAT service) ---
 resource "outscale_subnet" "private" {
+  count          = length(var.availability_zones)
   net_id         = outscale_net.this.net_id
-  ip_range       = "10.0.0.0/24"
-  subregion_name = var.availability_zones[0]
+  ip_range       = cidrsubnet(local.net_cidr, 8, local.private_netnums[count.index])
+  subregion_name = var.availability_zones[count.index]
 
   tags {
     key   = "Name"
-    value = "${var.cluster_name}-private-subnet"
+    value = "${var.cluster_name}-private-subnet-${count.index}"
   }
+}
+
+moved {
+  from = outscale_subnet.private
+  to   = outscale_subnet.private[0]
 }
 
 # --- Public subnet: bastion, NAT service, internet-facing LBs (egress via IGW) ---
 resource "outscale_subnet" "public" {
   net_id         = outscale_net.this.net_id
-  ip_range       = "10.0.1.0/24"
+  ip_range       = cidrsubnet(local.net_cidr, 8, 1)
   subregion_name = var.availability_zones[0]
 
   tags {
@@ -107,6 +124,12 @@ resource "outscale_route" "private_nat" {
 }
 
 resource "outscale_route_table_link" "private" {
+  count          = length(var.availability_zones)
   route_table_id = outscale_route_table.private.route_table_id
-  subnet_id      = outscale_subnet.private.subnet_id
+  subnet_id      = outscale_subnet.private[count.index].subnet_id
+}
+
+moved {
+  from = outscale_route_table_link.private
+  to   = outscale_route_table_link.private[0]
 }
