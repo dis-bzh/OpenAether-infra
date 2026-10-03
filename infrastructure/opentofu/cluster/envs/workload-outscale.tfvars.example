@@ -19,6 +19,8 @@ node_distribution = {
     control_planes     = 3
     workers            = 3
     region             = "eu-west-2"
+    # Deliberately below the sizing floor (docs/capacity.md): the default Outscale quota is 20 vCPU / 40 GB,
+    # and 5 nodes of 4 vCPU / 8 GB do not fit it. Enough for a bare cluster (Talos + Cilium); raise the quota first for the platform.
     instance_type      = "tinav5.c2r4p1"
     # image_id optional — defaults to looking up "talos-outscale-amd64-<talos_version>" by
     # name (published by talos-image). Override only if you use a different name/OMI:

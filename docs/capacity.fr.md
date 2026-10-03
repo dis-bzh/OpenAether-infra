@@ -52,17 +52,22 @@ script ne vérifie IP, LB ni security groups.
 
 | Exemple | Nœuds × type (vCPU / RAM) | Inst. | vCPU | RAM | Au plancher ? | `task preflight-quotas PROVIDER=… --` |
 |---|---|---|---|---|---|---|
-| `management-`, `failover-scaleway` | 3+2 × `POP2-2C-8G` (2 / 8 Go) | 6 | 12 | 42 Go | **Non** — 2 vCPU | pas de backend Scaleway |
-| `workload-scaleway` | 3+3 × `DEV1-M` (3 / 4 Go) | 7 | 20 | 26 Go | **Non** — 4 Go | pas de backend Scaleway |
+| `management-`, `failover-scaleway` | 3+2 × `POP2-4C-16G` (4 / 16 Go) | 6 | 22 | 82 Go | Type oui ; marge sur 2 workers non mesurée | pas de backend Scaleway |
+| `workload-scaleway` | 3+3 × `POP2-4C-16G` | 7 | 26 | 98 Go | Oui | pas de backend Scaleway |
 | `management-`, `failover-ovh` | 3+2 × `c3-8` (4 / 8 Go) | 6 | 22 | 48 Go | Type oui ; marge sur 2 workers non mesurée | `--add-vms 6 --add-cores 22 --add-ram-gb 48` |
 | `workload-ovh` | 3+3 × `c3-8` | 7 | 26 | 56 Go | Oui | `--add-vms 7 --add-cores 26 --add-ram-gb 56` |
-| `management-`, `failover-outscale` | 3+2 × `tinav5.c2r4p1` (2 / 4 Go) | 6 | 12 | 22 Go | **Non** | `--add-vms 6 --add-cores 12 --add-ram-gb 22` |
-| `workload-outscale` | 3+3 × `tinav5.c2r4p1` | 7 | 14 | 26 Go | **Non** | `--add-vms 7 --add-cores 14 --add-ram-gb 26` |
+| `management-`, `failover-outscale` | 3+2 × `tinav5.c2r4p1` (2 / 4 Go) | 6 | 12 | 22 Go | **Non, volontairement** — voir plus bas | `--add-vms 6 --add-cores 12 --add-ram-gb 22` |
+| `workload-outscale` | 3+3 × `tinav5.c2r4p1` | 7 | 14 | 26 Go | **Non, volontairement** | `--add-vms 7 --add-cores 14 --add-ram-gb 26` |
 | `*-proxmox` | 1+1 × 4 vCPU / 8 Gio, disque 20 Gio | 2 | 8 | 16 Gio | Type oui ; un seul worker ne se draine pas sans coupure | capacité de l'hôte, pas un quota |
 
 À noter aussi sur les exemples :
 
-- Le `DEV1-M` de `workload-scaleway` est un type à SSD local, alors que le
+- **Pourquoi les exemples Outscale restent sous le plancher.** Le quota par défaut du compte est de
+  20 vCPU / 40 Go. Le module prend un seul type pour tous les nœuds : le plancher (4 vCPU / 8 Go) sur
+  5 nœuds plus le bastion fait 22 vCPU, ce qui ne tient pas. Un cluster nu (Talos + Cilium) a été
+  déployé et vérifié en `tinav5.c2r4p1` à 3+3 le 2026-10-03 ; porter la plateforme là demande
+  d'abord un quota plus haut.
+- L'ancien exemple `workload` de Scaleway utilisait `DEV1-M`, un type à SSD local, alors que le
   module demande toujours une racine `sbs_volume`, et ses `zones` incluent
   `fr-par-3`, où le commentaire de l'exemple management dit que `DEV1-M` n'est
   pas proposé. Aucun run n'est consigné.

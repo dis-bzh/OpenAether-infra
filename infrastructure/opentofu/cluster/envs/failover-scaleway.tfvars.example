@@ -36,8 +36,8 @@ node_distribution = {
     workers        = 2
     region         = "fr-par"
     zone           = "fr-par-1"
-    instance_type  = "POP2-2C-8G"
-    image_name     = "talos-scaleway-amd64-v1.13.3"
+    instance_type  = "POP2-4C-16G" # meets the sizing floor, see docs/capacity.md
+    # image_name left unset — auto-derives to "talos-scaleway-amd64-${talos_version}".
     zones          = ["fr-par-1", "fr-par-2", "fr-par-3"]
   }
 }
