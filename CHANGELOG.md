@@ -213,6 +213,13 @@ in git. 0.1.0 is the first entry describing something proven.
   Kubernetes discovery registry's own, which Talos 1.14 stopped writing, so the step
   went red on the pin bump and had never tested kube-proxy. `test-kube-proxy-disabled.sh`
   reads the patches the Talos module builds, for control planes and workers.
+- **A stale state lock is now named, with the command that releases it.** A run
+  killed hard (SIGKILL, a crashed runner, a closed laptop) never releases its state
+  lock, and every later `cluster-up`, plan and apply stopped on `Error acquiring the
+  state lock` while nothing in the repository mentioned `tofu force-unlock`.
+  `explain-failure.sh` now prints the holder (ID, operation, who, when), says to
+  check that run is really gone first, and gives the exact command for the data dir
+  the run used. Measured on a live Scaleway cluster, after a `SIGKILL` of phase 2.
 - **The roll no longer deadlocks on Longhorn when it has as many replicas as workers.**
   `rolling-replace` waited for Longhorn to be healthy and only then uncordoned the
   node it had just rebuilt, but Longhorn does not put a replica on a cordoned node:
