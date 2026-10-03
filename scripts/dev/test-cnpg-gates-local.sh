@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rung ONE for the DATABASE gates: rolling-replace.sh's cnpg_* logic against a
+# Rung ONE for the DATABASE gates: roll-gates.sh's cnpg_* logic against a
 # REAL CloudNativePG, on the local Docker cluster.
 #
 # test-gates-local.sh is the real-apiserver rung for everything else, but it only
@@ -19,7 +19,7 @@
 #
 # Needs: `task local-up`.
 # Usage: test-cnpg-gates-local.sh [--skip-deadlock]
-#   RR_SRC=<file>  extract the gates from this copy of rolling-replace.sh instead.
+#   RR_SRC=<file>  extract the gates from this copy of lib/roll-gates.sh instead.
 #                  Mutating a copy and re-running is how each assertion below is
 #                  shown to be able to fail.
 #   LAB_NS=<ns>    reuse and KEEP this lab namespace instead of making one, so a
@@ -29,7 +29,7 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 export KUBECONFIG="${KUBECONFIG:-$ROOT/infrastructure/opentofu-local/kubeconfig}"
-RR_SRC="${RR_SRC:-$ROOT/scripts/ops/rolling-replace.sh}"
+RR_SRC="${RR_SRC:-$ROOT/scripts/lib/roll-gates.sh}"
 # Pinned, never `latest`: a gate proven against some other operator proves nothing
 # about the one that runs in production (OpenAether-apps apps/base/cnpg/).
 CNPG_VERSION="1.23.1"
@@ -155,7 +155,7 @@ EOF
 fi
 wait_ready 2 || { echo "✗ the lab cluster never reached 2/2 ready — nothing below would mean anything" >&2; exit 1; }
 
-echo "=== rolling-replace.sh's CNPG gates against CloudNativePG ${CNPG_VERSION} ==="
+echo "=== roll-gates.sh's CNPG gates against CloudNativePG ${CNPG_VERSION} ==="
 
 if cnpg_installed; then
   pass "cnpg_installed: the CRD is there and it says so"

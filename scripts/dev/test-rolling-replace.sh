@@ -56,15 +56,16 @@ REAL_KUBECTL="$(command -v kubectl || true)"   # before the stub shadows it
 export PATH="$STUB_DIR:$PATH"
 
 # --- load the functions under test -------------------------------------------
-# rolling-replace.sh is a script, not a library: source it with a sentinel that
-# makes it define its functions and stop before doing anything.
+# The gates live in lib/roll-gates.sh and the per-node flow in rolling-replace.sh,
+# a script rather than a library: read the function text out of both.
+RR_FILES=("$ROOT/scripts/lib/roll-gates.sh" "$ROOT/scripts/ops/rolling-replace.sh")
 extract() { # <fn name>...  — pull the named functions out, with their helpers
   awk -v fns="$1" '
     BEGIN { n = split(fns, a, ","); for (i = 1; i <= n; i++) want[a[i]] = 1 }
     /^[a-z_]+\(\) \{/ { name = $1; sub(/\(\).*/, "", name); inside = (name in want) }
     inside { print }
     inside && /^\}/ { inside = 0 }
-  ' "$ROOT/scripts/ops/rolling-replace.sh"
+  ' "${RR_FILES[@]}"
 }
 
 # shellcheck disable=SC2016
@@ -298,7 +299,10 @@ echo "--- and that it is wired in: once, after the budgets are gone, before node
 # Everything above tests a function the harness calls itself. The defect that
 # cost the most on 2026-08-15 was a fix that was never REACHED, so assert the
 # call site too: this is the one thing a stub kubectl cannot observe.
-SUT="$ROOT/scripts/ops/rolling-replace.sh"
+# The call-site and "exactly once" assertions below read the roll as one text, as
+# they did when it was one file: the gates first, then the script.
+SUT="$STUB_DIR/roll-all.sh"
+cat "${RR_FILES[@]}" >"$SUT"
 lineno() { grep -n "$1" "$SUT" | head -1 | cut -d: -f1; }
 # Last match: the first is the per-node re-assert in cordon_drain, not the main block.
 L_MAINT="$(grep -n '^  cnpg_maintenance true$' "$SUT" | tail -1 | cut -d: -f1)"
@@ -357,7 +361,7 @@ out="$(node_schematic ep 10.255.255.1)"; rc=$?
   || bad "node_schematic propagated a failure (rc=$rc, out='$out')"
 unset STUB_SCHEMATIC
 
-grep -q 'want_sch != .*have_sch\|want_sch" != "\$have_sch' "$ROOT/scripts/ops/rolling-replace.sh" \
+cat "${RR_FILES[@]}" | grep -q 'want_sch != .*have_sch\|want_sch" != "\$have_sch' \
   && ok "the skip compares the schematic as well as the tag" \
   || bad "the skip is back to comparing the version tag alone"
 
@@ -418,7 +422,7 @@ got="$(PATH="$STUB_DIR:$PATH" cp_roll_order 2>"$WARN_OUT" | tr '\n' ' ' | sed 's
   && ok "an unreadable etcd keeps the index order, and says so" \
   || bad "unreadable etcd: order='${got}' warn='$(tr -d '\n' <"$WARN_OUT")'"
 
-grep -q 'etcd forfeit-leadership' "$ROOT/scripts/ops/rolling-replace.sh" \
+cat "${RR_FILES[@]}" | grep -q 'etcd forfeit-leadership' \
   && ok "the roll hands leadership over instead of letting it be taken" \
   || bad "no forfeit-leadership — the last control plane still forces an election"
 
@@ -432,7 +436,7 @@ echo "=== the roll reads the role's env file, not always management's ==="
 # phases and then rolled against the MANAGEMENT state. Three call sites had to
 # agree, and only a source read can see two of them — a stub kubectl cannot
 # observe which file `tofu init` was handed.
-SUT_R="$ROOT/scripts/ops/rolling-replace.sh"
+SUT_R="$SUT"
 TFY="$ROOT/Taskfile.yml"
 
 grep -qE '^TFVARS="envs/\$\{ROLE\}-\$\{PROVIDER\}\.tfvars"$' "$SUT_R" \
@@ -717,7 +721,7 @@ chmod +x "$FK/bin/kubectl"
 
 eval "$(extract 'cnpg_flux_owners,cnpg_clusters,cnpg_flux_suspend,cnpg_maintenance,cnpg_budgets,cnpg_unrestored,assert_restored,finish_roll')"
 for f in cnpg_budgets cnpg_unrestored assert_restored finish_roll; do
-  declare -F "$f" >/dev/null || bad "$f is not defined in rolling-replace.sh"
+  declare -F "$f" >/dev/null || bad "$f is not defined in roll-gates.sh"
 done
 
 # The roll ends in the state the script leaves it in when it is done rolling:
