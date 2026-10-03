@@ -33,14 +33,14 @@ fi
 # other major. check-version-drift.sh compares all of them.
 #
 # renovate: datasource=github-releases depName=opentofu/opentofu extractVersion=^v(?<version>.*)$
-TOFU_VERSION="1.12.6"
+TOFU_VERSION="1.13.1"
 # renovate: datasource=github-releases depName=fluxcd/flux2 extractVersion=^v(?<version>.*)$
 FLUX_VERSION="2.9.3"
 # The flux-schema plugin `task lint`'s check-flux-schema.sh needs (#114). Same
 # pin as ci.yml's lint job, installed through `flux plugin install`, which
 # does its own checksum verification (fluxcd/flux2 RFC 0013).
 # renovate: datasource=github-releases depName=fluxcd/flux-schema extractVersion=^v(?<version>.*)$
-FLUX_SCHEMA_VERSION="0.13.0"
+FLUX_SCHEMA_VERSION="0.15.0"
 # renovate: datasource=github-releases depName=helm/helm extractVersion=^v(?<version>.*)$
 HELM_VERSION="4.3.0"
 

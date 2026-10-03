@@ -179,6 +179,18 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **`opentofu/opentofu` 1.12.6 → 1.13.1** (`ci.yml` ×5, `setup.sh`) and
+  **`fluxcd/flux-schema` 0.13.0 → 0.15.0** (`ci.yml`, `setup.sh`), both probed
+  green by Cléa (#91). Proven with the real binaries, not the sandbox's cached
+  ones: OpenTofu 1.13.1 (sha256 OK) first on the PATH and `flux plugin install
+  schema@0.15.0` (`flux schema version` = 0.15.0), then `task lint`,
+  `render-check`, `test-scripts`, `validate` (both roots) and `task test` (71/71)
+  green, plus checkov (32/0), its custom checks (6/0) and gitleaks. `trivy` not
+  run in this sandbox — relies on CI. Left out: `getplumber/plumber` v0.5.17
+  (probed green, but `clea bump` refuses its `action-sha` pin, same as #170);
+  `go-task` 3.54.0 and the `kubectl-cnpg` plugin 1.30.1 are in #226;
+  `fluxcd/flux2` v2.9.6 and `siderolabs/talos` v1.14.2 not probed;
+  `kubernetes/kubernetes` v1.37.1 probe failed (`versions-guard.tf`, #181).
 - **`getplumber/plumber` v0.4.51 → v0.5.12** in `security.yml` (SHA and comment
   together) and `install-plumber.sh`, by hand: `clea bump` refuses an
   `action-sha` pin, so Cléa's daily run had been red on it since at least
