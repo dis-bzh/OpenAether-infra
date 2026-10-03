@@ -17,7 +17,7 @@
 set -euo pipefail
 
 # renovate: datasource=github-releases depName=cloudnative-pg/cloudnative-pg extractVersion=^v(?<version>.*)$
-CNPG_VERSION="1.30.0"
+CNPG_VERSION="1.30.1"
 
 # shellcheck source=scripts/lib/common.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
