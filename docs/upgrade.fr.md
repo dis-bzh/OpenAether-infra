@@ -396,10 +396,12 @@ s'est terminé par un `cluster-verify` vert (13/13 après un worker, 12/12 aprè
 restantes (aucun volume, port, adresse ni NIC du nœud retiré). La destruction ciblée était exactement le lot lu :
 un worker fait 5 ou 6 ressources, un control plane de 3 (Outscale) à 5, plus l'appartenance au load balancer mise à
 jour dans le même apply. Un `/readyz` authentifié à travers le load balancer chaque seconde, pendant le retrait du
-control plane : Scaleway 8 échecs sur 350 (jamais deux de suite, sur 40 s), OVH 13 sur 374 (isolés, sur 76 s),
-Outscale 13 sur 220 (plus longue série 3 sondes, sur 58 s). Cette fenêtre, c'est le load balancer qui envoie encore
-une requête sur trois à un control plane sorti d'etcd, jusqu'à ce que sa sonde le déclare mort ; un client qui
-réessaie ne la voit pas. Sortir le membre du load balancer d'abord la raccourcirait et n'est pas construit. Les
+control plane : Scaleway 12 échecs sur 350 (huit isolés sur 40 s, puis une série de 4 sondes environ quatre minutes
+plus tard, attribuée par le run, sans l'avoir isolée, à la mise à jour du backend du load balancer lui-même), OVH 13
+sur 374 (isolés, sur 76 s), Outscale 13 sur 220 (plus longue série 3 sondes, sur 58 s). Les échecs isolés, c'est le
+load balancer qui envoie encore une requête sur trois à un control plane sorti d'etcd, jusqu'à ce que sa sonde le
+déclare mort ; un client qui réessaie ne les voit pas. Sortir le membre du load balancer d'abord les raccourcirait et
+n'est pas construit, et la série de Scaleway dit que cette mise à jour coûte aussi quelque chose. Les
 retraits de workers : Outscale 1 sonde en échec sur 215, OVH aucune (hors l'instant où `cluster-verify` a réécrit le
 kubeconfig que la sonde lisait) ; celui de Scaleway n'a pas été sondé.
 
