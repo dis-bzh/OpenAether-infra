@@ -34,6 +34,12 @@ So: "add a node, then retire the old one" is a defensible *ordering* when you ar
 already replacing a machine. It is not a reason to replace one instead of
 upgrading it.
 
+## Removing a node is not an upgrade step
+
+Lowering a count and running `cluster-up` is refused: OpenTofu would destroy the machine and its data
+volumes with no drain and no etcd leave. Use `task cluster-shrink-plan`, read the file, then `task
+cluster-shrink` (`docs/upgrade.md`, *Removing nodes*). Do not do it in the middle of a roll.
+
 ## Check the pair before moving either
 
 Talos supports the current Kubernetes minor and the five before it. Both the

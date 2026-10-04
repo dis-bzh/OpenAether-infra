@@ -214,7 +214,9 @@ machine, ouvre les tunnels, puis configure seulement le nouveau nœud
 Ajouter un control plane passe par la même étape, mesuré de 1 à 3 sur Scaleway, OVH et
 Outscale. Baisser un compte est refusé : `cluster-up` s'arrête avant d'appliquer un plan qui
 supprime un nœud d'un cluster déjà amorcé, car OpenTofu détruirait la machine d'indice le plus
-haut et ses volumes de données sans drain ni sortie d'etcd (`scripts/internal/refuse-node-deletes.sh`).
+haut et ses volumes de données sans drain ni sortie d'etcd (`scripts/internal/refuse-node-deletes.sh`). Retirer des
+nœuds a ses deux commandes, `task cluster-shrink-plan` puis `task cluster-shrink`, mesurées sur les trois
+clouds : [`upgrade.fr.md`](upgrade.fr.md#retirer-des-nœuds).
 
 ## 5. Joindre le cluster
 

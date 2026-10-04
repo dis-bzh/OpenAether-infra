@@ -160,6 +160,7 @@ What this lane still cannot carry: see "Known gaps" in
 | `OP-rolling-replace` | `task cluster-roll` | One node at a time (etcd evict, cordon/drain). Not zero-downtime: the API was unreachable for 5-8 s in August and for 1-2 s (Talos step) and 9-10 s (Kubernetes step) on 2026-10-03, see the open issues. | ✅ *(Scaleway and OVH 2026-08-19, Outscale 2026-08-20 — it carries the Talos upgrade)* |
 | `OP-grow-nodes` | `task cluster-up` with a raised count | Machines first, then the tunnels, then the configuration of only the new nodes (#59). | ✅ *(2026-10-03: Scaleway workers 3→6 and control planes 1→3; OVH and Outscale control planes 1→3)* |
 | `OP-refuse-node-delete` | a lowered count through `cluster-up` / `infra-apply` | Refused before anything is applied: removing a node destroys its data volumes with no drain and no etcd leave. | ✅ *(plan-only, 2026-10-03: two real Scaleway shrink plans, workers 2→1 and control planes 3→2, both refused)* |
+| `OP-shrink` | `task cluster-shrink-plan` then `task cluster-shrink` | Drain, etcd leave, power off, delete the Node, destroy exactly that node's bundle, converge the rest. | ✅ *(2026-10-04: a worker and a control plane, 3 to 2, on Scaleway, OVH and Outscale; Longhorn and CNPG were not on those clusters, so those gates ran against stubs only)* |
 
 ## C) Priority (highest-value untested, real apply)
 
