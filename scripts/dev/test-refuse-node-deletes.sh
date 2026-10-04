@@ -50,7 +50,7 @@ NOOP="$(change 'module.scw[0].scaleway_instance_server.worker[1]' worker '["no-o
 
 echo "=== a bootstrapped cluster: a node delete is refused ==="
 run - STUB_PLAN="$(plan_of "$WDEL")"
-{ [ "$RC" = 1 ] && grep -q 'worker\[2\]' <<<"$OUT" && grep -q 'Put the count back' <<<"$OUT"; } \
+{ [ "$RC" = 1 ] && grep -q 'worker\[2\]' <<<"$OUT" && grep -qi 'put the count back' <<<"$OUT"; } \
   && ok "a lowered workers count (the worker is deleted) is refused, the address named, with the way out" \
   || bad "a worker delete was let through (rc ${RC}): ${OUT}"
 run - STUB_PLAN="$(plan_of "$VDEL")"

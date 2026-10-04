@@ -50,6 +50,7 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 # --- args --------------------------------------------------------------------
+unset PLAN_ASSERT   # a hook of the shrink, not something the environment may set
 PROVIDER="${1:-scaleway}"
 shift || true
 SCOPE="all"        # all | workers | cp

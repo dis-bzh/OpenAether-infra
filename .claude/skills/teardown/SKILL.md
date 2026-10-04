@@ -136,6 +136,13 @@ servers it lists first, so a populated account read as clean — never conclude
 from truncated output. And an empty *server* list is not an empty account: seven
 Scaleway block volumes billed for three days behind one. Ask for volumes too.
 
+## After removing nodes, not the cluster
+
+`task cluster-shrink` destroys one node's resources, not a cluster, so the read is the machines left and
+nothing else: `python3 scripts/ops/purge-orphans/<provider>.py` (dry run) lists Scaleway's and OVH's servers,
+`python3 scripts/ops/verify-provider-clean.py <cluster> outscale` Outscale's VMs. Expect the remaining nodes
+plus the bastion, and no volume, port, address or NIC of the removed one. Read 2026-10-04 on all three clouds.
+
 ## Before you touch it
 
 `scripts/dev/test-teardown.sh` is the harness, and it found the `--force-no-edges`

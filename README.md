@@ -295,7 +295,7 @@ task security            # hardening checks
 | Release | Deliverable | Status |
 |---------|-------------|--------|
 | **0.1.0** | One Talos cluster + Cilium on Scaleway, OVH or Outscale, encrypted state and artifacts, in-place upgrades | ✅ published 2026-08-20 (pre-release) |
-| 0.2.0 | Talos v1.14 and Kubernetes v1.37 on all three clouds, adding nodes to a live cluster, the failure-domain check | ⏳ in progress, see the `[Unreleased]` section of [`CHANGELOG.md`](CHANGELOG.md) |
+| 0.2.0 | Talos v1.14 and Kubernetes v1.37 on all three clouds, adding and removing nodes on a live cluster, the failure-domain check | ⏳ in progress, see the `[Unreleased]` section of [`CHANGELOG.md`](CHANGELOG.md) |
 | after | Flux back as a user choice, then the modular pick from `OpenAether-apps` | ⏳ planned |
 | later | CAPI overlay: a management cluster driving children | ⏳ planned |
 | open | Proxmox on real hardware, the full cross-provider failover, the Outscale Net only the provider can delete | ⏳ |

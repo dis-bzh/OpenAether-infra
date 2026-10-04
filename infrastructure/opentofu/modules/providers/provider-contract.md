@@ -58,6 +58,12 @@ this contract to be consumed by the Talos module and the root `main.tf`.
    Check what the cloud's group actually filters: Scaleway's filters public traffic
    only (see `scw/security.tf`).
 
+5. **Scale-in** — `scripts/ops/shrink-nodes.sh` reads a lowered count off the saved plan, so a node's
+   resources MUST be count-indexed by node and carry `control_plane` or `worker` in their name (a data
+   volume is keyed `"w<worker>-d<disk>"`, a load balancer member is named for its pool and goes by type),
+   and its machine resource MUST be among them. A load balancer's membership MUST update in place when a
+   node leaves, never be replaced: replacing it would empty the backend list.
+
 ## Node image drift
 
 Every node resource must carry `lifecycle { ignore_changes = [<image attribute>] }`.

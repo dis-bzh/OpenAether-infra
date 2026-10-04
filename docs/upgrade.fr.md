@@ -352,3 +352,63 @@ enregistré est vide (par exemple parce que le gabarit a été supprimé). Ce se
 pire, puisque tous les nœuds seraient détruits en même temps.
 [`tests/node-size-change.tftest.hcl`](../infrastructure/opentofu/cluster/tests/node-size-change.tftest.hcl)
 vérifie que le drapeau de Scaleway reste désactivé.
+
+## Retirer des nœuds
+
+Baisser `control_planes` ou `workers` dans les tfvars faisait détruire à OpenTofu la machine d'indice le plus
+haut et ses volumes de données, sans drain, sans sortie d'etcd et sans suppression du Node. `cluster-up`,
+`infra-apply` et `grow-nodes.sh` refusent désormais un tel plan, et le retrait a ses deux commandes, comme la
+destruction :
+
+```bash
+# baisser le compte dans envs/<role>-<provider>.tfvars, puis
+task cluster-shrink-plan PROVIDER=scaleway     # lecture seule : ce qui part, et le cluster peut-il le perdre
+task cluster-shrink PROVIDER=scaleway PLAN=shrink-management-scaleway.json
+```
+
+Le périmètre vient du plan qu'OpenTofu fait lui-même, jamais des tfvars ; `cluster-shrink` le recalcule et refuse
+s'il a bougé. Seuls les indices les plus hauts peuvent partir, un run de workers peut en prendre plusieurs (un à la
+fois, le plus haut d'abord), un run de control plane en prend un, et sous trois control planes il faut
+`-- --allow-below-ha` sur les deux commandes. Il reste au moins un worker et un control plane.
+
+| | worker | control plane |
+|---|---|---|
+| réversible | éviction Longhorn, drain | snapshot etcd, leadership etcd passé, drain |
+| point de non-retour du membre | | `etcd leave` |
+| la machine | `talosctl shutdown`, puis suppression du Node | idem |
+| irréversible | destruction ciblée des seules ressources de ce nœud, volumes de données compris | idem, et son appartenance au load balancer |
+| après | rafraîchir les sorties et les tunnels, appliquer la config des nœuds restants un à un, plan vide, `cluster-verify` | idem |
+
+Il refuse avant de toucher à quoi que ce soit quand : le plan change plus que le retrait (une autre édition en
+attente, un nombre de disques modifié alors que la machine reste, une suppression de nœud que tofu n'attribue pas
+à un compte abaissé) ; un volume est épinglé au nœud (données CNPG ou local-path : les déplacer d'abord) ;
+Longhorn aurait moins de nœuds qu'un volume n'a de réplicas ; les workers qui restent ne portent pas les requêtes
+CPU ; un nœud n'est pas Ready ; etcd n'a pas les membres qu'il devrait. « Éteint » n'est jamais lu sur le tunnel
+du nœud lui-même : Talos doit accepter l'arrêt, un control plane qui n'est pas celui qui part doit cesser deux fois
+d'atteindre la machine, et son Node doit être NotReady. Un run interrompu en route se termine en relançant
+`cluster-shrink-plan` puis `cluster-shrink` ; un nœud déjà sorti de Kubernetes et éteint, un membre etcd déjà parti,
+sont sautés.
+
+**Mesuré sur un vrai cloud, le 2026-10-04**, sur un cluster à 3 control planes en Talos 1.14.2 avec Cilium, sans
+Longhorn ni CNPG : un worker, puis un control plane (3 à 2), sur chacun de Scaleway, OVH et Outscale. Chaque run
+s'est terminé par un `cluster-verify` vert (13/13 après un worker, 12/12 après le control plane, qui affiche
+`~ NOT HA` à deux), un etcd aux membres restants exactement, et l'API du provider listant exactement les machines
+restantes (aucun volume, port, adresse ni NIC du nœud retiré). La destruction ciblée était exactement le lot lu :
+un worker fait 5 ou 6 ressources, un control plane de 3 (Outscale) à 5, plus l'appartenance au load balancer mise à
+jour dans le même apply. Un `/readyz` authentifié à travers le load balancer chaque seconde, pendant le retrait du
+control plane : Scaleway 8 échecs sur 350 (jamais deux de suite, sur 40 s), OVH 13 sur 374 (isolés, sur 76 s),
+Outscale 13 sur 220 (plus longue série 3 sondes, sur 58 s). Cette fenêtre, c'est le load balancer qui envoie encore
+une requête sur trois à un control plane sorti d'etcd, jusqu'à ce que sa sonde le déclare mort ; un client qui
+réessaie ne la voit pas. Sortir le membre du load balancer d'abord la raccourcirait et n'est pas construit. Les
+retraits de workers : Outscale 1 sonde en échec sur 215, OVH aucune (hors l'instant où `cluster-verify` a réécrit le
+kubeconfig que la sonde lisait) ; celui de Scaleway n'a pas été sondé.
+
+Sur Scaleway, le cluster a ensuite été reconstitué à 3 + 2 par un seul `cluster-up` : `cluster-verify` 13/13, et
+`cluster-idempotency` a passé (plan vide, les cinq nœuds inchangés).
+
+Une limite : l'étape de clôture applique toute mise à jour de machine config en attente, un nœud à la fois, pas
+seulement celle que causent les comptes ; une édition de machine config faite dans les mêmes tfvars part donc avec le
+retrait. La faire séparément.
+
+Non mesuré : l'éviction Longhorn et CNPG sur un cluster vivant (les labos n'avaient ni l'un ni l'autre ; ces portes
+sont exercées contre des stubs), Proxmox, et un retrait interrompu en route sur un vrai cloud.

@@ -207,7 +207,9 @@ machine, opens the tunnels, then configures only the new node
 Adding a control plane goes through the same step, measured from 1 to 3 on Scaleway, OVH and
 Outscale. Lowering a count is refused: `cluster-up` stops before applying any plan that deletes a
 node of a bootstrapped cluster, because OpenTofu would destroy the highest-index machine and its
-data volumes with no drain and no etcd leave (`scripts/internal/refuse-node-deletes.sh`).
+data volumes with no drain and no etcd leave (`scripts/internal/refuse-node-deletes.sh`). Removing nodes is a pair of
+commands of its own, `task cluster-shrink-plan` then `task cluster-shrink`, measured on all three
+clouds: [`upgrade.md`](upgrade.md#removing-nodes).
 
 ## 5. Talk to it
 
