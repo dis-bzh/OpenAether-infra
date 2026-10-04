@@ -27,8 +27,10 @@ in git. 0.1.0 is the first entry describing something proven.
   condition, never the node's own tunnel. The gates are `scripts/lib/roll-gates.sh`, shared with the roll.
   Rungs: mocked (`test-shrink-nodes.sh`, mutants killed, after an adversarial review whose defects were fixed first)
   and real cloud, dated 2026-10-04 and pasted in `docs/upgrade.md`: a worker and a control plane (3 to 2) on each
-  of Scaleway, OVH and Outscale, `cluster-verify` green, the provider API showing no orphan. Not run on a real
-  cloud: Longhorn and CNPG (the labs had neither), Proxmox, and a removal that stops half-way.
+  of Scaleway, OVH and Outscale, `cluster-verify` green, the provider API showing no orphan. Longhorn's
+  eviction was run on Scaleway only (a sole replica moved off the node, data intact, a two-replica volume
+  refused; the eviction request is retried because Longhorn's webhook can refuse it while syncing). Not run on a
+  real cloud: CNPG, Proxmox, and a removal that stops half-way.
 
 - **A lowered node count is refused before anything is applied (refs the 0.2.0 scale-in audit).**
   Lowering `control_planes` or `workers` made OpenTofu destroy the highest-index machine and its
