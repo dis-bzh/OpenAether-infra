@@ -417,6 +417,8 @@ tasks:
       - ./scripts/dev/test-rolling-replace.sh
       - ./scripts/dev/test-shrink-nodes.sh
       - ./scripts/dev/test-tunnel-guard.sh
+      # The one test that runs talos-tunnels.sh itself: every other harness stubs it (#65).
+      - ./scripts/dev/test-talos-tunnels.sh
       - ./scripts/dev/test-real-cloud-workflow.sh
       # These two were written, they pass, and nothing ever ran them — not this
       # target, not CI. A harness nobody invokes is the failure mode this whole

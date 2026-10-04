@@ -5,7 +5,8 @@
 # One tunnel per node, IPs read from the tofu state: control planes on
 # localhost 50000+i, workers on 50100+i (local Docker uses 52000+ to avoid
 # clashes). Detached so they survive the `tofu apply` that follows; PIDs tracked
-# for a clean teardown.
+# for a clean teardown. What each ssh says is appended to .talos-tunnel-<port>.log
+# beside the pidfile (gitignored: it names the bastion); `open` and `ensure` quote it.
 #
 # TALOS_TUNNEL_OFFSET shifts that whole block, so a second cluster can be
 # bootstrapped from the same workstation instead of colliding on the ports —
@@ -30,6 +31,26 @@ OFFSET="$(oa_tunnel_offset)" || exit 1
 CP_BASE=$((50000 + OFFSET))
 WK_BASE=$((50100 + OFFSET))
 API_PORT=$((6443 + OFFSET))
+
+# The one place a tunnel is started. Its ssh output is APPENDED to a per-port log (never truncated: concurrent
+# opens share it), because the last lines are the only record of how a tunnel ended (#65); the marker line tells
+# one generation from the next. Uses KEY BASTION BUSER BASTION_KH LOG_PREFIX.
+spawn_tunnel() { # <pidfile> <local-port> <host:port behind the bastion>
+  local log="${LOG_PREFIX}${2}.log"
+  printf '%s spawn :%s\n' "$(date '+%F %T')" "$2" >>"$log"
+  nohup ssh -o LogLevel=VERBOSE -o UserKnownHostsFile="$BASTION_KH" -o StrictHostKeyChecking=accept-new \
+    -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=20 -o TCPKeepAlive=yes \
+    -i "$KEY" -N -L "$2:$3" "${BUSER}@${BASTION}" >>"$log" 2>&1 &
+  echo $! >>"$1"
+}
+
+# What ssh last wrote for a port. It says how the process ended, not who asked it to: a bastion-side close
+# ends with the same "Transferred:" lines as a TERM.
+log_tail() { # <local-port>
+  local l="${LOG_PREFIX}${1}.log"
+  [[ -s "$l" ]] || { echo "no transcript at $l"; return; }
+  echo "log, last written $(date -r "$l" '+%F %T' 2>/dev/null), ends: $(tail -n3 "$l" | paste -sd'|' -)"
+}
 
 if [[ "$ACTION" == "open-direct" ]]; then
   shift
@@ -66,13 +87,8 @@ if [[ "$ACTION" == "open-direct" ]]; then
   IFS=',' read -ra CPS <<<"$CPS_CSV"
   IFS=',' read -ra WKS <<<"${WKS_CSV:-}"
 
-  open_direct_one() { # localport nodeip
-    nohup ssh -o UserKnownHostsFile="$BASTION_KH" -o StrictHostKeyChecking=accept-new -o ExitOnForwardFailure=yes \
-      -o ServerAliveInterval=15 -o ServerAliveCountMax=20 -o TCPKeepAlive=yes \
-      -i "$KEY" -N -L "$1:$2:50000" "${BUSER}@${BASTION}" \
-      >/dev/null 2>&1 &
-    echo $! >>"$DIRECT_PIDFILE"
-  }
+  LOG_PREFIX=".talos-tunnel-direct-"
+  open_direct_one() { spawn_tunnel "$DIRECT_PIDFILE" "$1" "$2:50000"; } # localport nodeip
 
   echo "▶ [open-direct] opening tunnels via ${BUSER}@${BASTION} (key: $KEY)"
   i=0; for ip in "${CPS[@]}"; do [[ -n "$ip" ]] && open_direct_one "$((CP_BASE + i))" "$ip"; i=$((i + 1)); done
@@ -96,6 +112,7 @@ fi
 TOFU_DIR="$(cd "${2:-infrastructure/opentofu/cluster}" 2>/dev/null && pwd)" ||
   { echo "✗ no such directory: ${2:-infrastructure/opentofu/cluster}"; exit 1; }
 PIDFILE="${TOFU_DIR}/.talos-tunnels.pids"
+LOG_PREFIX="${TOFU_DIR}/.talos-tunnel-"
 
 close_tunnels() {
   # Primary: kill tracked PIDs from pidfile
@@ -178,6 +195,10 @@ if [[ "$ACTION" == "ensure" ]]; then
     exit 0
   fi
   echo "▶ ${#BAD[@]}/${TOTAL} Talos tunnel(s) not answering (${BAD[*]}) — rebuilding" >&2
+  for p in "${BAD[@]}"; do
+    pgrep -f "[s]sh .*-L ${p}:" >/dev/null && st="ssh running, the node behind it is not answering" || st="ssh EXITED"
+    echo "    :${p}  ${st}; $(log_tail "$p")" >&2
+  done
   "$SELF" open "$TOFU_DIR" || exit 1
   for _ in 1 2 3 4 5 6; do
     probe_all
@@ -203,13 +224,7 @@ close_tunnels # drop any stale tunnels (old IPs) before reopening
 BASTION_KH=".talos-bastion-known-hosts"
 : >"$BASTION_KH"
 
-open_one() { # localport nodeip
-  nohup ssh -o UserKnownHostsFile="$BASTION_KH" -o StrictHostKeyChecking=accept-new -o ExitOnForwardFailure=yes \
-    -o ServerAliveInterval=15 -o ServerAliveCountMax=20 -o TCPKeepAlive=yes \
-    -i "$KEY" -N -L "$1:$2:50000" "${BUSER}@${BASTION}" \
-    >/dev/null 2>&1 &
-  echo $! >>"$PIDFILE"
-}
+open_one() { spawn_tunnel "$PIDFILE" "$1" "$2:50000"; } # localport nodeip
 
 # The bastion has often just been created: its cloud-init installs packages and
 # only reloads sshd (AuthorizedKeysFile + AllowGroups) at the end. Attempting
@@ -261,11 +276,7 @@ i=0; for ip in "${WKS[@]}"; do open_one "$((WK_BASE + i))" "$ip"; i=$((i + 1)); 
 # LB — open a dedicated tunnel to reach the API from the operator's machine.
 K8S_API_TUNNELED=false
 if [[ -n "$K8S_LB_IP" ]] && is_private_ip "$K8S_LB_IP"; then
-  nohup ssh -o UserKnownHostsFile="$BASTION_KH" -o StrictHostKeyChecking=accept-new -o ExitOnForwardFailure=yes \
-    -o ServerAliveInterval=15 -o ServerAliveCountMax=20 -o TCPKeepAlive=yes \
-    -i "$KEY" -N -L "${API_PORT}:${K8S_LB_IP}:6443" "${BUSER}@${BASTION}" \
-    >/dev/null 2>&1 &
-  echo $! >>"$PIDFILE"
+  spawn_tunnel "$PIDFILE" "$API_PORT" "${K8S_LB_IP}:6443"
   K8S_API_TUNNELED=true
 fi
 
@@ -275,8 +286,8 @@ ports=()
 for j in "${!CPS[@]}"; do ports+=("$((CP_BASE + j))"); done
 for j in "${!WKS[@]}"; do ports+=("$((WK_BASE + j))"); done
 [[ "$K8S_API_TUNNELED" == true ]] && ports+=("$API_PORT")
-ok=0
-for p in "${ports[@]}"; do nc -z 127.0.0.1 "$p" 2>/dev/null && ok=$((ok + 1)); done
+ok=0; down=()
+for p in "${ports[@]}"; do nc -z 127.0.0.1 "$p" 2>/dev/null && ok=$((ok + 1)) || down+=("$p"); done
 
 echo "✓ ${ok}/${#ports[@]} tunnels up — CPs on ${CP_BASE}+i, workers on ${WK_BASE}+i"
 if [[ "$K8S_API_TUNNELED" == true ]]; then
@@ -285,5 +296,6 @@ fi
 if [[ "$ok" -ne "${#ports[@]}" ]]; then
   echo "⚠ some tunnels failed. Check: SSH_KEY is correct, the bastion is reachable"
   echo "  (ssh -i $KEY ${BUSER}@${BASTION}), and its routing fix has converged."
+  for p in "${down[@]}"; do echo "    :${p}  $(log_tail "$p")"; done
   exit 1
 fi

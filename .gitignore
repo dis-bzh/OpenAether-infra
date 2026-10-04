@@ -116,6 +116,8 @@ coverage/
 # Phase 2 SSH tunnel PIDs (Talos API via bastion)
 infrastructure/opentofu/.talos-tunnels.pids
 infrastructure/opentofu/cluster/.talos-tunnels.pids
+# What each tunnel's ssh said (names the bastion and the nodes). No directory on purpose: it lands in the tofu_dir argument.
+.talos-tunnel-*.log
 infrastructure/opentofu/.talos-bastion-known-hosts
 infrastructure/opentofu/cluster/.talos-bastion-known-hosts
 
