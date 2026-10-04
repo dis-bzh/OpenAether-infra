@@ -283,13 +283,19 @@ shrink_exit() { # EXIT: undo what is reversible, then finish_roll restores CNPG/
 
 longhorn_evict() { # <node>
   crd_present nodes.longhorn.io || return 0
-  local err deadline left
+  local err deadline left k
   if ! err="$("${KCTL[@]}" -n longhorn-system get nodes.longhorn.io "$1" 2>&1 >/dev/null)"; then
     case "$err" in *NotFound* | *"not found"*) return 0 ;; *) die "cannot read the Longhorn node $1: ${err%%$'\n'*}" ;; esac
   fi
   UNDO_LH="$1"; info "Longhorn: evicting the replicas of $1…"
-  "${KCTL[@]}" -n longhorn-system patch nodes.longhorn.io "$1" --type merge \
-    -p '{"spec":{"allowScheduling":false,"evictionRequested":true}}' >/dev/null || die "could not ask Longhorn to evict $1"
+  # Longhorn's webhook refuses a node edit while it is still syncing that node's disks ("please retry later"):
+  # seen live right after the install, so ask a few times before giving up.
+  for k in 1 2 3 4 5 6; do
+    "${KCTL[@]}" -n longhorn-system patch nodes.longhorn.io "$1" --type merge \
+      -p '{"spec":{"allowScheduling":false,"evictionRequested":true}}' >/dev/null 2>"$D/k.err" && break
+    (( k < 6 )) || die "could not ask Longhorn to evict $1: $(tail -n 1 "$D/k.err")"
+    sleep "$POLL"
+  done
   deadline=$(( SECONDS + EVICT_TIMEOUT ))
   while (( SECONDS < deadline )); do
     left="$("${KCTL[@]}" -n longhorn-system get replicas.longhorn.io -o json | jq --arg n "$1" '[.items[] | select(.spec.nodeID == $n)] | length')" || left=1

@@ -383,5 +383,12 @@ On Scaleway the cluster was then grown back to 3 + 2 with one `cluster-up`: `clu
 One limit: the closing step applies every pending machine-config update, one node at a time, not only the one the
 counts cause, so a machine-config edit made in the same tfvars rides in with the removal. Make it separately.
 
-Not measured: Longhorn eviction and CNPG on a live cluster (the labs had neither; those gates are exercised
-against stubs), Proxmox, and a removal that stops half-way on a real cloud.
+**Longhorn, Scaleway, 2026-10-04** (Longhorn 1.13.0 on the encrypted user volumes): a volume whose only replica
+sat on the worker going away, holding a checksummed blob written from a pod on the other worker. A second volume
+wanting two replicas was refused (`wants 2 replicas, 1 node(s) would remain`). Without it, the removal asked
+Longhorn to evict the node, the replica moved to the worker that stays before the drain began, the volume stayed
+healthy and attached, the blob's checksum held, and the Longhorn node entry went with the node. Longhorn's webhook
+refuses a node edit while it is syncing that node's disks ("please retry later"), so the eviction request is
+retried.
+
+Not measured: CNPG on a live cluster (stubs only), Proxmox, and a removal that stops half-way on a real cloud.
