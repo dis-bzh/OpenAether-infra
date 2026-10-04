@@ -410,5 +410,12 @@ Une limite : l'étape de clôture applique toute mise à jour de machine config 
 seulement celle que causent les comptes ; une édition de machine config faite dans les mêmes tfvars part donc avec le
 retrait. La faire séparément.
 
-Non mesuré : l'éviction Longhorn et CNPG sur un cluster vivant (les labos n'avaient ni l'un ni l'autre ; ces portes
-sont exercées contre des stubs), Proxmox, et un retrait interrompu en route sur un vrai cloud.
+**Longhorn, Scaleway, 2026-10-04** (Longhorn 1.13.0 sur les volumes utilisateur chiffrés) : un volume dont l'unique
+réplica était sur le worker qui part, avec un blob à somme de contrôle écrit depuis un pod sur l'autre worker. Un
+second volume voulant deux réplicas a été refusé (`wants 2 replicas, 1 node(s) would remain`). Sans lui, le retrait a
+demandé à Longhorn d'évacuer le nœud, le réplica est passé sur le worker qui reste avant le début du drain, le volume
+est resté sain et attaché, la somme de contrôle du blob a tenu, et l'entrée de nœud Longhorn est partie avec le nœud.
+Le webhook de Longhorn refuse une modification de nœud pendant qu'il synchronise ses disques (« please retry
+later ») : la demande d'évacuation est donc rejouée.
+
+Non mesuré : CNPG sur un cluster vivant (stubs seulement), Proxmox, et un retrait interrompu en route sur un vrai cloud.

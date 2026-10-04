@@ -104,6 +104,9 @@ case "$argv" in
   *" get clusters.postgresql.cnpg.io "*instances*) echo "db pg 1 1" ;;
   *" get clusters.postgresql.cnpg.io "*) echo "db pg" ;;
   *" describe nodes "*) cat "$ST/describe.txt" ;;
+  *" patch nodes.longhorn.io "*)
+    k=$(( $(cat "$ST/lhpatch.calls" 2>/dev/null || echo 0) + 1 )); echo "$k" >"$ST/lhpatch.calls"
+    [ "$k" -gt "${STUB_LH_PATCH_DENY:-0}" ] || { echo 'admission webhook "validator.longhorn.io" denied the request: spec and status of disks on node are being syncing and please retry later.' >&2; exit 1; } ;;
   *"get nodes.longhorn.io -o json"*) cat "$ST/lh-nodes.json" ;;
   *"get volumes.longhorn.io -o json"*) cat "$ST/lh-volumes.json" ;;
   *"get volumes.longhorn.io -n longhorn-system -o json"*) echo '{"items":[]}' ;;
@@ -486,6 +489,14 @@ ENVV=(STUB_LONGHORN=1 STUB_REPLICAS_POLLS=3); run scaleway --apply="$SCOPE_F"; E
   && [ "$(n_of 'get replicas.longhorn.io')" -ge 4 ]; } \
   && ok "…it waits for the replicas to leave (4 polls here) before draining, and deletes the Longhorn node after power-off" \
   || bad "longhorn wait (rc ${RC}): $(grep -n 'longhorn\|drain\|shutdown' "$CALLS" | cut -c1-110 | tr '\n' '|'): ${OUT}"
+fixtures "$WPLAN"; cp "$W/lh-nodes.json" "$ST/"; echo '{"items":[{"metadata":{"name":"vol-1"},"spec":{"numberOfReplicas":1}}]}' >"$ST/lh-volumes.json"
+ENVV=(STUB_LONGHORN=1 STUB_LH_PATCH_DENY=2); run scaleway --apply="$SCOPE_F"; ENVV=(X=1)
+{ [ "$RC" = 0 ] && grep -q 'removed worker 1' <<<"$OUT"; } \
+  && ok "Longhorn's webhook refusing the eviction twice (\"retry later\") is retried, not fatal" || bad "webhook retry (rc ${RC}): ${OUT}"
+fixtures "$WPLAN"; cp "$W/lh-nodes.json" "$ST/"; echo '{"items":[{"metadata":{"name":"vol-1"},"spec":{"numberOfReplicas":1}}]}' >"$ST/lh-volumes.json"
+ENVV=(STUB_LONGHORN=1 STUB_LH_PATCH_DENY=99); run scaleway --apply="$SCOPE_F"; ENVV=(X=1)
+{ [ "$RC" -ne 0 ] && grep -q 'could not ask Longhorn to evict' <<<"$OUT" && grep -q 'retry later' <<<"$OUT" && [ "$(n_of 'shutdown')" = 0 ] && no_destroy; } \
+  && ok "…and a webhook that never relents stops the run before the drain, with its own words" || bad "webhook never relents (rc ${RC}): ${OUT}"
 fixtures "$WPLAN"; cp "$W/lh-nodes.json" "$ST/"; echo '{"items":[{"metadata":{"name":"vol-1"},"spec":{"numberOfReplicas":1}}]}' >"$ST/lh-volumes.json"
 ENVV=(STUB_LONGHORN=1 STUB_REPLICAS_STUCK=1); run scaleway --apply="$SCOPE_F"; ENVV=(X=1)
 { [ "$RC" -ne 0 ] && grep -q 'still holds replicas' <<<"$OUT" && [ "$(n_of 'shutdown')" = 0 ] && no_destroy && grep -q 'allowScheduling":true' "$CALLS"; } \
