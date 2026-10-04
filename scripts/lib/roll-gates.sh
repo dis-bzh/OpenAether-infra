@@ -372,7 +372,7 @@ finish_roll() {
     elif (( stopped )); then
       warn "Stop requested: the roll is not reported complete. A 'stopping before' line above says what is left."
     else
-      ok "Rolling replacement complete. Run a state backup:  scripts/ops/backup-state.sh"
+      ok "${ROLL_DONE_MSG:-Rolling replacement complete. Run a state backup:  scripts/ops/backup-state.sh}"
     fi
   elif [[ $rc -eq 0 ]]; then
     rc=1
@@ -1069,6 +1069,10 @@ $(sed 's/^/    /' <<<"$foreign")
   A pending in-place change (an instance_type raised in the tfvars) rides along
   with the targeted apply and would hit those nodes all at once. Put the tfvars
   back as the cluster runs, or change one node at a time (docs/upgrade.md)."
+  fi
+  # A caller that knows the exact set it expects (the shrink) can say so: the plan path is its argument.
+  if [[ -n "${PLAN_ASSERT:-}" ]] && ! "$PLAN_ASSERT" "$pf"; then
+    rm -rf "$dir"; die "plan ${label} is not the plan this step expects — nothing applied"
   fi
   if [[ "$mode" == check ]]; then
     rm -rf "$dir"; ok "plan ${label} stays inside ${t}[${i}]"; return 0

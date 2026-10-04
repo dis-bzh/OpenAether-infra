@@ -42,12 +42,13 @@ TARGETS = {
     **dict.fromkeys(("local-up", "local-verify", "local-rbac", "local-test", "test-gates-local",
                      "test-cnpg-gates-local", "ssh-ca-check"), ("local-docker", "docker")),
     **dict.fromkeys(("infra-plan", "infra-apply", "infra-down-plan", "infra-down", "cluster-up",
-                     "cluster-verify", "cluster-roll", "cluster-upgrade", "cluster-idempotency",
-                     "cluster-down"), ("real-cloud", "tofu")),
+                     "cluster-verify", "cluster-roll", "cluster-upgrade", "cluster-shrink",
+                     "cluster-shrink-plan", "cluster-idempotency", "cluster-down"),
+                    ("real-cloud", "tofu")),
 }
 # A plan applies nothing: recorded, and a red one fails the check, but it cannot
 # stand for real cloud on its own (CONTRIBUTING: cluster-up is the proof).
-PLANS = {"infra-plan", "infra-down-plan"}
+PLANS = {"infra-plan", "infra-down-plan", "cluster-shrink-plan"}
 # The rest of the test/feint-/local-/infra-/cluster- families, and why they are not
 # rungs. The harness fails on a family member that is in neither list.
 EXCLUDED = {

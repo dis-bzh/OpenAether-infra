@@ -16,6 +16,20 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
+- **`task cluster-shrink-plan` then `task cluster-shrink` remove nodes from a live cluster (refs #249).** Lowering a
+  count used to destroy the machine and its data volumes with no drain and no etcd leave; `cluster-up` now refuses
+  that (below), and `scripts/ops/shrink-nodes.sh` does the removal: scope read off the saved plan and derived again
+  at apply, then per node highest index first Longhorn eviction, drain, `talosctl shutdown`, delete the Node and a
+  targeted destroy of exactly that node's resources; a control plane also takes an etcd snapshot, hands the etcd
+  leadership off and runs `etcd leave`, and needs `--allow-below-ha` under three. It refuses a node-local volume,
+  Longhorn replicas with nowhere to go, too little CPU, a node not Ready, an etcd without its members, or a plan
+  that changes more than the removal, and "down" is read through a peer control plane and the Node's Ready
+  condition, never the node's own tunnel. The gates are `scripts/lib/roll-gates.sh`, shared with the roll.
+  Rungs: mocked (`test-shrink-nodes.sh`, mutants killed, after an adversarial review whose defects were fixed first)
+  and real cloud, dated 2026-10-04 and pasted in `docs/upgrade.md`: a worker and a control plane (3 to 2) on each
+  of Scaleway, OVH and Outscale, `cluster-verify` green, the provider API showing no orphan. Not run on a real
+  cloud: Longhorn and CNPG (the labs had neither), Proxmox, and a removal that stops half-way.
+
 - **A lowered node count is refused before anything is applied (refs the 0.2.0 scale-in audit).**
   Lowering `control_planes` or `workers` made OpenTofu destroy the highest-index machine and its
   worker data volumes with no drain, no etcd leave and no Node delete, and neither `cluster-up` nor
@@ -291,6 +305,15 @@ in git. 0.1.0 is the first entry describing something proven.
   without a token. The token path rests on CI's "Pipeline audit" job.
 
 ### Fixed
+
+- **A changed `admin_ip` can be applied, and the failure says how.** The documented remedy, "update `admin_ip` then
+  `task infra-apply`", stopped at the tunnel check on a bootstrapped cluster: the bastion no longer let this machine
+  in, so the tunnels could not be rebuilt, and the escape hatch (`OA_SKIP_TUNNEL_GUARD=1`) existed only in a
+  Taskfile comment. The check is now `scripts/internal/tunnel-guard.sh`, its failure names the way out, and
+  `docs/admin-access.md` carries the measured procedure. Rung: mocked (`test-tunnel-guard.sh`, mutants killed) and
+  real cloud, Scaleway 2026-10-04: `admin_ip` changed to an address that is not ours (SSH to the bastion timed out),
+  the plain apply stopped at the check, `OA_SKIP_TUNNEL_GUARD=1 TF_VAR_skip_health_check=true` applied in under
+  four minutes, SSH worked again, `cluster-verify` 13/13. Not run on OVH or Outscale.
 
 - **Documents that still described the 0.1.0 measurements as the latest.** The README's "Honest status",
   layer table, providers table, roadmap and document index; `docs/status.md` (#59 "still open", the

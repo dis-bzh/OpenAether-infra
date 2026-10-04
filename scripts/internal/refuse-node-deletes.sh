@@ -36,7 +36,8 @@ if [ -n "$DEL" ]; then
     sed 's/^/    /' <<<"$DEL"
     echo "  Lowering a count destroys the highest-index node and its data volumes with no drain, no etcd"
     echo "  leave and no Node delete; a control plane below quorum is only recoverable from an etcd snapshot."
-    echo "  Put the count back in the tfvars."
+    echo "  To remove nodes safely: task cluster-shrink-plan, read it, then task cluster-shrink."
+    echo "  Otherwise put the count back in the tfvars."
   } >&2
   exit 1
 fi

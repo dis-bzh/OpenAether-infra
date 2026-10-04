@@ -329,3 +329,59 @@ empty (for example because the flavour was deleted). A replacement would be
 worse, since every node would be destroyed at once.
 [`tests/node-size-change.tftest.hcl`](../infrastructure/opentofu/cluster/tests/node-size-change.tftest.hcl)
 checks that Scaleway's flag stays unset.
+
+## Removing nodes
+
+Lowering `control_planes` or `workers` in the tfvars used to make OpenTofu destroy the
+highest-index machine and its data volumes with no drain, no etcd leave and no Node delete. `cluster-up`,
+`infra-apply` and `grow-nodes.sh` now refuse such a plan, and removal has two commands of its own, like destroy:
+
+```bash
+# lower the count in envs/<role>-<provider>.tfvars, then
+task cluster-shrink-plan PROVIDER=scaleway     # read-only: what goes, and can the cluster lose it
+task cluster-shrink PROVIDER=scaleway PLAN=shrink-management-scaleway.json
+```
+
+The scope comes from the plan OpenTofu itself makes, never from the tfvars; `cluster-shrink` derives it
+again and refuses if it moved. Only the highest indexes can go, a worker run may take several (one at a
+time, highest first), a control-plane run takes one, and below three control planes it wants
+`-- --allow-below-ha` on both commands. One worker and one control plane stay at least.
+
+| | worker | control plane |
+|---|---|---|
+| reversible | Longhorn eviction, drain | etcd snapshot, etcd leadership handed off, drain |
+| the member's point of no return | | `etcd leave` |
+| the machine | `talosctl shutdown`, then delete the Node | the same |
+| irreversible | targeted destroy of exactly that node's resources, data volumes included | the same, and its load-balancer membership |
+| after | refresh the outputs and tunnels, apply the remaining nodes' config one at a time, empty plan, `cluster-verify` | the same |
+
+It refuses before touching anything when: the plan changes more than the removal (another edit pending, a
+disk count edited with its machine staying, a node delete tofu does not attribute to a lowered count); a
+volume is pinned to the node (CNPG or local-path data: move it first); Longhorn would have fewer nodes than a
+volume has replicas; the workers that stay cannot carry the CPU requests; a node is not Ready; etcd has not
+the members it should. "Down" is never taken from the node's own tunnel: Talos must accept the shutdown, a
+control plane that is not the one going must stop reaching the machine twice, and its Node must read NotReady.
+A run that stopped half-way is finished by running `cluster-shrink-plan` and `cluster-shrink` again; a node
+already out of Kubernetes and down, an etcd member already gone, are skipped.
+
+**Measured on a real cloud, 2026-10-04**, on a 3 control plane cluster at Talos 1.14.2 with Cilium and no Longhorn or
+CNPG on it: a worker, then one control plane (3 to 2), on each of Scaleway, OVH and Outscale. Every run ended with
+`cluster-verify` green (13/13 after a worker, 12/12 after the control plane, which reads `~ NOT HA` at two), etcd with
+exactly the members left, and the provider's API listing exactly the machines left (no volume, port, address or
+NIC of the removed node). The targeted destroy was exactly the bundle read: a worker is 5 or 6 resources, a control
+plane 3 (Outscale) to 5, plus the load balancer's membership updated in the same apply. An authenticated
+`/readyz` through the load balancer each second, during the control-plane removal: Scaleway 8 failed of 350
+(never two in a row, over 40 s), OVH 13 of 374 (isolated, over 76 s), Outscale 13 of 220 (longest run 3 probes, over
+58 s). That window is the load balancer still sending one request in three to a control plane that has left
+etcd, until its health check marks it down; a client that retries does not see it. Taking the member out of the
+load balancer first would shorten it and is not built. Worker removals: Outscale 1 failed probe of 215, OVH none
+(apart from the moment `cluster-verify` rewrote the kubeconfig the probe was reading); Scaleway's was not probed.
+
+On Scaleway the cluster was then grown back to 3 + 2 with one `cluster-up`: `cluster-verify` 13/13, and
+`cluster-idempotency` passed (empty plan, the five nodes unchanged).
+
+One limit: the closing step applies every pending machine-config update, one node at a time, not only the one the
+counts cause, so a machine-config edit made in the same tfvars rides in with the removal. Make it separately.
+
+Not measured: Longhorn eviction and CNPG on a live cluster (the labs had neither; those gates are exercised
+against stubs), Proxmox, and a removal that stops half-way on a real cloud.

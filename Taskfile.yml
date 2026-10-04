@@ -415,6 +415,8 @@ tasks:
       # it meaningless, and this costs milliseconds.
       - ./scripts/dev/check-jsonpath.sh
       - ./scripts/dev/test-rolling-replace.sh
+      - ./scripts/dev/test-shrink-nodes.sh
+      - ./scripts/dev/test-tunnel-guard.sh
       # These two were written, they pass, and nothing ever ran them — not this
       # target, not CI. A harness nobody invokes is the failure mode this whole
       # target exists for, one level up: the check does work, it is simply never
@@ -919,8 +921,8 @@ tasks:
         # `ensure` answers in about a second, touches nothing when the tunnels are
         # healthy, and rebuilds only what is broken. It runs AFTER the init above,
         # so `tofu output` has its backend, and it never inits anything itself.
-        if [ "$TB" = true ] && [ "${OA_SKIP_TUNNEL_GUARD:-}" != 1 ]; then
-          SSH_KEY="{{.KEY}}" ../../../scripts/bootstrap/talos-tunnels.sh ensure . || exit 1
+        if [ "$TB" = true ]; then
+          ../../../scripts/internal/tunnel-guard.sh "{{.KEY}}" || exit 1
         fi
         if [ -n "{{.PLAN}}" ]; then
           # A saved plan carries its own variables; passing -var-file with one is
@@ -997,8 +999,8 @@ tasks:
         # listening after the connection through it dies (measured, offline:
         # scripts/dev/test-endpoint-probe.sh). `ensure` tests all six, demands a
         # TLS answer, and repairs instead of refusing.
-        if [ "$TB" = true ] && [ "${OA_SKIP_TUNNEL_GUARD:-}" != 1 ]; then
-          SSH_KEY="{{.KEY}}" ../../../scripts/bootstrap/talos-tunnels.sh ensure . || exit 1
+        if [ "$TB" = true ]; then
+          ../../../scripts/internal/tunnel-guard.sh "{{.KEY}}" || exit 1
         fi
         # -detailed-exitcode: 0 = no changes, 2 = changes, 1 = error. Task fails on
         # any non-zero, which is what turns "the plan is empty" into an assertion.
@@ -1169,6 +1171,63 @@ tasks:
         {{if eq .APPROVE "auto"}}--yes {{end}}{{.CLI_ARGS}}
       - task: _backup-state
         vars: {PROVIDER: "{{.PROVIDER}}"}
+
+  cluster-shrink-plan:
+    desc: >-
+      Read what removing nodes would do, and write it to a file. Lower control_planes or workers in the
+      tfvars first; nothing is removed. Read the file, then `task cluster-shrink PROVIDER=… PLAN=f`.
+      Usage: task cluster-shrink-plan PROVIDER=… [ROLE=management] [KEY=~/.ssh/key] [-- --allow-below-ha]
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+      KEY: '{{.KEY | default "~/.ssh/id_ed25519"}}'
+    env: *provider-env
+    cmds:
+      - defer: *receipt
+      - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
+      - SSH_KEY="{{.KEY}}" ../../../scripts/bootstrap/talos-tunnels.sh open .
+      - SSH_KEY="{{.KEY}}" ../../../scripts/ops/shrink-nodes.sh {{.PROVIDER}} --role={{.ROLE}} --plan {{.CLI_ARGS}}
+
+  cluster-shrink:
+    desc: >-
+      Remove nodes by applying a scope you have already read: drain, etcd leave for a control plane,
+      power off, delete the Node, then destroy exactly that node's resources. REQUIRES PLAN= — there is
+      no one-command removal, and APPROVE=auto cannot create one (a node's data volumes go with it).
+      Usage: task cluster-shrink-plan PROVIDER=…, read it, then task cluster-shrink PROVIDER=… PLAN=f
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+      KEY: '{{.KEY | default "~/.ssh/id_ed25519"}}'
+      PLAN: '{{.PLAN | default ""}}'
+    env: *provider-env
+    cmds:
+      - defer: *receipt
+      - |
+        if [ -z "{{.PLAN}}" ]; then
+          F="shrink-{{.ROLE}}-{{.PROVIDER}}.json"
+          echo "✗ refusing to remove nodes without a scope you have read. APPROVE=auto cannot stand in for it." >&2
+          echo "  This takes two commands:" >&2
+          echo "    task cluster-shrink-plan PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}" >&2
+          echo "    task cluster-shrink      PROVIDER={{.PROVIDER}} ROLE={{.ROLE}} PLAN=$F" >&2
+          exit 1
+        fi
+      - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
+      - SSH_KEY="{{.KEY}}" ../../../scripts/bootstrap/talos-tunnels.sh open .
+      - >-
+        SSH_KEY="{{.KEY}}" ../../../scripts/ops/shrink-nodes.sh {{.PROVIDER}} --role={{.ROLE}}
+        --apply="{{.PLAN}}" {{.CLI_ARGS}}
+      - task: _backup-state
+        vars: {PROVIDER: "{{.PROVIDER}}"}
+      - task: cluster-verify
+        vars:
+          ROLE: "{{.ROLE}}"
+          PROVIDER: "{{.PROVIDER}}"
 
   infra-down-plan:
     desc: >-

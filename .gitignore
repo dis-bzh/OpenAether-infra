@@ -77,6 +77,8 @@ worker.yaml
 *.tfvars.*
 !*.tfvars.example
 *.tfplan
+# The scope task cluster-shrink-plan writes: read it, apply it, never commit it.
+shrink-*.json
 plan
 
 # Talos image builder (downloaded/converted image artifacts — state is in S3)
