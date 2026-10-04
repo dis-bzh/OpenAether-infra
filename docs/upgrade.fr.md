@@ -418,4 +418,11 @@ est resté sain et attaché, la somme de contrôle du blob a tenu, et l'entrée 
 Le webhook de Longhorn refuse une modification de nœud pendant qu'il synchronise ses disques (« please retry
 later ») : la demande d'évacuation est donc rejouée.
 
-Non mesuré : CNPG sur un cluster vivant (stubs seulement), Proxmox, et un retrait interrompu en route sur un vrai cloud.
+**CNPG, Scaleway, 2026-10-04** (CloudNativePG 1.30.1 sur un cluster d'un control plane et de deux workers, deux
+instances sur une classe Longhorn à un réplica, 1000 lignes écrites) : le réplica était sur le worker qui part. Le
+retrait a ouvert la fenêtre de maintenance de CNPG et retiré ses budgets avant le drain, l'instance est revenue sur
+le worker qui reste avec son volume, les deux instances avaient les 1000 lignes, le cluster était sain à deux
+instances, et le budget et la fenêtre ont été remis à la fin. Ce cluster est aussi la forme non-HA (un control
+plane), et le retrait y a tourné sans changement.
+
+Non mesuré : un primaire CNPG sur le nœud qui part, Proxmox, et un retrait interrompu en route sur un vrai cloud.

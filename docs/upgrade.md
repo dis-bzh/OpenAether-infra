@@ -391,4 +391,11 @@ healthy and attached, the blob's checksum held, and the Longhorn node entry went
 refuses a node edit while it is syncing that node's disks ("please retry later"), so the eviction request is
 retried.
 
-Not measured: CNPG on a live cluster (stubs only), Proxmox, and a removal that stops half-way on a real cloud.
+**CNPG, Scaleway, 2026-10-04** (CloudNativePG 1.30.1 on a cluster of one control plane and two workers, two instances
+on a one-replica Longhorn class, 1000 rows written): the replica sat on the worker going away. The removal opened
+CNPG's maintenance window and dropped its budgets before the drain, the instance came back on the worker that
+stays with its volume, both instances held the 1000 rows, the cluster read healthy with two instances, and the
+budget and the window were put back at the end. That cluster is also the non-HA shape (one control plane), and the
+removal ran on it unchanged.
+
+Not measured: a CNPG primary on the node going away, Proxmox, and a removal that stops half-way on a real cloud.
