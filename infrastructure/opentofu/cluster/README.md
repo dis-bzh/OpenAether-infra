@@ -189,6 +189,23 @@ prerequisite — a state and artifacts replica on a SECOND provider — is real 
 measured (`docs/status.md`); rebuilding a cluster from it is designed work that
 has not been done. `envs/failover-*.tfvars.example` still describes the role.
 
+**Steering traffic between two live clusters** (the optional multi-cluster overlay, not the
+cold rebuild above) is health-checked DNS from a zone that shares no fate with either
+cluster. It is not BGP or anycast across providers, which needs each provider to let a VM
+announce a prefix. The vendors' own docs (read 2026-10-04) say:
+
+- Scaleway: flexible routed IPs; BGP only on InterLink and Site-to-Site VPN, toward a VPC;
+  bring-your-own-IP none documented (an open request on its feedback board).
+- OVH Public Cloud: the BGP Service is an alpha for bare-metal servers on a vRack, in 1-AZ
+  regions only (3-AZ regions excluded); an imported IP range works in one region only.
+- Outscale: BGP over DirectLink and VPN only, private routes to a Net; none documented
+  for a public prefix.
+
+Talos 1.14's native BGP (`BGPInstanceConfig`) needs a router to peer with: it fits where
+you run the upstream router (on-prem), not this failover. The cold rebuild on another
+provider (#57) needs no BGP. Revisit when a supported provider documents a customer BGP
+peer for VMs in a region we use.
+
 ### Upgrade Cilium or Flux
 
 ```bash
