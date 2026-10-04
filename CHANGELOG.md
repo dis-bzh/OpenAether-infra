@@ -29,8 +29,10 @@ in git. 0.1.0 is the first entry describing something proven.
   and real cloud, dated 2026-10-04 and pasted in `docs/upgrade.md`: a worker and a control plane (3 to 2) on each
   of Scaleway, OVH and Outscale, `cluster-verify` green, the provider API showing no orphan. Longhorn's
   eviction was run on Scaleway only (a sole replica moved off the node, data intact, a two-replica volume
-  refused; the eviction request is retried because Longhorn's webhook can refuse it while syncing). Not run on a
-  real cloud: CNPG, Proxmox, and a removal that stops half-way.
+  refused; the eviction request is retried because Longhorn's webhook can refuse it while syncing). CNPG ran
+  on Scaleway too (a replica on the node going away moved with its volume, 1000 rows on both instances, budget and
+  maintenance window restored, on a one-control-plane cluster). Not run on a real cloud: a CNPG primary on the
+  node going away, Proxmox, and a removal that stops half-way.
 
 - **A lowered node count is refused before anything is applied (refs the 0.2.0 scale-in audit).**
   Lowering `control_planes` or `workers` made OpenTofu destroy the highest-index machine and its
