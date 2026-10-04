@@ -136,10 +136,14 @@ bao token create -policy=openaether-reader -ttl=8h -display-name=<prénom>
 sceller, rekey et rotation — ces gestes restent au root token hors ligne,
 délibérés et rares.
 
-⚠️ Si ton IP publique change : mettre à jour `admin_ip` puis `task infra-apply`, sinon
-le bastion devient injoignable. `admin_ip` refuse désormais une liste vide, une
-adresse sans préfixe et un `/0` — c'est la liste d'autorisation devant sshd du
-bastion ET devant 6443.
+⚠️ Si ton IP publique change, le bastion ne te laisse plus entrer, et un simple `task infra-apply` s'arrête
+à son contrôle des tunnels : ils ne peuvent pas être reconstruits avant que l'apply passe. Mettre la nouvelle
+adresse dans `admin_ip` et le lancer sans le contrôle et sans la lecture de santé :
+`OA_SKIP_TUNNEL_GUARD=1 TF_VAR_skip_health_check=true task infra-apply PROVIDER=… APPROVE=auto`. Mesuré sur
+Scaleway, le 2026-10-04 : le groupe de sécurité du bastion et l'ACL du load balancer ont été mis à jour, l'apply
+a pris moins de quatre minutes, SSH vers le bastion remarchait et `cluster-verify` a passé 13/13. `admin_ip`
+refuse désormais une liste vide, une adresse sans préfixe et un `/0` — c'est la liste d'autorisation devant sshd
+du bastion ET devant 6443.
 
 **Le bastion reste, durci sur place (décision, #82, 2026-10-03).** Un émetteur OIDC
 pour l'apiserver, une CA SSH ou un plan de contrôle WireGuard demanderaient chacun un

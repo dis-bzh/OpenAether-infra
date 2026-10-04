@@ -301,6 +301,15 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **A changed `admin_ip` can be applied, and the failure says how.** The documented remedy, "update `admin_ip` then
+  `task infra-apply`", stopped at the tunnel check on a bootstrapped cluster: the bastion no longer let this machine
+  in, so the tunnels could not be rebuilt, and the escape hatch (`OA_SKIP_TUNNEL_GUARD=1`) existed only in a
+  Taskfile comment. The check is now `scripts/internal/tunnel-guard.sh`, its failure names the way out, and
+  `docs/admin-access.md` carries the measured procedure. Rung: mocked (`test-tunnel-guard.sh`, mutants killed) and
+  real cloud, Scaleway 2026-10-04: `admin_ip` changed to an address that is not ours (SSH to the bastion timed out),
+  the plain apply stopped at the check, `OA_SKIP_TUNNEL_GUARD=1 TF_VAR_skip_health_check=true` applied in under
+  four minutes, SSH worked again, `cluster-verify` 13/13. Not run on OVH or Outscale.
+
 - **Documents that still described the 0.1.0 measurements as the latest.** The README's "Honest status",
   layer table, providers table, roadmap and document index; `docs/status.md` (#59 "still open", the
   Renovate cause); `docs/first-cluster.md` (a control plane could not be added, nobody had used a
