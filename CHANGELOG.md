@@ -234,6 +234,11 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **commitizen 4.19.0 → 4.19.1** in the CI commit-message job, probed green by Cléa (#91). Proof: lint,
+  render-check, test-scripts, validate (both roots), `task test` (71/71), checkov 32/0, custom checks 6/0 and
+  gitleaks green; trivy not run in the sandbox. Left out: plumber v0.5.20 (`clea bump` refuses its `action-sha`
+  pin in `security.yml`, as #170) and flux2 v2.9.6, talos v1.14.2 (not probed), kubernetes v1.37.1 (probe failed).
+
 - **The roll's gates and helpers live in `scripts/lib/roll-gates.sh`, moved verbatim.** The scale-in
   command needs the same drain, CNPG, PDB, etcd and plan gates, and a copy would drift. The original
   `rolling-replace.sh` rebuilds byte for byte from the new script with the logging block and the function
