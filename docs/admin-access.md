@@ -130,9 +130,13 @@ bao token create -policy=openaether-reader -ttl=8h -display-name=<name>
 `openaether-admin` covers daily operations but explicitly denies seal, rekey and
 key rotation — those stay with the offline root token, deliberate and rare.
 
-⚠️ If your public IP changes: update `admin_ip` then `task infra-apply`, or the bastion
-becomes unreachable. `admin_ip` refuses an empty list, a bare address and a `/0`
-since it validates — it is the allowlist in front of both bastion sshd and 6443.
+⚠️ If your public IP changes, the bastion stops letting you in, and a plain `task infra-apply` stops
+at its tunnel check: the tunnels cannot be rebuilt until the apply lands. Put the new address in
+`admin_ip` and run it with the check off and the health read skipped:
+`OA_SKIP_TUNNEL_GUARD=1 TF_VAR_skip_health_check=true task infra-apply PROVIDER=… APPROVE=auto`. Measured on
+Scaleway, 2026-10-04: the bastion's security group and the load balancer's ACL were updated, the apply took
+under four minutes, SSH to the bastion worked again and `cluster-verify` passed 13/13. `admin_ip` refuses an
+empty list, a bare address and a `/0` since it validates — it is the allowlist in front of both bastion sshd and 6443.
 
 **The bastion stays, hardened in place (decision, #82, 2026-10-03).** An OIDC issuer
 for the apiserver, an SSH CA or a WireGuard control plane would each need an always-on

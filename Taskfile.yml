@@ -416,6 +416,7 @@ tasks:
       - ./scripts/dev/check-jsonpath.sh
       - ./scripts/dev/test-rolling-replace.sh
       - ./scripts/dev/test-shrink-nodes.sh
+      - ./scripts/dev/test-tunnel-guard.sh
       # These two were written, they pass, and nothing ever ran them — not this
       # target, not CI. A harness nobody invokes is the failure mode this whole
       # target exists for, one level up: the check does work, it is simply never
@@ -920,8 +921,8 @@ tasks:
         # `ensure` answers in about a second, touches nothing when the tunnels are
         # healthy, and rebuilds only what is broken. It runs AFTER the init above,
         # so `tofu output` has its backend, and it never inits anything itself.
-        if [ "$TB" = true ] && [ "${OA_SKIP_TUNNEL_GUARD:-}" != 1 ]; then
-          SSH_KEY="{{.KEY}}" ../../../scripts/bootstrap/talos-tunnels.sh ensure . || exit 1
+        if [ "$TB" = true ]; then
+          ../../../scripts/internal/tunnel-guard.sh "{{.KEY}}" || exit 1
         fi
         if [ -n "{{.PLAN}}" ]; then
           # A saved plan carries its own variables; passing -var-file with one is
@@ -998,8 +999,8 @@ tasks:
         # listening after the connection through it dies (measured, offline:
         # scripts/dev/test-endpoint-probe.sh). `ensure` tests all six, demands a
         # TLS answer, and repairs instead of refusing.
-        if [ "$TB" = true ] && [ "${OA_SKIP_TUNNEL_GUARD:-}" != 1 ]; then
-          SSH_KEY="{{.KEY}}" ../../../scripts/bootstrap/talos-tunnels.sh ensure . || exit 1
+        if [ "$TB" = true ]; then
+          ../../../scripts/internal/tunnel-guard.sh "{{.KEY}}" || exit 1
         fi
         # -detailed-exitcode: 0 = no changes, 2 = changes, 1 = error. Task fails on
         # any non-zero, which is what turns "the plan is empty" into an assertion.
