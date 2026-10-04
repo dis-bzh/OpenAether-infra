@@ -251,6 +251,13 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **`siderolabs/talos` provider 0.11 → 0.12.0, pinned exactly (refs #241, #44).** The cluster root and the local lane
+  pin `0.12.0`, the module's ceiling moves to `< 0.13.0` and Renovate's hold rule is gone. Exact on purpose: no lock
+  file is committed, so a range would let a later 0.12.x change the rendered text unseen. `replace_triggered_by`
+  (#352) stays: fixed upstream in 0.12.0, but no run without it has happened. Rung: mocked. With the contract
+  cap above, a cloud cluster's rendered config equals 0.11's (offline); the local Docker lane's changes in
+  container mode (the default installer image), which a disposable lane absorbs. Not measured: any node, any cloud.
+
 - **`modules/talos` renders the machine configuration under the v1.13 contract on a Talos 1.14 node (refs #241).**
   On `talos_machine_configuration`, `talos_version` is the config contract, not the node's Talos: provider 0.12
   renders the 1.14 multi-document config for it and the module's v1alpha1 patches collide with it (seven errors on

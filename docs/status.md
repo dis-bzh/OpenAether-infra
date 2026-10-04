@@ -154,13 +154,14 @@ alone, #57; only `restore-artifacts` was read back byte-identical, on one provid
 unattended to completion; and a control-plane roll with zero failed probes has not happened on any cloud
 (#42: 1 s on Scaleway and OVH, 3 s on Outscale, 9 s once Kubernetes moves there).
 
-**Talos provider 0.12.0 cannot carry a 1.14 cluster yet.** At `talos_version` 1.14.x it renders Talos's
-multi-document config and the module's v1alpha1 patches conflict (seven errors on every config apply,
-measured on OVH). Inside the 1.13 contract it works: a fresh deploy and a bump 1.13.9→1.13.11 ran through
-on OVH and on Outscale (13/13, plan empty after), though with our `replace_triggered_by` workaround still
-in, so it does not show that the upstream fix alone suffices (#83, closed). The module now renders a 1.14 node
-under the 1.13 contract (same text as 0.11.0, checked offline; no node or cloud has run it), and the pin stays on
-0.11.0 until a real cloud has ([#241](https://github.com/dis-bzh/OpenAether-infra/issues/241)).
+**Talos provider 0.12.0 is pinned, and a 1.14 node is still rendered under the 1.13 contract.** Given a 1.14
+contract, 0.12.0 renders Talos's multi-document config and the module's v1alpha1 patches conflict with it (seven
+errors on every config apply, measured on OVH), so `modules/talos` caps the contract at v1.13: the same text 0.11.0
+rendered, checked offline. Inside the 1.13 contract 0.12.0 ran through on OVH and on Outscale (a fresh deploy and
+a bump 1.13.9→1.13.11, 13/13, plan empty after), with our `replace_triggered_by` workaround still in (#83, closed).
+**Not proven**: a 1.14.x cluster brought up from scratch under 0.12.0 on a real cloud with `cluster-verify` green
+([#241](https://github.com/dis-bzh/OpenAether-infra/issues/241)); `talos_machine` ([#44](https://github.com/dis-bzh/OpenAether-infra/issues/44))
+is not adopted.
 
 **Six gates were green on something they had stopped checking**, found on
 2026-08-28 by auditing what the pipeline actually constrains rather than what it
