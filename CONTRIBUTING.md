@@ -56,10 +56,14 @@ re-run and paste again. Renovate, Dependabot and docs-only diffs may declare
 nothing; a rung they declare is checked. Which targets record, and what a
 receipt proves and cannot: [`scripts/dev/rung-receipt.py`](scripts/dev/rung-receipt.py).
 
-The credentialed rung has no CI lane: it is run by hand, by someone watching.
-The workflow that was meant to automate it never reached a deploy and was
-deleted for 0.1.0 rather than left cronning red — the history is on the
-`archive/staging-lane` branch. **No workflow may run cloud credentials on a pull
+The credentialed rung has no automatic CI lane: it is run by hand, by someone
+watching. The workflow that was meant to automate it never reached a deploy and
+was deleted for 0.1.0 rather than left cronning red — the history is on the
+`archive/staging-lane` branch. What exists now is a manual-only workflow,
+`real-cloud-regression.yml` (`workflow_dispatch`, no schedule), that runs the
+same deploy, verify and teardown on SANDBOX accounts; it is dormant until its
+secrets exist and its first step names the one that is missing. It never runs on
+a pull request. **No workflow may run cloud credentials on a pull
 request**: GitHub withholds secrets from fork PRs on purpose, and
 `pull_request_target` would run a stranger's code with this repository's
 credentials. Before a release, `docs/release-checklist.md` says what to run by

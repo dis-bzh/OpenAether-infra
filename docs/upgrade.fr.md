@@ -14,7 +14,7 @@
 > La version scriptée de cette même procédure est `task cluster-upgrade`
 > ([`scripts/dev/cluster-upgrade.sh`](../scripts/dev/cluster-upgrade.sh)). Elle
 > se lance à la main, sous surveillance : aucune voie de CI ne déploie quoi que
-> ce soit. Cette page est ce qui a réellement tourné.
+> ce soit toute seule. Cette page est ce qui a réellement tourné.
 
 ## Les deux faits dont découle tout le reste
 
