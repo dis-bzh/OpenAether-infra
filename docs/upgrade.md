@@ -398,4 +398,10 @@ stays with its volume, both instances held the 1000 rows, the cluster read healt
 budget and the window were put back at the end. That cluster is also the non-HA shape (one control plane), and the
 removal ran on it unchanged.
 
-Not measured: a CNPG primary on the node going away, Proxmox, and a removal that stops half-way on a real cloud.
+A second run put the **primary** on the worker going away (the same cluster shape, a writer pod on the worker that
+stays inserting one row a second through the read-write service). The drain evicted it, CNPG failed over to the
+replica on the other worker and recreated the old primary there as a replica with its volume; the cluster read
+healthy with two instances, both held the 1000 rows, and of 368 inserts 2 failed (a failing run of 2 s) and every
+acknowledged one was on the new primary. The budget and the window were put back at the end.
+
+Not measured: Proxmox, and a removal that stops half-way on a real cloud.
