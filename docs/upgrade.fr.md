@@ -425,4 +425,10 @@ le worker qui reste avec son volume, les deux instances avaient les 1000 lignes,
 instances, et le budget et la fenêtre ont été remis à la fin. Ce cluster est aussi la forme non-HA (un control
 plane), et le retrait y a tourné sans changement.
 
-Non mesuré : un primaire CNPG sur le nœud qui part, Proxmox, et un retrait interrompu en route sur un vrai cloud.
+Un second run a mis le **primaire** sur le worker qui part (même forme de cluster, un pod écrivain sur le worker qui
+reste insérant une ligne par seconde à travers le service en lecture-écriture). Le drain l'a expulsé, CNPG a basculé
+sur le réplica de l'autre worker et recréé l'ancien primaire là comme réplica avec son volume ; le cluster était sain
+à deux instances, les deux avaient les 1000 lignes, et sur 368 insertions 2 ont échoué (une série de 2 s) et toutes
+celles qui ont été acquittées étaient sur le nouveau primaire. Le budget et la fenêtre ont été remis à la fin.
+
+Non mesuré : Proxmox, et un retrait interrompu en route sur un vrai cloud.
