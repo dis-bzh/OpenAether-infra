@@ -109,6 +109,12 @@ A build that fails after its apply has already replaced the old image, so leave
 the pin at the new version and re-run. The 2026-10-03 climbs ran through that
 order on all three clouds.
 
+`talos_version` is the node's Talos, not the machine-config contract. The module renders under
+a separate contract, never newer than v1.13 (`config_contract` in `modules/talos/main.tf`):
+provider 0.12 renders Talos 1.14's multi-document config for a 1.14 contract, and the module's
+v1alpha1 patches collide with it (#241). A bump to 1.14 changes the installer image in the
+config, not the shape of its documents.
+
 **On Outscale the image build dominates the whole upgrade.** The image is
 registered from a snapshot imported through a provider-side queue: 8 min on
 2026-08-18, over 60 min on 2026-07-25. It blocks before a single node is touched,

@@ -198,13 +198,20 @@ locals {
 # Control Plane Machine Configuration
 # ==============================================================================
 
+locals {
+  # On these data sources `talos_version` is the config CONTRACT, not the node's Talos. Provider 0.12
+  # renders Talos 1.14's multi-document config for a 1.14 contract, which the v1alpha1 patches below
+  # collide with (#241). So never newer than v1.13; an older node keeps its own, it cannot read newer.
+  config_contract = tonumber(split(".", trimprefix(var.talos_version, "v"))[1]) >= 13 ? "v1.13" : var.talos_version
+}
+
 data "talos_machine_configuration" "control_plane" {
   count              = var.control_plane_count
   cluster_name       = var.cluster_name
   cluster_endpoint   = var.cluster_endpoint
   machine_type       = "controlplane"
   machine_secrets    = local.machine_secrets.machine_secrets
-  talos_version      = var.talos_version
+  talos_version      = local.config_contract
   kubernetes_version = var.kubernetes_version
 
   config_patches = [
@@ -333,7 +340,7 @@ data "talos_machine_configuration" "worker" {
   cluster_endpoint   = var.cluster_endpoint
   machine_type       = "worker"
   machine_secrets    = local.machine_secrets.machine_secrets
-  talos_version      = var.talos_version
+  talos_version      = local.config_contract
   kubernetes_version = var.kubernetes_version
 
   # Base patch (machine + cluster) plus one UserVolumeConfig patch per declared

@@ -117,6 +117,12 @@ qui bloque. Un build qui échoue après son apply a déjà remplacé l'ancienne
 image : laisser le pin sur la nouvelle version et relancer. Les montées du 2026-10-03
 ont suivi cet ordre sur les trois clouds.
 
+`talos_version` est le Talos du nœud, pas le contrat de configuration machine. Le module génère
+sous un contrat distinct, jamais plus récent que v1.13 (`config_contract` dans
+`modules/talos/main.tf`) : le provider 0.12 génère la configuration multi-documents de Talos 1.14
+pour un contrat 1.14, et les patches v1alpha1 du module la heurtent (#241). Un bump vers 1.14
+change l'image d'installation dans la configuration, pas la forme de ses documents.
+
 **Sur Outscale, la construction de l'image domine tout l'upgrade.** L'image est
 enregistrée depuis un snapshot importé via une file côté provider : 8 min le
 2026-08-18, plus de 60 min le 2026-07-25. Elle bloque avant qu'un seul nœud soit

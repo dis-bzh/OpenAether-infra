@@ -158,8 +158,9 @@ unattended to completion; and a control-plane roll with zero failed probes has n
 multi-document config and the module's v1alpha1 patches conflict (seven errors on every config apply,
 measured on OVH). Inside the 1.13 contract it works: a fresh deploy and a bump 1.13.9→1.13.11 ran through
 on OVH and on Outscale (13/13, plan empty after), though with our `replace_triggered_by` workaround still
-in, so it does not show that the upstream fix alone suffices (#83, closed). The pin stays on 0.11.0 until
-the patches move to 1.14 documents ([#241](https://github.com/dis-bzh/OpenAether-infra/issues/241)).
+in, so it does not show that the upstream fix alone suffices (#83, closed). The module now renders a 1.14 node
+under the 1.13 contract (same text as 0.11.0, checked offline; no node or cloud has run it), and the pin stays on
+0.11.0 until a real cloud has ([#241](https://github.com/dis-bzh/OpenAether-infra/issues/241)).
 
 **Six gates were green on something they had stopped checking**, found on
 2026-08-28 by auditing what the pipeline actually constrains rather than what it
