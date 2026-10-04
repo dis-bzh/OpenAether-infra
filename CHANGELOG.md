@@ -16,6 +16,20 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
+- **`real-cloud-regression.yml`: a manual deploy, verify and teardown on sandbox accounts, dormant until the owner
+  creates its secrets.** `workflow_dispatch` only (the `schedule:` block is written and commented out), one provider
+  or all three in turn, behind a "these are sandbox accounts" box, with `if: always()` on both teardown steps and on
+  a last step that asks the provider (not the state) whether anything is left. Its first step names whichever secret
+  is missing; none exists in the repository today. It was written on 2026-09-30 and never run; read again against
+  `main` it had a conflict marker committed into this file's own entry, secrets interpolated into shell text (a tfvars
+  holds quotes, so `printf '%s' "…"` breaks on it), a private key written without its final newline, an unpinned
+  `kubectl`, a stale OpenTofu pin, and an Outscale proof that could never read clean because of #43. All fixed: secrets
+  reach a step only through `env:`, kubectl is the cluster's own pin and checksum-verified, Outscale is judged on its
+  VMs and public IPs. Rung: mocked (`test-real-cloud-workflow.sh` lifts each shell step out of the YAML and runs it
+  with fake secrets in a scratch tree, with mutants killed); **not run against any account**, because the repository
+  holds no cloud secret and an agent does not copy yours into it. The first dispatch is where a real account gets to
+  disagree.
+
 - **`task cluster-shrink-plan` then `task cluster-shrink` remove nodes from a live cluster (refs #249).** Lowering a
   count used to destroy the machine and its data volumes with no drain and no etcd leave; `cluster-up` now refuses
   that (below), and `scripts/ops/shrink-nodes.sh` does the removal: scope read off the saved plan and derived again

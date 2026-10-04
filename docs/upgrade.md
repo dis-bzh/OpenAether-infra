@@ -12,7 +12,7 @@
 >
 > The scripted version of this same procedure is `task cluster-upgrade`
 > ([`scripts/dev/cluster-upgrade.sh`](../scripts/dev/cluster-upgrade.sh)). It is
-> run by hand, by someone watching: no CI lane deploys anything. This page is
+> run by hand, by someone watching: no CI lane deploys anything on its own. This page is
 > what was actually run.
 
 ## The two facts everything here follows from
