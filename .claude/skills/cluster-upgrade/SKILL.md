@@ -54,10 +54,11 @@ widening it.
 Each version has its own image state: a build never replaces another image, and a failed
 one leaves the pin on a version whose image may not exist (re-run, or put the old pin back).
 The pin still moves first: `talos-image.sh` compares a pinned `image_id` only with the image
-of the version it builds. The lane keeps the two highest versions (`RETAIN=1`, README): `cluster-up`
-runs it after its verify; `cluster-upgrade` does not, so run it once the climb is verified, never before.
-The upgrade harness stubbed `task`, which hid that order: a stub
+of the version it builds. The upgrade harness stubbed `task`, which hid that order: a stub
 between two scripts hides their contract. Its Talos-step scenarios run the real `talos-image.sh`.
+
+Old images go by `RETAIN=1` (README): the cluster's version and the one below it stay. `cluster-up`
+runs it after its verify; `cluster-upgrade` does not, so run it once the climb is verified, never before.
 
 ## One apply per bump, and why
 

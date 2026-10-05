@@ -44,27 +44,30 @@ native object storage, so its state lives on an external S3-compatible store
 
 ```bash
 task image-build PROVIDER=ovh LIST=1                  # the versions held, one state each
-task image-build PROVIDER=ovh VERSION=<old> PRUNE=1   # destroy ONE version; refused while an envs/*.tfvars pins it
-task image-build PROVIDER=ovh RETAIN=1                # keep the two highest versions held, destroy every other
+task image-build PROVIDER=ovh VERSION=<old> PRUNE=1   # destroy ONE version; refused while an envs/*.tfvars names it
+task image-build PROVIDER=ovh RETAIN=1                # keep the cluster's version and the one below it, destroy the rest
 ```
 
-- **Retention: the two highest versions** (`RETAIN=1`, `--retain`; it takes no version). The lane keeps
-  the two highest versions it holds by semver, so a node can still be made on N-1 while N runs. It touches
-  image states only, never the cluster. It says what it will destroy, then runs `--prune` for each other
-  version, lowest first (tofu asks its own yes each time). A prune that fails stops the run, naming it,
-  what already went and what was not tried.
-  **Never destroyed, but kept and named**: a version an `envs/*-<provider>.tfvars` pins (**the way to keep an
-  older one**) and a held version that is not `vX.Y.Z` (a pre-release cannot be ordered). Versions are
-  counted from the state keys and the pre-#69 state, like `--list`: a half-built version above the
-  cluster's takes one of the two places. `task cluster-up` runs it after `cluster-verify` passed, only when
-  a person answers (never under `APPROVE=auto`), and a failure there only warns; after
+- **Retention** (`RETAIN=1`, `--retain`; it takes no version) ranks around the version a cluster is on. N is the
+  newest `talos_version` an `envs/*-<provider>.tfvars` pins; the lane keeps N and the highest version held below
+  it, so a node can still be made on N-1 while N runs, and `--prune`s every other one, lowest first (tofu asks its
+  own yes each time). It touches image states only, never the cluster. Pre-releases rank below their release.
+  A version above N (built ahead, or a bump reverted) is kept and named: it takes none of the two places.
+  **Kept and named, never destroyed**: a version a tfvars names, by its `talos_version` or by an `image_name` (or,
+  on Proxmox, `talos_image_file_id`) override naming a lane image (**the way to keep an older one**), and a key that
+  is no version. **Refused outright**, because what a cluster still needs is then unknown: a tfvars that sets
+  `image_id` (an id names no version: drop it, the name resolves the image), one that cannot be read, no envs
+  directory, no tfvars for the provider. Unlike `--list`, it also reads the version the pre-#69 state holds.
+  A prune that fails, or leaves objects in its state, stops the run, naming it, what already went and what was not
+  tried. One operator per lane: the image state takes no lock. `task cluster-up` runs it after `cluster-verify`
+  passed, only when a person answers (never under `APPROVE=auto`), and a failure there only warns; after
   `task cluster-upgrade`, run it yourself.
 - **A node on an older image**: build that version, then set
   `node_distribution.<provider>.image_name = "talos-<provider>-amd64-<older>"` (OVH and
   Outscale also take `image_id`) and add the node. Nodes ignore later changes of that
   attribute. Not measured (#69): whether such a node stays on the older Talos or installs
-  the pinned one at its first config; `talosctl version` on it answers. `PRUNE=1` reads
-  `talos_version` only, so drop the `image_name` override before pruning that version.
+  the pinned one at its first config; `talosctl version` on it answers. `PRUNE=1` and `RETAIN=1`
+  keep the version that override names, so drop it before pruning that version.
 - **The pre-#69 single state** (`talos-image.tfstate`) is read, never guessed: the first
   build of the version it holds copies it to that version's key and renames the old object
   to `.migrated-to-<version>` (never deleted). A build of another version leaves it alone.

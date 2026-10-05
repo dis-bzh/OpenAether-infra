@@ -153,8 +153,10 @@ task cluster-up ROLE=management PROVIDER=scaleway KEY=~/.ssh/yourkey
 Sans `APPROVE=auto`, il demande un terminal : il sollicite une approbation deux
 fois, sur les plans de la phase 1 et de la phase 2, et applique le plan qu'il
 vient de montrer — n'utilise pas `-auto-approve`, qui en applique un *autre*,
-recalculé à cet instant. Pour un run non supervisé, ajoute `APPROVE=auto` : il
-répond aux deux questions. (Pour relire à part un plan de la phase 1,
+recalculé à cet instant. Une fois vérifié, il lance aussi la rétention des images,
+où tofu demande son propre oui pour chaque ancienne image détruite. Pour un run non
+supervisé, ajoute `APPROVE=auto` : il répond aux deux plans et saute la rétention.
+(Pour relire à part un plan de la phase 1,
 enregistre-le : `task infra-plan ROLE=management PROVIDER=scaleway OUT=tfplan`,
 relis-le, puis `task infra-apply PROVIDER=scaleway PLAN=tfplan`. `PROVIDER` est
 exigé sur les deux — il retombait avant sur Scaleway, ce qui est le mauvais cloud
