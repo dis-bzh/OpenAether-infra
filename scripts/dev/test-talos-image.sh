@@ -29,6 +29,7 @@ SCRIPT=scripts/bootstrap/talos-image.sh
 TFROOT=infrastructure/opentofu/talos-image
 SB="$(mktemp -d)"
 LOG="$SB/tofu.log"
+mkdir -p "$SB/tmp"   # the script's own mktemp lands here, so a leftover is visible
 # The pin scans read an envs dir: a sandbox one, so a real gitignored tfvars in
 # this checkout can neither fail these cases nor be written next to (#191).
 export OA_ENVS_DIR="$SB/envs"; mkdir -p "$OA_ENVS_DIR"
@@ -74,12 +75,29 @@ exit 0
 STUB
 # Logged (prefixed, so it never collides with a tofu subcommand match below) —
 # the zero-spend assertions need to see whether aws was ever invoked, not
-# just tofu. The listing of the lane bucket answers from OA_STUB_KEYS.
+# just tofu. The listing behaves like S3's: a bucket other than OA_STUB_BUCKET does not exist, and
+# only the keys of OA_STUB_KEYS (tab-separated) that start with --prefix come back, else "None".
+# head-bucket answers OA_STUB_HEAD (404 or 403) the way the CLI words it.
 cat >"$SB/aws" <<'STUB'
 #!/usr/bin/env bash
 printf 'aws:%s\n' "$*" >>"$OA_STUB_LOG"
+bucket="" prefix=""
+for ((i = 1; i < $#; i++)); do
+  j=$((i + 1))
+  case "${!i}" in --bucket) bucket="${!j}" ;; --prefix) prefix="${!j}" ;; esac
+done
 case "$*" in
-  *list-objects-v2*) printf '%s\n' "${OA_STUB_KEYS:-None}"; exit "${OA_STUB_LIST_EXIT:-0}" ;;
+  *head-bucket*)
+    case "${OA_STUB_HEAD:-}" in
+      404) echo "An error occurred (404) when calling the HeadBucket operation: Not Found" >&2; exit 254 ;;
+      403) echo "An error occurred (403) when calling the HeadBucket operation: Forbidden" >&2; exit 254 ;;
+    esac ;;
+  *list-objects-v2*)
+    [ -n "${OA_STUB_BUCKET:-}" ] || { echo "stub aws: OA_STUB_BUCKET unset" >&2; exit 99; }
+    [ "$bucket" = "$OA_STUB_BUCKET" ] || { echo "An error occurred (NoSuchBucket) when calling the ListObjectsV2 operation" >&2; exit 254; }
+    out=""
+    for k in $(tr '\t' ' ' <<<"${OA_STUB_KEYS:-}"); do case "$k" in "$prefix"*) out+="${out:+	}$k" ;; esac; done
+    printf '%s\n' "${out:-None}"; exit "${OA_STUB_LIST_EXIT:-0}" ;;
   "s3 mv "*) exit "${OA_STUB_MV_EXIT:-0}" ;;
 esac
 exit 0
@@ -100,7 +118,8 @@ run() { # <plan-exit> [script args...] — prints the script's output, exits as 
   local ver=("${VER:-v1.13.4}"); [ "${VER:-}" != none ] || ver=()
   # </dev/null is the point of the whole exercise: this is the lane that runs
   # with no terminal to answer a prompt.
-  env PATH="$SB:$PATH" OA_STUB_LOG="$LOG" OA_STUB_PLAN_EXIT="$pe" \
+  env PATH="${RUN_PATH:-$SB:$PATH}" OA_STUB_LOG="$LOG" OA_STUB_PLAN_EXIT="$pe" TMPDIR="$SB/tmp" \
+      OA_STUB_BUCKET="s3-oatest-t3st-${PROV:-scaleway}-talos-image" \
       TALOS_IMAGE_ALLOW_OFFLINE="${TALOS_IMAGE_ALLOW_OFFLINE:-0}" \
       OA_TFVARS="$SB/t.tfvars" \
       SCW_AWS_ACCESS_KEY_ID=STUB-AK SCW_AWS_SECRET_ACCESS_KEY=STUB-SK \
@@ -125,6 +144,8 @@ positional() { # <subcommand> — its non-flag arguments
   done
   printf '%s' "${out[*]:-}"
 }
+
+hasvar() { [[ " $(line "$1") " == *" -var $2 "* ]]; }  # does that `tofu <subcommand>` call carry exactly -var <name=value>?
 
 # The schematic gate's OWN blind case, which this file used to leave to nobody:
 # an unreachable Factory left LIVE_ID empty, so the refusal and the line of
@@ -217,7 +238,7 @@ echo "--- a failed apply must fail the run (cluster-up deploys on what it says) 
 : >"$LOG"; rm -f "$TFROOT"/talos-image-scaleway.tfplan
 RC=0
 env PATH="$SB:$PATH" OA_STUB_LOG="$LOG" OA_STUB_PLAN_EXIT=2 OA_STUB_APPLY_EXIT=1 \
-    OA_TFVARS="$SB/t.tfvars" \
+    OA_STUB_BUCKET=s3-oatest-t3st-scaleway-talos-image OA_TFVARS="$SB/t.tfvars" \
     SCW_AWS_ACCESS_KEY_ID=STUB-AK SCW_AWS_SECRET_ACCESS_KEY=STUB-SK \
     "$SCRIPT" scaleway v1.13.4 --ensure </dev/null >/dev/null 2>&1 || RC=$?
 [ "$RC" -ne 0 ] && ok "a failing apply propagates (exit $RC), so the caller cannot deploy on it" \
@@ -240,6 +261,10 @@ OUT="$(VER=none run 2 --ensure)"; RC=$?
   && ok "no version argument builds the pin of the cluster tfvars, not a literal kept in the script" \
   || bad "a bare call did not resolve the pin (rc=$RC, keys: $(initkeys))"
 rm -f "$OA_ENVS_DIR/management-scaleway.tfvars"
+printf 'talos_version = "v1.13.5"\n' >"$OA_ENVS_DIR/prod-scaleway.tfvars"
+OUT="$(OA_ROLE=prod VER=none run 2 --ensure)"
+is "OA_ROLE picks the tfvars a bare call reads its pin from" "talos-image-scaleway-v1.13.5.tfstate" "$(initkeys)"
+rm -f "$OA_ENVS_DIR/prod-scaleway.tfvars"
 
 echo "--- a cluster pinning ANOTHER version no longer blocks a build (it used to, #93) ---"
 printf 'talos_version = "v1.13.9"\n' >"$PINFILE"
@@ -248,7 +273,7 @@ is "the build completes" 0 "$RC"
 is "and applies" 1 "$(calls apply)"
 rm -f "$PINFILE"
 
-echo "--- --list: the versions held, read from the lane bucket, no tofu ---"
+echo "--- --list: the versions held, read from the lane bucket; builds nothing, creates nothing ---"
 OUT="$(OA_STUB_KEYS=$'talos-image-scaleway-v1.13.4.tfstate\ttalos-image-scaleway-v1.14.2.tfstate\ttalos-image-ovh-v1.13.9.tfstate' run 2 --list)"; RC=$?
 is "the script completes" 0 "$RC"
 { grep -q 'v1.13.4' <<<"$OUT" && grep -q 'v1.14.2' <<<"$OUT"; } && ok "it names every version of this provider" || bad "a held version is missing: $OUT"
@@ -256,6 +281,29 @@ grep -q 'v1.13.9' <<<"$OUT" && bad "it listed another provider's version" || ok 
 is "tofu is never called" 0 "$(calls init)"
 OUT="$(OA_STUB_LIST_EXIT=1 run 2 --list)"; RC=$?
 { [ "$RC" -ne 0 ] && grep -q 'cannot list' <<<"$OUT"; } && ok "a listing that fails is an error, not an empty lane" || bad "a failed listing read as 'nothing held' (rc=$RC)"
+OUT="$(OA_STUB_KEYS=$'talos-image.tfstate\ttalos-image-scaleway-v1.13.4.tfstate' run 2 --list)"
+grep -q 'pre-#69' <<<"$OUT" && ok "the pre-#69 state is mentioned when the lane holds one" || bad "a legacy key went unmentioned"
+OUT="$(OA_STUB_KEYS=talos-image-scaleway-v1.13.4.tfstate run 2 --list)"
+grep -q 'pre-#69' <<<"$OUT" && bad "the pre-#69 note appeared with no legacy key" || ok "and is absent when it holds none"
+OUT="$(OA_STUB_HEAD=404 run 2 --list)"; RC=$?
+{ [ "$RC" -eq 0 ] && grep -q 'nothing held' <<<"$OUT" && [ "$(acalls 's3 mb')" = 0 ]; } \
+  && ok "a lane with no bucket lists nothing and does not create it (S3 names are global)" || bad "--list on a missing bucket created it or failed (rc=$RC)"
+OUT="$(OA_STUB_HEAD=403 run 2 --list)"; RC=$?
+{ [ "$RC" -ne 0 ] && [ "$(acalls 's3 mb')" = 0 ] && ! grep -q 'nothing held' <<<"$OUT"; } \
+  && ok "a bucket that cannot be reached (403) is an error, not an empty lane" || bad "a 403 read as 'nothing held' (rc=$RC)"
+OUT="$(OA_STUB_HEAD=404 run 2 --ensure)"
+is "a build still creates both missing buckets" 2 "$(acalls 's3 mb')"
+
+echo "--- one mode per run: the last flag used to win, so --list --prune destroyed ---"
+for combo in '--list --prune' '--prune --list' '--ensure --list' '--ensure --prune'; do
+  # shellcheck disable=SC2086  # the combo IS several arguments
+  OUT="$(run 2 $combo)"; RC=$?
+  { [ "$RC" -ne 0 ] && [ ! -s "$LOG" ]; } && ok "'$combo' is refused before any call (rc=$RC)" || bad "'$combo' ran: $(head -c 200 "$LOG")"
+done
+OUT="$(PROV=outscale run 2 --import-snapshot snap-fixture1 --prune)"; RC=$?
+{ [ "$RC" -ne 0 ] && [ ! -s "$LOG" ]; } && ok "'--import-snapshot <id> --prune' is refused too" || bad "an import and a prune ran together"
+OUT="$(PROV=outscale run 2 --import-snapshot --prune)"; RC=$?
+{ [ "$RC" -ne 0 ] && [ ! -s "$LOG" ]; } && ok "a flag is not taken for a snapshot id" || bad "--prune was read as the snapshot id"
 
 echo "--- --prune: explicit, one version, and never while a cluster still pins it ---"
 printf 'talos_version = "v1.13.4"\n' >"$PINFILE"
@@ -267,14 +315,20 @@ printf 'talos_version = "v1.13.9"\n' >"$PINFILE"
 OUT="$(OA_STUB_KEYS=talos-image-scaleway-v1.13.4.tfstate run 2 --prune)"; RC=$?
 is "an unpinned version is pruned" 0 "$RC"
 is "by one destroy" 1 "$(calls destroy)"
-grep -qE '^destroy .*-var talos_version=v1\.13\.4' "$LOG" && ok "of that version only" || bad "the destroy does not carry the version: $(line destroy)"
+for v in target_provider=scaleway talos_version=v1.13.4 import_bucket=s3-oatest-t3st-scaleway-talos-import; do
+  hasvar destroy "$v" && ok "the destroy carries -var $v" || bad "the destroy lacks -var $v: $(line destroy)"
+done
 is "on that version's own state" "talos-image-scaleway-v1.13.4.tfstate" "$(initkeys)"
+is "it reads the lane's state bucket and ensures nothing else" 1 "$(acalls 's3api head-bucket')"
 is "the emptied state object is removed, or --list would still show the version" 1 "$(acalls "s3 rm .*talos-image-scaleway-v1.13.4.tfstate")"
 OUT="$(OA_STUB_KEYS=talos-image-scaleway-v1.13.4.tfstate OA_STUB_LEFT=module.scaleway run 2 --prune)"
 { [ "$(calls destroy)" = 1 ] && [ "$(acalls 's3 rm')" = 0 ]; } \
   && ok "a state that still holds objects (destroy declined) is kept" || bad "a state with objects left was removed, or the destroy did not run"
 OUT="$(OA_STUB_KEYS=talos-image-scaleway-v1.14.2.tfstate run 2 --prune)"; RC=$?
 { [ "$RC" -ne 0 ] && [ "$(calls destroy)" = 0 ]; } && ok "a version no state holds is refused, not destroyed blind" || bad "prune of an unheld version did not refuse (rc=$RC)"
+OUT="$(OA_STUB_HEAD=404 run 2 --prune)"; RC=$?
+{ [ "$RC" -ne 0 ] && [ "$(acalls 's3 mb')" = 0 ] && [ "$(calls destroy)" = 0 ]; } \
+  && ok "a lane with no bucket has nothing to prune, and none is created" || bad "prune on a missing bucket created it or went on (rc=$RC)"
 rm -f "$PINFILE"
 
 # Only a build depends on the Factory: one that disagrees with the pin must not block removing an image.
@@ -307,12 +361,14 @@ awk '/^state push/ {exit} /^output/ {found=1} END {exit found}' "$LOG" \
   && ok "no root output was read to decide the version" || bad "the version was asked of the root output before the copy"
 is "the legacy object is retired by rename, not deleted" 1 "$(acalls "s3 mv s3://s3-oatest-t3st-scaleway-talos-image/$LEG s3://s3-oatest-t3st-scaleway-talos-image/$LEG.migrated-to-v1.13.4")"
 is "and nothing was destroyed" 0 "$(acalls 's3 rm')"
+is "the decrypted copy of the legacy state is gone after the run" 0 "$(find "$SB/tmp" -type f | wc -l)"
 
 OUT="$(OA_STUB_MV_EXIT=1 run 2 --ensure)"; RC=$?
 { [ "$RC" -eq 0 ] && grep -q 'could not retire' <<<"$OUT"; } && ok "a rename that fails warns with the command and goes on (the copy is done)" || bad "a failed retire was silent or fatal (rc=$RC)"
 OUT="$(OA_STUB_PUSH_DROP=1 run 2 --ensure)"; RC=$?
 { [ "$RC" -ne 0 ] && [ "$(acalls 's3 mv')" = 0 ] && [ "$(calls apply)" = 0 ]; } \
   && ok "a push that did not land (lineage differs) stops before the legacy object is touched" || bad "the copy was not verified (rc=$RC)"
+is "…and the decrypted copy is removed on that path too" 0 "$(find "$SB/tmp" -type f | wc -l)"
 
 OUT="$(VER=v1.13.9 run 2 --ensure)"; RC=$?
 { [ "$RC" -eq 0 ] && [ "$(calls 'state push')" = 0 ] && [ "$(acalls 's3 mv')" = 0 ] && [ "$(initkeys)" = "$LEG talos-image-scaleway-v1.13.9.tfstate" ]; } \
@@ -324,64 +380,125 @@ is "an already migrated version does not read the legacy state again" "talos-ima
 OUT="$(OA_STUB_PULL_FAIL=1 run 2 --ensure)"; RC=$?
 { [ "$RC" -ne 0 ] && [ "$(calls plan)" = 0 ] && [ "$(calls 'state push')" = 0 ]; } && ok "an unreadable legacy state refuses and changes nothing" || bad "an unreadable legacy state was guessed at (rc=$RC)"
 
-for case_ in 'deposed|{"deposed":"1a2b3c4d"}|deposed or tainted' 'tainted|{"status":"tainted"}|deposed or tainted'; do
-  IFS='|' read -r what extra want <<<"$case_"
+OUT="$(run 2 --prune)"; RC=$?
+{ [ "$RC" -eq 0 ] && [ "$(calls 'state push')" = 1 ] && [ "$(calls destroy)" = 1 ] && [ "$(acalls 's3 mv')" = 1 ]; } \
+  && ok "--prune of a version only the legacy state holds copies it, then destroys that version" || bad "prune ignored the legacy state (rc=$RC): ${OUT:0:200}"
+awk '/^state push/ {p=NR} /^destroy/ {d=NR} END {exit !(p && d && p<d)}' "$LOG" \
+  && ok "…in that order" || bad "the destroy did not follow the copy: $(tr '\n' '|' <"$LOG")"
+OUT="$(VER=v1.13.9 run 2 --prune)"; RC=$?
+{ [ "$RC" -ne 0 ] && [ "$(calls destroy)" = 0 ] && [ "$(calls 'state push')" = 0 ]; } \
+  && ok "--prune of a version the legacy state does not hold refuses and leaves it alone" || bad "prune touched the legacy state of another version (rc=$RC)"
+
+# A half-finished object only blocks the version it belongs to: a Talos bump on that provider must not wait for a hand edit.
+for case_ in 'deposed|{"deposed":"1a2b3c4d"}' 'tainted|{"status":"tainted"}'; do
+  IFS='|' read -r what extra <<<"$case_"
   legacy v1.13.4 talos-scaleway-amd64-v1.13.4 "$extra" >"$SB/legacy-bad.json"
   OUT="$(OA_STUB_LEGACY="$SB/legacy-bad.json" run 2 --ensure)"; RC=$?
-  { [ "$RC" -ne 0 ] && grep -q "$want" <<<"$OUT" && [ "$(calls 'state push')" = 0 ] && [ "$(calls plan)" = 0 ] && [ "$(acalls 's3 mv')" = 0 ]; } \
-    && ok "a legacy state holding a $what object is refused, whatever its version: nothing moved, no plan" \
+  { [ "$RC" -ne 0 ] && grep -q 'not clean' <<<"$OUT" && grep -q 'module.scaleway\[0\].scaleway_instance_image.talos' <<<"$OUT" && grep -q 'state rm' <<<"$OUT" \
+      && [ "$(calls 'state push')" = 0 ] && [ "$(calls plan)" = 0 ] && [ "$(acalls 's3 mv')" = 0 ]; } \
+    && ok "the version a $what legacy state holds is refused, naming the object: nothing moved, no plan" \
     || bad "a $what object was carried over (rc=$RC): ${OUT:0:200}"
+  OUT="$(VER=v1.13.9 OA_STUB_LEGACY="$SB/legacy-bad.json" run 2 --ensure)"; RC=$?
+  { [ "$RC" -eq 0 ] && [ "$(calls apply)" = 1 ] && [ "$(calls 'state push')" = 0 ] && [ "$(acalls 's3 mv')" = 0 ] \
+      && [ "$(initkeys)" = "$LEG talos-image-scaleway-v1.13.9.tfstate" ] && grep -q 'stays its authority' <<<"$OUT"; } \
+    && ok "…but another version still builds, the $what legacy state left where it is" \
+    || bad "a $what legacy state blocked another version's build (rc=$RC): ${OUT:0:200}"
 done
 legacy v1.13.9 talos-scaleway-amd64-v1.13.4 >"$SB/legacy-mixed.json"
-OUT="$(OA_STUB_LEGACY="$SB/legacy-mixed.json" run 2 --ensure)"; RC=$?
-{ [ "$RC" -ne 0 ] && grep -q 'v1.13.4 and v1.13.9' <<<"$OUT" && [ "$(calls 'state push')" = 0 ]; } \
-  && ok "objects naming two versions (a build moved, its image did not) are refused" || bad "disagreeing objects were migrated (rc=$RC)"
+for v in v1.13.4 v1.13.9; do
+  OUT="$(VER=$v OA_STUB_LEGACY="$SB/legacy-mixed.json" run 2 --ensure)"; RC=$?
+  { [ "$RC" -ne 0 ] && grep -q 'v1.13.4, v1.13.9' <<<"$OUT" && [ "$(calls 'state push')" = 0 ] && [ "$(calls plan)" = 0 ]; } \
+    && ok "objects naming two versions (a build moved, its image did not) are refused for $v" || bad "disagreeing objects were migrated for $v (rc=$RC)"
+done
+OUT="$(VER=v1.13.7 OA_STUB_LEGACY="$SB/legacy-mixed.json" run 2 --ensure)"; RC=$?
+{ [ "$RC" -eq 0 ] && [ "$(calls apply)" = 1 ] && [ "$(calls 'state push')" = 0 ]; } \
+  && ok "…and a third version builds" || bad "a mixed legacy state blocked a version it does not name (rc=$RC)"
+legacy v1.13.4 talos-scaleway-amd64 >"$SB/legacy-blind.json"
+OUT="$(VER=v1.13.9 OA_STUB_LEGACY="$SB/legacy-blind.json" run 2 --ensure)"; RC=$?
+{ [ "$RC" -ne 0 ] && grep -q 'no readable version' <<<"$OUT" && [ "$(calls plan)" = 0 ]; } \
+  && ok "an object naming no version blocks every build: what the state holds is unknown" || bad "a state of unknown content was passed (rc=$RC)"
 unset OA_STUB_LEGACY OA_STUB_KEYS
 
 echo "--- image-state-version.sh reads the objects of every provider's lane ---"
 HELPER=scripts/internal/image-state-version.sh
-objs() { # <type> <name> <attr> <value> — one managed object
-  jq -n --arg t "$1" --arg n "$2" --arg a "$3" --arg v "$4" '{type:$t,name:$n,mode:"managed",instances:[{attributes:{($a):$v}}]}'
+objs() { # <type> <name> <attr> <value> [deposed] — one managed object
+  jq -n --arg t "$1" --arg n "$2" --arg a "$3" --arg v "$4" --arg d "${5:-}" \
+    '{type:$t,name:$n,mode:"managed",instances:[({attributes:{($a):$v}} + (if $d == "" then {} else {deposed:$d} end))]}'
+}
+objt() { # <type> <name> <version> — a build object, its version in triggers_replace as `state pull` prints it
+  jq -n --arg t "$1" --arg n "$2" --arg v "$3" '{type:$t,name:$n,mode:"managed",instances:[{attributes:{triggers_replace:{value:{version:$v}}}}]}'
 }
 st() { jq -s '{resources:.}'; }
 is "outscale: the OMI name" v1.14.2 "$({ objs outscale_image talos image_name talos-outscale-amd64-v1.14.2; } | st | "$HELPER")"
 is "ovh: the Glance image name" v1.14.2 "$({ objs openstack_images_image_v2 talos name talos-ovh-amd64-v1.14.2; } | st | "$HELPER")"
 is "proxmox: the datastore file, which drops the v" v1.14.2 "$({ objs proxmox_virtual_environment_download_file talos file_name talos-1.14.2-nocloud-amd64.img; } | st | "$HELPER")"
 is "a pre-release version is read whole" v1.14.0-beta.1 "$({ objs outscale_image talos image_name talos-outscale-amd64-v1.14.0-beta.1; } | st | "$HELPER")"
+is "ovh: a build and its image agree" v1.14.2 "$({ objt terraform_data build v1.14.2; objs openstack_images_image_v2 talos name talos-ovh-amd64-v1.14.2; } | st | "$HELPER")"
+is "ovh: a build that moved while its image did not names both" "v1.14.2 v1.14.3" "$({ objt terraform_data build v1.14.3; objs openstack_images_image_v2 talos name talos-ovh-amd64-v1.14.2; } | st | "$HELPER")"
+is "a deposed object is reported on line 2, not hidden" "v1.14.2|outscale_image.talos" \
+   "$({ objs outscale_image talos image_name talos-outscale-amd64-v1.14.2 abc123; } | st | "$HELPER" | paste -sd'|')"
 is "no managed object: nothing to say" "" "$(echo '{"resources":[]}' | "$HELPER")"
 OUT="$({ objs outscale_image talos image_name talos-outscale-amd64; } | st | "$HELPER" 2>&1)"; RC=$?
-{ [ "$RC" -ne 0 ] && grep -q unreadable <<<"$OUT"; } && ok "a name carrying no version is refused, not guessed" || bad "an unreadable name passed (rc=$RC): $OUT"
+{ [ "$RC" -ne 0 ] && grep -q 'no readable version' <<<"$OUT"; } && ok "a name carrying no version is refused, not guessed" || bad "an unreadable name passed (rc=$RC): $OUT"
+OUT="$({ objt terraform_data build_and_upload ""; } | st | "$HELPER" 2>&1)"; RC=$?
+[ "$RC" -ne 0 ] && ok "a build whose version is empty is refused too" || bad "an empty build version passed: $OUT"
+OUT="$({ objs scaleway_object_bucket other name staging; } | st | "$HELPER" 2>&1)"; RC=$?
+{ [ "$RC" -ne 0 ] && grep -q 'none of its objects' <<<"$OUT"; } && ok "objects of no known type are refused: nothing says what the state holds" || bad "a state of unknown objects passed (rc=$RC): $OUT"
 
 echo "--- the Outscale same-name refusal: before the import, not after ---"
 mkdir -p "$SB/shows"
-show() { # <create|noop> <ids...> — a plan as `tofu show -json` prints it
-  local act="$1"; shift
-  jq -n --arg act "$act" --args '{resource_changes:[{type:"outscale_image", change:{actions:[(if $act == "create" then "create" else "no-op" end)]}}],
-        planned_values:{outputs:{omi_name_collisions:{value:$ARGS.positional}}}}' "$@"
+show() { # <actions, comma-separated> <omi ids...> — a plan as `tofu show -json` prints it: the lookup is in the PRIOR state
+  local acts="$1"; shift
+  jq -n --arg acts "$acts" --args '{resource_changes:[{type:"outscale_image", change:{actions:($acts | split(","))}}],
+    prior_state:{values:{root_module:{child_modules:[{address:"module.outscale[0]", resources:[
+      {address:"module.outscale[0].data.outscale_images.same_name", mode:"data", type:"outscale_images", name:"same_name",
+       values:{images:[$ARGS.positional[] | {image_id: .}]}}]}]}}}}' "$@"
+}
+gate() { # <show file> [exit of tofu show] — an Outscale --ensure whose plan is that file
+  OUT="$(OA_STUB_SHOW="$1" OA_STUB_SHOW_EXIT="${2:-0}" PROV=outscale run 2 --ensure)"; RC=$?
 }
 show create ami-fixture1 >"$SB/shows/taken.json"
-OUT="$(OA_STUB_SHOW="$SB/shows/taken.json" PROV=outscale run 2 --ensure)"; RC=$?
+gate "$SB/shows/taken.json"
 { [ "$RC" -ne 0 ] && [ "$(calls apply)" = 0 ]; } && ok "a plan creating the OMI while one holds the name is refused, nothing applied (rc=$RC)" || bad "the collision reached the apply (rc=$RC)"
 grep -q 'ami-fixture1' <<<"$OUT" && ok "the message names the OMI" || bad "the message does not name the OMI: $OUT"
 grep -qi "owner" <<<"$OUT" && ok "and says deleting an untracked OMI is the owner's, not this script's" || bad "no word on who deletes it"
-show noop ami-fixture1 >"$SB/shows/tracked.json"
-OUT="$(OA_STUB_SHOW="$SB/shows/tracked.json" PROV=outscale run 2 --ensure)"; RC=$?
+# Replacing the lane's own OMI is create-before-destroy: the same-version case the refusal exists for.
+for acts in create,delete delete,create; do
+  show "$acts" ami-fixture1 >"$SB/shows/replace.json"
+  gate "$SB/shows/replace.json"
+  { [ "$RC" -ne 0 ] && [ "$(calls apply)" = 0 ]; } && ok "a replacement (actions: $acts) of an OMI that holds the name is refused" || bad "a replace of $acts reached the apply (rc=$RC)"
+done
+show no-op ami-fixture1 >"$SB/shows/tracked.json"
+gate "$SB/shows/tracked.json"
 { [ "$RC" -eq 0 ] && [ "$(calls apply)" = 1 ]; } && ok "the lane's own OMI with no replacement planned does not block" || bad "a tracked, unchanged OMI blocked the run (rc=$RC)"
 show create >"$SB/shows/free.json"
-OUT="$(OA_STUB_SHOW="$SB/shows/free.json" PROV=outscale run 2 --ensure)"; RC=$?
+gate "$SB/shows/free.json"
 { [ "$RC" -eq 0 ] && [ "$(calls apply)" = 1 ]; } && ok "a creation with the name free goes ahead" || bad "a free name was refused (rc=$RC)"
-OUT="$(OA_STUB_SHOW="$SB/shows/taken.json" OA_STUB_SHOW_EXIT=1 PROV=outscale run 2 --ensure)"; RC=$?
+jq 'del(.prior_state)' "$SB/shows/free.json" >"$SB/shows/blind.json"
+gate "$SB/shows/blind.json"
+{ [ "$RC" -ne 0 ] && [ "$(calls apply)" = 0 ]; } && ok "a plan that carries no lookup is refused: a gate that cannot see is not a gate" || bad "a plan with no lookup went to the apply (rc=$RC)"
+gate "$SB/shows/taken.json" 1
 { [ "$RC" -ne 0 ] && [ "$(calls apply)" = 0 ]; } && ok "a plan that cannot be read is not applied" || bad "an unreadable plan went to the apply (rc=$RC)"
 OUT="$(OA_STUB_SHOW="$SB/shows/taken.json" run 2 --ensure)"; RC=$?
 { [ "$RC" -eq 0 ] && [ "$(calls show)" = 0 ]; } && ok "other providers never ask (the module only exists on Outscale)" || bad "the Outscale gate ran on scaleway (rc=$RC)"
 
 echo "--- --import-snapshot: an import that outlived a failed apply, into THAT version's state ---"
-OUT="$(PROV=outscale run 2 --import-snapshot snap-fixture1)"; RC=$?
-is "completes" 0 "$RC"
-grep -qE "^import .*-var talos_version=v1\.13\.4 .*module\.outscale\[0\]\.outscale_snapshot\.talos snap-fixture1$" "$LOG" \
-  && ok "it imports the snapshot at the address that exists, with the version's variables" || bad "wrong import: $(line import)"
+BUILD_ADDR='module.outscale[0].terraform_data.build_and_upload'
+OUT="$(OA_STUB_LEFT="$BUILD_ADDR" PROV=outscale run 2 --import-snapshot snap-fixture1)"; RC=$?
+is "completes when that version's state holds the build" 0 "$RC"
+grep -qE "^import .*module\.outscale\[0\]\.outscale_snapshot\.talos snap-fixture1$" "$LOG" \
+  && ok "it imports the snapshot at the address that exists" || bad "wrong import: $(line import)"
+for v in target_provider=outscale talos_version=v1.13.4 import_bucket=s3-oatest-t3st-outscale-talos-import; do
+  hasvar import "$v" && ok "…with -var $v" || bad "the import lacks -var $v: $(line import)"
+done
 is "into the version's own state" "talos-image-outscale-v1.13.4.tfstate" "$(initkeys)"
-is "and builds nothing" 0 "$(calls apply)"
+is "builds nothing, and ensures no bucket but the state's" "0 1" "$(calls apply) $(acalls 's3api head-bucket')"
+for held in "" "module.outscale[0].outscale_image.talos"; do
+  OUT="$(OA_STUB_LEFT="$held" PROV=outscale run 2 --import-snapshot snap-fixture1)"; RC=$?
+  { [ "$RC" -ne 0 ] && [ "$(calls import)" = 0 ] && grep -qi 'owner' <<<"$OUT"; } \
+    && ok "a state without the build (${held:-empty}) is refused: the next plan would replace the snapshot; the way out is the owner's" \
+    || bad "an import ran against a state that does not hold the build (rc=$RC): ${OUT:0:200}"
+done
 OUT="$(run 2 --import-snapshot snap-fixture1)"; RC=$?
 [ "$RC" -ne 0 ] && ok "on another provider it is refused" || bad "an Outscale-only import ran on scaleway"
 OUT="$(PROV=outscale run 2 --import-snapshot)"; RC=$?
@@ -397,23 +514,42 @@ is "another version's image keeps its own id: not stale" 0 "$RC"
 rm -f "$OA_ENVS_DIR/oa-ovh.tfvars"
 
 echo "--- the scratch files of the three builds carry the version ---"
-# Provisioner text is invisible to `tofu test`, and two versions now build in separate states,
-# so a shared scratch name would be clobbered silently. A path under cache_dir needs the version.
+# Provisioner text is invisible to `tofu test`; a shared scratch name would let one version's
+# leftover be read as another's. A path under cache_dir needs the version.
 for m in scaleway ovh outscale; do
   f="infrastructure/opentofu/modules/talos-image/$m/main.tf"
   [ -z "$(grep -n 'cache_dir}/' "$f" | grep -v 'talos_version')" ] \
     && ok "$m: every cache_dir path carries talos_version" \
     || bad "$m has an unversioned scratch path: $(grep -n 'cache_dir}/' "$f" | grep -v 'talos_version')"
+  # ...and a scratch name moved out of cache_dir escapes the grep above, so the definitions are read too.
+  moved="$(grep -nE '^[[:space:]]*(raw_zst|raw_path|qcow2_path)[[:space:]]*=' "$f" | grep -v '"${var.cache_dir}/[^"]*${var.talos_version}' || true)"
+  [ -z "$moved" ] && ok "$m: every scratch file is defined under cache_dir, with the version" || bad "$m defines a scratch file outside cache_dir or without the version: $moved"
 done
 
-# The same-name gate is inert if its lookup filters on nothing, and a mock cannot see the filter.
-awk '/data "outscale_images" "same_name"/,/^}/' infrastructure/opentofu/modules/talos-image/outscale/main.tf | grep -q 'values = \[var.image_name\]' \
-  && ok "the Outscale same-name lookup filters on the OMI name being built" || bad "the same-name lookup no longer filters on var.image_name: the gate would never fire"
+# What a mock cannot see: the lookup's filter, and that the lookup stays out of the root outputs
+# (a persisted output made every plan after it exit 2, and went [] -> [own OMI] on each first build).
+SAMENAME="$(awk '/data "outscale_images" "same_name"/,/^}/' infrastructure/opentofu/modules/talos-image/outscale/main.tf)"
+{ grep -q 'values = \[var.image_name\]' <<<"$SAMENAME" && grep -Eq 'name[[:space:]]*=[[:space:]]*"image_names"' <<<"$SAMENAME"; } \
+  && ok "the Outscale same-name lookup filters image_names on the OMI name being built" || bad "the same-name lookup no longer filters image_names on var.image_name: the gate would never fire"
+grep -q 'same_name' "$TFROOT/outputs.tf" \
+  && bad "the same-name lookup is a root output again: every plan after it exits 2 until applied" \
+  || ok "the lookup is not a root output"
+awk '/variable "talos_version"/,/^}/' "$TFROOT/variables.tf" | grep -Eq '^[[:space:]]*default' \
+  && bad "talos_version has a default again: a bare apply would replace the image the state holds" \
+  || ok "talos_version has no default"
 
-echo "--- the Taskfile forwards LIST and PRUNE to the script ---"
+echo "--- the Taskfile forwards LIST and PRUNE to the script, and \`task test\` runs the image root ---"
 grep -q -- '--prune' <<<"$(task -n image-build PROVIDER=ovh PRUNE=1 VERSION=v1.13.4 2>&1)" \
   && grep -q -- '--list' <<<"$(task -n image-build PROVIDER=ovh LIST=1 2>&1)" \
   && ok "task image-build PRUNE=1 / LIST=1 reach talos-image.sh" || bad "the Taskfile does not forward --prune/--list"
+grep -Eq 'cd \.\./talos-image .*tofu test' <<<"$(task -n test 2>&1)" \
+  && ok "task test runs the image root's tofu test (the same-name lookup is only proven there)" || bad "task test no longer runs the talos-image root"
+
+echo "--- jq is checked up front, not discovered mid-run ---"
+mkdir -p "$SB/nojq"
+for f in /usr/bin/*; do [ "${f##*/}" = jq ] || ln -sf "$f" "$SB/nojq/${f##*/}"; done
+OUT="$(RUN_PATH="$SB:$SB/nojq" run 2 --ensure)"; RC=$?
+{ [ "$RC" -ne 0 ] && grep -q 'jq required' <<<"$OUT"; } && ok "a missing jq stops the run before anything is read or built" || bad "no jq did not stop the script (rc=$RC): ${OUT:0:200}"
 
 echo "--- floors: the stubs really ran (all of the above is vacuous otherwise) ---"
 OUT="$(run 2 --ensure)"

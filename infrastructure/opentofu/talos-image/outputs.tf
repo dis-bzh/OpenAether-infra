@@ -17,11 +17,6 @@ output "image_id" {
   )
 }
 
-output "omi_name_collisions" {
-  description = "Outscale only: IDs of the OMIs already named image_name. talos-image.sh --ensure refuses a plan that would create the OMI while this is non-empty."
-  value       = var.target_provider == "outscale" ? one(module.outscale[*].same_name_ids) : []
-}
-
 output "image_ids" {
   description = "Scaleway only: map of zone => Instance Image ID."
   value       = var.target_provider == "scaleway" ? one(module.scaleway[*].image_ids) : null

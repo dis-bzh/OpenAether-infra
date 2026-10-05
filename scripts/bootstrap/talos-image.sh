@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # OpenAether — build + publish the Talos image for a provider (decoupled root).
 #
-# Built once per Talos version, reused by every cluster on that provider. Each
-# version has its OWN state (key talos-image-<provider>-<version>.tfstate in the
-# provider's lane bucket), so a build can only touch its own version and building
-# X never replaces Y. Building never touches deployed cluster infra.
+# Built once per Talos version, reused by every cluster on that provider. Each version has its OWN
+# state (key talos-image-<provider>-<version>.tfstate in the provider's lane bucket), so a build can
+# only touch its own version and building X never replaces Y. It never touches deployed cluster infra.
 #
 # Credentials: AWS_* = the provider's S3 keys, plus its compute creds
 # (scaleway SCW_*, ovh OS_*, outscale OSC_*, proxmox PROXMOX_VE_*) and
@@ -14,29 +13,30 @@
 #   ./scripts/bootstrap/talos-image.sh <provider> [talos_version] [--ensure|--list|--prune|--import-snapshot <id>]
 #   task image-build PROVIDER=ovh [VERSION=v1.13.4] [ENSURE=1|LIST=1|PRUNE=1]
 #
-# --ensure: idempotence gate for `task cluster-up` — plans first and only applies on a
-#   real change, so a rerun with the image already published costs nothing.
-# --list: the versions this lane holds (one state each); no tofu, no build.
-# --prune: destroy ONE version's image set. The only way an image leaves the lane, never a
-#   side effect of a build, and refused while a cluster tfvars still pins that version.
-# --import-snapshot <id>: Outscale only — adopt a snapshot whose import outlived a failed
-#   apply into this version's state (see the outscale module), before re-running the build.
+# --ensure: idempotence gate for `task cluster-up`: plan first, apply only on a real change.
+# --list: the versions this lane holds (one state each); builds nothing and creates no bucket.
+# --prune: destroy ONE version's image set (the only way an image leaves the lane); refused while a tfvars pins it.
+# --import-snapshot <id>: Outscale; adopt a snapshot a failed apply orphaned into this version's state (see the module).
+# One mode per run, and one run at a time per checkout: runs share a .terraform data dir.
 set -euo pipefail
 
-MODE=build ENSURE=false SNAP=""
+MODE=build ENSURE=false SNAP="" NMODES=0
 ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --ensure) ENSURE=true ;;
-    --list)   MODE=list ;;
-    --prune)  MODE=prune ;;
-    --import-snapshot) MODE=import; SNAP="${2:-}"
-      [ -n "$SNAP" ] || { echo "✗ --import-snapshot needs a snapshot id" >&2; exit 1; }
+    --list)   MODE=list;  NMODES=$((NMODES + 1)) ;;
+    --prune)  MODE=prune; NMODES=$((NMODES + 1)) ;;
+    --import-snapshot) MODE=import; NMODES=$((NMODES + 1)); SNAP="${2:-}"
+      case "$SNAP" in "" | -*) echo "✗ --import-snapshot needs a snapshot id" >&2; exit 1 ;; esac
       shift ;;
     *) ARGS+=("$1") ;;
   esac
   shift
 done
+# Exclusive on purpose: with the last flag winning, `--list --prune` would destroy.
+[ "$NMODES" -le 1 ] || { echo "✗ --list, --prune and --import-snapshot are exclusive: one per run" >&2; exit 1; }
+[ "$ENSURE" = false ] || [ "$MODE" = build ] || { echo "✗ --ensure only goes with a build" >&2; exit 1; }
 
 INTERNAL="$(cd "$(dirname "${BASH_SOURCE[0]}")/../internal" && pwd)"  # absolute: the script cd's to the root below
 RAW="${ARGS[0]:?usage: talos-image.sh <scaleway|ovh|outscale|proxmox> [talos_version] [--ensure|--list|--prune|--import-snapshot <id>]}"
@@ -72,6 +72,7 @@ fi
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../infrastructure/opentofu/talos-image" && pwd)"
 command -v tofu >/dev/null 2>&1 || { echo "✗ tofu required"; exit 1; }
 command -v aws  >/dev/null 2>&1 || { echo "✗ aws CLI required"; exit 1; }
+command -v jq   >/dev/null 2>&1 || { echo "✗ jq required (the plan gate and the legacy-state check read JSON)"; exit 1; }
 LEGACY_JSON="" PLAN=""
 trap 'rm -f ${LEGACY_JSON:+"$LEGACY_JSON"} ${PLAN:+"$ROOT/$PLAN"}' EXIT
 
@@ -188,8 +189,23 @@ ensure() { # bucket
   exit 1
 }
 
-echo "▶ Ensuring talos-image state bucket on ${TGT} (${STATE_BUCKET})"
-ensure "$STATE_BUCKET"
+bucket_present() { # <bucket>: 0 present, 1 absent (a 404); any other failure is unknown, never guessed
+  local err
+  err="$(aws s3api head-bucket --bucket "$1" --endpoint-url "$SEP" --region "$SREGION" 2>&1)" && return 0
+  case "$err" in *404* | *NoSuchBucket* | *"Not Found"*) return 1 ;; esac
+  echo "✗ cannot reach s3://$1 on ${TGT}: ${err##*: }" >&2; exit 1
+}
+
+case "$MODE" in
+  list | prune) # reads the lane: S3 names are global, so these never create a bucket
+    if ! bucket_present "$STATE_BUCKET"; then
+      [ "$MODE" = list ] && { echo "▶ no state bucket ${STATE_BUCKET} on ${TGT}: nothing held"; exit 0; }
+      echo "✗ nothing to prune: no state bucket ${STATE_BUCKET} on ${TGT}." >&2; exit 1
+    fi ;;
+  *)
+    echo "▶ Ensuring talos-image state bucket on ${TGT} (${STATE_BUCKET})"
+    ensure "$STATE_BUCKET" ;;
+esac
 
 # One state per version. The pre-#69 lane kept every provider's image in ONE state; that object
 # stays the authority for the version it holds until a build of that version copies it (below).
@@ -214,7 +230,7 @@ case "$P" in
     # as a snapshot. "import", not "staging": this repository spends that word
     # on environments (dev/prod) and reading it as one here is what it cost.
     IMPORT_BUCKET="s3-${IMG_PROJECT}-${TGT}-talos-import"
-    ensure "$IMPORT_BUCKET"
+    [ "$MODE" != build ] || ensure "$IMPORT_BUCKET"  # only a build uploads to it
     APPLY_VARS+=(-var "import_bucket=$IMPORT_BUCKET" -var "region=$SREGION" -var "s3_endpoint=$SEP")
     ;;
   proxmox)
@@ -230,17 +246,20 @@ case "$P" in
     ;;
 esac
 
-# Outscale answers 409 (9015) to CreateImage when an OMI already holds the name, and only AFTER
-# the 8-14 min snapshot import. The plan carries the OMIs holding it (the module reads them), so
-# refuse here, in seconds. Deleting an OMI this lane does not track is the OWNER's call: this
-# script never deletes one.
+# Outscale answers 409 (9015) to CreateImage when an OMI holds the name, but only AFTER the 8-14 min build
+# (download, upload, snapshot import). The lookup is read from the plan's prior state (as a root output it made every
+# later plan exit 2), so refuse in seconds. Deleting an OMI this lane does not track is the OWNER's call, never ours.
 refuse_taken_omi() {
   [ "$TGT" = outscale ] || return 0
   local taken
   taken="$(tofu show -json "$PLAN" | jq -r '
-    if ([.resource_changes[]? | select(.type == "outscale_image" and (.change.actions | index("create")))] | length) > 0
-    then ((.planned_values.outputs.omi_name_collisions.value // []) | join(" ")) else empty end')" \
-    || { echo "✗ cannot read the plan for OMI name collisions; nothing was applied." >&2; exit 1; }
+    ([.prior_state.values.root_module.child_modules[]?.resources[]?
+      | select(.mode == "data" and .type == "outscale_images" and .name == "same_name")] | .[0]) as $d
+    | if ([.resource_changes[]? | select(.type == "outscale_image" and (.change.actions | index("create")))] | length) > 0
+      then (if $d == null then error("the plan carries no same-name lookup")
+            else ([$d.values.images[]?.image_id] | join(" ")) end)
+      else empty end')" \
+    || { echo "✗ cannot read the OMI name lookup from the plan; nothing was applied." >&2; exit 1; }
   [ -z "$taken" ] && return 0
   echo "✗ this plan creates the OMI for ${VERSION}, but the account already holds one under that name: ${taken}" >&2
   echo "  CreateImage would fail with 409 after the snapshot import. Nothing was imported or spent." >&2
@@ -258,20 +277,26 @@ init_state() { # <key>
 }
 
 cd "$ROOT"
-# Legacy state: read first, and only moved by a build of the version it HOLDS (copied, then
-# retired; the version comes from its objects, see image-state-version.sh). Another version's
-# build leaves it alone.
+# Legacy state: read first, moved only by a build of the version it holds (copied, then retired). A
+# build of another version leaves it alone, whatever state it is in; one it cannot read blocks all.
 MIGRATE=false
 if grep -qx "$LEGACY_KEY" <<<"$KEYS" && ! grep -qx "$NEW_KEY" <<<"$KEYS"; then
   init_state "$LEGACY_KEY"
   LEGACY_JSON="$(mktemp)"
   tofu state pull >"$LEGACY_JSON" \
     || { echo "✗ cannot read ${LEGACY_KEY}; nothing was changed." >&2; exit 1; }
-  LEGACY_VER="$("$INTERNAL/image-state-version.sh" <"$LEGACY_JSON")" || exit 1
-  if [ "$LEGACY_VER" = "$VERSION" ]; then
+  HELD="$("$INTERNAL/image-state-version.sh" <"$LEGACY_JSON")" || exit 1
+  LEGACY_VERS="$(sed -n 1p <<<"$HELD")" LEGACY_BAD="$(sed -n 2p <<<"$HELD")"
+  if [[ " $LEGACY_VERS " == *" $VERSION "* ]]; then
+    if [ "$LEGACY_VERS" != "$VERSION" ] || [ -n "$LEGACY_BAD" ]; then
+      echo "✗ ${LEGACY_KEY} holds ${VERSION} but is not clean (versions: ${LEGACY_VERS// /, }; deposed or tainted: ${LEGACY_BAD:-none})." >&2
+      echo "  Copying it would carry the half-finished object. Nothing was moved; another version's build is not blocked." >&2
+      echo "  Clear it first: the owner deletes the cloud objects it names, then \`tofu state rm\` them from ${LEGACY_KEY} (talos-image README, 'The pre-#69 single state')." >&2
+      exit 1
+    fi
     MIGRATE=true
-  elif [ -n "$LEGACY_VER" ]; then
-    echo "  ~ ${LEGACY_KEY} holds ${LEGACY_VER} and stays its authority until a build of ${LEGACY_VER} copies it."
+  elif [ -n "$LEGACY_VERS" ]; then
+    echo "  ~ ${LEGACY_KEY} holds ${LEGACY_VERS// /, } and stays its authority until a build of one of them copies it."
   fi
 fi
 if [ "$MODE" = prune ] && [ "$MIGRATE" = false ] && ! grep -qx "$NEW_KEY" <<<"$KEYS"; then
@@ -280,7 +305,7 @@ if [ "$MODE" = prune ] && [ "$MIGRATE" = false ] && ! grep -qx "$NEW_KEY" <<<"$K
 fi
 init_state "$NEW_KEY"
 if [ "$MIGRATE" = true ]; then
-  echo "▶ Copying ${LEGACY_KEY} (${LEGACY_VER}) to ${NEW_KEY}"
+  echo "▶ Copying ${LEGACY_KEY} (${VERSION}) to ${NEW_KEY}"
   tofu state push "$LEGACY_JSON"
   [ "$(tofu state pull | jq -r .lineage)" = "$(jq -r .lineage "$LEGACY_JSON")" ] \
     || { echo "✗ ${NEW_KEY} does not hold the state just pushed; ${LEGACY_KEY} is untouched." >&2; exit 1; }
@@ -300,6 +325,14 @@ case "$MODE" in
     fi
     exit 0 ;;
   import)
+    # Adopted without the build in this state, the next plan creates the build and REPLACES the snapshot.
+    BUILD='module.outscale[0].terraform_data.build_and_upload'
+    ADDRS="$(tofu state list 2>&1 || true)"
+    if ! grep -qxF "$BUILD" <<<"$ADDRS"; then
+      echo "✗ ${NEW_KEY} does not hold ${BUILD}: an adopted snapshot would be replaced by the next plan (a second import)." >&2
+      echo "  The way out is the account owner deleting the orphan snapshot, then a normal build." >&2
+      exit 1
+    fi
     tofu import "${APPLY_VARS[@]}" 'module.outscale[0].outscale_snapshot.talos' "$SNAP"
     exit 0 ;;
 esac

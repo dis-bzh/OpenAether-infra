@@ -1,6 +1,6 @@
-# The Outscale same-name lookup must reach the root output talos-image.sh --ensure
-# gates on, and only on that target. `command = plan` throughout: a provisioner
-# would download an 11 GiB image on apply, and override_resource does not stop it.
+# The Outscale same-name lookup (the data source talos-image.sh --ensure reads from the plan) must exist
+# on that target only, and must not become a root output (a persisted one made every plan exit 2).
+# `command = plan` throughout: a provisioner would download an 11 GiB image on apply.
 
 mock_provider "scaleway" {}
 mock_provider "openstack" {}
@@ -41,24 +41,24 @@ variables {
   import_bucket         = "fixture-import"
 }
 
-run "outscale_reports_the_omis_already_holding_the_name" {
+run "outscale_reads_the_omis_already_holding_the_name" {
   command = plan
   variables {
     target_provider = "outscale"
   }
   assert {
-    condition     = output.omi_name_collisions == tolist(["ami-fixture1", "ami-fixture2"])
-    error_message = "the same-name lookup did not reach omi_name_collisions: ${jsonencode(output.omi_name_collisions)}"
+    condition     = jsonencode(module.outscale[0].same_name_ids) == jsonencode(["ami-fixture1", "ami-fixture2"])
+    error_message = "the same-name lookup did not reach the module output: ${jsonencode(module.outscale[0].same_name_ids)}"
   }
 }
 
-run "other_targets_report_none" {
+run "other_targets_have_no_lookup" {
   command = plan
   variables {
     target_provider = "ovh"
   }
   assert {
-    condition     = length(output.omi_name_collisions) == 0
-    error_message = "a non-Outscale target reported OMI collisions"
+    condition     = length(module.outscale) == 0
+    error_message = "the Outscale module (and its lookup) exists on another target"
   }
 }

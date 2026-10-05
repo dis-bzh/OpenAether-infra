@@ -518,7 +518,8 @@ upgrade_k8s_to() { # <version>
 }
 
 upgrade_talos_to() { # <version>
-  local target="$1"
+  local target="$1" prev
+  prev="$(tfvar_get talos_version)"
   echo "--- Talos → ${target} ---"
 
   # The pin moves first: talos-image.sh checks an image_id pin only on a cluster that pins the
@@ -530,7 +531,7 @@ upgrade_talos_to() { # <version>
   # to resolve, and it derives its name from talos_version. Without this the
   # plan fails on an image the account does not have.
   task image-build PROVIDER="$PROVIDER" VERSION="$target" ENSURE=1 ||
-    fail "the Talos ${target} image build failed; talos_version stays at ${target} and the previous image is untouched. Fix the cause and re-run."
+    fail "the Talos ${target} image build failed. talos_version stays at ${target}, an image that may not exist, so this cluster cannot plan: re-run to retry, or set it back to \"${prev}\" in ${ROLE}-${PROVIDER}.tfvars (that image is untouched)."
 
   task infra-apply ROLE="$ROLE" PROVIDER="$PROVIDER" KEY="$KEY" APPROVE=auto
 

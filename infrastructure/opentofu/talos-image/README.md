@@ -56,16 +56,28 @@ task image-build PROVIDER=ovh VERSION=<old> PRUNE=1   # destroy ONE version; ref
 - **The pre-#69 single state** (`talos-image.tfstate`) is read, never guessed: the first
   build of the version it holds copies it to that version's key and renames the old object
   to `.migrated-to-<version>` (never deleted). A build of another version leaves it alone.
-  It is refused when it holds a deposed or tainted object (a failed apply: finish it with a
-  normal apply on the code that built it) or objects naming different versions.
+  It is read off its objects, not the root output (a failed apply rewrites that).
+  **A deposed or tainted object, or objects naming two versions, refuse the version it holds**
+  (a copy would carry the half-finished object); no other version is blocked. To clear it:
+  the account owner deletes the cloud objects it names (or accepts them as orphans), then
+  `tofu state rm` each resource it names, with the root inited on key `talos-image.tfstate`
+  as `talos-image.sh` does (measured on a stand-in: one `state rm` removes the tainted and the
+  deposed instance together). An object naming no readable version blocks every build
+  (unmeasured on older module revisions): copy it by hand (`state pull`, init on the new key,
+  `state push`) and rename the old object.
 - **Outscale, same-name OMI**: an OMI name is unique in the account, and CreateImage fails
-  with 409 only after the 8 to 14 minute snapshot import. `--ensure` refuses, before it, a
-  plan that creates the OMI while one holds the name (`omi_name_collisions`; a plain
-  `image-build` shows it among the plan's outputs instead). Deleting an OMI this state does
-  not track, with its snapshot, is the account owner's call; the script never does. An import
-  that outlived a failed apply: `talos-image.sh outscale <version> --import-snapshot <snap-id>`.
-- Versions build in separate states and may run side by side: scratch files carry the
-  version; each Outscale build needs about 11 GiB of disk.
+  with 409 only after the 8 to 14 minute build (download, upload, snapshot import). `--ensure`
+  (what `cluster-up` runs) refuses, before it, a plan that creates the OMI while one holds the
+  name; a plain `image-build` still hits the 409. The lookup is read from the plan, never a
+  root output (a persisted one made every later plan exit 2), and is not scoped by account:
+  an OMI of another account with that name refuses too. Deleting an OMI this state does not
+  track, with its snapshot, is the account owner's call; the script never does. An import that
+  outlived a failed apply: `talos-image.sh outscale <version> --import-snapshot <snap-id>`,
+  only if that version's state already holds `build_and_upload` (else the next plan replaces
+  the adopted snapshot, a second import, and the script refuses).
+- **One run at a time per checkout**: runs share one `.terraform` data dir, so a second run
+  repoints the first one's backend and its next plan reads the other version's state.
+  Scratch files carry the version; each Outscale build needs about 11 GiB of disk.
 
 ## Prerequisites
 

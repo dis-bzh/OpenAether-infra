@@ -510,6 +510,15 @@ grep -qE '^talos_version *= *"v0.0.1"' "$CLUSTER/envs/other-scaleway.tfvars" \
   && ok "…and that cluster's pin was not touched" || bad "the upgrade rewrote another cluster's tfvars"
 rm -f "$CLUSTER/envs/"*-scaleway.tfvars
 
+# A build that fails BEFORE its apply leaves the pin on an image that does not exist: the cluster cannot
+# plan until it moves back, so the failure says to, naming the version whose image is untouched.
+plan "tofu plan\t1\t\n${IMAGE_OK}${UPGRADE_OK}${VERIFY_OK}"
+upgrade
+{ [ "$RUN_RC" -ne 0 ] && ! called 'tofu apply' && said 'set it back to "v0.0.1" in' && said "${ROLE}-scaleway.tfvars"; } \
+  && ok "a build that failed before its apply says how to put the pin back (to the version it was)" \
+  || bad "a build that failed before its apply left the pin with no way back in the message (rc=$RUN_RC): $(grep -m1 'image build failed' <<<"$RUN_OUT")"
+rm -f "$CLUSTER/envs/"*-scaleway.tfvars
+
 # A build that fails AFTER its apply: on OVH the stale image_id guard runs last. The pin stays on
 # the target, whose image now exists; the previous version's image was never in play.
 PROVIDER=ovh TFVARS="$CLUSTER/envs/${ROLE}-ovh.tfvars"

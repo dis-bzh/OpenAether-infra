@@ -9,7 +9,7 @@
 locals {
   factory_url = "https://factory.talos.dev/image/${var.schematic_id}/${var.talos_version}/openstack-${var.arch}.raw.zst"
   qcow2_path  = "${var.cache_dir}/openstack-${var.arch}-${var.talos_version}.qcow2"
-  # Versioned scratch names: versions build in separate states and may run side by side.
+  # Versioned scratch names: one version's leftovers are never another's.
   raw_zst  = "${var.cache_dir}/openstack-${var.arch}-${var.talos_version}.raw.zst"
   raw_path = "${var.cache_dir}/openstack-${var.arch}-${var.talos_version}.raw"
 }

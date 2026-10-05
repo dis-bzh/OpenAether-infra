@@ -20,7 +20,7 @@
 
 locals {
   factory_url = "https://factory.talos.dev/image/${var.schematic_id}/${var.talos_version}/aws-${var.arch}.raw.zst"
-  # Versioned scratch names: versions build in separate states and may run side by side.
+  # Versioned scratch names: one version's leftovers are never another's.
   raw_zst    = "${var.cache_dir}/aws-${var.arch}-${var.talos_version}.raw.zst"
   raw_path   = "${var.cache_dir}/aws-${var.arch}-${var.talos_version}.raw"
   object_key = "talos/aws-${var.arch}-${var.talos_version}.raw"
@@ -110,6 +110,7 @@ resource "outscale_snapshot" "talos" {
   # DO NOT re-run the apply as-is (it creates a second import) — adopt the
   # existing snapshot into THAT version's state first, then continue:
   #   scripts/bootstrap/talos-image.sh outscale <version> --import-snapshot <snap-id>
+  # (it refuses unless that state holds build_and_upload: the next plan would replace the snapshot)
   timeouts {
     create = "120m"
   }
@@ -135,8 +136,9 @@ resource "outscale_snapshot" "talos" {
 }
 
 # An OMI name is unique in the account: CreateImage answers 409 (9015) for a taken
-# one, but only AFTER the import above. Read here so talos-image.sh --ensure can
-# refuse a plan that creates the image while one of that name exists.
+# one, but only AFTER the import above. talos-image.sh --ensure reads this lookup from the
+# plan and refuses one that creates the image while a name holds it. Not scoped by AccountIds
+# (ReadImages may list shared OMIs): a same-named one of another account refuses too, the safe way.
 data "outscale_images" "same_name" {
   filter {
     name   = "image_names"

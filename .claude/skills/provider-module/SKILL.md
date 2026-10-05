@@ -41,10 +41,9 @@ The version comes from `scripts/internal/talos-version.sh` — one source, becau
 two drifted once and `task cluster-up` built an image the cluster then refused to
 find.
 
-The lane keeps **one state per version** (`talos-image-<p>-<v>.tfstate`), so a build can
-only touch its own version; `task image-build LIST=1` shows what is held and `PRUNE=1` removes
-one. An Outscale OMI name is unique per account: `--ensure` refuses a plan that creates the OMI
-while one holds the name, and deleting an untracked one is the owner's.
+The lane keeps **one state per version** (`talos-image-<p>-<v>.tfstate`), so a build can only
+touch its own version; `LIST=1` and `PRUNE=1` and the Outscale same-name refusal are in
+`infrastructure/opentofu/talos-image/README.md`.
 
 A boot image is the medium a node **installs from**, not the version it runs:
 node resources ignore that attribute on purpose. Re-imaging is deliberate, via
