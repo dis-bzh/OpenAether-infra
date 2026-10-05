@@ -293,9 +293,11 @@ state. The nodes still trust the PKI it held, the next apply mints another one, 
 `cluster-roll` and `cluster-shrink`, and `backup-state.sh` refuses to replicate it, so the replica stays the undo.
 Measured on Scaleway (1 control plane + 1 worker, Talos 1.14.2, 2026-10-04): the symptom, and both recoveries below,
 which ended with `talosctl version` answering and an empty strict plan (the second also with no node reboot: uptimes only
-grew). Not run: OVH, Outscale, three control planes, a replica on another provider, `cluster-verify` on a lost PKI
-(read, not run: `infra-verify.sh` turns an unreadable node into a warning, so it should stay green). The commands
-below are the lab's with placeholders for the values; they were not run again from this text.
+grew). Followed again from this text on OVH, the provider of the original incident, 2026-10-05 (same size): the symptom,
+the refusals of `cluster-up` and `backup-state`, the replica as the undo, and recovery 2 (empty strict plan, uptimes
+only grew); that run is how the `talosconfig.restored` step below was found missing. Not run: Outscale, three control
+planes, a replica on another provider, `cluster-verify` on a lost PKI (read, not run: `infra-verify.sh` turns an
+unreadable node into a warning, so it should stay green).
 
 1. **A replica that still holds the secrets.** `infra-down-plan` replicates the state before it untracks and prints
    the object (`✓ tfstate replicated ... to s3://<replica-bucket>/<key>`). Put that ciphertext back over the primary
@@ -314,8 +316,8 @@ below are the lab's with placeholders for the values; they were not run again fr
    ```bash
    export TF_DATA_DIR=.terraform-<role>-<p> TF_VAR_talos_tunnel_port_offset="${TALOS_TUNNEL_OFFSET:-0}"
    export AWS_ACCESS_KEY_ID=<primary key> AWS_SECRET_ACCESS_KEY=<primary secret> TF_VAR_encryption_passphrase=<passphrase>
-   task restore-artifacts PROVIDER=<p> FROM=replica   # writes ./talosconfig, or ./talosconfig.restored if one exists
-   talosctl --talosconfig ./talosconfig -e 127.0.0.1:$((50000 + ${TALOS_TUNNEL_OFFSET:-0})) -n 127.0.0.1 \
+   task restore-artifacts PROVIDER=<p> FROM=replica   # ./talosconfig is the refused one: this writes ./talosconfig.restored
+   talosctl --talosconfig ./talosconfig.restored -e 127.0.0.1:$((50000 + ${TALOS_TUNNEL_OFFSET:-0})) -n 127.0.0.1 \
      get machineconfig -o yaml | awk 'f{sub(/^    /,""); print} /^spec: \|/{f=1}' | awk '/^---$/{exit} {print}' > cp.yaml
    talosctl gen secrets --from-controlplane-config cp.yaml -o secrets.yaml
    tofu state rm 'module.talos.talos_machine_secrets.this[0]'   # only if an apply already created new ones
