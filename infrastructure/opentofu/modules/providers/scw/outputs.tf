@@ -20,6 +20,14 @@ output "k8s_lb_ip" {
   value       = var.k8s_lb_mode == "managed" ? scaleway_lb_ip.k8s[0].ip_address : split("/", scaleway_ipam_ip.k8s_vip[0].address)[0]
 }
 
+output "k8s_lb_health_check" {
+  description = "How the Kubernetes API load balancer checks a control plane; null in vip mode (no load balancer)."
+  value = var.k8s_lb_mode == "managed" ? {
+    protocol = length(scaleway_lb_backend.k8s_api[0].health_check_https) > 0 ? "HTTPS" : "TCP"
+    path     = one(scaleway_lb_backend.k8s_api[0].health_check_https[*].uri)
+  } : null
+}
+
 output "app_lb_ip" {
   description = "Public IP of the App LB (80/443). Null means no application load balancer on this cluster (deploy_app_lb = false)."
   value       = one(scaleway_lb_ip.app[*].ip_address)

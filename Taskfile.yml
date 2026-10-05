@@ -1142,7 +1142,7 @@ tasks:
       provider-agnostic; --upgrade exercised live on Scaleway, OVH and Outscale. ROLE picks the env file and
       the state, and defaults to management.
       Usage: task cluster-roll PROVIDER=… [ROLE=management|workload] [KEY=~/.ssh/key] [APPROVE=auto]
-      [-- --workers-only|--cp-only|--dry-run|--upgrade]
+      [-- --workers-only|--cp-only|--dry-run|--upgrade|--cp-order=leader-last|index|leader-first]
     dir: infrastructure/opentofu/cluster
     # PROVIDER is REQUIRED, not defaulted. Twenty targets used to fall back to
     # scaleway in silence — including destroy and down — so a command typed

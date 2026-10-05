@@ -370,7 +370,7 @@ echo "=== the etcd leader is rolled LAST, and hands over deliberately ==="
 # fails — which is what a consecutive run of probe failures looks like. Rolling
 # the followers first leaves the leader untouched (quorum holds at 2/3), so the
 # cluster pays ONE chosen hand-off instead of three forced elections.
-eval "$(extract 'etcd_member_and_leader,etcd_leader_index,cp_roll_order')"
+eval "$(extract 'etcd_member_and_leader,etcd_leader_index,cp_roll_order,cp_forfeit_wanted')"
 CP_IPS=(10.0.0.1 10.0.0.2 10.0.0.3)
 talos_ep() { printf 'ep%s' "$2"; }
 
@@ -425,6 +425,75 @@ got="$(PATH="$STUB_DIR:$PATH" cp_roll_order 2>"$WARN_OUT" | tr '\n' ' ' | sed 's
 cat "${RR_FILES[@]}" | grep -q 'etcd forfeit-leadership' \
   && ok "the roll hands leadership over instead of letting it be taken" \
   || bad "no forfeit-leadership — the last control plane still forces an election"
+
+# --cp-order (#42): the experiment orders. `index` is the order before leader-last existed,
+# `leader-first` the extreme; neither hands leadership over. The default must not move.
+for lead_ip in 10.0.0.1 10.0.0.2 10.0.0.3; do
+  etcd_stub "$lead_ip"
+  case "$lead_ip" in 10.0.0.1) li=0; want="0 1 2" ;; 10.0.0.2) li=1; want="1 0 2" ;; *) li=2; want="2 0 1" ;; esac
+  got="$(PATH="$STUB_DIR:$PATH" cp_roll_order leader-first | tr '\n' ' ' | sed 's/ $//')"
+  [ "$got" = "$want" ] \
+    && ok "leader on cp-${li}, --cp-order=leader-first: rolled first (order ${got})" \
+    || bad "leader on cp-${li}, leader-first: expected '${want}', got '${got}'"
+  got="$(PATH="$STUB_DIR:$PATH" cp_roll_order index | tr '\n' ' ' | sed 's/ $//')"
+  [ "$got" = "0 1 2" ] \
+    && ok "leader on cp-${li}, --cp-order=index: index order, the leader not spared" \
+    || bad "leader on cp-${li}, index: expected '0 1 2', got '${got}'"
+  got="$(PATH="$STUB_DIR:$PATH" cp_roll_order leader-last | tr '\n' ' ' | sed 's/ $//')"
+  dflt="$(PATH="$STUB_DIR:$PATH" cp_roll_order | tr '\n' ' ' | sed 's/ $//')"
+  [ "$got" = "$dflt" ] && [ "${got##* }" = "$li" ] \
+    && ok "leader on cp-${li}: leader-last is the default and rolls it last" \
+    || bad "leader-last ('${got}') differs from the default ('${dflt}') or does not end on cp-${li}"
+  fw=""; for k in 0 1 2; do for o in leader-last index leader-first; do
+    if PATH="$STUB_DIR:$PATH" cp_forfeit_wanted "$o" "$k"; then fw="$fw $o:$k"; fi
+  done; done
+  [ "$fw" = " leader-last:$li" ] \
+    && ok "leader on cp-${li}: leadership is handed over only for leader-last on cp-${li}" \
+    || bad "leader on cp-${li}: hand-off wanted for '${fw}', expected only ' leader-last:${li}'"
+done
+
+# `index` must not even ask etcd who leads: with etcd unreadable it stays silent, and the
+# other orders say so. An unknown order would silently drop the leader from the roll.
+cat >"$STUB_DIR/talosctl" <<'STUB'
+#!/usr/bin/env bash
+exit 1
+STUB
+chmod +x "$STUB_DIR/talosctl"
+got="$(PATH="$STUB_DIR:$PATH" cp_roll_order index 2>"$WARN_OUT" | tr '\n' ' ' | sed 's/ $//')"
+[ "$got" = "0 1 2" ] && ! grep -q 'could not identify' "$WARN_OUT" \
+  && ok "--cp-order=index never queries etcd" \
+  || bad "index with unreadable etcd: order='${got}' warn='$(tr -d '\n' <"$WARN_OUT")'"
+got="$(PATH="$STUB_DIR:$PATH" cp_roll_order leader-first 2>"$WARN_OUT" | tr '\n' ' ' | sed 's/ $//')"
+[ "$got" = "0 1 2" ] && grep -q 'could not identify the etcd leader' "$WARN_OUT" \
+  && ok "leader-first with unreadable etcd keeps the index order, and says so" \
+  || bad "leader-first with unreadable etcd: order='${got}' warn='$(tr -d '\n' <"$WARN_OUT")'"
+got="$(PATH="$STUB_DIR:$PATH" cp_roll_order sideways 2>"$WARN_OUT")"; rc=$?
+[ "$rc" = 2 ] && [ -z "$got" ] && grep -q "unknown control-plane order" "$WARN_OUT" \
+  && ok "an unknown order is refused with nothing to roll" \
+  || bad "unknown order: rc=${rc} out='${got}'"
+
+# The flag itself, through the real script: a bad value stops at parse time (rc 2), the two
+# experiment orders warn, the default does not. The script then dies on the missing tfvars
+# (run from the repo root), before it touches anything.
+rr_run() { (cd "$ROOT" && PATH="$STUB_DIR:$PATH" bash scripts/ops/rolling-replace.sh scaleway --cp-only "$@" 2>&1 </dev/null); }
+out="$(rr_run --cp-order=sideways)"; rc=$?
+[ "$rc" = 2 ] && grep -q -- '--cp-order must be' <<<"$out" \
+  && ok "rolling-replace refuses --cp-order=sideways at parse time" \
+  || bad "--cp-order=sideways: rc=${rc} out='$(head -c 200 <<<"$out")'"
+for o in index leader-first; do
+  out="$(rr_run --cp-order=$o)"; rc=$?
+  [ "$rc" != 2 ] && grep -q "experiment order" <<<"$out" \
+    && ok "--cp-order=${o} is accepted and warns that it is an experiment" \
+    || bad "--cp-order=${o}: rc=${rc} out='$(head -c 200 <<<"$out")'"
+done
+out="$(rr_run)"; rc=$?
+[ "$rc" != 2 ] && ! grep -q "experiment order" <<<"$out" \
+  && ok "the default order does not warn" \
+  || bad "default order: rc=${rc} out='$(head -c 200 <<<"$out")'"
+grep -q 'cp_roll_order "\$CP_ORDER"' "$ROOT/scripts/ops/rolling-replace.sh" \
+  && grep -q 'cp_forfeit_wanted "\$CP_ORDER"' "$ROOT/scripts/ops/rolling-replace.sh" \
+  && ok "the roll loop passes the order on and asks before handing leadership over" \
+  || bad "the roll loop ignores --cp-order"
 
 
 

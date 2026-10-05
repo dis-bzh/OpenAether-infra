@@ -52,12 +52,17 @@ resource "openstack_lb_pool_v2" "k8s_api" {
 }
 
 resource "openstack_lb_monitor_v2" "k8s_api" {
-  count       = var.k8s_lb_mode == "managed" ? 1 : 0
-  pool_id     = openstack_lb_pool_v2.k8s_api[0].id
-  type        = "TCP"
-  delay       = 15
-  timeout     = 10
-  max_retries = 5
+  count   = var.k8s_lb_mode == "managed" ? 1 : 0
+  pool_id = openstack_lb_pool_v2.k8s_api[0].id
+  type    = var.k8s_lb_health_https ? "HTTPS" : "TCP"
+  delay   = var.k8s_lb_health_https ? 2 : 15
+  timeout = var.k8s_lb_health_https ? 1 : 10
+  # Octavia: max_retries = successes before ONLINE (75 s with 5 x 15 s), max_retries_down =
+  # failures before ERROR. Both set: the API default of 3 for the second is what existing monitors hold.
+  max_retries      = var.k8s_lb_health_https ? 2 : 5
+  max_retries_down = 3
+  url_path         = var.k8s_lb_health_https ? "/readyz" : null
+  expected_codes   = var.k8s_lb_health_https ? "200" : null
 }
 
 resource "openstack_lb_member_v2" "k8s_api" {

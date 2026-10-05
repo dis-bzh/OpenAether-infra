@@ -123,11 +123,26 @@ resource "scaleway_lb_backend" "k8s_api" {
   forward_protocol       = "tcp"
   server_ips             = [for ip in scaleway_ipam_ip.control_plane : split("/", ip.address)[0]]
 
-  health_check_delay       = "15s"
-  health_check_timeout     = "10s"
-  health_check_max_retries = 5
+  # HTTPS /readyz at 2 s / 1 s (vendor minimums 1 s). A backend going down is re-checked every
+  # health_check_transient_delay (0.5 s default), so DOWN comes in a few seconds, not 3 x 2 s. The
+  # certificate is not verified (no TLS on the backend).
+  health_check_delay       = var.k8s_lb_health_https ? "2s" : "15s"
+  health_check_timeout     = var.k8s_lb_health_https ? "1s" : "10s"
+  health_check_max_retries = var.k8s_lb_health_https ? 3 : 5
   health_check_port        = 6443
-  health_check_tcp {}
+
+  dynamic "health_check_tcp" {
+    for_each = var.k8s_lb_health_https ? [] : [1]
+    content {}
+  }
+  dynamic "health_check_https" {
+    for_each = var.k8s_lb_health_https ? [1] : []
+    content {
+      uri    = "/readyz"
+      method = "GET"
+      code   = 200
+    }
+  }
 }
 
 resource "scaleway_lb_frontend" "k8s_api" {

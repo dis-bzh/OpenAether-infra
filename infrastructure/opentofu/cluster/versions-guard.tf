@@ -35,3 +35,28 @@ resource "terraform_data" "version_pair_guard" {
     }
   }
 }
+
+# ==============================================================================
+# Kubernetes API health (k8s_api_health): the apiserver side and the load balancer side.
+# ==============================================================================
+
+locals {
+  apiserver_health_endpoints = var.k8s_api_health != "tcp"
+  lb_health_https            = var.k8s_api_health == "readyz"
+  talos_minor_num            = tonumber(split(".", local.talos_minor_key)[1])
+}
+
+resource "terraform_data" "api_health_guard" {
+  input = "${var.k8s_api_health}/${var.k8s_api_shutdown_delay}"
+
+  lifecycle {
+    precondition {
+      condition     = !local.apiserver_health_endpoints || (local.k8s_minor_num >= 32 && local.talos_minor_num >= 13)
+      error_message = "k8s_api_health = \"${var.k8s_api_health}\" needs kubernetes_version >= 1.32 (the AuthenticationConfiguration `anonymous` field is absent on 1.30, alpha on 1.31) and talos_version >= 1.13 (extraArgs null does not remove a flag before). Keep \"tcp\" there."
+    }
+    precondition {
+      condition     = var.k8s_api_shutdown_delay == "" || var.k8s_api_health == "readyz"
+      error_message = "k8s_api_shutdown_delay needs k8s_api_health = \"readyz\": it only helps a load balancer that reads /readyz, and it is set after the flip."
+    }
+  }
+}

@@ -41,9 +41,11 @@
 # Longhorn rebuilds from the surviving replicas — check they are healthy first.
 #
 # Usage: rolling-replace.sh <provider> [--workers-only|--cp-only] [--upgrade]
-#                          [--dry-run] [--yes]
+#                          [--cp-order=leader-last|index|leader-first] [--dry-run] [--yes]
 #   --upgrade: `talosctl upgrade` in place (version changes) instead of
 #   replacing the VM. Reads the target from talos_version in the tfvars.
+#   --cp-order: control-plane order, default leader-last (the etcd leader rolled last, after a
+#   hand-off). The other two are for the #42 experiment only: no hand-off, an election is forced.
 #   Needs: tofu init, AWS_* creds, open Talos tunnels, ./talosconfig + ./kubeconfig.
 # ==============================================================================
 set -euo pipefail
@@ -57,6 +59,7 @@ SCOPE="all"        # all | workers | cp
 DRY_RUN=0
 ASSUME_YES=0
 UPGRADE=0         # --upgrade: in-place `talosctl upgrade`, no VM replacement
+CP_ORDER="leader-last"  # --cp-order=: see cp_roll_order in lib/roll-gates.sh
 # The role used to be the literal "management", here and in the Taskfile, while
 # `task cluster-roll` declared a ROLE variable nothing read. So `cluster-upgrade
 # ROLE=workload` applied the workload tfvars in both its phases and then rolled
@@ -73,10 +76,17 @@ for arg in "$@"; do
     --upgrade)      UPGRADE=1 ;;
     --yes|-y)       ASSUME_YES=1 ;;
     --role=*)       ROLE="${arg#--role=}" ;;
+    --cp-order=*)   CP_ORDER="${arg#--cp-order=}" ;;
     *) echo "✗ unknown flag: $arg" >&2; exit 2 ;;
   esac
 done
 [ -n "$ROLE" ] || { echo "✗ --role= given with no value" >&2; exit 2; }
+case "$CP_ORDER" in
+  leader-last) ;;
+  index|leader-first)
+    echo "⚠ --cp-order=${CP_ORDER}: experiment order (#42), the etcd leader is not handed over before it goes." >&2 ;;
+  *) echo "✗ --cp-order must be leader-last, index or leader-first (got '${CP_ORDER}')" >&2; exit 2 ;;
+esac
 
 # Provider → module name in cluster/main.tf (junction modules, count-gated).
 case "$PROVIDER" in
@@ -557,10 +567,10 @@ if [[ "$SCOPE" == "all" || "$SCOPE" == "workers" ]]; then
   for j in "${!WK_IPS[@]}"; do stop_here worker && break; replace_node worker "$j"; done
 fi
 if [[ "$SCOPE" == "all" || "$SCOPE" == "cp" ]]; then
-  for j in $(cp_roll_order); do
+  for j in $(cp_roll_order "$CP_ORDER"); do
     stop_here cp && break
     # Re-read each time: leadership can move for reasons that are not ours.
-    if [[ $DRY_RUN -eq 0 && "$j" == "$(etcd_leader_index || true)" ]]; then
+    if [[ $DRY_RUN -eq 0 ]] && cp_forfeit_wanted "$CP_ORDER" "$j"; then
       forfeit_leadership "$j"
     fi
     replace_node cp "$j"

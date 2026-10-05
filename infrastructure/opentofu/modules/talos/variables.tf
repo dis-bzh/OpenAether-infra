@@ -176,6 +176,39 @@ variable "apiserver_vip_device_selector" {
 }
 
 # ==============================================================================
+# kube-apiserver health for a load balancer (anonymous /readyz, /livez, /healthz)
+# ==============================================================================
+
+variable "apiserver_health_endpoints" {
+  description = <<-EOT
+    Let anonymous callers read exactly /readyz, /livez and /healthz on the kube-apiserver, so a
+    load balancer can run an HTTPS /readyz check. Talos starts the apiserver with
+    --anonymous-auth=false, which cannot sit next to an AuthenticationConfiguration `anonymous`
+    stanza, so the patch removes it (extraArgs null: Talos >= 1.13) and mounts the file.
+    Needs Kubernetes >= 1.32 (the field is absent on 1.30, alpha on 1.31) and Talos >= 1.13.
+    The file is written only at BOOT: on a running node Talos 1.13 reboots to apply it (measured, Docker),
+    Talos 1.14 applies the flags without a reboot and the apiserver starts against a missing file
+    until the next boot (Talos source, not seen). Adopt one control plane at a time, on 1.13
+    (#42). The version floors are the root's guard (cluster/versions-guard.tf): a nested validation
+    cannot be tested from the root.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "apiserver_shutdown_delay" {
+  description = <<-EOT
+    kube-apiserver --shutdown-delay-duration, whole seconds under 30 (e.g. "20s"), null = flag not set.
+    For that long a stopping apiserver reports /readyz 500 and keeps serving, which lets a load
+    balancer drop it before it disappears. Measured on Talos 1.13.9 in Docker: a static pod restart
+    (config apply) honours all 20 s, a node stop (reboot, upgrade) cuts it at about 10 s (the kubelet's
+    critical-pod grace); the pod spec sets none, so the kubelet's 30 s is the ceiling.
+  EOT
+  type        = string
+  default     = null
+}
+
+# ==============================================================================
 # Bootstrap Manifests (injected via Talos inlineManifests)
 # ==============================================================================
 

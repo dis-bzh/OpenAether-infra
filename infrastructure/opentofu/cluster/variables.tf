@@ -506,3 +506,42 @@ variable "talos_installer_schematic_id" {
   type        = string
   default     = "613e1592b2da41ae5e265e8789429f22e121aab91cb4deb6bc3c0b6262961245"
 }
+
+variable "k8s_api_health" {
+  description = <<-EOT
+    How the Kubernetes API load balancer decides a control plane can serve.
+      "tcp"       (default) the port accepts a connection, which cannot tell a listening
+                  port from a serving apiserver.
+      "anonymous" kube-apiserver answers /readyz, /livez and /healthz without credentials; the
+                  load balancer still checks TCP. The middle step of an adoption: every control
+                  plane serves BEFORE the check relies on it. Apply it one control plane at a
+                  time (the file is written at boot), never as one concurrent apply.
+      "readyz"    the load balancer checks HTTPS /readyz (needs "anonymous" applied everywhere).
+    Both non-default values need kubernetes_version >= 1.32 and talos_version >= 1.13. Ignored by the
+    load balancer with k8s_lb_mode = "vip" and on Proxmox (the apiserver side still applies).
+  EOT
+  type        = string
+  default     = "tcp"
+
+  validation {
+    condition     = contains(["tcp", "anonymous", "readyz"], var.k8s_api_health)
+    error_message = "k8s_api_health must be \"tcp\", \"anonymous\" or \"readyz\"."
+  }
+}
+
+variable "k8s_api_shutdown_delay" {
+  description = <<-EOT
+    kube-apiserver --shutdown-delay-duration ("20s"), "" = not set. Needs k8s_api_health = "readyz": it only
+    helps a load balancer that reads /readyz. Set it AFTER the flip, and only where control planes are
+    changed one at a time: the Kubernetes step applies all three at once, and with a delay all three
+    report not-ready together, so a /readyz load balancer can be left with no backend (#42).
+    Whole seconds under 30: the kubelet's default grace period is 30 s. A node stop cuts it at about 10 s.
+  EOT
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.k8s_api_shutdown_delay == "" || (can(regex("^[1-9][0-9]?s$", var.k8s_api_shutdown_delay)) ? tonumber(trimsuffix(var.k8s_api_shutdown_delay, "s")) < 30 : false)
+    error_message = "k8s_api_shutdown_delay must be empty or whole seconds under 30 (\"20s\")."
+  }
+}

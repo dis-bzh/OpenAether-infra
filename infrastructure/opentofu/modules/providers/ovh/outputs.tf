@@ -22,6 +22,14 @@ output "k8s_lb_ip" {
   value       = var.k8s_lb_mode == "managed" ? openstack_networking_floatingip_v2.k8s[0].address : try(openstack_networking_port_v2.k8s_vip[0].all_fixed_ips[0], "")
 }
 
+output "k8s_lb_health_check" {
+  description = "How the Kubernetes API load balancer checks a control plane; null in vip mode (no load balancer)."
+  value = var.k8s_lb_mode == "managed" ? {
+    protocol = openstack_lb_monitor_v2.k8s_api[0].type
+    path     = openstack_lb_monitor_v2.k8s_api[0].url_path # unknown until apply while the monitor is TCP
+  } : null
+}
+
 output "app_lb_ip" {
   description = "Public IP of the App LB (80/443). Null means no application load balancer on this cluster (deploy_app_lb = false)."
   # one(): returns null on the empty list instead of failing on [0].

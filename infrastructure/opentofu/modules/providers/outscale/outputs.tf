@@ -24,6 +24,14 @@ output "k8s_lb_ip" {
   value       = outscale_load_balancer.k8s.dns_name
 }
 
+output "k8s_lb_health_check" {
+  description = "How the Kubernetes API load balancer checks a control plane."
+  value = {
+    protocol = one(outscale_load_balancer_attributes.k8s.health_check[*].protocol)
+    path     = one(outscale_load_balancer_attributes.k8s.health_check[*].path)
+  }
+}
+
 output "app_lb_ip" {
   description = "DNS name of the App LB (80/443). Null means no application load balancer on this cluster (deploy_app_lb = false)."
   value       = one(outscale_load_balancer.app[*].dns_name)

@@ -96,3 +96,13 @@ output "inline_manifest_names" {
   EOT
   value       = [for m in local.inline_manifests : m.name]
 }
+
+output "apiserver_health_patch" {
+  description = <<-EOT
+    The extra control-plane config patch that opens /readyz, /livez and /healthz
+    anonymously and sets the apiserver shutdown delay ([] when neither is on).
+    Exposed because control_plane_config is unknown until apply, so a plan-time test
+    cannot read it. Holds no secret.
+  EOT
+  value       = local.apiserver_health_patch
+}

@@ -876,18 +876,25 @@ etcd_leader_index() { # → index of the CP carrying the leader, or empty
   return 1
 }
 
-cp_roll_order() { # → CP indices, the etcd leader LAST
-  local lead k
+# The order is a switch for ONE experiment (#42: the Talos-only roll with the leader-last order
+# disabled): `index` is the order before leader-last existed, `leader-first` the extreme. Default unchanged.
+cp_roll_order() { # [leader-last|index|leader-first] → CP indices, one per line
+  local order="${1:-leader-last}" lead k
+  # Anything else would drop the leader from the roll: refuse rather than guess.
+  case "$order" in leader-last|index|leader-first) ;; *) warn "unknown control-plane order '${order}'"; return 2 ;; esac
+  if [ "$order" = index ]; then printf '%s\n' "${!CP_IPS[@]}"; return 0; fi
   lead="$(etcd_leader_index)" || {
     # No leader answered. Say so and keep the declared order rather than
     # inventing one: an unreadable cluster is not a reordering problem.
     warn "could not identify the etcd leader — rolling control planes in index order"
-    printf '%s
-' "${!CP_IPS[@]}"; return 0; }
-  for k in "${!CP_IPS[@]}"; do [ "$k" = "$lead" ] || printf '%s
-' "$k"; done
-  printf '%s
-' "$lead"
+    printf '%s\n' "${!CP_IPS[@]}"; return 0; }
+  [ "$order" != leader-first ] || printf '%s\n' "$lead"
+  for k in "${!CP_IPS[@]}"; do [ "$k" = "$lead" ] || printf '%s\n' "$k"; done
+  [ "$order" != leader-last ] || printf '%s\n' "$lead"
+}
+
+cp_forfeit_wanted() { # <order> <index> → 0 when this CP carries the leader AND the order spares it
+  [ "$1" = leader-last ] && [ "$2" = "$(etcd_leader_index || true)" ]
 }
 
 forfeit_leadership() { # <index> — hand etcd leadership to a peer, and check it moved

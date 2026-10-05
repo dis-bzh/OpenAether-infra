@@ -172,3 +172,14 @@ variable "app_lb_node_ports" {
     https = 30443
   }
 }
+
+variable "k8s_lb_health_https" {
+  description = <<-EOT
+    Health-check the Kubernetes API load balancer with HTTPS GET /readyz instead of a
+    TCP connect. Requires the apiserver to answer /readyz anonymously
+    (modules/talos apiserver_health_endpoints) on EVERY control plane first: with
+    anything else the check reads 401 and the load balancer marks every backend down.
+  EOT
+  type        = bool
+  default     = false
+}

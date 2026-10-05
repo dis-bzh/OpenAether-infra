@@ -164,6 +164,62 @@ locals {
   }
 }
 
+# ==============================================================================
+# kube-apiserver: anonymous health endpoints and shutdown delay, as ONE extra patch
+# (not inside the merge() of the main patch: local.apiserver_vip_certsans assigns
+# the whole cluster.apiServer key and would drop a second map under it).
+# ==============================================================================
+
+locals {
+  apiserver_extra_args = merge(
+    var.apiserver_health_endpoints ? {
+      "authentication-config" = "/etc/kubernetes/oa-authn/authentication-config.yaml"
+      # Talos passes --anonymous-auth=false and the apiserver refuses it next to the file's
+      # `anonymous`. null renders as "flag absent" on Talos 1.13+ only: 1.12 prints `--anonymous-auth=`.
+      "anonymous-auth" = null
+    } : {},
+    var.apiserver_shutdown_delay != null ? { "shutdown-delay-duration" = var.apiserver_shutdown_delay } : {},
+  )
+
+  apiserver_health_patch = !var.apiserver_health_endpoints && var.apiserver_shutdown_delay == null ? [] : [yamlencode(merge(
+    var.apiserver_health_endpoints ? {
+      machine = {
+        files = [{
+          path        = "/var/lib/oa-authn/authentication-config.yaml"
+          permissions = 292 # 0o444; a string is rejected by the provider
+          # `create` on every boot: Talos's WriteUserFiles runs `create` unconditionally (docs say the
+          # path must not exist, the code does not check); `overwrite` fails on the first boot.
+          op = "create"
+          content = yamlencode({
+            # v1beta1 on the whole 1.32+ range, so a Kubernetes bump never changes the file: a
+            # changed machine.files makes Talos 1.12/1.13 reboot the node, and the K8s step applies all three.
+            apiVersion = "apiserver.config.k8s.io/v1beta1"
+            kind       = "AuthenticationConfiguration"
+            anonymous = {
+              enabled    = true
+              conditions = [{ path = "/livez" }, { path = "/readyz" }, { path = "/healthz" }]
+            }
+          })
+        }]
+      }
+    } : {},
+    {
+      cluster = {
+        apiServer = merge(
+          { extraArgs = local.apiserver_extra_args },
+          var.apiserver_health_endpoints ? {
+            extraVolumes = [{
+              hostPath  = "/var/lib/oa-authn"
+              mountPath = "/etc/kubernetes/oa-authn"
+              readonly  = true
+            }]
+          } : {},
+        )
+      }
+    },
+  ))]
+}
+
 locals {
   worker_volume_encryption = {
     provider = "luks2"
@@ -207,7 +263,7 @@ data "talos_machine_configuration" "control_plane" {
   talos_version      = var.talos_version
   kubernetes_version = var.kubernetes_version
 
-  config_patches = [
+  config_patches = concat([
     yamlencode({
       machine = merge(
         {
@@ -310,7 +366,7 @@ data "talos_machine_configuration" "control_plane" {
       kind       = "HostnameConfig"
       hostname   = "${var.cluster_name}-cp-${count.index}"
     })
-  ]
+  ], local.apiserver_health_patch)
 
   lifecycle {
     precondition {

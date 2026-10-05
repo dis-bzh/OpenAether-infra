@@ -222,6 +222,9 @@ module "scw" {
   k8s_lb_mode      = local.scw_dist.k8s_lb_mode
   deploy_app_lb    = var.deploy_app_lb
 
+  # HTTPS /readyz check on the API load balancer; needs apiserver_health_endpoints on the control planes first.
+  k8s_lb_health_https = local.lb_health_https
+
   worker_storage = var.worker_storage
 
   admin_ip         = var.admin_ip
@@ -251,6 +254,9 @@ module "ovh" {
   k8s_lb_mode        = local.ovh_dist.k8s_lb_mode
   deploy_app_lb      = var.deploy_app_lb
 
+  # HTTPS /readyz check on the API load balancer; needs apiserver_health_endpoints on the control planes first.
+  k8s_lb_health_https = local.lb_health_https
+
   worker_storage = var.worker_storage
 
   admin_ip         = var.admin_ip
@@ -277,6 +283,9 @@ module "outscale" {
   bastion_image_id   = local.osc_dist.bastion_image_id
   k8s_lb_mode        = local.osc_dist.k8s_lb_mode
   deploy_app_lb      = var.deploy_app_lb
+
+  # HTTPS /readyz check on the API load balancer; needs apiserver_health_endpoints on the control planes first.
+  k8s_lb_health_https = local.lb_health_https
 
   worker_storage = var.worker_storage
 
@@ -522,6 +531,10 @@ module "talos" {
   k8s_lb_ip         = local.k8s_lb_ip
   control_plane_ips = local.control_plane_ips
   worker_ips        = local.worker_ips
+
+  # k8s_api_health: anonymous /readyz, /livez, /healthz. k8s_api_shutdown_delay: the apiserver delays its stop.
+  apiserver_health_endpoints = local.apiserver_health_endpoints
+  apiserver_shutdown_delay   = var.k8s_api_shutdown_delay == "" ? null : var.k8s_api_shutdown_delay
 
   # Proxmox always wires a VIP; scw/ovh only in k8s_lb_mode = "vip"; outscale
   # and local never do (both resolve to null — see the locals above).

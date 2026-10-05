@@ -46,13 +46,15 @@ resource "outscale_load_balancer" "k8s" {
 resource "outscale_load_balancer_attributes" "k8s" {
   load_balancer_name = outscale_load_balancer.k8s.load_balancer_name
 
+  # HTTPS /readyz at the API minimums (interval 5 s, thresholds 2): down in about 10 s, up in 10 s.
   health_check {
     healthy_threshold   = 2
-    unhealthy_threshold = 3
-    check_interval      = 10
-    timeout             = 5
+    unhealthy_threshold = var.k8s_lb_health_https ? 2 : 3
+    check_interval      = var.k8s_lb_health_https ? 5 : 10
+    timeout             = var.k8s_lb_health_https ? 3 : 5
     port                = 6443
-    protocol            = "TCP"
+    protocol            = var.k8s_lb_health_https ? "HTTPS" : "TCP"
+    path                = var.k8s_lb_health_https ? "/readyz" : null
   }
 }
 
