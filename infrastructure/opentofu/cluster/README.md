@@ -184,8 +184,8 @@ task bootstrap-phase2 ROLE=workload PROVIDER=ovh KEY=~/.ssh/yourkey
 
 Provider A is gone; its backups survive on B's store. The state replica is the only copy of the
 Talos PKI, so a cluster built from it is one A's saved kubeconfig and talosconfig still open. It is
-a rebuild, not a restore: etcd contents and application data are not in it. **Not yet run on real
-accounts** ([`docs/status.md`](../../../docs/status.md), #57).
+a rebuild, not a restore: etcd contents and application data are not in it. **Run once on real
+accounts, OVH to Scaleway** ([`docs/status.md`](../../../docs/status.md), #57); no other pair has run.
 
 ```bash
 # A prod B needs a replica off B's cloud too, and A is down: an example whose replica endpoint points back at A cannot be created.

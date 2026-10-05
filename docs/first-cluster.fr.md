@@ -389,8 +389,8 @@ Ce qui reste ouvert :
   page.
 - **Le failover complet.** Le fournisseur A traité comme perdu, l'état et les
   artefacts récupérés depuis B seul, le cluster reconstruit chez B.
-  `envs/failover-*.tfvars.example` existe exactement pour ça et n'a jamais servi.
-  Le transport en dessous est prouvé ; le failover, non.
+  Joué une fois, OVH vers Scaleway (2026-10-05, `docs/status.md`) ; toute autre
+  paire de fournisseurs n'a pas tourné.
 - **Le kubeconfig et le talosconfig n'ont jamais été récupérés depuis un vrai
   bucket.** L'aller-retour est prouvé hors ligne, `enc()` contre `dec()` octet
   pour octet (`scripts/dev/test-restore.sh`), et le transport du tfstate est
