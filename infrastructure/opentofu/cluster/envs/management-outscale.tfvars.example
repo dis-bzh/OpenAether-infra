@@ -68,6 +68,14 @@ node_distribution = {
 # Prod (dedicated disks): disks = [{ size_gb = 100 }, { size_gb = 400 }] and
 #   discriminate by size, e.g. disk_match "disk.size < 200000000000u" vs "> ...".
 
+# Node DNS (optional): DNS-over-TLS (tcp/853, Talos 1.14+) for the nodes' own resolver
+# instead of the platform's plaintext one. All encrypted or all plain; rules and
+# trade-offs: modules/talos/variables.tf.
+# node_nameservers = [
+#   { address = "9.9.9.9", tls_server_name = "dns.quad9.net" },
+#   { address = "149.112.112.112", tls_server_name = "dns.quad9.net" },
+# ]
+
 admin_ip = ["YOUR_IP/32"]
 
 bastion_ssh_keys = {

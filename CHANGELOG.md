@@ -16,6 +16,16 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
+- **`node_nameservers`: DNS-over-TLS or -HTTPS for the nodes' own resolver (refs #173).** A list of `{address,
+  protocol, tls_server_name}` rendered as one Talos `ResolverConfig` and appended to every node's config, plus a
+  `TimeSyncConfig` `bootTimeout` when a server is encrypted (`node_dns_boot_timeout`, default `90s`, `""` keeps
+  Talos's endless wait); both are root variables. Opt-in: unset renders the config byte-identical, and a change
+  replaces the apply resources (upstream #352). A list mixing encrypted and plain entries is refused, since a plain
+  one is a silent plaintext fallback. Appended because provider 0.11 rejects the 1.14 keys in `config_patches`; it
+  moves there with #241. The bound trades a loud stall for a node that starts after the delay with name resolution
+  still dead. Rung: mocked (`modules/talos/tests/node-nameservers.tftest.hcl`); **not run on any cloud**, so what a
+  provider's network does to tcp/853 and whether pods keep resolving are open.
+
 - **`real-cloud-regression.yml`: a manual deploy, verify and teardown on sandbox accounts, dormant until the owner
   creates its secrets.** `workflow_dispatch` only (the `schedule:` block is written and commented out), one provider
   or all three in turn, behind a "these are sandbox accounts" box, with `if: always()` on both teardown steps and on

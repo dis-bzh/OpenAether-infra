@@ -77,6 +77,14 @@ node_distribution = {
 #   ]
 # }
 
+# Node DNS (optional): DNS-over-TLS (tcp/853, Talos 1.14+) for the nodes' own resolver
+# instead of the platform's plaintext one. All encrypted or all plain; rules and
+# trade-offs: modules/talos/variables.tf.
+# node_nameservers = [
+#   { address = "9.9.9.9", tls_server_name = "dns.quad9.net" },
+#   { address = "149.112.112.112", tls_server_name = "dns.quad9.net" },
+# ]
+
 admin_ip = ["YOUR_IP/32"]
 
 # Not used with host-as-bastion (no bastion VM). Only needed if enable_bastion = true.

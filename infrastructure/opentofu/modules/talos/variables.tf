@@ -249,3 +249,65 @@ variable "installer_schematic_id" {
   type        = string
   default     = ""
 }
+
+variable "node_nameservers" {
+  description = <<-EOT
+    Resolvers for the nodes' own DNS (image pulls, NTP), rendered as one Talos
+    ResolverConfig appended to every node's config. Empty (default) keeps the
+    platform's resolver and the rendered config byte-identical. Per entry:
+    `address` (an IP), `protocol` (Do53, DoT or DoH; DoT/DoH need Talos 1.14)
+    and `tls_server_name` (SNI and certificate name: required for DoT/DoH, empty
+    for Do53). Listed servers replace what the platform's DHCP hands out, and
+    their order is a priority. The list is all encrypted or all plain: a plain
+    entry beside an encrypted one is a silent plaintext fallback when that one
+    refuses or fails TLS. DoT needs egress to tcp/853, DoH to tcp/443.
+    Schema: https://docs.siderolabs.com/talos/v1.14/reference/configuration/network/resolverconfig
+  EOT
+  type = list(object({
+    address         = string
+    protocol        = optional(string, "DoT")
+    tls_server_name = optional(string, "")
+  }))
+  default = []
+
+  validation {
+    # "/32" parses for an IPv6 address too: only whether it is an address matters here.
+    condition     = alltrue([for n in var.node_nameservers : can(cidrhost("${n.address}/32", 0))])
+    error_message = "node_nameservers[].address must be an IPv4 or IPv6 address, not a hostname: Talos dials it directly."
+  }
+  validation {
+    condition     = alltrue([for n in var.node_nameservers : contains(["Do53", "DoT", "DoH"], n.protocol)])
+    error_message = "node_nameservers[].protocol must be Do53, DoT or DoH."
+  }
+  validation {
+    condition     = alltrue([for n in var.node_nameservers : (n.protocol == "Do53") == (n.tls_server_name == "")])
+    error_message = "node_nameservers[].tls_server_name is required for DoT/DoH and must be empty for Do53."
+  }
+  validation {
+    condition     = length(distinct([for n in var.node_nameservers : n.protocol == "Do53"])) <= 1
+    error_message = "node_nameservers must be all encrypted (DoT/DoH) or all Do53: a plain entry beside an encrypted one is a silent plaintext fallback when the encrypted one refuses or fails TLS."
+  }
+  validation {
+    condition     = alltrue([for n in var.node_nameservers : n.protocol == "Do53" || can(regex("^v(1\\.(1[4-9]|[2-9][0-9])|[2-9])\\.", var.talos_version))])
+    error_message = "DoT and DoH in node_nameservers need Talos 1.14 or later: an older node refuses the document (unknown keys)."
+  }
+}
+
+variable "node_dns_boot_timeout" {
+  description = <<-EOT
+    With an encrypted entry in node_nameservers: how long a booting node waits for
+    time sync, as a TimeSyncConfig bootTimeout. NTP names resolve through those
+    servers and Talos waits forever by default, so an unreachable server leaves
+    etcd, kubelet and trustd waiting: loud, and one applied working config fixes
+    it. The bound trades that stall for a node that starts after this delay with
+    time unverified and name resolution still dead, which `get timestatus` can
+    then read as synced. Empty keeps Talos's wait. Unused without an encrypted entry.
+  EOT
+  type        = string
+  default     = "90s"
+
+  validation {
+    condition     = var.node_dns_boot_timeout == "" || can(regex("^[1-9][0-9]*(s|m|h)$", var.node_dns_boot_timeout))
+    error_message = "node_dns_boot_timeout must be empty or a positive whole number of seconds, minutes or hours: 90s, 2m."
+  }
+}

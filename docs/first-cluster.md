@@ -130,6 +130,7 @@ $EDITOR management-scaleway.tfvars
 | `s3_replica_endpoint` / `_region` | S3 for the backup copy. In production, **a different provider** — a state you can only read from the cloud that just failed is not a backup. That store is opened with ITS OWN cloud's keys (`OUTSCALE_AWS_*` for an Outscale replica) — see step 2. `task cluster-up` refuses before it builds anything if the `-backup` buckets cannot be created there |
 | `bastion_ssh_keys` | the **public** half of the key you will pass as `KEY=`. `task cluster-up` refuses to start if they do not match, before spending anything |
 | `control_planes` | 3 — **inside `node_distribution.<provider>`**, not a top-level field, and `bastion_ssh_keys` is a map keyed by provider the same way. Nothing validates the count; `2` silently builds a two-member etcd |
+| `node_nameservers` / `node_dns_boot_timeout` | optional, Talos 1.14+ for DoT/DoH. The nodes' own resolver (image pulls, NTP) over DNS-over-TLS or -HTTPS instead of the platform's plaintext DNS. All encrypted or all plain: a mixed list is refused, a plain entry beside an encrypted one is a silent plaintext fallback. An unreachable server stops image pulls; `node_dns_boot_timeout` (90 s, `""` to disable) trades the boot stall for a node that starts with its clock unverified. Rules and trade-offs: `modules/talos/variables.tf` |
 
 `git_repo_url`, `git_ref`, `flux_namespace` and `apps_profile` are inert while
 Flux is off. Leave them.

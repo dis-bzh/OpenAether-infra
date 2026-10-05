@@ -195,6 +195,39 @@ locals {
 }
 
 # ==============================================================================
+# Node resolver (node_nameservers): a ResolverConfig, plus a TimeSyncConfig when
+# a server is encrypted, appended to every rendered config.
+# Appended, not a config patch: provider 0.11 rejects `protocol` and
+# `tlsServerName` there. Migrate to config_patches with #241.
+# `hostDNS` stays out: the generated v1alpha1 sets it, and Talos refuses both.
+# ==============================================================================
+
+locals {
+  encrypted_dns = anytrue([for n in var.node_nameservers : n.protocol != "Do53"])
+
+  appended_documents = concat(
+    length(var.node_nameservers) == 0 ? [] : [yamlencode({
+      apiVersion = "v1alpha1"
+      kind       = "ResolverConfig"
+      nameservers = [for n in var.node_nameservers : merge(
+        { address = n.address },
+        n.protocol == "Do53" ? {} : { protocol = n.protocol, tlsServerName = n.tls_server_name },
+      )]
+    })],
+    local.encrypted_dns && var.node_dns_boot_timeout != "" ? [yamlencode({
+      apiVersion  = "v1alpha1"
+      kind        = "TimeSyncConfig"
+      bootTimeout = var.node_dns_boot_timeout
+    })] : [],
+  )
+  # "" leaves every generated config untouched: an unset list renders byte-identical.
+  resolver_tail = join("", [for d in local.appended_documents : "---\n${d}"])
+
+  control_plane_configs = [for c in data.talos_machine_configuration.control_plane : local.resolver_tail == "" ? c.machine_configuration : "${trimsuffix(c.machine_configuration, "\n")}\n${local.resolver_tail}"]
+  worker_configs        = [for c in data.talos_machine_configuration.worker : local.resolver_tail == "" ? c.machine_configuration : "${trimsuffix(c.machine_configuration, "\n")}\n${local.resolver_tail}"]
+}
+
+# ==============================================================================
 # Control Plane Machine Configuration
 # ==============================================================================
 
@@ -477,18 +510,19 @@ resource "terraform_data" "talos_port_ready_worker" {
   }
 }
 
-# Carries nothing but the version pair, and exists only to be referenced by the
-# two `replace_triggered_by` below. See the comment on them.
+# Carries the version pair and a hash of the appended resolver documents (none
+# when unset, so the input is unchanged there), and exists only to be referenced
+# by the two `replace_triggered_by` below. See the comment on them.
 resource "terraform_data" "machine_config_version" {
   count = local.do_apply ? 1 : 0
-  input = "${var.talos_version}/${var.kubernetes_version}"
+  input = "${var.talos_version}/${var.kubernetes_version}${local.resolver_tail == "" ? "" : "/${sha256(local.resolver_tail)}"}"
 }
 
 resource "talos_machine_configuration_apply" "control_plane" {
   count = local.do_apply ? var.control_plane_count : 0
 
   client_configuration        = local.machine_secrets.client_configuration
-  machine_configuration_input = data.talos_machine_configuration.control_plane[count.index].machine_configuration
+  machine_configuration_input = local.control_plane_configs[count.index]
   endpoint                    = local.cp_endpoints[count.index]
   node                        = var.control_plane_ips[count.index]
 
@@ -497,7 +531,7 @@ resource "talos_machine_configuration_apply" "control_plane" {
   }
 
   lifecycle {
-    # REPLACE on a version change instead of updating in place. Updating is what
+    # REPLACE on a version or node_nameservers change instead of updating in place. Updating is what
     # trips siderolabs/terraform-provider-talos#352: when the rendered config is
     # only known during apply, the provider keeps the OLD
     # `machine_configuration_hash` in the plan and recomputes it at apply, and
@@ -519,7 +553,7 @@ resource "talos_machine_configuration_apply" "worker" {
   count = local.do_apply ? var.worker_count : 0
 
   client_configuration        = local.machine_secrets.client_configuration
-  machine_configuration_input = data.talos_machine_configuration.worker[count.index].machine_configuration
+  machine_configuration_input = local.worker_configs[count.index]
   endpoint                    = local.worker_endpoints[count.index]
   node                        = var.worker_ips[count.index]
 
