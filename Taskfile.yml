@@ -1246,18 +1246,26 @@ tasks:
     cmds:
       - defer: *receipt
       - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
-      # ⚠️ NOT purely read-only, and the one wart in this two-step design.
-      # machine_secrets carries prevent_destroy — the PKI is the cluster's root of
-      # trust — and OpenTofu enforces that at PLAN time, not at apply. So the plan
-      # cannot be computed while the resource is tracked. This detaches it from
-      # state, exactly as the old one-shot destroy did, only now it happens at the
-      # planning step. If you read the plan and change your mind, the cluster still
-      # runs and its PKI is untouched on the nodes — but the state no longer tracks
-      # that resource.
+      # prevent_destroy is a PLAN-time check, so the destroy plan needs the secrets untracked: this step is NOT
+      # read-only. The replica gets the pre-untrack state first (the undo); a re-run skips both, or it would copy
+      # a PKI-less state over that snapshot (#66). `state rm` exits 1 on an absent address, hence the test.
       - |
-        echo "⚠ untracking module.talos.talos_machine_secrets so the destroy plan can be computed."
-        echo "  The PKI on the nodes is untouched; the state stops tracking it."
-      - tofu state rm module.talos.talos_machine_secrets.this 2>/dev/null || true
+        if ! list="$(tofu state list -no-color 2>&1)"; then
+          echo "⚠ cannot read the state: nothing is untracked or replicated; the plan below says what it needs." >&2
+          printf '    %s\n' "$list" >&2
+        elif ! grep -qF 'module.talos.talos_machine_secrets.this' <<<"$list"; then
+          echo "  module.talos.talos_machine_secrets is already out of the state (an earlier run untracked it):"
+          echo "  nothing to do, and nothing is replicated now, so the snapshot that run took stays the undo."
+        else
+          echo "⚠ untracking module.talos.talos_machine_secrets so the destroy plan can be computed."
+          echo "  The PKI on the nodes is untouched; the state stops tracking it. Replicating the state first:"
+          ../../../scripts/ops/backup-state.sh . \
+            || echo "⚠ the state was NOT replicated: this untracking has no undo (a teardown is never blocked)." >&2
+          tofu state rm module.talos.talos_machine_secrets.this || true
+          echo "  Undo, if you decline the destroy: copy the replica object named by the '✓ tfstate replicated' line"
+          echo "  above (no such line, no undo) back over the primary state object BEFORE any apply or cluster-up"
+          echo "  (README, \"Lost the Talos secrets\")."
+        fi
       # talos_bootstrap=false resolves module.talos to count=0, so the plan skips
       # data.talos_cluster_health — which would otherwise read through the SSH
       # tunnels and hang if they are already closed.

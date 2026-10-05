@@ -23,6 +23,9 @@ run() { OUT="$(PATH="$TMP/bin:$PATH" "$SUT" 2>"$TMP/err")"; RC=$?; ERR="$(cat "$
 
 LIVE=$'module.scw[0].scaleway_instance_server.worker[0]\nmodule.talos.talos_machine_bootstrap.this[0]\nmodule.talos.talos_machine_secrets.this[0]'
 FRESH=$'module.scw[0].scaleway_instance_server.worker[0]\nmodule.talos.talos_machine_secrets.this[0]'
+# What `task infra-down-plan` leaves behind: every talos_* resource but the secrets (#66).
+LOST=$'module.scw[0].scaleway_instance_server.worker[0]\nmodule.talos.talos_machine_configuration_apply.cp[0]\nmodule.talos.talos_machine_bootstrap.this[0]\nmodule.talos.talos_cluster_kubeconfig.this[0]'
+UNPROT=$'module.scw[0].scaleway_instance_server.worker[0]\nmodule.talos.talos_machine_bootstrap.this[0]\nmodule.talos.talos_machine_secrets.unprotected[0]'
 
 echo "=== the state answers ==="
 STUB_OUT="$LIVE" run
@@ -33,6 +36,19 @@ STUB_OUT="" run
 [ "$RC" = 0 ] && [ "$OUT" = false ] && ok "an empty state answers false" || bad "empty state: rc=$RC out=[$OUT]"
 STUB_RC=1 STUB_ERR=$'Error: No state file was found!\n' run
 [ "$RC" = 0 ] && [ "$OUT" = false ] && ok "a first run (no state object yet) answers false, not an error" || bad "absent state: rc=$RC out=[$OUT] err=[$ERR]"
+
+echo "=== the bootstrap is there and the secrets are not ==="
+STUB_OUT="$LOST" run
+[ "$RC" -ne 0 ] && [ -z "$OUT" ] && grep -q 'talos_machine_secrets' <<<"$ERR" && grep -q 'infra-down-plan' <<<"$ERR" \
+  && grep -q 'Lost the Talos secrets' <<<"$ERR" && grep -q 'Do not run cluster-up or infra-apply' <<<"$ERR" \
+  && ok "refused with nothing on stdout, naming the secrets, the likely cause and where the recovery is" \
+  || bad "a state without its secrets was answered (rc=$RC out=[$OUT] err=[$ERR])"
+STUB_OUT=$'module.talos.talos_machine_bootstrap.this[0]' run
+[ "$RC" -ne 0 ] && [ -z "$OUT" ] && ok "…whatever else the state holds: the bootstrap alone is enough to refuse" \
+  || bad "a bootstrap-only state was answered (rc=$RC out=[$OUT])"
+STUB_OUT="$UNPROT" run
+[ "$RC" = 0 ] && [ "$OUT" = true ] && ok "the unprotected twin of the secrets (tofu test) counts as the secrets" \
+  || bad "unprotected secrets were not accepted: rc=$RC out=[$OUT] err=[$ERR]"
 
 echo "=== the state cannot be read ==="
 STUB_RC=1 STUB_ERR='Error: S3: 503 SlowDown' run
@@ -45,6 +61,12 @@ STUB_RC=1 STUB_OUT="$LIVE" STUB_ERR='Error: connection reset' run
   || bad "a partial listing was trusted (rc=$RC out=[$OUT])"
 STUB_RC=1 STUB_ERR='Error: Failed to load state: decryption failed' run
 [ "$RC" -ne 0 ] && [ -z "$OUT" ] && ok "a state that will not decrypt is refused too" || bad "decrypt failure answered (rc=$RC out=[$OUT])"
+
+echo "=== every caller stops on the refusal ==="
+n=0; for f in Taskfile.yml scripts/bootstrap/grow-nodes.sh scripts/ops/shrink-nodes.sh scripts/internal/refuse-node-deletes.sh; do
+  n=$((n + $(grep -cE 'bootstrap-in-state\.sh"?\)" \|\| exit 1' "$ROOT/$f")))
+done
+[ "$n" = 5 ] && ok "infra-apply, infra-plan, grow, shrink and the plan guard each exit on it" || bad "expected five callers that exit on a refusal, found $n"
 
 echo "=== both call sites use it ==="
 [ "$(grep -c 'scripts/internal/bootstrap-in-state.sh' "$ROOT/Taskfile.yml")" = 2 ] \

@@ -281,6 +281,31 @@ tofu init -reconfigure \
   -backend-config="endpoint=<replica-endpoint>"
 ```
 
+### Lost the Talos secrets
+
+`task infra-down-plan` (behind `task cluster-down`) and `tofu state rm` take `talos_machine_secrets` out of the
+state. The nodes still trust the PKI it held, the next apply mints another one, and every Talos call ends in
+`x509: certificate signed by unknown authority` while Kubernetes stays healthy (the provider only prints `Still
+modifying...`). `bootstrap-in-state.sh` now refuses that state before any plan. Both recoveries below ran on a real
+cluster (Scaleway, 1 control plane + 1 worker, Talos 1.14.2, 2026-10-04). The witness is `talosctl version` with the
+recovered talosconfig: `cluster-verify` stays green on a lost PKI, its Talos checks only warn.
+
+1. **A replica that still holds the secrets** (`infra-down-plan` replicates before it untracks and prints the object):
+   copy the replica's `<cluster_name>.tfstate` over the primary key, `task kubeconfig` (rewrites the talosconfig),
+   `task infra-plan STRICT=1` says `No changes`.
+2. **Only a talosconfig the nodes still trust** (`task restore-artifacts FROM=replica`): read the first document of
+   `talosctl get machineconfig -o yaml`, `talosctl gen secrets --from-controlplane-config cp.yaml -o secrets.yaml`,
+   `tofu state rm` the secrets an apply created, then import the bundle with `TF_VAR_talos_tunnel_port_offset` set to
+   your `TALOS_TUNNEL_OFFSET` (without it the import's health read waits 15 minutes on ports nothing listens on):
+   `tofu import 'module.talos.talos_machine_secrets.this[0]' secrets.yaml`. The plan must not create, delete or replace
+   a `talos_*` resource; then `task cluster-up` (a first run can stop on the provider's "inconsistent final plan",
+   #352: run it again). Nodes do not reboot.
+
+Never run `cluster-up` or `infra-apply` from a state without the secrets, push a state nobody verified with `-force`,
+or replace `random_password` (the disk key; importing it plans a replacement). Not recoverable from here: no
+talosconfig and no replica copy. A privileged pod does not help, a node's STATE partition is empty to pods (measured
+through `hostPath` and `hostPID`, Talos 1.14.2).
+
 > Rebuilding from scratch on another provider instead? That path has no command
 > yet — see the note under "Failover" above. The replica it would read from does
 > exist and is verified across providers.
