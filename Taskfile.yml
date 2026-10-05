@@ -417,6 +417,8 @@ tasks:
       - ./scripts/dev/test-rolling-replace.sh
       - ./scripts/dev/test-shrink-nodes.sh
       - ./scripts/dev/test-tunnel-guard.sh
+      # The one test that runs talos-tunnels.sh itself: every other harness stubs it (#65).
+      - ./scripts/dev/test-talos-tunnels.sh
       - ./scripts/dev/test-real-cloud-workflow.sh
       # These two were written, they pass, and nothing ever ran them — not this
       # target, not CI. A harness nobody invokes is the failure mode this whole
@@ -548,7 +550,7 @@ tasks:
         [ -z "$written" ] || { echo "✗ a step wrote under envs/:" $written >&2; exit 1; }
 
   test:
-    desc: Run OpenTofu tests (cluster root)
+    desc: Run OpenTofu tests (cluster root, then modules/talos)
     dir: infrastructure/opentofu/cluster
     # Same isolation as `validate`, and for the same reason — the comment there
     # claimed this task already matched it, but only the init flag was copied,
@@ -570,6 +572,9 @@ tasks:
       # providers and modules resolved first. -upgrade: see `validate`.
       - tofu init -backend=false -upgrade
       - tofu test
+      # Module-level tests: the root's tests above never run a module's own logic.
+      - tofu -chdir=../modules/talos init -backend=false -upgrade
+      - tofu -chdir=../modules/talos test
 
   clea-scan:
     desc: >-
