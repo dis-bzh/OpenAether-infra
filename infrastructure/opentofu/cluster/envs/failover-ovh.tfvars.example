@@ -8,9 +8,8 @@
 # the cluster on the SAME provider (the everyday recovery). This file is the
 # CROSS-provider failover — same role, different cloud.
 #
-# Usage: there is no failover command yet — see "Cross-provider failover" in
-# ../README.md. Untested sketch:
-#   tofu apply -var-file=envs/failover-ovh.tfvars -var talos_bootstrap=true
+# Usage: task restore-state, then task cluster-up — see "Cross-provider failover" in
+# ../README.md.
 #
 # After rebuild:
 #   1. Flux bootstrap → syncs from Git automatically

@@ -154,7 +154,7 @@ What this lane still cannot carry: see "Known gaps" in
 |---|---|---|---|
 | `OP-twophase` | `talos_bootstrap=false` then `true` | Documented `task infra-apply` → `task bootstrap-phase2` split. | ✅ |
 | `OP-autotunnels` | `auto_tunnels=true` | EXPERIMENTAL single-apply. | ⬜ |
-| `OP-failover` | `failover-<p>.tfvars`, no command yet | Rebuild on provider B from B's replica. The replica is verified; the rebuild is undesigned. | ⬜ |
+| `OP-failover` | `failover-<p>.tfvars`, `task restore-state` then `task cluster-up` | Rebuild on provider B from the replica A left on B's store: the PKI carries over, nothing else does. Offline harness only; no real account has run it (#57). | ⬜ |
 | `OP-destroy` | `task cluster-down` / `task infra-down` | Ordered teardown (children then management). | ✅ |
 | `OP-tftest` | mocked | The unit-test suite (no credentials). | ✅ (CI) |
 | `OP-backup` | `backup_enabled=true`, cross-provider replica (`<STORE>_AWS_*`) | DR: tfstate + kube/talosconfig to primary + replica; client-encrypted restic. | ✅ *(local + real cloud SCW+OVH)* |

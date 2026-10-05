@@ -71,10 +71,11 @@ command -v gpg >/dev/null 2>&1 || { echo "✗ gpg is required to decrypt" >&2; e
 command -v aws >/dev/null 2>&1 || { echo "✗ the aws CLI is required to fetch" >&2; exit 1; }
 [ -f "$TFVARS" ] || { echo "✗ no $TFVARS — the bucket name is derived from it" >&2; exit 1; }
 
-tfv() { grep -E "^[[:space:]]*$1[[:space:]]*=" "$TFVARS" 2>/dev/null | head -1 | sed -E 's/.*"([^"]*)".*/\1/'; }
-CN="$(tfv cluster_name)"; ENVN="$(tfv environment)"
-PRIM_EP="$(tfv s3_primary_endpoint)"; PRIM_REGION="$(tfv s3_primary_region)"
-REPL_EP="$(tfv s3_replica_endpoint)"; REPL_REGION="$(tfv s3_replica_region)"
+# common.sh's tfv, not a private copy: that one read the LAST quoted string of a line, so the
+# `"dev"` in the inline comment of every failover/workload example became the replica endpoint.
+CN="$(tfv "$TFVARS" cluster_name)"; ENVN="$(tfv "$TFVARS" environment)"
+PRIM_EP="$(tfv "$TFVARS" s3_primary_endpoint)"; PRIM_REGION="$(tfv "$TFVARS" s3_primary_region)"
+REPL_EP="$(tfv "$TFVARS" s3_replica_endpoint)"; REPL_REGION="$(tfv "$TFVARS" s3_replica_region)"
 [ -n "$CN" ] && [ -n "$ENVN" ] || { echo "✗ could not read cluster_name/environment from ${TFVARS##*/}" >&2; exit 1; }
 
 # Same convention as backup.tf and ensure-buckets.sh — via the shared helper, so
@@ -86,16 +87,22 @@ REPL_EP="$(tfv s3_replica_endpoint)"; REPL_REGION="$(tfv s3_replica_region)"
 # while the objects sat in s3-<project>-<suffix>-<provider>-… and reported "not
 # found" for a backup that existed. Using the shared helper is not the same as
 # using it with the same inputs.
-BUCKET="$(oa_artifact_bucket "$(oa_project "$CN" "$(tfv bucket_suffix)")" "$PROVIDER" "$ROLE" "$ENVN")"
+# --role picks the FILE; the bucket's role segment is the file's own cluster_role (backup.tf), which a
+# failover-<p>.tfvars declares as "management".
+CROLE="$(tfv "$TFVARS" cluster_role)"
+BUCKET="$(oa_artifact_bucket "$(oa_project "$CN" "$(tfv "$TFVARS" bucket_suffix)")" "$PROVIDER" "${CROLE:-$ROLE}" "$ENVN")"
 if [ "$FROM" = replica ]; then
   BUCKET="${BUCKET}-backup"
   EP="${REPL_EP:-$PRIM_EP}"; REGION="${REPL_REGION:-$PRIM_REGION}"; KIND=backup
 else
   EP="$PRIM_EP"; REGION="$PRIM_REGION"; KIND=primary
 fi
-AK="$("$ROOT/scripts/internal/resolve-s3-cred.sh" "$PROVIDER" ak "$KIND")"
-SK="$("$ROOT/scripts/internal/resolve-s3-cred.sh" "$PROVIDER" sk "$KIND")"
-[ -n "$AK" ] && [ -n "$SK" ] || { echo "✗ no ${KIND} S3 credentials resolved for '${PROVIDER}'" >&2; exit 1; }
+# The endpoint decides whose keys a replica needs (s3_cred); every other caller passes it. Without it a
+# replica on another cloud was read with this cluster's own keys, and with none of them in the shell, not at all.
+oa_aws_compat
+AK="$(s3_cred "$PROVIDER" "$KIND" ak "$EP")"
+SK="$(s3_cred "$PROVIDER" "$KIND" sk "$EP")"
+[ -n "$AK" ] && [ -n "$SK" ] || { echo "✗ no ${KIND} S3 credentials resolved for '${PROVIDER}' (${EP})" >&2; exit 1; }
 
 echo "▶ Restoring from the ${FROM} store: s3://${BUCKET}/backups/  (${EP})"
 
@@ -112,10 +119,15 @@ dec() { # in-file  out-file
 
 RESTORED=0
 for name in talosconfig kubeconfig; do
-  if ! AWS_ACCESS_KEY_ID="$AK" AWS_SECRET_ACCESS_KEY="$SK" \
+  # The store's own words are kept: "not found", "access denied" and "cannot connect" are three
+  # different repairs, and a blanket "not found" sent the reader to the wrong one.
+  if ! err="$(AWS_ACCESS_KEY_ID="$AK" AWS_SECRET_ACCESS_KEY="$SK" \
        aws s3 cp "s3://${BUCKET}/backups/${name}.gpg" "$WORK/${name}.gpg" \
-         --endpoint-url "$EP" --region "$REGION" >/dev/null 2>&1; then
-    echo "  ✗ ${name}.gpg not found in s3://${BUCKET}/backups/" >&2
+         --endpoint-url "$EP" --region "$REGION" 2>&1 >/dev/null)"; then
+    case "$err" in
+      *404* | *NoSuchKey* | *"Not Found"*) echo "  ✗ ${name}.gpg not found in s3://${BUCKET}/backups/" >&2 ;;
+      *) echo "  ✗ ${name}.gpg could not be fetched from s3://${BUCKET}/backups/: $(tail -n 1 <<<"$err")" >&2 ;;
+    esac
     continue
   fi
   if ! dec "$WORK/${name}.gpg" "$WORK/${name}"; then
