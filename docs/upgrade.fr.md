@@ -117,11 +117,10 @@ qui bloque. Un build qui échoue après son apply a déjà remplacé l'ancienne
 image : laisser le pin sur la nouvelle version et relancer. Les montées du 2026-10-03
 ont suivi cet ordre sur les trois clouds.
 
-`talos_version` est le Talos du nœud, pas le contrat de configuration machine. Le module génère
-sous un contrat distinct, jamais plus récent que v1.13 (`config_contract` dans
-`modules/talos/main.tf`) : le provider 0.12 génère la configuration multi-documents de Talos 1.14
-pour un contrat 1.14, et les patches v1alpha1 du module la heurtent (#241). Un bump vers 1.14
-change l'image d'installation dans la configuration, pas la forme de ses documents.
+`talos_version` est le Talos du nœud, pas le contrat de configuration machine : le module génère
+sous un contrat plafonné (`config_contract` dans `modules/talos/main.tf`, qui dit pourquoi). Un
+bump vers 1.14 change l'image d'installation dans la configuration ; les rendus hors ligne sous
+le provider 0.12.0 ne montrent rien d'autre, mais aucun `cluster-upgrade` n'a encore tourné sous lui.
 
 **Sur Outscale, la construction de l'image domine tout l'upgrade.** L'image est
 enregistrée depuis un snapshot importé via une file côté provider : 8 min le

@@ -202,7 +202,7 @@ locals {
   # On these data sources `talos_version` is the config CONTRACT, not the node's Talos. Provider 0.12
   # renders Talos 1.14's multi-document config for a 1.14 contract, which the v1alpha1 patches below
   # collide with (#241). So never newer than v1.13; an older node keeps its own, it cannot read newer.
-  config_contract = tonumber(split(".", trimprefix(var.talos_version, "v"))[1]) >= 13 ? "v1.13" : var.talos_version
+  config_contract = tonumber(split(".", var.talos_version)[1]) >= 13 ? "v1.13" : var.talos_version
 }
 
 data "talos_machine_configuration" "control_plane" {
