@@ -5,8 +5,9 @@
 # (bootstrap, machine configs, kubeconfig) from the state. A first run has no state
 # object yet: that is a real `false`. Run from the cluster dir, backend inited.
 #
-# A state with the bootstrap and NO machine secrets is refused too: the nodes still
-# trust the PKI those secrets held, and any apply from it mints a new one (#66).
+# A state holding the bootstrap, a machine config or the kubeconfig but NO machine secrets is refused too: the
+# nodes still trust the PKI those secrets held, and any apply from it mints a new one (#66). Only the bootstrap
+# makes the answer `true`.
 set -uo pipefail
 list="$(tofu state list -no-color 2>&1)"
 if [ $? -ne 0 ]; then
@@ -17,19 +18,17 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 has() { grep -qF "$1" <<<"$list"; }
-if has 'module.talos.talos_machine_bootstrap'; then
-  # `this` or `unprotected` (tofu test): either one is the secrets.
-  if ! has 'module.talos.talos_machine_secrets.'; then
-    cat >&2 <<'MSG'
-✗ the state holds the Talos bootstrap but no talos_machine_secrets (`task infra-down-plan` untracks
+# `this`, or `unprotected` (tofu test): either one is the secrets.
+if ! has 'module.talos.talos_machine_secrets.' \
+   && { has 'module.talos.talos_machine_bootstrap' || has 'module.talos.talos_machine_configuration_apply' \
+        || has 'module.talos.talos_cluster_kubeconfig'; }; then
+  cat >&2 <<'MSG'
+✗ the state holds Talos resources but no talos_machine_secrets (`task infra-down-plan` untracks
   them, and so does `tofu state rm`). The nodes still trust the PKI they held; an apply from this state
   would mint a new one they reject ("certificate signed by unknown authority"). Nothing was applied.
   Do not run cluster-up or infra-apply. Restore a state that still holds the secrets, or rebuild them from a node
   (infrastructure/opentofu/cluster/README.md, "Lost the Talos secrets"; #66), or finish the teardown.
 MSG
-    exit 1
-  fi
-  echo true
-else
-  echo false
+  exit 1
 fi
+if has 'module.talos.talos_machine_bootstrap'; then echo true; else echo false; fi

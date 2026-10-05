@@ -19,11 +19,15 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 TOFU_DIR="${1:-infrastructure/opentofu/cluster}"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 command -v aws >/dev/null 2>&1 || { echo "✗ aws CLI required"; exit 1; }
 command -v jq  >/dev/null 2>&1 || { echo "✗ jq required"; exit 1; }
 oa_aws_compat
 
 cd "$TOFU_DIR"
+# The replica is the undo of infra-down-plan's untracking (#66): a state without its secrets must not replace it.
+"$HERE/../internal/bootstrap-in-state.sh" >/dev/null \
+  || { echo "✗ nothing was replicated: the replica may hold the only copy of the secrets, leave it as it is." >&2; exit 1; }
 # "There is nothing to replicate yet" and "I could not ask" are different
 # answers, and this used to give the first for both: any failure of `tofu output`
 # — no backend, no credentials, wrong directory — became 'null', a warning and

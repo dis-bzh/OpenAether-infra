@@ -325,6 +325,27 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **A state that lost its Talos secrets is refused, and the teardown plan replicates the state before it untracks
+  them (refs #66).** `task infra-down-plan` takes `talos_machine_secrets` out of the state to compute a destroy plan,
+  and `tofu state rm` does the same by hand. Declining the destroy left nodes that trust a PKI the state no longer
+  held: the next `cluster-up` minted another, every Talos call ended in `x509: certificate signed by unknown
+  authority`, Kubernetes stayed healthy, and the provider kept printing `Still modifying...`. Now
+  `bootstrap-in-state.sh` refuses a state that holds the bootstrap, a machine config or the kubeconfig without the
+  secrets, before any plan of `cluster-up`, `infra-plan`, `infra-apply`, `cluster-roll` and `cluster-shrink`;
+  `backup-state.sh` refuses to replicate it, so the replica stays the undo; `infra-down-plan` replicates first, skips
+  both steps when the secrets are already out, never blocks a teardown, and prints the undo only when it exists. The
+  cluster README gains "Lost the Talos secrets": two recoveries, with the commands that ran.
+  Rung: mocked (`test-task-guards.sh` runs the real untrack block against a stub `tofu` and `backup-state.sh`;
+  `test-bootstrap-in-state.sh` runs each caller in a copy of the tree; `test-state-backups.sh`; 38 mutants killed, 1
+  equivalent) and real cloud on Scaleway only (1 control plane + 1 worker, Talos 1.14.2, 2026-10-04/05). The
+  untracking, the symptom and both recoveries (the replica's state put back; the bundle rebuilt from a node's own
+  configuration, no reboot) ran before this change. One pass of the guard and of replicate-then-untrack ran at the
+  branch's first commit: a second `infra-down-plan` skipped both and the replica did not move, `cluster-up` was
+  refused before any plan, the replica copied back planned empty. **Not run on a real cloud:** the untrack block as
+  reworked since, the `backup-state.sh` and `cluster-roll` guards, the wider trigger; OVH and Outscale; three control
+  planes; a replica on another provider; `cluster-verify` on a lost PKI; a cluster with no talosconfig and no replica
+  copy (unrecoverable here). The cause of the 2026-08-15 mismatch is still not established.
+
 - **A changed `admin_ip` can be applied, and the failure says how.** The documented remedy, "update `admin_ip` then
   `task infra-apply`", stopped at the tunnel check on a bootstrapped cluster: the bastion no longer let this machine
   in, so the tunnels could not be rebuilt, and the escape hatch (`OA_SKIP_TUNNEL_GUARD=1`) existed only in a

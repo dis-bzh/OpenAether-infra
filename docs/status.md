@@ -174,7 +174,9 @@ the authority — required a variable no module has ever declared.
 
 **Resume here**: the pin is 1.14.2 / 1.37.1 and every cloud's newest row says so. Still unseen on a real
 cloud: the failover (#57), a roll with zero failed probes (#42), a Proxmox apply (#48, #201: no hardware),
-and the CA mismatch of #66 (the version flip is refused by `prevent_destroy`; the interrupted-apply path
-was not broken). Standing items only a person can close are in the issues: #43 (Outscale support), #61,
-#73 (two old staging buckets, a delete the owner runs). Upstream, Feint's fix for #179 is on its `main`
-and waits for their next release.
+and the wider cases of #66. Its CA mismatch was reproduced on Scaleway (1 control plane, 2026-10-04) through
+`infra-down-plan`'s untracking and recovered two ways (`cluster/README.md`, "Lost the Talos secrets"); the version
+flip is refused by `prevent_destroy` and the interrupted-apply path was not broken. Unseen: OVH and Outscale, three
+control planes, a replica on another provider, a cluster with no talosconfig and no replica copy. Standing items
+only a person can close are in the issues: #43 (Outscale support), #61, #73 (two old staging buckets, a delete the
+owner runs). Upstream, Feint's fix for #179 is on its `main` and waits for their next release.

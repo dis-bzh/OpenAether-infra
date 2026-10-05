@@ -1259,12 +1259,16 @@ tasks:
         else
           echo "⚠ untracking module.talos.talos_machine_secrets so the destroy plan can be computed."
           echo "  The PKI on the nodes is untouched; the state stops tracking it. Replicating the state first:"
-          ../../../scripts/ops/backup-state.sh . \
-            || echo "⚠ the state was NOT replicated: this untracking has no undo (a teardown is never blocked)." >&2
-          tofu state rm module.talos.talos_machine_secrets.this || true
-          echo "  Undo, if you decline the destroy: copy the replica object named by the '✓ tfstate replicated' line"
-          echo "  above (no such line, no undo) back over the primary state object BEFORE any apply or cluster-up"
-          echo "  (README, \"Lost the Talos secrets\")."
+          rep="$(../../../scripts/ops/backup-state.sh .)" && rc=0 || rc=$?
+          printf '%s\n' "$rep"
+          if ! tofu state rm module.talos.talos_machine_secrets.this; then
+            echo "⚠ state rm failed: the secrets are still tracked, and a destroy plan needs them untracked." >&2
+          elif [ "$rc" = 0 ] && grep -q '^✓ tfstate replicated' <<<"$rep"; then
+            echo "  Undo, if you decline the destroy: copy the replica object named above back over the primary state"
+            echo "  object BEFORE any apply or cluster-up (README, \"Lost the Talos secrets\")."
+          else
+            echo "⚠ the state was NOT replicated: this untracking has no undo (a teardown is never blocked)." >&2
+          fi
         fi
       # talos_bootstrap=false resolves module.talos to count=0, so the plan skips
       # data.talos_cluster_health — which would otherwise read through the SSH
@@ -1307,6 +1311,12 @@ tasks:
         else
           echo
           echo "✓ destruction plan written to {{.OUT}}. Nothing has been destroyed."
+        fi
+        # The plan needed the secrets untracked: say it here, where the decision is taken, not 90 KB above.
+        if st="$(tofu state list -no-color 2>/dev/null)" && grep -qF 'module.talos.talos_machine_bootstrap' <<<"$st" \
+           && ! grep -qF 'module.talos.talos_machine_secrets.' <<<"$st"; then
+          echo "  The state no longer tracks the Talos secrets: if you decline this destroy, read the README's"
+          echo "  \"Lost the Talos secrets\" first."
         fi
 
   infra-down:
