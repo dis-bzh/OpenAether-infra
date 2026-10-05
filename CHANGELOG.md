@@ -251,6 +251,16 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **The Talos tunnels keep what their ssh said, and `ensure` and a short `open` quote it (#65).** Every tunnel's
+  output went to `/dev/null`, so the tunnels that were reported 6/6 up on 2026-08-18 and had no listener later left
+  nothing to read. One `spawn_tunnel` now appends each ssh's `LogLevel=VERBOSE` output to `.talos-tunnel-<port>.log`
+  beside the pidfile (gitignored, it names the bastion). `open` and `open-direct` quote the log of each port that did
+  not come up; `ensure` quotes it for each tunnel that does not answer, and says whether its ssh still runs. A log
+  says how an ssh ended, not who asked it to, and a running ssh that nothing answers through says nothing of why. The
+  cause of 2026-08-18 is still unknown. Rung: mocked (`test-talos-tunnels.sh`: what each ssh is asked to do, what the
+  logs hold, what is quoted; mutants killed). Seen once on a real Scaleway bastion with 2 tunnels: after a TERM,
+  `ensure` quoted the client's closing lines and rebuilt 2/2. Not seen there: a drop by the bastion, a KILL, `open-direct`.
+
 - **flux2 2.9.3 → 2.9.6**, with the vendored `flux-install.yaml` and its seven controller image digests refreshed
   together (Cléa's probe was red on a stale vendored file, #91). A new cluster with `deploy_flux=true` gets the 2.9.6
   controllers and CRDs; a running cluster manages its own Flux and nothing here touches it. Rung: mocked
