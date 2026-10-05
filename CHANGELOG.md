@@ -275,6 +275,17 @@ in git. 0.1.0 is the first entry describing something proven.
   (pipx, then `pip --user`, then a private venv); brew, snap and apt are gone for them, as they cannot name a version.
   yamllint is also held equal to `ci.yml`'s by `check-version-drift.sh`.
 
+- **The image lane keeps the two highest Talos versions it holds, and `RETAIN=1` removes the rest (refs #69).**
+  `task image-build PROVIDER=<p> RETAIN=1` ranks the held versions by semver (never alphabetically: v1.9.0 is below
+  v1.14.0) and destroys every other one, lowest first, through `PRUNE=1`'s own code (tofu asks its yes per version).
+  A version a tfvars pins, and one that is not `vX.Y.Z` (a pre-release), are kept and named; a prune that fails stops
+  the run, naming it and what already went. `task cluster-up` runs it after `cluster-verify` passed, when a person
+  answers and never under `APPROVE=auto` (which does not answer a destroy), and a failure there only warns;
+  `task cluster-upgrade` does not run it. Details: `infrastructure/opentofu/talos-image/README.md`. Rung: mocked
+  (`test-talos-image.sh`, `test-cluster-up.sh` under a pty, `test-unattended.sh`; 58 mutants killed, one equivalent).
+  Not run on any cloud: the destroy of a real image set through it, tofu's prompt with no terminal, Outscale refusing a
+  snapshot an OMI still references, and the removal of the emptied state object. #69 stays open on those.
+
 - **`siderolabs/talos` provider 0.11 → 0.12.0, pinned exactly (refs #241, #44).** The cluster root and the local lane
   pin `0.12.0`, the module's ceiling moves to `< 0.13.0`, and Renovate's hold rule gives way to a `needs-real-run`
   label on the provider's own PRs (the module's ceiling is left to a person). Exact on purpose: no lock file is

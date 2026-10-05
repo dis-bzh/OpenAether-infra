@@ -60,6 +60,8 @@ case "$1" in
     case "$*" in *-detailed-exitcode*) exit "${OA_STUB_PLAN_EXIT:-2}" ;; esac
     exit 0 ;;
   apply)  exit "${OA_STUB_APPLY_EXIT:-0}" ;;
+  destroy) echo "stub: tofu destroy ran"
+           case " $* " in *" talos_version=${OA_STUB_DESTROY_FAIL:-none} "*) exit 1 ;; esac ;;  # a version whose destroy fails
   output) case "$*" in *image_name*) echo oa-talos-stub ;; *image_id*) echo "${OA_STUB_IMAGE_ID:-}" ;; esac ;;
   show)   cat "${OA_STUB_SHOW:-/dev/null}"; exit "${OA_STUB_SHOW_EXIT:-0}" ;;
   state)
@@ -295,7 +297,7 @@ OUT="$(OA_STUB_HEAD=404 run 2 --ensure)"
 is "a build still creates both missing buckets" 2 "$(acalls 's3 mb')"
 
 echo "--- one mode per run: the last flag used to win, so --list --prune destroyed ---"
-for combo in '--list --prune' '--prune --list' '--ensure --list' '--ensure --prune'; do
+for combo in '--list --prune' '--prune --list' '--ensure --list' '--ensure --prune' '--retain --prune' '--prune --retain' '--list --retain' '--retain --list' '--ensure --retain'; do
   # shellcheck disable=SC2086  # the combo IS several arguments
   OUT="$(run 2 $combo)"; RC=$?
   { [ "$RC" -ne 0 ] && [ ! -s "$LOG" ]; } && ok "'$combo' is refused before any call (rc=$RC)" || bad "'$combo' ran: $(head -c 200 "$LOG")"
@@ -304,6 +306,11 @@ OUT="$(PROV=outscale run 2 --import-snapshot snap-fixture1 --prune)"; RC=$?
 { [ "$RC" -ne 0 ] && [ ! -s "$LOG" ]; } && ok "'--import-snapshot <id> --prune' is refused too" || bad "an import and a prune ran together"
 OUT="$(PROV=outscale run 2 --import-snapshot --prune)"; RC=$?
 { [ "$RC" -ne 0 ] && [ ! -s "$LOG" ]; } && ok "a flag is not taken for a snapshot id" || bad "--prune was read as the snapshot id"
+OUT="$(PROV=outscale run 2 --import-snapshot snap-fixture1 --retain)"; RC=$?
+{ [ "$RC" -ne 0 ] && [ ! -s "$LOG" ]; } && ok "'--import-snapshot <id> --retain' is refused too" || bad "an import and a retention ran together"
+OUT="$(run 2 --retain)"; RC=$?
+{ [ "$RC" -ne 0 ] && [ ! -s "$LOG" ] && grep -q 'takes no version' <<<"$OUT"; } \
+  && ok "--retain with a version is refused before any call: it would read as 'retain around it'" || bad "--retain accepted a version (rc=$RC): ${OUT:0:200}"
 
 echo "--- --prune: explicit, one version, and never while a cluster still pins it ---"
 printf 'talos_version = "v1.13.4"\n' >"$PINFILE"
@@ -418,6 +425,131 @@ OUT="$(VER=v1.13.9 OA_STUB_LEGACY="$SB/legacy-blind.json" run 2 --ensure)"; RC=$
 { [ "$RC" -ne 0 ] && grep -q 'no readable version' <<<"$OUT" && [ "$(calls plan)" = 0 ]; } \
   && ok "an object naming no version blocks every build: what the state holds is unknown" || bad "a state of unknown content was passed (rc=$RC)"
 unset OA_STUB_LEGACY OA_STUB_KEYS
+
+echo "--- --retain: the two highest versions stay, every other one is pruned, lowest first ---"
+keys() { # <versions...> — the lane's state keys for them, tab-separated, as the listing returns them
+  local acc="" v
+  for v in "$@"; do acc+="${acc:+$'\t'}talos-image-${PROV:-scaleway}-$v.tfstate"; done
+  printf '%s' "$acc"
+}
+destroyed() { sed -nE 's/^destroy .*-var talos_version=([^ ]+).*/\1/p' "$LOG" | paste -sd' '; }  # in the order they ran
+retain_raw() { OUT="$(OA_STUB_KEYS="$1" VER=none run 2 --retain)"; RC=$?; }  # <raw key list>: OUT and RC of one run
+retain() { retain_raw "$(keys "$@")"; }  # <versions...>
+lineno() { grep -n -m1 -- "$1" <<<"$OUT" | cut -d: -f1; }
+
+retain v1.14.1 v1.14.2 v1.14.3
+is "three held: the run completes" 0 "$RC"
+is "only the lowest is destroyed" v1.14.1 "$(destroyed)"
+is "through --prune: one destroy, on that version's own state" "1 talos-image-scaleway-v1.14.1.tfstate" "$(calls destroy) $(initkeys)"
+is "and only that version's state object is removed" 1 "$(acalls 's3 rm')"
+is "the one removed is the destroyed version's" 1 "$(acalls "s3 rm .*talos-image-scaleway-v1.14.1.tfstate")"
+is "no bucket created, nothing built" "0 0 0" "$(acalls 's3 mb') $(calls plan) $(calls apply)"
+grep -q 'keeping the 2 highest: v1.14.2 v1.14.3' <<<"$OUT" && ok "it names the two it keeps" || bad "the kept versions are not named: $OUT"
+w="$(lineno 'will destroy, lowest first: v1.14.1')"; d="$(lineno 'stub: tofu destroy ran')"
+{ [ -n "$w" ] && [ -n "$d" ] && [ "$w" -lt "$d" ]; } && ok "it says what it will destroy BEFORE destroying" || bad "the announcement is at line ${w:-none}, the destroy at ${d:-none}"
+
+for held in "" "v1.14.2" "v1.14.1 v1.14.2"; do
+  # shellcheck disable=SC2086  # the list IS several arguments
+  retain $held
+  { [ "$RC" -eq 0 ] && [ -z "$(destroyed)" ] && [ "$(calls init)" = 0 ] && grep -q 'nothing to destroy' <<<"$OUT"; } \
+    && ok "holding '${held:-nothing}': a no-op that says so, and no state is even opened" || bad "holding '${held:-nothing}' (rc=$RC, destroyed '$(destroyed)', inits $(calls init)): ${OUT:0:200}"
+done
+
+retain v1.14.3 v1.13.4 v1.14.2 v1.14.1  # the order a listing returns is not the order of the versions
+is "four held, listed out of order: the two lowest, lowest first" "v1.13.4 v1.14.1" "$(destroyed)"
+is "…each on its own state, one at a time" "talos-image-scaleway-v1.13.4.tfstate talos-image-scaleway-v1.14.1.tfstate" "$(initkeys)"
+is "…and each emptied state object removed" 2 "$(acalls 's3 rm')"
+
+# What S3 lists is alphabetical, and alphabetical is the wrong order: v1.9.0 would outrank v1.14.0.
+retain v1.14.0 v1.14.10 v1.14.9 v1.9.0
+is "v1.9.0 ranks below v1.14.0, and v1.14.9 below v1.14.10" "v1.9.0 v1.14.0" "$(destroyed)"
+retain v1.14.10 v1.14.11 v1.14.9
+is "v1.14.9 is lower than v1.14.10, not higher" v1.14.9 "$(destroyed)"
+retain v1.14.10 v1.14.8 v1.14.9
+is "…and v1.14.8 is the lowest of 8, 9 and 10" v1.14.8 "$(destroyed)"
+
+retain v1.14.1 v1.14.2 v1.14.3 v1.15.0-rc.1
+{ [ "$RC" -eq 0 ] && [ "$(destroyed)" = v1.14.1 ] && grep -q 'not vMAJOR.MINOR.PATCH so not ranked: v1.15.0-rc.1' <<<"$OUT"; } \
+  && ok "a pre-release is kept and named, and the three it can rank give up the lowest" || bad "pre-release (rc=$RC, destroyed '$(destroyed)'): ${OUT:0:300}"
+grep -q 'integer expression' <<<"$OUT" && bad "a pre-release reached oa_semver_lt, which cannot read it" || ok "…without handing it to oa_semver_lt, which cannot order it"
+retain v1.14.3-rc.1 v1.14.3 v1.14.4 v1.14.5
+is "a pre-release of a held version is not that version: only the final one is ranked and pruned" v1.14.3 "$(destroyed)"
+retain v1.14.2 v1.14.3 v1.15.0-rc.1
+{ [ "$RC" -eq 0 ] && [ -z "$(destroyed)" ]; } && ok "a pre-release is not one of the two kept: with two ranked versions nothing goes" || bad "a pre-release counted as a kept version (destroyed '$(destroyed)')"
+retain v1.14.1 v1.14.2 vfoo
+{ [ "$RC" -eq 0 ] && [ -z "$(destroyed)" ] && grep -q 'so not ranked: vfoo' <<<"$OUT"; } && ok "a key that is no version is kept and named too" || bad "an odd key was ranked or destroyed (rc=$RC): ${OUT:0:200}"
+
+printf 'talos_version = "v1.13.4"\n' >"$PINFILE"
+retain v1.13.4 v1.14.1 v1.14.2 v1.14.3
+{ [ "$RC" -eq 0 ] && [ "$(destroyed)" = v1.14.1 ] && [ "$(initkeys)" = talos-image-scaleway-v1.14.1.tfstate ]; } \
+  && ok "a version a tfvars pins is not destroyed, nor its state opened; the others still go" || bad "a pinned version was touched (rc=$RC, destroyed '$(destroyed)', keys $(initkeys))"
+grep -q "kept, pinned by a tfvars: v1.13.4 (${PINFILE##*/})" <<<"$OUT" && ok "and it is named, with the file that pins it" || bad "the pinned version is not named: $OUT"
+retain v1.13.4 v1.14.1 v1.14.2
+{ [ "$RC" -eq 0 ] && [ -z "$(destroyed)" ] && grep -q 'pinned by a tfvars: v1.13.4' <<<"$OUT" && grep -q 'nothing to destroy' <<<"$OUT"; } \
+  && ok "when the only old version is pinned, the run is a no-op and says why" || bad "a pinned lowest version was destroyed or unmentioned (rc=$RC)"
+printf 'talos_version = "v1.14.10"\n' >"$PINFILE"
+retain v1.14.1 v1.14.2 v1.14.3 v1.14.10
+is "a pin on v1.14.10 does not protect v1.14.1: a pin is a whole version, not a prefix" "v1.14.1 v1.14.2" "$(destroyed)"
+printf 'talos_version = "v1.14.1"\n' >"$OA_ENVS_DIR/oa-ovh.tfvars"; rm -f "$PINFILE"
+retain v1.14.1 v1.14.2 v1.14.3
+is "another provider's pin does not protect this provider's image" v1.14.1 "$(destroyed)"
+rm -f "$OA_ENVS_DIR/oa-ovh.tfvars"
+
+PROV=ovh retain v1.14.1 v1.14.2 v1.14.3
+{ [ "$(destroyed)" = v1.14.1 ] && hasvar destroy target_provider=ovh && [ "$(initkeys)" = talos-image-ovh-v1.14.1.tfstate ]; } \
+  && ok "the provider reaches every --prune it runs" || bad "the prune did not carry the provider: $(line destroy) / $(initkeys)"
+
+echo "--- --retain and the pre-#69 single state ---"
+legacy v1.13.4 talos-scaleway-amd64-v1.13.4 >"$SB/legacy.json"
+export OA_STUB_LEGACY="$SB/legacy.json"
+retain_raw "$LEG"$'\t'"$(keys v1.14.1 v1.14.2)"
+{ [ "$RC" -eq 0 ] && [ "$(destroyed)" = v1.13.4 ] && [ "$(calls 'state push')" = 1 ] && [ "$(acalls 's3 mv')" = 1 ]; } \
+  && ok "the version only the legacy state holds is the oldest: copied to its own key, then destroyed, like --prune" || bad "legacy-held oldest (rc=$RC, destroyed '$(destroyed)'): ${OUT:0:300}"
+awk '/^state push/ {p=NR} /^destroy/ {d=NR} END {exit !(p && d && p<d)}' "$LOG" && ok "…in that order" || bad "the destroy did not follow the copy: $(tr '\n' '|' <"$LOG")"
+is "the decrypted copy of the legacy state is gone after the run" 0 "$(find "$SB/tmp" -type f | wc -l)"
+legacy v1.14.2 talos-scaleway-amd64-v1.14.2 >"$SB/legacy-top.json"
+OUT="$(OA_STUB_LEGACY="$SB/legacy-top.json" OA_STUB_KEYS="$LEG"$'\t'"$(keys v1.13.4 v1.14.1)" VER=none run 2 --retain)"; RC=$?
+{ [ "$RC" -eq 0 ] && [ "$(destroyed)" = v1.13.4 ] && [ "$(calls 'state push')" = 0 ] && [ "$(acalls 's3 mv')" = 0 ] \
+    && grep -q 'keeping the 2 highest: v1.14.1 v1.14.2' <<<"$OUT"; } \
+  && ok "the version the legacy state holds counts, and when it is among the two highest the legacy object is left alone" || bad "legacy-held highest (rc=$RC, destroyed '$(destroyed)'): ${OUT:0:300}"
+retain_raw "$LEG"$'\t'"$(keys v1.13.4 v1.14.1 v1.14.2)"
+is "a version held by the legacy state AND by its own key is one version, destroyed once" v1.13.4 "$(destroyed)"
+legacy v1.13.4 talos-scaleway-amd64-v1.13.4 '{"status":"tainted"}' >"$SB/legacy-bad.json"
+OUT="$(OA_STUB_LEGACY="$SB/legacy-bad.json" OA_STUB_KEYS="$LEG"$'\t'"$(keys v1.14.1 v1.14.2)" VER=none run 2 --retain)"; RC=$?
+{ [ "$RC" -ne 0 ] && [ -z "$(destroyed)" ] && grep -q 'not clean' <<<"$OUT" && grep -q 'pruning v1.13.4 failed' <<<"$OUT"; } \
+  && ok "a half-finished legacy object is refused by the prune it goes through, which the run names" || bad "a tainted legacy state was pruned or the failure is unnamed (rc=$RC): ${OUT:0:300}"
+OUT="$(OA_STUB_PULL_FAIL=1 OA_STUB_KEYS="$LEG"$'\t'"$(keys v1.14.1 v1.14.2 v1.14.3)" VER=none run 2 --retain)"; RC=$?
+{ [ "$RC" -ne 0 ] && [ "$(calls destroy)" = 0 ]; } && ok "a legacy state that cannot be read: what is held is unknown, nothing is destroyed" || bad "an unreadable legacy state was guessed at (rc=$RC)"
+legacy v1.13.4 talos-scaleway-amd64 >"$SB/legacy-blind.json"
+OUT="$(OA_STUB_LEGACY="$SB/legacy-blind.json" OA_STUB_KEYS="$LEG"$'\t'"$(keys v1.14.1 v1.14.2 v1.14.3)" VER=none run 2 --retain)"; RC=$?
+{ [ "$RC" -ne 0 ] && [ "$(calls destroy)" = 0 ] && grep -q 'no readable version' <<<"$OUT"; } \
+  && ok "a legacy state naming no version: nothing is destroyed" || bad "a legacy state of unknown content was passed (rc=$RC)"
+legacy v1.13.9 talos-scaleway-amd64-v1.13.4 >"$SB/legacy-mixed.json"
+OUT="$(OA_STUB_LEGACY="$SB/legacy-mixed.json" OA_STUB_KEYS="$LEG"$'\t'"$(keys v1.14.1 v1.14.2)" VER=none run 2 --retain)"; RC=$?
+{ [ "$RC" -ne 0 ] && [ -z "$(destroyed)" ] && grep -q 'Not attempted: v1.13.9' <<<"$OUT"; } \
+  && ok "a legacy state naming two versions holds both: the first refusal stops the run, the other is not attempted" || bad "a mixed legacy state was pruned (rc=$RC): ${OUT:0:300}"
+unset OA_STUB_LEGACY
+
+echo "--- --retain: a prune that fails stops the run, naming it and what already went ---"
+OUT="$(OA_STUB_DESTROY_FAIL=v1.13.4 OA_STUB_KEYS="$(keys v1.13.3 v1.13.4 v1.14.1 v1.14.2 v1.14.3)" VER=none run 2 --retain)"; RC=$?
+[ "$RC" -ne 0 ] && ok "a destroy that fails fails the run (exit $RC)" || bad "a failed prune exited 0"
+is "it stopped there: v1.13.3 went, v1.13.4 failed, v1.14.1 was never tried" "v1.13.3 v1.13.4" "$(destroyed)"
+grep -q 'pruning v1.13.4 failed. Destroyed before it: v1.13.3. Not attempted: v1.14.1.' <<<"$OUT" \
+  && ok "and says so: the failed version, the earlier destroy, what is left" || bad "the failure report is wrong: $OUT"
+is "the failed version's state object stays (it still holds what the destroy did not remove)" 1 "$(acalls 's3 rm')"
+OUT="$(OA_STUB_DESTROY_FAIL=v1.13.4 OA_STUB_KEYS="$(keys v1.13.4 v1.14.1 v1.14.2 v1.14.3)" VER=none run 2 --retain)"; RC=$?
+{ [ "$RC" -ne 0 ] && grep -q 'Destroyed before it: none. Not attempted: v1.14.1.' <<<"$OUT"; } \
+  && ok "the first one failing reports nothing destroyed" || bad "a first failure is misreported (rc=$RC): $OUT"
+
+echo "--- --retain reads the lane without creating anything ---"
+OUT="$(OA_STUB_HEAD=404 VER=none run 2 --retain)"; RC=$?
+{ [ "$RC" -eq 0 ] && grep -q 'nothing to retain' <<<"$OUT" && [ "$(acalls 's3 mb')" = 0 ] && [ "$(calls init)" = 0 ] && [ "$(acalls 's3api list-objects-v2')" = 0 ]; } \
+  && ok "no state bucket: nothing held, none created, nothing listed" || bad "--retain on a missing bucket created it or went on (rc=$RC): $OUT"
+OUT="$(OA_STUB_HEAD=403 VER=none run 2 --retain)"; RC=$?
+{ [ "$RC" -ne 0 ] && [ "$(acalls 's3 mb')" = 0 ] && [ "$(calls destroy)" = 0 ]; } && ok "a bucket that cannot be reached (403) is an error, not an empty lane" || bad "a 403 read as nothing held (rc=$RC)"
+OUT="$(OA_STUB_LIST_EXIT=1 OA_STUB_KEYS="$(keys v1.14.1 v1.14.2 v1.14.3)" VER=none run 2 --retain)"; RC=$?
+{ [ "$RC" -ne 0 ] && [ "$(calls destroy)" = 0 ] && grep -q 'cannot list' <<<"$OUT"; } \
+  && ok "a listing that fails is not an empty one: nothing is destroyed on a guess" || bad "a failed listing was read as the lane (rc=$RC)"
 
 echo "--- image-state-version.sh reads the objects of every provider's lane ---"
 HELPER=scripts/internal/image-state-version.sh
@@ -585,6 +717,12 @@ echo "--- the Taskfile forwards LIST and PRUNE to the script, and \`task test\` 
 grep -q -- '--prune' <<<"$(task -n image-build PROVIDER=ovh PRUNE=1 VERSION=v1.13.4 2>&1)" \
   && grep -q -- '--list' <<<"$(task -n image-build PROVIDER=ovh LIST=1 2>&1)" \
   && ok "task image-build PRUNE=1 / LIST=1 reach talos-image.sh" || bad "the Taskfile does not forward --prune/--list"
+is "task image-build RETAIN=1 passes --retain and no version" "./scripts/bootstrap/talos-image.sh ovh --retain" \
+   "$(task -n image-build PROVIDER=ovh RETAIN=1 2>&1 | sed -nE 's/^task: \[image-build\] //p')"
+grep -q -- 'ovh v1.13.4 --retain' <<<"$(task -n image-build PROVIDER=ovh RETAIN=1 VERSION=v1.13.4 2>&1)" \
+  && ok "a typed VERSION still reaches the script, which refuses it" || bad "a VERSION given with RETAIN=1 was dropped silently"
+grep -q -- '--list --retain' <<<"$(task -n image-build PROVIDER=ovh LIST=1 RETAIN=1 2>&1)" \
+  && ok "LIST=1 RETAIN=1 forwards both flags, and the script's exclusivity refuses them" || bad "the Taskfile hid one of two modes"
 grep -Eq 'cd \.\./talos-image .*tofu test' <<<"$(task -n test 2>&1)" \
   && ok "task test runs the image root's tofu test (the image root's own tests are only proven there)" || bad "task test no longer runs the talos-image root"
 
