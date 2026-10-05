@@ -247,6 +247,14 @@ talosctl --talosconfig talosconfig -n "$(tofu output -json control_plane_private
 Ces endpoints sont des **tunnels locaux**. `task tunnels-down` rend le
 talosconfig inutilisable jusqu'à leur réouverture.
 
+Ce que le ssh de chaque tunnel a dit est gardé dans `.talos-tunnel-<port>.log`, dans le dossier du cluster
+(ignoré par git : il nomme le bastion, à caviarder avant de le coller en public). `open` et le `ensure` du garde en
+citent les dernières lignes pour un tunnel qui ne répond pas. Lire la fin : `Timeout, server … not responding.` est
+environ cinq minutes de silence côté distant ; `Connection to … closed by remote host.` vient du bastion ; une paire
+finale `Transferred:` / `Bytes per second:` ne dit pas qui a demandé la sortie ; plus rien après
+`Authenticated to …` est un SIGKILL ou un espace de noms terminé. Mesuré en loopback avec OpenSSH 10.0 ; seule la
+fin par TERM a été vue sur un vrai bastion.
+
 ## 6. Demander au cluster si ça a marché
 
 ```bash
