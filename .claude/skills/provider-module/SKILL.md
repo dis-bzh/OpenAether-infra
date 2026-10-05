@@ -42,7 +42,7 @@ two drifted once and `task cluster-up` built an image the cluster then refused t
 find.
 
 The lane keeps **one state per version** (`talos-image-<p>-<v>.tfstate`), so a build can only
-touch its own version; `LIST=1` and `PRUNE=1` and the Outscale same-name refusal are in
+touch its own version; `LIST=1`, `PRUNE=1`, `RETAIN=1` (the two highest stay) and the Outscale same-name refusal are in
 `infrastructure/opentofu/talos-image/README.md`.
 
 A boot image is the medium a node **installs from**, not the version it runs:

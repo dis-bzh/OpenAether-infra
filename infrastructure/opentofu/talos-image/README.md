@@ -45,8 +45,20 @@ native object storage, so its state lives on an external S3-compatible store
 ```bash
 task image-build PROVIDER=ovh LIST=1                  # the versions held, one state each
 task image-build PROVIDER=ovh VERSION=<old> PRUNE=1   # destroy ONE version; refused while an envs/*.tfvars pins it
+task image-build PROVIDER=ovh RETAIN=1                # keep the two highest versions held, destroy every other
 ```
 
+- **Retention: the two highest versions** (`RETAIN=1`, `--retain`; it takes no version). The lane keeps
+  the two highest versions it holds by semver, so a node can still be made on N-1 while N runs. It touches
+  image states only, never the cluster. It says what it will destroy, then runs `--prune` for each other
+  version, lowest first (tofu asks its own yes each time). A prune that fails stops the run, naming it,
+  what already went and what was not tried.
+  **Never destroyed, but kept and named**: a version an `envs/*-<provider>.tfvars` pins (**the way to keep an
+  older one**) and a held version that is not `vX.Y.Z` (a pre-release cannot be ordered). Versions are
+  counted from the state keys and the pre-#69 state, like `--list`: a half-built version above the
+  cluster's takes one of the two places. `task cluster-up` runs it after `cluster-verify` passed, only when
+  a person answers (never under `APPROVE=auto`), and a failure there only warns; after
+  `task cluster-upgrade`, run it yourself.
 - **A node on an older image**: build that version, then set
   `node_distribution.<provider>.image_name = "talos-<provider>-amd64-<older>"` (OVH and
   Outscale also take `image_id`) and add the node. Nodes ignore later changes of that

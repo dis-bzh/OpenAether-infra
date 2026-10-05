@@ -105,8 +105,11 @@ task cluster-roll PROVIDER=<p> KEY=~/.ssh/<key> -- --workers-only --upgrade
 The pin moves before the build (`talos-image.sh` compares a pinned `image_id` only
 with the image of the version it builds). Each version has its own image state, so a
 build never replaces another image; if it fails, re-run, or set `talos_version` back to
-the old version to plan the cluster again. Old images stay until `PRUNE=1` removes one,
-see [`talos-image/README.md`](../infrastructure/opentofu/talos-image/README.md). The
+the old version to plan the cluster again. The lane keeps the two highest versions it holds (a node
+can still be made on N-1 while N runs) and `RETAIN=1` destroys the others, lowest first: `task cluster-up`
+runs it after its `cluster-verify` when you answer, `task cluster-upgrade` leaves it to you, and a tfvars
+pin keeps an older one. `LIST=1` and `PRUNE=1` too, see
+[`talos-image/README.md`](../infrastructure/opentofu/talos-image/README.md). The
 2026-10-03 climbs ran in that order on all three clouds, on the single-image lane
 this replaces.
 
