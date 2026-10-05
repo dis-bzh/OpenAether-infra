@@ -10,12 +10,13 @@
 # TF_VAR_encryption_passphrase.
 #
 # Usage:
-#   ./scripts/bootstrap/talos-image.sh <provider> [talos_version] [--ensure|--list|--prune|--import-snapshot <id>]
-#   task image-build PROVIDER=ovh [VERSION=v1.13.4] [ENSURE=1|LIST=1|PRUNE=1]
+#   ./scripts/bootstrap/talos-image.sh <provider> [talos_version] [--ensure|--list|--prune|--retain|--import-snapshot <id>]
+#   task image-build PROVIDER=ovh [VERSION=v1.13.4] [ENSURE=1|LIST=1|PRUNE=1|RETAIN=1]
 #
 # --ensure: idempotence gate for `task cluster-up`: plan first, apply only on a real change.
 # --list: the versions this lane holds (one state each); builds nothing and creates no bucket.
-# --prune: destroy ONE version's image set (the only way an image leaves the lane); refused while a tfvars pins it.
+# --prune: destroy ONE version's image set (the only way an image leaves the lane); refused while a tfvars names it.
+# --retain: keep N (the newest tfvars pin) and the highest held below it; --prune the rest, lowest first, bar what a tfvars names. No version.
 # --import-snapshot <id>: Outscale; adopt a snapshot a failed apply orphaned into this version's state (see the module).
 # One mode per run, and one run at a time per checkout: runs share a .terraform data dir.
 set -euo pipefail
@@ -27,6 +28,7 @@ while [ $# -gt 0 ]; do
     --ensure) ENSURE=true ;;
     --list)   MODE=list;  NMODES=$((NMODES + 1)) ;;
     --prune)  MODE=prune; NMODES=$((NMODES + 1)) ;;
+    --retain) MODE=retain; NMODES=$((NMODES + 1)) ;;
     --import-snapshot) MODE=import; NMODES=$((NMODES + 1)); SNAP="${2:-}"
       case "$SNAP" in "" | -*) echo "✗ --import-snapshot needs a snapshot id" >&2; exit 1 ;; esac
       shift ;;
@@ -35,11 +37,13 @@ while [ $# -gt 0 ]; do
   shift
 done
 # Exclusive on purpose: with the last flag winning, `--list --prune` would destroy.
-[ "$NMODES" -le 1 ] || { echo "✗ --list, --prune and --import-snapshot are exclusive: one per run" >&2; exit 1; }
+[ "$NMODES" -le 1 ] || { echo "✗ --list, --prune, --retain and --import-snapshot are exclusive: one per run" >&2; exit 1; }
 [ "$ENSURE" = false ] || [ "$MODE" = build ] || { echo "✗ --ensure only goes with a build" >&2; exit 1; }
+# A version here would read as "retain around it": it ranks what the lane holds, whatever any pin says.
+[ "$MODE" != retain ] || [ -z "${ARGS[1]:-}" ] || { echo "✗ --retain takes no version: it ranks the versions the lane holds" >&2; exit 1; }
 
 INTERNAL="$(cd "$(dirname "${BASH_SOURCE[0]}")/../internal" && pwd)"  # absolute: the script cd's to the root below
-RAW="${ARGS[0]:?usage: talos-image.sh <scaleway|ovh|outscale|proxmox> [talos_version] [--ensure|--list|--prune|--import-snapshot <id>]}"
+RAW="${ARGS[0]:?usage: talos-image.sh <scaleway|ovh|outscale|proxmox> [talos_version] [--ensure|--list|--prune|--retain|--import-snapshot <id>]}"
 P="$(printf '%s' "$RAW" | tr '[:upper:]' '[:lower:]')"
 case "$P" in
   scw | scaleway) P=scaleway; TGT=scaleway; SREGION=fr-par;    SEP="https://s3.fr-par.scw.cloud" ;;
@@ -52,21 +56,54 @@ esac
 # A bare call builds the pin of the cluster tfvars, never a literal kept here.
 VERSION="${ARGS[1]:-$("$INTERNAL/talos-version.sh" "${OA_ROLE:-management}-${P}.tfvars")}"
 
-# A prune is the one deliberate way an image leaves the lane, so it is where a pin is checked:
-# a cluster pinning the version could neither plan nor be DESTROYED once it is gone (#69).
-# Same resolution as everywhere else that reads a pin (talos-version.sh), before any credential.
+# A prune is how an image leaves the lane (--retain runs one per version), so what the clusters still name is read first:
+# one that names the version could neither plan nor be DESTROYED once it is gone (#69).
 # OA_ENVS_DIR: a test harness points this at a sandbox, never at the real envs/ (#191).
-ENVS_DIR="${OA_ENVS_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../infrastructure/opentofu/cluster/envs}"
-if [ "$MODE" = prune ] && [ -d "$ENVS_DIR" ]; then
-  pinned=0
+# Absolute, and exported for talos-version.sh: this script cd's to the image root below.
+ENVS_DIR="$(cd "${OA_ENVS_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../infrastructure/opentofu/cluster/envs}" 2>/dev/null && pwd)" || ENVS_DIR=""
+[ -z "$ENVS_DIR" ] || export OA_ENVS_DIR="$ENVS_DIR"
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"  # absolute: --retain re-runs it after the cd below
+# Every image an envs/*-<provider>.tfvars names, "<version> <file> <how>" per line: its talos_version (the variables.tf
+# default when it pins none), and an image_name / talos_image_file_id override naming a lane image. Fails, saying why,
+# when that cannot be known (no envs dir, an unreadable file, an image_id: an id names no version): a destroy never
+# decides on missing evidence.
+pin_refs() {
+  local f b v body
+  [ -n "$ENVS_DIR" ] || { echo "✗ no envs directory to read the pins from: what a cluster still needs is unknown." >&2; return 1; }
   for f in "$ENVS_DIR"/*-"$P".tfvars; do
     [ -e "$f" ] || continue
-    [ "$("$INTERNAL/talos-version.sh" "$(basename "$f")" 2>/dev/null || true)" = "$VERSION" ] || continue
-    echo "✗ $(basename "$f") pins talos_version = ${VERSION}: pruning its image would leave that cluster" >&2
-    echo "  unable to plan, or to be destroyed. Move its pin first, then prune." >&2
-    pinned=1
+    b="$(basename "$f")"
+    [ -r "$f" ] || { echo "✗ cannot read ${b}: what it pins is unknown." >&2; return 1; }
+    v="$("$INTERNAL/talos-version.sh" "$b")" || { echo "✗ cannot read the pin of ${b}." >&2; return 1; }
+    echo "$v $b talos_version"
+    body="$(sed 's/#.*$//' "$f")"
+    if grep -qE '(^|[^[:alnum:]_])image_id[[:space:]]*=[[:space:]]*"[^"]' <<<"$body"; then  # not bastion_image_id
+      echo "✗ ${b} sets image_id: an id names no version, so what that cluster still needs is unknown." >&2
+      echo "  Drop it (the name resolves the image from talos_version), then run this again." >&2
+      return 1
+    fi
+    while read -r v; do
+      [ -z "$v" ] || echo "$v $b override"
+    done < <(grep -oE "image_name[[:space:]]*=[[:space:]]*\"talos-${P}-amd64-[^\"]+\"" <<<"$body" | sed -E 's/.*-amd64-([^"]+)"$/\1/'
+             grep -oE 'talos_image_file_id[[:space:]]*=[[:space:]]*"[^"]*/talos-[^"]+-nocloud-amd64\.img"' <<<"$body" | sed -E 's/.*\/talos-(.+)-nocloud-amd64\.img"$/v\1/')
   done
-  [ "$pinned" -eq 0 ] || exit 1
+  return 0
+}
+pinned_by() { awk -v v="$1" '$1 == v {print $2}' <<<"$PIN_REFS" | sort -u; }  # <version>: the env files naming it, one per line
+PIN_REFS=""
+if [ "$MODE" = prune ] || [ "$MODE" = retain ]; then
+  PIN_REFS="$(pin_refs)" || exit 1
+  [ "$MODE" != prune ] || [ -n "$PIN_REFS" ] || echo "  ~ no envs/*-${P}.tfvars here: no cluster was asked whether it still needs ${VERSION}." >&2
+fi
+if [ "$MODE" = prune ]; then
+  pinned="$(pinned_by "$VERSION")"
+  if [ -n "$pinned" ]; then
+    while read -r f; do
+      echo "✗ ${f} still names ${VERSION} (its talos_version, or an image_name / talos_image_file_id override): pruning" >&2
+      echo "  its image would leave that cluster unable to plan, or to be destroyed. Move that first, then prune." >&2
+    done <<<"$pinned"
+    exit 1
+  fi
 fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../infrastructure/opentofu/talos-image" && pwd)"
@@ -197,9 +234,10 @@ bucket_present() { # <bucket>: 0 present, 1 absent (a 404); any other failure is
 }
 
 case "$MODE" in
-  list | prune) # reads the lane: S3 names are global, so these never create a bucket
+  list | prune | retain) # reads the lane: S3 names are global, so these never create a bucket
     if ! bucket_present "$STATE_BUCKET"; then
       [ "$MODE" = list ] && { echo "▶ no state bucket ${STATE_BUCKET} on ${TGT}: nothing held"; exit 0; }
+      [ "$MODE" = retain ] && { echo "▶ no state bucket ${STATE_BUCKET} on ${TGT}: nothing held, nothing to retain"; exit 0; }
       echo "✗ nothing to prune: no state bucket ${STATE_BUCKET} on ${TGT}." >&2; exit 1
     fi ;;
   *)
@@ -216,9 +254,10 @@ KEYS="$(aws s3api list-objects-v2 --bucket "$STATE_BUCKET" --prefix talos-image 
           --output text --endpoint-url "$SEP" --region "$SREGION")" \
   || { echo "✗ cannot list s3://${STATE_BUCKET}: which versions the lane holds is unknown." >&2; exit 1; }
 KEYS="$(tr '\t' '\n' <<<"$KEYS" | grep -v '^None$' || true)"
+held_by_key() { sed -nE "s/^talos-image-${TGT}-(v.+)\.tfstate$/\1/p" <<<"$KEYS"; }  # the one reading --list and --retain share
 if [ "$MODE" = list ]; then
   echo "▶ Versions held on ${TGT} (one state each):"
-  sed -nE "s/^talos-image-${TGT}-(v.+)\.tfstate$/    \1/p" <<<"$KEYS"
+  held_by_key | sed 's/^/    /'
   grep -qx "$LEGACY_KEY" <<<"$KEYS" && echo "    (${LEGACY_KEY}: the pre-#69 state, copied to its own key by the next build of the version it holds)"
   exit 0
 fi
@@ -277,17 +316,88 @@ init_state() { # <key>
     -backend-config="endpoint=$SEP"
 }
 
-cd "$ROOT"
-# Legacy state: read first, moved only by a build of the version it holds (copied, then retired). A
-# build of another version leaves it alone, whatever state it is in; one it cannot read blocks all.
-MIGRATE=false
-if grep -qx "$LEGACY_KEY" <<<"$KEYS" && ! grep -qx "$NEW_KEY" <<<"$KEYS"; then
+read_legacy() { # sets LEGACY_JSON, LEGACY_VERS (the versions its objects name) and LEGACY_BAD (deposed or tainted ones)
   init_state "$LEGACY_KEY"
   LEGACY_JSON="$(mktemp)"
   tofu state pull >"$LEGACY_JSON" \
     || { echo "✗ cannot read ${LEGACY_KEY}; nothing was changed." >&2; exit 1; }
   HELD="$("$INTERNAL/image-state-version.sh" <"$LEGACY_JSON")" || exit 1
   LEGACY_VERS="$(sed -n 1p <<<"$HELD")" LEGACY_BAD="$(sed -n 2p <<<"$HELD")"
+}
+
+# a < b over vMAJOR.MINOR.PATCH[-pre]: a pre-release is below its own release; two of them order as version strings.
+SEMVER_RE='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+ver_lt() {
+  local ca="${1%%-*}" cb="${2%%-*}" pa pb
+  pa="${1#"$ca"}" pb="${2#"$cb"}"
+  [ "$ca" = "$cb" ] || { oa_semver_lt "$ca" "$cb"; return; }
+  [ "$pa" != "$pb" ] || return 1
+  [ -n "$pb" ] || return 0
+  [ -n "$pa" ] || return 1
+  [ "$(printf '%s\n%s\n' "$pa" "$pb" | sort -V | sed -n 1p)" = "$pa" ]
+}
+
+# --retain: relative to the cluster, not to what the lane happens to hold. N is the newest talos_version a tfvars pins;
+# keep the RETAIN_KEEP highest versions held at or below N (N and the one before it, so a node can still be made on
+# N-1) and --prune each other one, lowest first, through this script's own --prune. Kept and named, never destroyed:
+# a version a tfvars names, one above N (built ahead, or a bump reverted), and a key that is no version at all.
+RETAIN_KEEP=2
+retain_lane() {
+  local v i n start pins top="" held=() ranked=() ahead=() odd=() drop=() pinned=() destroyed=() rest=()
+  [ -n "$PIN_REFS" ] || { echo "✗ no envs/*-${P}.tfvars: nothing says which version a cluster is on, so nothing is retained." >&2; exit 1; }
+  while read -r v _ how; do  # N: the newest version a cluster is ON (an override below it is a node on an older image)
+    [ "$how" = talos_version ] && [[ "$v" =~ $SEMVER_RE ]] || continue
+    if [ -z "$top" ] || ver_lt "$top" "$v"; then top="$v"; fi
+  done <<<"$PIN_REFS"
+  [ -n "$top" ] || { echo "✗ no talos_version pin is a vMAJOR.MINOR.PATCH version: there is no N to retain around." >&2; exit 1; }
+  LEGACY_VERS=""
+  if grep -qx "$LEGACY_KEY" <<<"$KEYS"; then read_legacy; fi
+  while read -r v; do  # the keys and the legacy state name the same version once, never twice
+    [ -z "$v" ] || [[ " ${held[*]} " == *" $v "* ]] || held+=("$v")
+  done < <(held_by_key; tr ' ' '\n' <<<"$LEGACY_VERS")
+  for v in "${held[@]}"; do
+    if ! [[ "$v" =~ $SEMVER_RE ]]; then
+      odd+=("$v")
+    elif ver_lt "$top" "$v"; then
+      ahead+=("$v")
+    else  # insertion sort, ascending (never lexicographic: v1.9.0 is below v1.14.0)
+      i=${#ranked[@]}
+      while [ "$i" -gt 0 ] && ver_lt "$v" "${ranked[i-1]}"; do ranked[i]="${ranked[i-1]}"; i=$((i - 1)); done
+      ranked[i]="$v"
+    fi
+  done
+  for ((i = 0; i < ${#ranked[@]} - RETAIN_KEEP; i++)); do
+    pins="$(pinned_by "${ranked[i]}" | paste -sd' ')"
+    if [ -n "$pins" ]; then pinned+=("${ranked[i]} (${pins})"); else drop+=("${ranked[i]}"); fi
+  done
+  n=${#ranked[@]}; start=$((n > RETAIN_KEEP ? n - RETAIN_KEEP : 0))
+  echo "▶ ${TGT} holds ${held[*]:-no version}; the newest pin is ${top}; keeping the ${RETAIN_KEEP} highest at or below it: ${ranked[*]:start}"
+  [ "${#ahead[@]}" -eq 0 ] || echo "  kept, above every pin (built ahead, or a bump reverted): ${ahead[*]}"
+  [ "${#pinned[@]}" -eq 0 ] || echo "  kept, named by a tfvars: ${pinned[*]}"
+  [ "${#odd[@]}" -eq 0 ] || echo "  kept, not a version so not ranked: ${odd[*]}"
+  if [ "${#drop[@]}" -eq 0 ]; then echo "✓ nothing to destroy"; exit 0; fi
+  echo "  will destroy, lowest first: ${drop[*]}"
+  for i in "${!drop[@]}"; do
+    echo "▶ --prune ${drop[i]}"
+    "$SELF" "$P" "${drop[i]}" --prune || {
+      rest=("${drop[@]:i+1}")
+      echo "✗ pruning ${drop[i]} failed. Destroyed before it: ${destroyed[*]:-none}. Not attempted: ${rest[*]:-none}." >&2
+      echo "  Fix the cause and run --retain again (it ranks what is held then)." >&2
+      exit 1
+    }
+    destroyed+=("${drop[i]}")
+  done
+  echo "✓ destroyed: ${destroyed[*]}"
+  exit 0
+}
+
+cd "$ROOT"
+[ "$MODE" != retain ] || retain_lane
+# Legacy state: read first, moved only by a build of the version it holds (copied, then retired). A
+# build of another version leaves it alone, whatever state it is in; one it cannot read blocks all.
+MIGRATE=false
+if grep -qx "$LEGACY_KEY" <<<"$KEYS" && ! grep -qx "$NEW_KEY" <<<"$KEYS"; then
+  read_legacy
   if [[ " $LEGACY_VERS " == *" $VERSION "* ]]; then
     if [ "$LEGACY_VERS" != "$VERSION" ] || [ -n "$LEGACY_BAD" ]; then
       echo "✗ ${LEGACY_KEY} holds ${VERSION} but is not clean (versions: ${LEGACY_VERS// /, }; deposed or tainted: ${LEGACY_BAD:-none})." >&2
@@ -321,11 +431,13 @@ fi
 case "$MODE" in
   prune)
     tofu destroy "${APPLY_VARS[@]}"
-    # An emptied state object would be listed as a held version.
+    # An emptied state object would be listed as a held version; one not confirmed empty is kept AND is a failure.
     if LEFT="$(tofu state list -no-color 2>&1)" && [ -z "$LEFT" ]; then
       aws s3 rm "s3://${STATE_BUCKET}/${NEW_KEY}" --endpoint-url "$SEP" --region "$SREGION" >/dev/null
+      exit 0
     fi
-    exit 0 ;;
+    echo "✗ ${VERSION}: its state still lists objects, or could not be listed. It is kept, and --list still shows it." >&2
+    exit 1 ;;
   import)
     # Adopted without the build in this state, the next plan creates the build and REPLACES the snapshot.
     BUILD='module.outscale[0].terraform_data.build_and_upload'

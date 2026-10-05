@@ -149,7 +149,9 @@ task cluster-up ROLE=management PROVIDER=scaleway KEY=~/.ssh/yourkey
 Without `APPROVE=auto` it needs a terminal: it asks for approval twice, on the
 phase-1 and phase-2 plans, and applies the plan it just showed you — do not reach
 for `-auto-approve`, which applies a *different* plan computed at that moment.
-For an unattended run add `APPROVE=auto`: it answers both questions. (To read a
+Once verified it also runs the image retention, where tofu asks its own yes for each
+old image it destroys. For an unattended run add `APPROVE=auto`: it answers the two
+plans and skips the retention. (To read a
 phase-1 plan on its own, save it:
 `task infra-plan ROLE=management PROVIDER=scaleway OUT=tfplan`, read it, then
 `task infra-apply PROVIDER=scaleway PLAN=tfplan`. PROVIDER is required on both —

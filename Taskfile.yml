@@ -63,9 +63,10 @@ tasks:
           task cluster-down PROVIDER=… -- --plan                  computes, destroys nothing
           task cluster-down PROVIDER=… -- --plan-file F --yes     lands exactly that plan
 
-        Nothing asks you a question except `cluster-up`, twice: on its phase-1 and phase-2 infrastructure
-        plans. Add APPROVE=auto to answer both in advance — for CI, and for a shell that cannot be asked.
-        APPROVE=auto is deliberately powerless on anything that destroys.
+        Nothing asks you a question except `cluster-up`: on its phase-1 and phase-2 infrastructure plans, then
+        tofu's own yes for each old image its retention destroys. Add APPROVE=auto to answer the two plans in
+        advance — for CI, and for a shell that cannot be asked. APPROVE=auto is deliberately powerless on
+        anything that destroys, so it skips the retention.
 
         When you need them:
           task kubeconfig        PROVIDER=…   get access back
@@ -602,7 +603,8 @@ tasks:
     desc: >-
       Build + publish the Talos image for a provider, one state per version. Usage: task talos-image
       PROVIDER=scaleway|ovh|outscale|proxmox [VERSION=v1.13.4] [ENSURE=1]; LIST=1 shows the versions
-      held, PRUNE=1 VERSION=<v> destroys that one.
+      held, PRUNE=1 VERSION=<v> destroys that one, RETAIN=1 (no VERSION) keeps the cluster's version and the one
+      below it and destroys the rest, except a version a tfvars names.
     # PROVIDER is REQUIRED, not defaulted. Twenty targets used to fall back to
     # scaleway in silence — including destroy and down — so a command typed
     # while working on another cloud aimed at the wrong account. The refusal is
@@ -633,19 +635,25 @@ tasks:
       ENSURE: '{{.ENSURE | default ""}}'
       LIST: '{{.LIST | default ""}}'
       PRUNE: '{{.PRUNE | default ""}}'
-      MODE: '{{if .LIST}} --list{{end}}{{if .PRUNE}} --prune{{end}}'
+      # A destroy that needs no version arms on 1 or true only: RETAIN=0 is not a retention.
+      RETAIN: '{{if or (eq (.RETAIN | default "") "1") (eq (.RETAIN | default "") "true")}}1{{end}}'
+      MODE: '{{if .LIST}} --list{{end}}{{if .PRUNE}} --prune{{end}}{{if .RETAIN}} --retain{{end}}'
+      # RETAIN takes no version, so only a typed VERSION reaches the script, which refuses it.
+      VERSION_ARG: '{{if or (not .RETAIN) .VERSION}} {{.IMAGE_VERSION}}{{end}}'
     cmds:
-      - './scripts/bootstrap/talos-image.sh {{.PROVIDER}} {{.IMAGE_VERSION}}{{if .ENSURE}} --ensure{{end}}{{.MODE}}'
+      - './scripts/bootstrap/talos-image.sh {{.PROVIDER}}{{.VERSION_ARG}}{{if .ENSURE}} --ensure{{end}}{{.MODE}}'
 
   cluster-up:
     aliases: [up]
     desc: >-
       Idempotent one-shot bring-up: image -> render manifests -> infra -> tunnels -> bootstrap -> converge the
       fleet onto the versions the tfvars pins (editing that file IS the decision to upgrade) -> cluster-verify,
-      whose failure fails the command. Usage: task cluster-up
+      whose failure fails the command -> image retention (RETAIN=1), when you answer, never under
+      APPROVE=auto, and it only warns. Usage: task cluster-up
       ROLE=management|workload PROVIDER=… [KEY=~/.ssh/yourkey] [FORCE=1] [APPROVE=auto].
-      It asks twice, on the phase-1 and phase-2 infrastructure plans, showing each; APPROVE=auto answers
-      for you, for CI and for a shell that cannot be asked.
+      It asks on the phase-1 and phase-2 infrastructure plans, showing each, then tofu's own yes for each old
+      image the retention destroys. APPROVE=auto answers the plans for you, for CI and for a shell that cannot
+      be asked, and skips the retention.
     # PROVIDER is REQUIRED, not defaulted. Twenty targets used to fall back to
     # scaleway in silence — including destroy and down — so a command typed
     # while working on another cloud aimed at the wrong account. The refusal is
@@ -727,11 +735,13 @@ tasks:
         ./scripts/internal/ensure-buckets.sh "$TFVARS" --preflight || exit 1
       # image-build reads the pin from ROLE's tfvars. VERSION is blanked because
       # go-task hands it an exported or typed one, and the tfvars is the decision.
+      # RETAIN too: an exported one would turn this build into a retention, which the script refuses.
       - task: image-build
         vars:
           PROVIDER: "{{.PROVIDER}}"
           ROLE: "{{.ROLE}}"
           VERSION: ""
+          RETAIN: ""
           ENSURE: "1"
       - |
         CILIUM=infrastructure/opentofu/cluster/bootstrap-manifests/cilium.yaml
@@ -813,6 +823,17 @@ tasks:
         vars:
           ROLE: "{{.ROLE}}"
           PROVIDER: "{{.PROVIDER}}"
+      # After the verdict, never before: until N is verified, N-1's image is the one still needed. The destroy asks
+      # tofu's yes, which APPROVE=auto never answers. Not fatal: a verified cluster is not a failed one over a
+      # leftover image. VERSION is blanked, as for the build.
+      - |
+        if [ "{{.APPROVE}}" = auto ]; then
+          echo "~ images below the cluster's version and the one under it are pruned by a person, not here:"
+          echo "    task image-build PROVIDER={{.PROVIDER}} ROLE={{.ROLE}} RETAIN=1"
+        elif ! task image-build PROVIDER={{.PROVIDER}} ROLE={{.ROLE}} VERSION= RETAIN=1; then
+          echo "⚠ image retention did not finish; the cluster is verified. Run it again:" >&2
+          echo "    task image-build PROVIDER={{.PROVIDER}} ROLE={{.ROLE}} RETAIN=1" >&2
+        fi
       # Do NOT end on "every step above is idempotent": that line came out
       # identical on the first run, which applied 43 changes in phase 1 and 17 in
       # phase 2, and on the second, which applied none. Idempotence is a property
