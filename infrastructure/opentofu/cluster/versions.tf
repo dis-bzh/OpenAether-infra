@@ -4,9 +4,9 @@ terraform {
   required_providers {
     talos = {
       source = "siderolabs/talos"
-      # Held on 0.11: 0.12.0 (stable since 2026-09-21) renders Talos 1.14's multi-document
-      # config and the module's v1alpha1 patches collide with it (#241). Renovate is told so.
-      version = "~> 0.11.0"
+      # Exact: a provider release can change the rendered text, and the module's patches were
+      # checked against 0.12.0's alone (#241). Renovate's PR for a release is labelled needs-real-run.
+      version = "0.12.0"
     }
     scaleway = {
       source  = "scaleway/scaleway"

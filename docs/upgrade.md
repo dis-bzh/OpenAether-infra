@@ -109,6 +109,17 @@ A build that fails after its apply has already replaced the old image, so leave
 the pin at the new version and re-run. The 2026-10-03 climbs ran through that
 order on all three clouds.
 
+`talos_version` is the node's Talos, not the machine-config contract: the module renders under a
+capped one (`config_contract` in `modules/talos/main.tf`, which says why). A bump to 1.14 changes
+the installer image in the config; offline renders under provider 0.12.0 show nothing else, but
+no `cluster-upgrade` has run under it yet.
+
+**After pulling the provider 0.12.0 pin**, run `tofu init -backend=false -upgrade` in
+`infrastructure/opentofu/cluster` (or `task validate`, which shares the lock). The lock file is
+local and gitignored, so every `infra-*` task stops at init until you do. `-upgrade` moves every
+provider within its constraint: read the next plan. To move only talos, delete its block from
+`.terraform.lock.hcl` and run a plain `tofu init`.
+
 **On Outscale the image build dominates the whole upgrade.** The image is
 registered from a snapshot imported through a provider-side queue: 8 min on
 2026-08-18, over 60 min on 2026-07-25. It blocks before a single node is touched,
@@ -222,10 +233,11 @@ untouched. Open as an issue.
 
 The first apply after a `talos_version` bump used to fail once on OVH and
 Outscale with "Provider produced inconsistent final plan" (upstream
-`siderolabs/terraform-provider-talos` #352, fixed only in the 0.12.0 pre-release
-line). The module now replaces each machine-config apply on a version change
+`siderolabs/terraform-provider-talos` #352, fixed in 0.12.0, which is pinned).
+The module replaces each machine-config apply on a version change
 (`replace_triggered_by`), so the bump goes through in one apply: the 2026-10-03
-climbs ran through `cluster-upgrade`, which has no retry, on all three clouds.
+climbs ran through `cluster-upgrade`, which has no retry, on all three clouds. The
+workaround stays until a run without it passes (#83).
 
 ## What to check, beyond "it came back"
 

@@ -154,12 +154,18 @@ alone, #57; only `restore-artifacts` was read back byte-identical, on one provid
 unattended to completion; and a control-plane roll with zero failed probes has not happened on any cloud
 (#42: 1 s on Scaleway and OVH, 3 s on Outscale, 9 s once Kubernetes moves there).
 
-**Talos provider 0.12.0 cannot carry a 1.14 cluster yet.** At `talos_version` 1.14.x it renders Talos's
-multi-document config and the module's v1alpha1 patches conflict (seven errors on every config apply,
-measured on OVH). Inside the 1.13 contract it works: a fresh deploy and a bump 1.13.9→1.13.11 ran through
-on OVH and on Outscale (13/13, plan empty after), though with our `replace_triggered_by` workaround still
-in, so it does not show that the upstream fix alone suffices (#83, closed). The pin stays on 0.11.0 until
-the patches move to 1.14 documents ([#241](https://github.com/dis-bzh/OpenAether-infra/issues/241)).
+**Talos provider 0.12.0 is pinned** ([#241](https://github.com/dis-bzh/OpenAether-infra/issues/241)); a 1.14 node
+is rendered under a capped contract, and `config_contract` in `modules/talos/main.tf` says why. Measured on Scaleway on
+2026-10-05, one control plane and one worker at Talos 1.14.2 and Kubernetes 1.37.1, no Flux: a cluster built under 0.11
+planned empty under the pin and `cluster-up` changed nothing (`cluster-verify` 12/12); rebuilt from an empty state under
+0.12.0, `cluster-up` ended on `cluster-verify` 12/12 and `cluster-idempotency` was green. Inside the 1.13 contract 0.12.0
+had already run through on OVH and on Outscale (a fresh deploy and a bump 1.13.9→1.13.11, 13/13, plan empty after), with
+our `replace_triggered_by` workaround still in (#83, closed).
+**Not proven**: a 1.14 cluster under 0.12.0 with three control planes, or on OVH or Outscale; `cluster-upgrade` 1.13.9 to
+1.14.2 under 0.12.0 (only offline renders, which differ in the installer image alone); a run without
+`replace_triggered_by`; `task local-up` at 1.14.2, which did not start on the one host tried (kernel 6.12), so the
+container-mode install image change (v1.13.0 to v1.14.0) is unmeasured there; `talos_machine`
+([#44](https://github.com/dis-bzh/OpenAether-infra/issues/44)) is not adopted.
 
 **Six gates were green on something they had stopped checking**, found on
 2026-08-28 by auditing what the pipeline actually constrains rather than what it
