@@ -361,7 +361,7 @@ out="$(node_schematic ep 10.255.255.1)"; rc=$?
   || bad "node_schematic propagated a failure (rc=$rc, out='$out')"
 unset STUB_SCHEMATIC
 
-cat "${RR_FILES[@]}" | grep -q 'want_sch != .*have_sch\|want_sch" != "\$have_sch' \
+grep -q 'want_sch != .*have_sch\|want_sch" != "\$have_sch' "${RR_FILES[@]}" \
   && ok "the skip compares the schematic as well as the tag" \
   || bad "the skip is back to comparing the version tag alone"
 
@@ -422,7 +422,7 @@ got="$(PATH="$STUB_DIR:$PATH" cp_roll_order 2>"$WARN_OUT" | tr '\n' ' ' | sed 's
   && ok "an unreadable etcd keeps the index order, and says so" \
   || bad "unreadable etcd: order='${got}' warn='$(tr -d '\n' <"$WARN_OUT")'"
 
-cat "${RR_FILES[@]}" | grep -q 'etcd forfeit-leadership' \
+grep -q 'etcd forfeit-leadership' "${RR_FILES[@]}" \
   && ok "the roll hands leadership over instead of letting it be taken" \
   || bad "no forfeit-leadership — the last control plane still forces an election"
 
