@@ -98,7 +98,7 @@ untouched() { # the cases where nothing may change — no import, and no exit co
   [ "$(calls '^tofu import')" = 0 ] && ! grep -q UNEXPECTED "$W/calls.log"
 }
 # Both words are looked up in what the script prints, wherever it prints them.
-said() { cat "$W/out" "$W/err" | grep -qi -- "$1"; }
+said() { grep -qi -- "$1" "$W/out" "$W/err"; }
 
 
 echo "--- the bootstrap is already in state: the normal re-run is left alone ---"
