@@ -76,7 +76,7 @@ shown redundant under provider 0.12.0 (#83), so leave it in.
 
 `modules/talos` renders the machine config under `config_contract`, never newer than v1.13: provider
 0.12 turns a 1.14 contract into documents the v1alpha1 patches collide with (#241). Feed the node's
-version, not the contract, to the secrets, the installer and the replace trigger; the module test pins that.
+version, not the contract, to the secrets, the installer and the replace trigger; the tests pin all three.
 
 ## What to watch, beyond "it came back"
 

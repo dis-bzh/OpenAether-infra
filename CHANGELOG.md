@@ -273,9 +273,9 @@ in git. 0.1.0 is the first entry describing something proven.
   On `talos_machine_configuration`, `talos_version` is the config contract, not the node's Talos: provider 0.12
   renders the 1.14 multi-document config for it and the module's v1alpha1 patches collide with it (seven errors on
   every config apply). One local, `config_contract` (v1.13, or the node's version when older), now feeds both data
-  sources. Rung: mocked (`modules/talos/tests`, now run by `task test`; 17 of 19 mutants killed. One survivor, the
-  installer image fed the contract, is killed by the cluster root's tests; the other, a 1.13.x node keeping its patch
-  version, renders the same text). Measured with the real providers and no node: under 0.11.0
+  sources. Rung: mocked (`modules/talos/tests`, now run by `task test`; 17 of 19 mutants killed; of the other two,
+  the installer image fed the contract is killed by the cluster root's tests, and a 1.13.x node keeping its patch
+  version renders the same text). Measured with the real providers and no node: under 0.11.0
   the text equals `main`'s for every shape and node version tried (cloud, container, VIP, HA; 1.12, 1.13, 1.14);
   on a 1.14 node under 0.12.0 it equals what 0.11.0 renders, bar the default installer image in container mode,
   and `talosctl validate --strict` (1.13.9 and 1.14.2 clients) accepts it. Not measured: any node, any cloud.
