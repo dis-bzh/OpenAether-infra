@@ -4,9 +4,11 @@
 #
 # Partial backend: bucket / key / region / endpoint are passed at init time by
 # scripts/bootstrap/talos-image.sh. State lives on the TARGET provider's S3
-# (s3-<project>-<provider>-talos-image / talos-image.tfstate), reached with
-# AWS_* = that provider's S3 keys — the same cred rule as deploying a cluster on
-# it. State payload is client-encrypted by the encryption{} block below.
+# (s3-<project>-<provider>-talos-image), ONE KEY PER VERSION
+# (talos-image-<provider>-<version>.tfstate): a build can only touch its own
+# version. Reached with AWS_* = that provider's S3 keys — the same cred rule as
+# deploying a cluster on it. State payload is client-encrypted by the
+# encryption{} block below.
 # ==============================================================================
 
 terraform {

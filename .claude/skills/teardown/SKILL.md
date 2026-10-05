@@ -114,7 +114,8 @@ not make it for them.
 
 ## Left standing on purpose
 
-Talos images and their snapshots (rebuilding costs about an hour on Outscale),
+Talos images, one set per version built (`task image-build PROVIDER=<p> LIST=1`), and
+their snapshots (a rebuild is 8 minutes on a good Outscale day, over an hour on a bad one),
 keypairs, and the S3 buckets — state, artifacts, backups. Deleting a state
 bucket destroys the ability to restore. `fleet-down.sh` step 3 lists them by
 name rather than removing them; that report is the deliverable, not noise.

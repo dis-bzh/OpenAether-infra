@@ -518,28 +518,19 @@ upgrade_k8s_to() { # <version>
 }
 
 upgrade_talos_to() { # <version>
-  local target="$1" f pin clash=""
+  local target="$1"
   echo "--- Talos → ${target} ---"
 
-  # The image lane keeps one image per provider and refuses a version another
-  # cluster's tfvars pins (#93, talos-image.sh). Asked before the pin moves, the
-  # same way, so that refusal changes nothing.
-  for f in "$ROOT/infrastructure/opentofu/cluster/envs/"*-"${PROVIDER}.tfvars"; do
-    [ -e "$f" ] && [ "${f##*/}" != "${ROLE}-${PROVIDER}.tfvars" ] || continue
-    pin="$("$ROOT/scripts/internal/talos-version.sh" "${f##*/}" 2>/dev/null || true)"
-    [ -z "$pin" ] || [ "$pin" = "$target" ] || clash+=" ${f##*/} pins talos_version = ${pin};"
-  done
-  [ -z "$clash" ] || fail "${clash# } the image lane keeps one image per provider, and building ${target} would replace it (#93). Update those tfvars first; this step has changed nothing."
-
-  # The lane builds only a pinned version, so the pin moves first. A failed build
-  # leaves it: past its apply, the previous image is already replaced.
+  # The pin moves first: talos-image.sh checks an image_id pin only on a cluster that pins the
+  # version it builds, so a stale one is caught here, not after the apply. Each version has its
+  # own state, so a failed build leaves the previous image untouched.
   tfvar_set talos_version "$target"
 
   # The nodes ignore their image attribute, but the image DATA SOURCE still has
   # to resolve, and it derives its name from talos_version. Without this the
   # plan fails on an image the account does not have.
   task image-build PROVIDER="$PROVIDER" VERSION="$target" ENSURE=1 ||
-    fail "the Talos ${target} image build failed; talos_version stays at ${target}, since a build that reached its apply has replaced the previous image. Fix the cause and re-run."
+    fail "the Talos ${target} image build failed; talos_version stays at ${target} and the previous image is untouched. Fix the cause and re-run."
 
   task infra-apply ROLE="$ROLE" PROVIDER="$PROVIDER" KEY="$KEY" APPROVE=auto
 

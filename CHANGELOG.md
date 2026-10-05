@@ -251,6 +251,21 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **The image lane keeps one state per Talos version, so building one version no longer replaces another (refs #69).**
+  `talos-image-<provider>-<version>.tfstate` replaces the single `talos-image.tfstate`: a build can only touch its own
+  version, so #93's refusal (a build blocked while another tfvars pins a different version) is gone, and so is "a
+  failed build has already replaced the old image". `task image-build LIST=1` shows the versions held and `PRUNE=1`
+  removes one (refused while a tfvars pins it). The old single state is copied to its version's key by the first
+  build of the version it holds, read from its objects and never from the root output (a failed apply rewrites that),
+  refused when it holds a deposed or tainted object, and renamed afterwards, not deleted. On Outscale, `--ensure`
+  refuses a plan that creates an OMI while one already holds the name, before the snapshot import instead of after
+  it (the 409 of 2026-10-03); deleting an OMI the state does not track stays the owner's. The three modules' scratch
+  files carry the version, the stale `talos_version = "v1.13.3"` default of the image root is gone, and
+  `--import-snapshot` replaces a recovery command that named the wrong state. Rung: mocked (`test-talos-image.sh`, the
+  image root's first `tofu test`, mutants killed). Not run on any cloud: `state pull` and `push` against the
+  encrypted S3 state, a real legacy state, two versions in a provider's own listing, a node created on the older image
+  (whether it stays on it is unmeasured) and the refusal against a real OMI. #69 stays open on those.
+
 - **commitizen 4.19.0 → 4.19.1** in the CI commit-message job, probed green by Cléa (#91). Proof: lint,
   render-check, test-scripts, validate (both roots), `task test` (71/71), checkov 32/0, custom checks 6/0 and
   gitleaks green; trivy not run in the sandbox. Left out: plumber v0.5.20 (`clea bump` refuses its `action-sha`

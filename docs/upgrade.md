@@ -102,12 +102,15 @@ task cluster-roll PROVIDER=<p> KEY=~/.ssh/<key> -- --cp-only --upgrade
 task cluster-roll PROVIDER=<p> KEY=~/.ssh/<key> -- --workers-only --upgrade
 ```
 
-The pin moves before the build: the image lane keeps one image per provider, so
-it refuses a version that any `envs/*-<p>.tfvars` does not pin, as it would
-replace the image that cluster still uses (#93). It names the file that blocks.
-A build that fails after its apply has already replaced the old image, so leave
-the pin at the new version and re-run. The 2026-10-03 climbs ran through that
-order on all three clouds.
+The pin moves before the build, because `talos-image.sh` compares a pinned
+`image_id` only with the image of the version it builds. Each version has its own
+image state, so the build never replaces the old image: another cluster still
+pinning it is undisturbed, and a build that fails leaves the previous image alone
+(leave the pin at the new version and re-run). Old images stay until you remove one
+(`PRUNE=1`, refused while a tfvars pins it; `LIST=1` shows what is held), see
+[`talos-image/README.md`](../infrastructure/opentofu/talos-image/README.md). The
+2026-10-03 climbs ran in that order on all three clouds, on the single-image lane
+this replaces.
 
 **On Outscale the image build dominates the whole upgrade.** The image is
 registered from a snapshot imported through a provider-side queue: 8 min on

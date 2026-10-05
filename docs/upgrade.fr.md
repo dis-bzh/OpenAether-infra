@@ -110,12 +110,16 @@ task cluster-roll PROVIDER=<p> KEY=~/.ssh/<clé> -- --cp-only --upgrade
 task cluster-roll PROVIDER=<p> KEY=~/.ssh/<clé> -- --workers-only --upgrade
 ```
 
-Le pin bouge avant le build : la voie image garde une image par provider, donc
-elle refuse une version que l'un des `envs/*-<p>.tfvars` ne pinne pas, car elle
-remplacerait l'image que ce cluster utilise encore (#93). Elle nomme le fichier
-qui bloque. Un build qui échoue après son apply a déjà remplacé l'ancienne
-image : laisser le pin sur la nouvelle version et relancer. Les montées du 2026-10-03
-ont suivi cet ordre sur les trois clouds.
+Le pin bouge avant le build, car `talos-image.sh` ne compare un `image_id` pinné
+qu'à l'image de la version qu'il construit. Chaque version a son propre état
+d'image : le build ne remplace jamais l'ancienne image, un autre cluster qui la
+pinne n'est pas perturbé, et un build qui échoue laisse l'image précédente
+intacte (laisser le pin sur la nouvelle version et relancer). Les anciennes
+images restent jusqu'à ce qu'on en retire une (`PRUNE=1`, refusé tant qu'un tfvars
+la pinne ; `LIST=1` montre ce qui existe), voir
+[`talos-image/README.md`](../infrastructure/opentofu/talos-image/README.md). Les
+montées du 2026-10-03 ont suivi cet ordre sur les trois clouds, sur la voie à
+image unique que ceci remplace.
 
 **Sur Outscale, la construction de l'image domine tout l'upgrade.** L'image est
 enregistrée depuis un snapshot importé via une file côté provider : 8 min le

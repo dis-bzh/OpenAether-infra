@@ -9,6 +9,9 @@
 locals {
   factory_url = "https://factory.talos.dev/image/${var.schematic_id}/${var.talos_version}/openstack-${var.arch}.raw.zst"
   qcow2_path  = "${var.cache_dir}/openstack-${var.arch}-${var.talos_version}.qcow2"
+  # Versioned scratch names: versions build in separate states and may run side by side.
+  raw_zst  = "${var.cache_dir}/openstack-${var.arch}-${var.talos_version}.raw.zst"
+  raw_path = "${var.cache_dir}/openstack-${var.arch}-${var.talos_version}.raw"
 }
 
 # Fetch from Image Factory, decompress (zstd), convert to QCOW2. Re-runs only when
@@ -30,11 +33,11 @@ resource "terraform_data" "build" {
       done
       mkdir -p "${var.cache_dir}"
       echo "▶ Downloading Talos ${var.talos_version} (openstack-${var.arch}) from Image Factory..."
-      curl -fL --retry 3 "${local.factory_url}" -o "${var.cache_dir}/openstack.raw.zst"
+      curl -fL --retry 3 "${local.factory_url}" -o "${local.raw_zst}"
       echo "▶ Decompressing (zstd) + converting to QCOW2 (qemu-img)..."
-      zstd -f -d "${var.cache_dir}/openstack.raw.zst" -o "${var.cache_dir}/openstack.raw"
-      qemu-img convert -f raw -O qcow2 "${var.cache_dir}/openstack.raw" "${local.qcow2_path}"
-      rm -f "${var.cache_dir}/openstack.raw.zst" "${var.cache_dir}/openstack.raw"
+      zstd -f -d "${local.raw_zst}" -o "${local.raw_path}"
+      qemu-img convert -f raw -O qcow2 "${local.raw_path}" "${local.qcow2_path}"
+      rm -f "${local.raw_zst}" "${local.raw_path}"
       echo "✓ QCOW2 ready for Glance upload: ${local.qcow2_path}"
     EOT
   }

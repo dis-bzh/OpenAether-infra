@@ -67,7 +67,7 @@ cat >"$STUB_DIR/kubectl" <<'STUB'
 argv="$(basename "$0") $*"
 printf '%s\n' "$argv" >>"${STUB_LOG:-/dev/null}"
 # STUB_IMAGE_BUILD: `task image-build` runs that real talos-image.sh the way the
-# Taskfile does, with its tofu, aws and curl stubbed, so its #93 guard is real.
+# Taskfile does, with its tofu, aws and curl stubbed, so its pin handling is real.
 if [ -n "${STUB_IMAGE_BUILD:-}" ] && [[ $argv == "task image-build "* ]]; then
   for a in "$@"; do
     case "$a" in PROVIDER=*) p="${a#*=}" ;; VERSION=*) v="${a#*=}" ;; ENSURE=?*) e=--ensure ;; esac
@@ -477,12 +477,11 @@ fi
 rm -f "$STUB_LOG.blocked"
 
 echo
-echo "=== cluster-upgrade: the Talos step through the REAL #93 guard ==="
+echo "=== cluster-upgrade: the Talos step through the REAL image lane ==="
 
-# Above, `task image-build` always says yes, so the order the upgrade builds in
-# was invisible. Here it is the real talos-image.sh, whose guard refuses a
-# version any tfvars does not pin. It needs a provider it knows; the fixtures stay
-# in the fake root, which has no schematic.yaml, so the Factory is never asked.
+# Above, `task image-build` always says yes, so what the upgrade hands the lane was invisible.
+# Here it is the real talos-image.sh. It needs a provider it knows; the fixtures stay in the
+# fake root, which has no schematic.yaml, so the Factory is never asked.
 mkdir -p "$FAKE/scripts/bootstrap" "$FAKE/scripts/internal" "$FAKE/infrastructure/opentofu/talos-image"
 for f in bootstrap/talos-image.sh internal/talos-version.sh; do
   ln -s "$ROOT/scripts/$f" "$FAKE/scripts/$f"
@@ -494,25 +493,25 @@ IMAGE_OK='tofu \t0\t\naws \t0\t\n'
 plan "${IMAGE_OK}${UPGRADE_OK}${VERIFY_OK}"
 upgrade
 { [ "$RUN_RC" -eq 0 ] && called 'tofu plan' && said 'every node on Talos v0.0.2'; } \
-  && ok "the real guard accepts the upgrade's own build of its target" \
+  && ok "the real lane builds the upgrade's own target" \
   || bad "the image lane refused the upgrade's own target (rc=$RUN_RC): $(grep -m1 'build targets' <<<"$RUN_OUT")"
+called 'key=talos-image-scaleway-v0.0.2.tfstate' \
+  && ok "…in that version's own state" || bad "the build did not use the target's own state key: $(grep -m1 '^tofu init' "$STUB_LOG")"
 
-# What the guard is for: another cluster on this provider still pins the old image.
-# The upgrade asks the same question before it moves its own pin.
+# Another cluster on this provider still pins the old version. One image per provider used to make
+# that a refusal; each version has its own state now, so the old image is not in the build's way.
 printf 'talos_version = "v0.0.1"\n' >"$CLUSTER/envs/other-scaleway.tfvars"
 plan "${IMAGE_OK}${UPGRADE_OK}${VERIFY_OK}"
 upgrade
-{ [ "$RUN_RC" -ne 0 ] && said 'other-scaleway.tfvars pins talos_version = v0.0.1' \
-  && ! said "${ROLE}-scaleway.tfvars pins" && ! called 'tofu ' && ! called 'aws ' && ! called 'cluster-roll'; } \
-  && ok "…and still refuses to replace an image another cluster pins, naming only that one" \
-  || bad "the guard did not protect the other cluster, or blamed the one being upgraded (rc=$RUN_RC)"
-grep -qE '^talos_version *= *"v0.0.1"' "$TFVARS" \
-  && ok "…and that refusal leaves this cluster's pin where it was" \
-  || bad "the refusal left talos_version at the target, naming an image that was never built"
+{ [ "$RUN_RC" -eq 0 ] && called 'tofu plan' && called 'cluster-roll' && ! said 'pins talos_version'; } \
+  && ok "another cluster's pin on the old version no longer blocks the upgrade" \
+  || bad "the upgrade was refused over another cluster's pin (rc=$RUN_RC): $(grep -m1 'pins' <<<"$RUN_OUT")"
+grep -qE '^talos_version *= *"v0.0.1"' "$CLUSTER/envs/other-scaleway.tfvars" \
+  && ok "…and that cluster's pin was not touched" || bad "the upgrade rewrote another cluster's tfvars"
 rm -f "$CLUSTER/envs/"*-scaleway.tfvars
 
-# A build that fails AFTER its apply has already replaced the old image: on OVH
-# the stale image_id guard runs last. Moving the pin back would name a gone image.
+# A build that fails AFTER its apply: on OVH the stale image_id guard runs last. The pin stays on
+# the target, whose image now exists; the previous version's image was never in play.
 PROVIDER=ovh TFVARS="$CLUSTER/envs/${ROLE}-ovh.tfvars"
 plan "tofu plan\t2\t\ntofu output -raw image_id\t0\timg-new\n${IMAGE_OK}${UPGRADE_OK}${VERIFY_OK}"
 tfvars v0.0.1 v0.0.1; printf 'image_id = "img-old"\n' >>"$TFVARS"
@@ -520,7 +519,7 @@ run "$UPGRADE" "$PROVIDER" "$ROLE" "$KEYFILE"
 { [ "$RUN_RC" -ne 0 ] && called 'tofu apply' && said 'pins image_id = img-old' && said 'talos_version stays at v0.0.2' \
   && grep -qE '^talos_version *= *"v0.0.2"' "$TFVARS"; } \
   && ok "a build that failed after its apply keeps the pin on the image it published" \
-  || bad "a build that failed after its apply moved the pin back to a replaced image (rc=$RUN_RC)"
+  || bad "a build that failed after its apply moved the pin back off the image it published (rc=$RUN_RC)"
 rm -f "$CLUSTER/envs/"*-ovh.tfvars
 unset STUB_IMAGE_BUILD
 PROVIDER=stubcloud TFVARS="$CLUSTER/envs/${ROLE}-${PROVIDER}.tfvars"
