@@ -48,10 +48,10 @@ def call(action, payload):  # same AWS4 signing as scripts/ops/purge-orphans/out
         return json.load(urllib.request.urlopen(req, timeout=60))
     except urllib.error.HTTPError as e:
         print(f"✗ {action} refused (HTTP {e.code}): {e.read().decode()[:200]}", file=sys.stderr)
-        sys.exit(2)
+        raise SystemExit(2) from e
     except Exception as e:  # noqa: BLE001 — unreachable is not "no OMI"
         print(f"✗ {action} unreachable: {str(e)[:100]}", file=sys.stderr)
-        sys.exit(2)
+        raise SystemExit(2) from e
 
 
 # OMI names are unique per account, so only this account's own count; the unscoped catalogue is no fallback.
