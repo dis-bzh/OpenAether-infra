@@ -447,40 +447,86 @@ OUT="$({ objs scaleway_object_bucket other name staging; } | st | "$HELPER" 2>&1
 
 echo "--- the Outscale same-name refusal: before the import, not after ---"
 mkdir -p "$SB/shows"
-show() { # <actions, comma-separated> <omi ids...> — a plan as `tofu show -json` prints it: the lookup is in the PRIOR state
-  local acts="$1"; shift
-  jq -n --arg acts "$acts" --args '{resource_changes:[{type:"outscale_image", change:{actions:($acts | split(","))}}],
-    prior_state:{values:{root_module:{child_modules:[{address:"module.outscale[0]", resources:[
-      {address:"module.outscale[0].data.outscale_images.same_name", mode:"data", type:"outscale_images", name:"same_name",
-       values:{images:[$ARGS.positional[] | {image_id: .}]}}]}]}}}}' "$@"
+show() { # <actions, comma-separated> — a plan as `tofu show -json` prints it: the OMI it creates is named in `after`
+  jq -n --arg acts "$1" '{resource_changes:[{type:"outscale_image", change:{actions:($acts | split(",")), after:{image_name:"talos-outscale-amd64-v1.13.4"}}}]}'
 }
-gate() { # <show file> [exit of tofu show] — an Outscale --ensure whose plan is that file
-  OUT="$(OA_STUB_SHOW="$1" OA_STUB_SHOW_EXIT="${2:-0}" PROV=outscale run 2 --ensure)"; RC=$?
+# The account's answer: OA_STUB_OMIS (space-separated ids) and OA_STUB_OMI_EXIT, the name it was asked for kept in $SB/omi.asked.
+cat >"$SB/omi-lookup" <<'LOOKUP'
+#!/usr/bin/env bash
+printf '%s %s\n' "$1" "$2" >>"$OA_STUB_OMI_ASKED"
+[ "${OA_STUB_OMI_EXIT:-0}" = 0 ] || exit "$OA_STUB_OMI_EXIT"
+for id in ${OA_STUB_OMIS:-}; do echo "$id"; done
+LOOKUP
+chmod +x "$SB/omi-lookup"
+export OA_OMI_LOOKUP="$SB/omi-lookup" OA_STUB_OMI_ASKED="$SB/omi.asked"
+gate() { # <show file> <omi ids, space-separated> [exit of tofu show] [exit of the lookup] — an Outscale --ensure whose plan is that file
+  OUT="$(OA_STUB_SHOW="$1" OA_STUB_OMIS="$2" OA_STUB_SHOW_EXIT="${3:-0}" OA_STUB_OMI_EXIT="${4:-0}" PROV=outscale run 2 --ensure)"; RC=$?
 }
-show create ami-fixture1 >"$SB/shows/taken.json"
-gate "$SB/shows/taken.json"
+show create >"$SB/shows/create.json"
+: >"$SB/omi.asked"
+gate "$SB/shows/create.json" ami-fixture1
 { [ "$RC" -ne 0 ] && [ "$(calls apply)" = 0 ]; } && ok "a plan creating the OMI while one holds the name is refused, nothing applied (rc=$RC)" || bad "the collision reached the apply (rc=$RC)"
 grep -q 'ami-fixture1' <<<"$OUT" && ok "the message names the OMI" || bad "the message does not name the OMI: $OUT"
 grep -qi "owner" <<<"$OUT" && ok "and says deleting an untracked OMI is the owner's, not this script's" || bad "no word on who deletes it"
+is "the account was asked for the name the plan creates, in the lane's region" "talos-outscale-amd64-v1.13.4 eu-west-2" "$(head -1 "$SB/omi.asked")"
 # Replacing the lane's own OMI is create-before-destroy: the same-version case the refusal exists for.
 for acts in create,delete delete,create; do
-  show "$acts" ami-fixture1 >"$SB/shows/replace.json"
-  gate "$SB/shows/replace.json"
+  show "$acts" >"$SB/shows/replace.json"
+  gate "$SB/shows/replace.json" ami-fixture1
   { [ "$RC" -ne 0 ] && [ "$(calls apply)" = 0 ]; } && ok "a replacement (actions: $acts) of an OMI that holds the name is refused" || bad "a replace of $acts reached the apply (rc=$RC)"
 done
-show no-op ami-fixture1 >"$SB/shows/tracked.json"
-gate "$SB/shows/tracked.json"
-{ [ "$RC" -eq 0 ] && [ "$(calls apply)" = 1 ]; } && ok "the lane's own OMI with no replacement planned does not block" || bad "a tracked, unchanged OMI blocked the run (rc=$RC)"
-show create >"$SB/shows/free.json"
-gate "$SB/shows/free.json"
+gate "$SB/shows/create.json" "ami-fixture1 ami-fixture2"
+grep -q 'ami-fixture1 ami-fixture2' <<<"$OUT" && ok "two OMIs holding the name are both named" || bad "the message lost an id: $OUT"
+: >"$SB/omi.asked"
+show no-op >"$SB/shows/tracked.json"
+gate "$SB/shows/tracked.json" ami-fixture1
+{ [ "$RC" -eq 0 ] && [ "$(calls apply)" = 1 ] && [ ! -s "$SB/omi.asked" ]; } && ok "no OMI created: the account is not even asked, and the run goes ahead" || bad "a plan creating no OMI was blocked or asked (rc=$RC)"
+gate "$SB/shows/create.json" ""
 { [ "$RC" -eq 0 ] && [ "$(calls apply)" = 1 ]; } && ok "a creation with the name free goes ahead" || bad "a free name was refused (rc=$RC)"
-jq 'del(.prior_state)' "$SB/shows/free.json" >"$SB/shows/blind.json"
-gate "$SB/shows/blind.json"
-{ [ "$RC" -ne 0 ] && [ "$(calls apply)" = 0 ]; } && ok "a plan that carries no lookup is refused: a gate that cannot see is not a gate" || bad "a plan with no lookup went to the apply (rc=$RC)"
-gate "$SB/shows/taken.json" 1
+jq '.resource_changes[0].change.after = {}' "$SB/shows/create.json" >"$SB/shows/blind.json"
+gate "$SB/shows/blind.json" ""
+{ [ "$RC" -ne 0 ] && [ "$(calls apply)" = 0 ]; } && ok "a plan that does not name the OMI is refused: a gate that cannot see is not a gate" || bad "a plan with no OMI name went to the apply (rc=$RC)"
+gate "$SB/shows/create.json" ami-fixture1 1
 { [ "$RC" -ne 0 ] && [ "$(calls apply)" = 0 ]; } && ok "a plan that cannot be read is not applied" || bad "an unreadable plan went to the apply (rc=$RC)"
-OUT="$(OA_STUB_SHOW="$SB/shows/taken.json" run 2 --ensure)"; RC=$?
-{ [ "$RC" -eq 0 ] && [ "$(calls show)" = 0 ]; } && ok "other providers never ask (the module only exists on Outscale)" || bad "the Outscale gate ran on scaleway (rc=$RC)"
+gate "$SB/shows/create.json" "" 0 2
+{ [ "$RC" -ne 0 ] && [ "$(calls apply)" = 0 ]; } && ok "an account that cannot answer is not an account with no OMI: nothing applied" || bad "a refused lookup read as 'no OMI' (rc=$RC)"
+: >"$SB/omi.asked"
+OUT="$(OA_STUB_SHOW="$SB/shows/create.json" OA_STUB_OMIS=ami-fixture1 run 2 --ensure)"; RC=$?
+{ [ "$RC" -eq 0 ] && [ "$(calls show)" = 0 ] && [ ! -s "$SB/omi.asked" ]; } && ok "other providers never ask" || bad "the Outscale gate ran on scaleway (rc=$RC)"
+
+# The lookup itself, against a local endpoint that answers like the API: a name nobody holds is an EMPTY answer (the provider's
+# data source fails the plan instead, measured on a real account), and a refusal or a dead endpoint is exit 2, never empty.
+LOOK=scripts/internal/outscale-omi-ids.py
+cat >"$SB/osc-api.py" <<'API'
+import http.server, json, sys
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        act = self.path.rsplit('/', 1)[1]
+        if sys.argv[2] == 'deny': code, out = 401, {'Errors': [{'Code': '1'}]}
+        elif act == 'ReadAccounts': code, out = 200, {'Accounts': [{'AccountId': 'ACC'}]}
+        else:
+            f = body['Filters']
+            assert f['AccountIds'] == ['ACC'], f
+            held = {'taken': [{'ImageId': 'ami-aaaa1111', 'ImageName': f['ImageNames'][0]}, {'ImageId': 'ami-bbbb2222', 'ImageName': f['ImageNames'][0]}]}
+            code, out = 200, {'Images': held.get(sys.argv[2], [])}
+        self.send_response(code); self.send_header('Content-Type', 'application/json'); self.end_headers(); self.wfile.write(json.dumps(out).encode())
+    def log_message(self, *a): pass
+http.server.HTTPServer(('127.0.0.1', int(sys.argv[1])), H).serve_forever()
+API
+osc() { # <mode: taken|none|deny> — the answer of the lookup against that stub endpoint, then its exit code
+  local port=$((20000 + RANDOM % 20000)); python3 "$SB/osc-api.py" "$port" "$1" & local pid=$!
+  for _ in $(seq 1 50); do (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && break; sleep 0.1; done
+  OUT="$(OUTSCALE_ACCESS_KEY_ID=k OUTSCALE_SECRET_KEY=s OA_OSC_API="http://127.0.0.1:$port" "$LOOK" talos-outscale-amd64-v1.13.4 2>&1)"; RC=$?
+  kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+}
+osc taken; is "lookup: the OMIs of the account holding the name, one id per line" "0 ami-aaaa1111|ami-bbbb2222" "$RC $(paste -sd'|' <<<"$OUT")"
+osc none;  is "lookup: nobody holds the name is an empty answer, exit 0" "0 " "$RC $OUT"
+osc deny;  { [ "$RC" -eq 2 ] && grep -q 'HTTP 401' <<<"$OUT"; } && ok "lookup: a refusal is exit 2 and says so" || bad "a refused ReadAccounts read as an answer (rc=$RC): $OUT"
+OUT="$(OUTSCALE_ACCESS_KEY_ID=k OUTSCALE_SECRET_KEY=s OA_OSC_API="http://127.0.0.1:9" "$LOOK" x 2>&1)"; RC=$?
+[ "$RC" -eq 2 ] && ok "lookup: an unreachable endpoint is exit 2, not 'no OMI'" || bad "an unreachable endpoint read as an answer (rc=$RC): $OUT"
+OUT="$(env -u OUTSCALE_ACCESS_KEY_ID "$LOOK" x 2>&1)"; RC=$?
+[ "$RC" -eq 2 ] && ok "lookup: no credential is exit 2" || bad "a missing credential read as an answer (rc=$RC)"
 
 echo "--- --import-snapshot: an import that outlived a failed apply, into THAT version's state ---"
 BUILD_ADDR='module.outscale[0].terraform_data.build_and_upload'
@@ -526,14 +572,11 @@ for m in scaleway ovh outscale; do
   [ -z "$moved" ] && ok "$m: every scratch file is defined under cache_dir, with the version" || bad "$m defines a scratch file outside cache_dir or without the version: $moved"
 done
 
-# What a mock cannot see: the lookup's filter, and that the lookup stays out of the root outputs
-# (a persisted output made every plan after it exit 2, and went [] -> [own OMI] on each first build).
-SAMENAME="$(awk '/data "outscale_images" "same_name"/,/^}/' infrastructure/opentofu/modules/talos-image/outscale/main.tf)"
-{ grep -q 'values = \[var.image_name\]' <<<"$SAMENAME" && grep -Eq 'name[[:space:]]*=[[:space:]]*"image_names"' <<<"$SAMENAME"; } \
-  && ok "the Outscale same-name lookup filters image_names on the OMI name being built" || bad "the same-name lookup no longer filters image_names on var.image_name: the gate would never fire"
-grep -q 'same_name' "$TFROOT/outputs.tf" \
-  && bad "the same-name lookup is a root output again: every plan after it exits 2 until applied" \
-  || ok "the lookup is not a root output"
+# What a mock cannot see: the provider's lookup fails the whole plan when no OMI carries the name, so it must not come back
+# in the module (measured on a real account 2026-10-05; the mocked rung had passed it).
+grep -rq 'data "outscale_images"' infrastructure/opentofu/modules/talos-image infrastructure/opentofu/talos-image --include='*.tf' \
+  && bad "data.outscale_images is back in the image modules: it fails every plan of a name nobody holds" \
+  || ok "no data.outscale_images in the image modules (it errors on an empty answer)"
 awk '/variable "talos_version"/,/^}/' "$TFROOT/variables.tf" | grep -Eq '^[[:space:]]*default' \
   && bad "talos_version has a default again: a bare apply would replace the image the state holds" \
   || ok "talos_version has no default"
@@ -543,7 +586,7 @@ grep -q -- '--prune' <<<"$(task -n image-build PROVIDER=ovh PRUNE=1 VERSION=v1.1
   && grep -q -- '--list' <<<"$(task -n image-build PROVIDER=ovh LIST=1 2>&1)" \
   && ok "task image-build PRUNE=1 / LIST=1 reach talos-image.sh" || bad "the Taskfile does not forward --prune/--list"
 grep -Eq 'cd \.\./talos-image .*tofu test' <<<"$(task -n test 2>&1)" \
-  && ok "task test runs the image root's tofu test (the same-name lookup is only proven there)" || bad "task test no longer runs the talos-image root"
+  && ok "task test runs the image root's tofu test (the image root's own tests are only proven there)" || bad "task test no longer runs the talos-image root"
 
 echo "--- jq is checked up front, not discovered mid-run ---"
 mkdir -p "$SB/nojq"

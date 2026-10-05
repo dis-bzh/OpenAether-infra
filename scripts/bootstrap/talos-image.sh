@@ -247,19 +247,20 @@ case "$P" in
 esac
 
 # Outscale answers 409 (9015) to CreateImage when an OMI holds the name, but only AFTER the 8-14 min build
-# (download, upload, snapshot import). The lookup is read from the plan's prior state (as a root output it made every
-# later plan exit 2), so refuse in seconds. Deleting an OMI this lane does not track is the OWNER's call, never ours.
+# (download, upload, snapshot import), so ask before: refuse in seconds. The provider's own lookup cannot ask: on a
+# real account `data.outscale_images` fails the whole plan when nothing matches. Deleting an OMI this lane does not
+# track is the OWNER's call, never ours.
 refuse_taken_omi() {
   [ "$TGT" = outscale ] || return 0
-  local taken
-  taken="$(tofu show -json "$PLAN" | jq -r '
-    ([.prior_state.values.root_module.child_modules[]?.resources[]?
-      | select(.mode == "data" and .type == "outscale_images" and .name == "same_name")] | .[0]) as $d
-    | if ([.resource_changes[]? | select(.type == "outscale_image" and (.change.actions | index("create")))] | length) > 0
-      then (if $d == null then error("the plan carries no same-name lookup")
-            else ([$d.values.images[]?.image_id] | join(" ")) end)
-      else empty end')" \
-    || { echo "✗ cannot read the OMI name lookup from the plan; nothing was applied." >&2; exit 1; }
+  local name taken
+  name="$(tofu show -json "$PLAN" | jq -r '
+    [.resource_changes[]? | select(.type == "outscale_image" and (.change.actions | index("create")))] as $c
+    | if ($c | length) == 0 then empty
+      else ($c[0].change.after.image_name // error("the plan does not name the OMI it creates")) end')" \
+    || { echo "✗ cannot read the OMI name from the plan; nothing was applied." >&2; exit 1; }
+  [ -z "$name" ] && return 0
+  taken="$("${OA_OMI_LOOKUP:-$INTERNAL/outscale-omi-ids.py}" "$name" "$SREGION" | paste -sd' ')" \
+    || { echo "✗ cannot list the OMIs of this account; nothing was applied (a refused question is not an empty answer)." >&2; exit 1; }
   [ -z "$taken" ] && return 0
   echo "✗ this plan creates the OMI for ${VERSION}, but the account already holds one under that name: ${taken}" >&2
   echo "  CreateImage would fail with 409 after the snapshot import. Nothing was imported or spent." >&2

@@ -68,9 +68,10 @@ task image-build PROVIDER=ovh VERSION=<old> PRUNE=1   # destroy ONE version; ref
 - **Outscale, same-name OMI**: an OMI name is unique in the account, and CreateImage fails
   with 409 only after the 8 to 14 minute build (download, upload, snapshot import). `--ensure`
   (what `cluster-up` runs) refuses, before it, a plan that creates the OMI while one holds the
-  name; a plain `image-build` still hits the 409. The lookup is read from the plan, never a
-  root output (a persisted one made every later plan exit 2), and is not scoped by account:
-  an OMI of another account with that name refuses too. Deleting an OMI this state does not
+  name; a plain `image-build` still hits the 409. It asks `ReadImages` for this account's own OMIs
+  (`scripts/internal/outscale-omi-ids.py`); an answer it cannot get refuses too. The provider's
+  `outscale_images` data source cannot do this: on a real account it fails every plan of a name
+  nobody holds. Deleting an OMI this state does not
   track, with its snapshot, is the account owner's call; the script never does. An import that
   outlived a failed apply: `talos-image.sh outscale <version> --import-snapshot <snap-id>`,
   only if that version's state already holds `build_and_upload` (else the next plan replaces

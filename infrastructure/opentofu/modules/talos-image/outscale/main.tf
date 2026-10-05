@@ -135,17 +135,6 @@ resource "outscale_snapshot" "talos" {
 
 }
 
-# An OMI name is unique in the account: CreateImage answers 409 (9015) for a taken
-# one, but only AFTER the import above. talos-image.sh --ensure reads this lookup from the
-# plan and refuses one that creates the image while a name holds it. Not scoped by AccountIds
-# (ReadImages may list shared OMIs): a same-named one of another account refuses too, the safe way.
-data "outscale_images" "same_name" {
-  filter {
-    name   = "image_names"
-    values = [var.image_name]
-  }
-}
-
 # Register a bootable OMI from the imported snapshot. The cluster references it by
 # ID (set image_id in the cluster envs/*.tfvars).
 resource "outscale_image" "talos" {
@@ -181,7 +170,7 @@ resource "outscale_image" "talos" {
 
     # Required for the snapshot's create_before_destroy above: OpenTofu refuses
     # the mode unless every dependent shares it. Names carry the version, so two
-    # versions coexist; a same-version replacement does not (see same_name).
+    # versions coexist; a same-version replacement does not (see refuse_taken_omi in talos-image.sh).
     create_before_destroy = true
   }
 }
