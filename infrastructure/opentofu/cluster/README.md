@@ -192,14 +192,20 @@ has not been done. `envs/failover-*.tfvars.example` still describes the role.
 **Steering traffic between two live clusters** (the optional multi-cluster overlay, not the
 cold rebuild above) is health-checked DNS from a zone that shares no fate with either
 cluster. It is not BGP or anycast across providers, which needs each provider to let a VM
-announce a prefix. The vendors' own docs (read 2026-10-04) say:
+announce a prefix, and none documents that (vendor pages read 2026-10-04; links and PoC
+numbers in the #172 comment):
 
-- Scaleway: flexible routed IPs; BGP only on InterLink and Site-to-Site VPN, toward a VPC;
-  bring-your-own-IP none documented (an open request on its feedback board).
-- OVH Public Cloud: the BGP Service is an alpha for bare-metal servers on a vRack, in 1-AZ
-  regions only (3-AZ regions excluded); an imported IP range works in one region only.
-- Outscale: BGP over DirectLink and VPN only, private routes to a Net; none documented
-  for a public prefix.
+- Scaleway: flexible routed IPs; BGP documented only on InterLink and Site-to-Site VPN,
+  toward a VPC; bring-your-own-IP none documented.
+- OVH: the BGP Service is an alpha for Bare Metal dedicated servers on a vRack, not a
+  Public Cloud product, in 1-AZ regions only (3-AZ excluded); an imported IP range works
+  in one region only.
+- Outscale: BGP documented only over DirectLink and VPN, private routes to a Net; none
+  documented for a public prefix.
+
+Cost and gap: DNS failover takes the check interval times its threshold plus the TTL and
+drops connections in flight (not measured here); a customer-operated router reaching each
+cloud over InterLink or DirectLink was not evaluated.
 
 Talos 1.14's native BGP (`BGPInstanceConfig`) needs a router to peer with: it fits where
 you run the upstream router (on-prem), not this failover. The cold rebuild on another

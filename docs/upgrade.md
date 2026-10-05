@@ -371,13 +371,16 @@ exactly the members left, and the provider's API listing exactly the machines le
 NIC of the removed node). The targeted destroy was exactly the bundle read: a worker is 5 or 6 resources, a control
 plane 3 (Outscale) to 5, plus the load balancer's membership updated in the same apply. An authenticated
 `/readyz` through the load balancer each second, during the control-plane removal: Scaleway 12 failed of 350
-(eight isolated over 40 s, then one run of 4 probes about four minutes later, attributed by the run, not isolated, to
-the load balancer's own backend update), OVH 13 of 374 (isolated, over 76 s), Outscale 13 of 220 (longest run 3
-probes, over 58 s). The isolated failures are the load balancer still sending one request in three to a control
-plane that has left etcd, until its health check marks it down; a client that retries does not see them. Taking the
-member out of the load balancer first would shorten them and is not built, and the Scaleway run says that update
-costs something too. Worker removals: Outscale 1 failed probe of 215, OVH none
-(apart from the moment `cluster-verify` rewrote the kubeconfig the probe was reading); Scaleway's was not probed.
+(eight isolated timeouts over 40 s, then four instant failures in a row about 20 s before the end of the run:
+attributed, not isolated, to the probe reading the kubeconfig while `task kubeconfig` rewrote it, as for OVH's
+worker below), OVH 13 of 374 (isolated, over 76 s), Outscale 13 of 220 (longest run 3 probes, over 57 s). The
+isolated failures are the load balancer still sending one request in three to a control plane that has left etcd;
+a client that retries does not see them. OVH's span matches its health check (5 × 15 s); Scaleway's is shorter
+(40 s against 75 s) and the membership update in the same apply was not timestamped, so what ended the failures
+there was not separated. Taking the member out of the load balancer first is not built; its effect was not
+measured. Worker removals: Outscale 1 failed probe of 215, OVH none (apart from the moment `cluster-verify`
+rewrote the kubeconfig the probe was reading); Scaleway's was not probed. The probe read the live kubeconfig until
+the OVH worker run and a private copy after.
 
 On Scaleway the cluster was then grown back to 3 + 2 with one `cluster-up`: `cluster-verify` 13/13, and
 `cluster-idempotency` passed (empty plan, the five nodes unchanged).

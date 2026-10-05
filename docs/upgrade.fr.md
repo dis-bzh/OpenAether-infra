@@ -396,14 +396,17 @@ s'est terminé par un `cluster-verify` vert (13/13 après un worker, 12/12 aprè
 restantes (aucun volume, port, adresse ni NIC du nœud retiré). La destruction ciblée était exactement le lot lu :
 un worker fait 5 ou 6 ressources, un control plane de 3 (Outscale) à 5, plus l'appartenance au load balancer mise à
 jour dans le même apply. Un `/readyz` authentifié à travers le load balancer chaque seconde, pendant le retrait du
-control plane : Scaleway 12 échecs sur 350 (huit isolés sur 40 s, puis une série de 4 sondes environ quatre minutes
-plus tard, attribuée par le run, sans l'avoir isolée, à la mise à jour du backend du load balancer lui-même), OVH 13
-sur 374 (isolés, sur 76 s), Outscale 13 sur 220 (plus longue série 3 sondes, sur 58 s). Les échecs isolés, c'est le
-load balancer qui envoie encore une requête sur trois à un control plane sorti d'etcd, jusqu'à ce que sa sonde le
-déclare mort ; un client qui réessaie ne les voit pas. Sortir le membre du load balancer d'abord les raccourcirait et
-n'est pas construit, et la série de Scaleway dit que cette mise à jour coûte aussi quelque chose. Les
-retraits de workers : Outscale 1 sonde en échec sur 215, OVH aucune (hors l'instant où `cluster-verify` a réécrit le
-kubeconfig que la sonde lisait) ; celui de Scaleway n'a pas été sondé.
+control plane : Scaleway 12 échecs sur 350 (huit délais d'attente isolés sur 40 s, puis quatre échecs instantanés de
+suite environ 20 s avant la fin du run : attribués, sans l'avoir isolé, à la sonde qui lisait le kubeconfig pendant
+que `task kubeconfig` le réécrivait, comme pour le worker d'OVH ci-dessous), OVH 13 sur 374 (isolés, sur 76 s),
+Outscale 13 sur 220 (plus longue série 3 sondes, sur 57 s). Les échecs isolés, c'est le load balancer qui envoie
+encore une requête sur trois à un control plane sorti d'etcd ; un client qui réessaie ne les voit pas. La durée
+d'OVH correspond à sa sonde de santé (5 × 15 s) ; celle de Scaleway est plus courte (40 s contre 75 s) et la mise à
+jour du membre dans le même apply n'a pas été horodatée : ce qui a arrêté les échecs n'y est pas séparé. Sortir le
+membre du load balancer d'abord n'est pas construit ; son effet n'a pas été mesuré. Les retraits de workers :
+Outscale 1 sonde en échec sur 215, OVH aucune (hors l'instant où `cluster-verify` a réécrit le kubeconfig que la
+sonde lisait) ; celui de Scaleway n'a pas été sondé. La sonde lisait le kubeconfig vivant jusqu'au run worker d'OVH,
+une copie privée ensuite.
 
 Sur Scaleway, le cluster a ensuite été reconstitué à 3 + 2 par un seul `cluster-up` : `cluster-verify` 13/13, et
 `cluster-idempotency` a passé (plan vide, les cinq nœuds inchangés).
