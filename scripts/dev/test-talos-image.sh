@@ -594,6 +594,12 @@ for f in /usr/bin/*; do [ "${f##*/}" = jq ] || ln -sf "$f" "$SB/nojq/${f##*/}"; 
 OUT="$(RUN_PATH="$SB:$SB/nojq" run 2 --ensure)"; RC=$?
 { [ "$RC" -ne 0 ] && grep -q 'jq required' <<<"$OUT"; } && ok "a missing jq stops the run before anything is read or built" || bad "no jq did not stop the script (rc=$RC): ${OUT:0:200}"
 
+echo "--- the image-build task hands its ROLE to the script: the lane's bucket namespace is that role's tfvars ---"
+# Without it a failover cluster looked for management-<provider>.tfvars, absent on the machine that has only the failover file,
+# and fell back to the shared 'openaether' namespace, a bucket name another customer may own.
+grep -q 'OA_ROLE=failover ./scripts/bootstrap/talos-image.sh scaleway' <<<"$(task -n image-build PROVIDER=scaleway ROLE=failover VERSION=v1.14.2 2>&1)" \
+  && ok "task image-build ROLE=failover runs the script with OA_ROLE=failover" || bad "the image-build task does not pass ROLE to the script"
+
 echo "--- floors: the stubs really ran (all of the above is vacuous otherwise) ---"
 OUT="$(run 2 --ensure)"
 [ "$(calls init)" -ge 1 ] && ok "tofu was invoked through the stub ($(wc -l <"$LOG") calls recorded)" \

@@ -638,7 +638,9 @@ tasks:
       PRUNE: '{{.PRUNE | default ""}}'
       MODE: '{{if .LIST}} --list{{end}}{{if .PRUNE}} --prune{{end}}'
     cmds:
-      - './scripts/bootstrap/talos-image.sh {{.PROVIDER}} {{.IMAGE_VERSION}}{{if .ENSURE}} --ensure{{end}}{{.MODE}}'
+      - >-
+        OA_ROLE={{.ROLE}} ./scripts/bootstrap/talos-image.sh {{.PROVIDER}}
+        {{.IMAGE_VERSION}}{{if .ENSURE}} --ensure{{end}}{{.MODE}}
 
   cluster-up:
     aliases: [up]
