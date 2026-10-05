@@ -67,7 +67,7 @@ case "$1" in
     case "$2" in
       pull) [ -z "${OA_STUB_PULL_FAIL:-}" ] || exit 1
             if [ -f "$KF.$k" ]; then cat "$KF.$k"; elif [ "$k" = talos-image.tfstate ]; then cat "${OA_STUB_LEGACY:-/dev/null}"; fi ;;
-      push) [ -n "${OA_STUB_PUSH_DROP:-}" ] || cp "$3" "$KF.$k" ;;
+      push) [ -n "${OA_STUB_PUSH_DROP:-}" ] || jq '.lineage = "re-minted" | .serial = 1' "$3" >"$KF.$k" ;;  # the real backend re-mints both
       list) printf '%s' "${OA_STUB_LEFT:-}" ;;
     esac ;;
 esac
@@ -367,7 +367,7 @@ OUT="$(OA_STUB_MV_EXIT=1 run 2 --ensure)"; RC=$?
 { [ "$RC" -eq 0 ] && grep -q 'could not retire' <<<"$OUT"; } && ok "a rename that fails warns with the command and goes on (the copy is done)" || bad "a failed retire was silent or fatal (rc=$RC)"
 OUT="$(OA_STUB_PUSH_DROP=1 run 2 --ensure)"; RC=$?
 { [ "$RC" -ne 0 ] && [ "$(acalls 's3 mv')" = 0 ] && [ "$(calls apply)" = 0 ]; } \
-  && ok "a push that did not land (lineage differs) stops before the legacy object is touched" || bad "the copy was not verified (rc=$RC)"
+  && ok "a push that did not land (the pulled state holds other resources) stops before the legacy object is touched" || bad "the copy was not verified (rc=$RC)"
 is "…and the decrypted copy is removed on that path too" 0 "$(find "$SB/tmp" -type f | wc -l)"
 
 OUT="$(VER=v1.13.9 run 2 --ensure)"; RC=$?

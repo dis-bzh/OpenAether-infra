@@ -307,7 +307,8 @@ init_state "$NEW_KEY"
 if [ "$MIGRATE" = true ]; then
   echo "▶ Copying ${LEGACY_KEY} (${VERSION}) to ${NEW_KEY}"
   tofu state push "$LEGACY_JSON"
-  [ "$(tofu state pull | jq -r .lineage)" = "$(jq -r .lineage "$LEGACY_JSON")" ] \
+  # A push into an empty key re-mints lineage and serial (measured: OpenTofu 1.12.6, encrypted S3), so compare what the state holds.
+  [ "$(tofu state pull | jq -S '[.resources, .outputs]')" = "$(jq -S '[.resources, .outputs]' "$LEGACY_JSON")" ] \
     || { echo "✗ ${NEW_KEY} does not hold the state just pushed; ${LEGACY_KEY} is untouched." >&2; exit 1; }
   # Retired, not deleted, and not left in place: a legacy object still named so would be copied
   # back as a ghost the day this version is pruned and built again.
