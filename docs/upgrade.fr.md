@@ -113,8 +113,10 @@ task cluster-roll PROVIDER=<p> KEY=~/.ssh/<clé> -- --workers-only --upgrade
 Le pin bouge avant le build (`talos-image.sh` ne compare un `image_id` pinné qu'à
 l'image de la version qu'il construit). Chaque version a son propre état d'image : un
 build ne remplace jamais une autre image ; s'il échoue, relancer, ou remettre
-`talos_version` à l'ancienne version pour que le cluster replanifie. Les anciennes
-images restent jusqu'à `PRUNE=1`, voir
+`talos_version` à l'ancienne version pour que le cluster replanifie. Une fois la
+montée vérifiée, `RETAIN=1` garde la version du cluster et celle d'en dessous et
+détruit les autres images (`cluster-up` le lance, `cluster-upgrade` non) ; ses règles,
+`LIST=1` et `PRUNE=1` sont dans
 [`talos-image/README.md`](../infrastructure/opentofu/talos-image/README.md). Les
 montées du 2026-10-03 ont suivi cet ordre sur les trois clouds, sur la voie à
 image unique que ceci remplace.

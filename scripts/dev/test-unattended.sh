@@ -448,7 +448,8 @@ else:
 # talos-image.sh has two applies: --ensure applies a saved plan (never prompts),
 # the plain path prompts. So the unattended entry must carry ENSURE.
 hdr('the image build the entry point triggers is the non-interactive one')
-img = [(callee, kv) for c, callee, _, kv in EDGES if c == ENTRY and callee == 'image-build']
+# A retention edge destroys instead of building: it has no apply to make non-interactive and is held to its own guard below.
+img = [(callee, kv) for c, callee, _, kv in EDGES if c == ENTRY and callee == 'image-build' and not unquote(kv.get('RETAIN', ''))]
 if not img:
     bad(f'{ENTRY} no longer calls image-build — this check is measuring a journey that moved')
 def ensures(v):
@@ -468,6 +469,16 @@ for callee, kv in img:
         ok('image-build forwards it to talos-image.sh as --ensure')
     else:
         bad('image-build does not forward --ensure — the ENSURE var is inert')
+
+# The retention is a destroy, and its yes is tofu's own: APPROVE=auto must not reach it (a run asked for a terminal before).
+ret = [b for b in blocks(TASKS[ENTRY]) if any(c == 'image-build' and 'RETAIN' in kv for _, c, kv, _ in shell_calls(b))]
+if len(ret) != 1:
+    bad(f'{ENTRY} has {len(ret)} blocks calling image-build RETAIN=… — expected exactly one, after the verdict')
+else:
+    if re.search(r'if \[ "\{\{[^}]*\.APPROVE[^}]*\}\}" = auto \]; then', ret[0]):
+        ok(f'{ENTRY} retention is skipped under APPROVE=auto, which never answers a destroy')
+    else:
+        bad(f'{ENTRY} retention is not guarded by APPROVE=auto: unattended, tofu would ask a destroy nobody can answer')
 
 # --- F. the callers OUTSIDE the Taskfile -------------------------------------
 # THE RULE. Anything that runs `task <something that needs the approval>` must
