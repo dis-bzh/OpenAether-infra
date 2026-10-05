@@ -70,9 +70,8 @@ name = "cloudnative-pg/cloudnative-pg"
 installer = "scripts/internal/install-kubectl-cnpg.sh"
 version_cmd = "kubectl-cnpg version"
 
-# Moved out of [[unpinned]] below (#113): both consumers — setup.sh and
-# ci.yml — now install through this pinned, checksum-verified installer
-# instead of an unpinned `apt-get install -y shellcheck`.
+# Both consumers — setup.sh and ci.yml — install through this pinned,
+# checksum-verified installer (#113).
 [[tool]]
 name = "koalaman/shellcheck"
 installer = "scripts/internal/install-shellcheck.sh"
@@ -109,41 +108,6 @@ name = "siderolabs/talos"
 installer = "scripts/internal/install-talosctl.sh"
 version_cmd = "talosctl version --client"
 daily = false
-
-# --- What the repository consumes without pinning it -------------------------
-# No version is written down anywhere, so no two machines are guaranteed the
-# same tool. Cléa cannot bump these — it can only make the movement visible,
-# which is more than exists today.
-
-[[unpinned]]
-name = "kubernetes/kubernetes"
-datasource = "url-text"
-url = "https://dl.k8s.io/release/stable.txt"
-extract = "^(?P<v>v[0-9][0-9A-Za-z.-]*)$"
-consumed_by = "scripts/setup.sh (install_kubectl)"
-
-[[unpinned]]
-# github-TAGS, not releases: aws/aws-cli tags every version and publishes no
-# GitHub release, so `releases/latest` answers 404. A 404 is reported as a
-# failure rather than as "up to date", which is how this was noticed.
-name = "aws/aws-cli"
-datasource = "github-tags"
-consumed_by = "scripts/setup.sh (install_awscli_bundle)"
-
-[[unpinned]]
-name = "checkov"
-datasource = "pypi"
-consumed_by = "scripts/setup.sh (install_checkov)"
-
-[[unpinned]]
-name = "yamllint"
-datasource = "pypi"
-consumed_by = "scripts/setup.sh (install_yamllint), .github/workflows/ci.yml"
-
-[[unpinned]]
-name = "pre-commit"
-datasource = "pypi"
-consumed_by = "scripts/setup.sh (install_precommit)"
 
 # --- The repository's own gates, run on every probe branch -------------------
 # Not a copy of CI: a bot push carries GITHUB_TOKEN, and GitHub does not trigger

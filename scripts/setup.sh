@@ -43,6 +43,19 @@ FLUX_VERSION="2.9.3"
 FLUX_SCHEMA_VERSION="0.15.0"
 # renovate: datasource=github-releases depName=helm/helm extractVersion=^v(?<version>.*)$
 HELM_VERSION="4.3.0"
+# Five more, pinned so Cléa compares a version instead of "whatever is newest today".
+# kubectl and aws-cli install from a named URL; the three Python tools via pip.
+# YAMLLINT_VERSION MUST equal the pip pin in ci.yml (check-version-drift.sh).
+# renovate: datasource=github-releases depName=kubernetes/kubernetes extractVersion=^v(?<version>.*)$
+KUBECTL_VERSION="1.37.1"
+# renovate: datasource=github-tags depName=aws/aws-cli
+AWSCLI_VERSION="2.37.9"
+# renovate: datasource=pypi depName=checkov
+CHECKOV_VERSION="3.3.22"
+# renovate: datasource=pypi depName=yamllint
+YAMLLINT_VERSION="1.38.0"
+# renovate: datasource=pypi depName=pre-commit
+PRECOMMIT_VERSION="4.6.2"
 
 # check_cmd <tool> [pinned-version]
 #
@@ -54,9 +67,8 @@ HELM_VERSION="4.3.0"
 # The same shape was found and fixed for feint on 2026-08-21
 # (scripts/dev/feint.sh, the comment above its install_feint call).
 #
-# Only the tools this file PINS get the second argument. For the others there is
-# no version to compare against, and inventing one would be a check that cannot
-# fail; pinning them is a separate decision, not made here.
+# Every tool this file pins gets the second argument; a tool with no pin must not,
+# a comparison against an invented version cannot fail.
 check_cmd() {
     local tool="$1" want="${2:-}" version
     if ! command -v "$tool" &> /dev/null; then
@@ -151,13 +163,16 @@ install_tofu() {
 }
 
 install_kubectl() {
-    echo "Installing kubectl..."
-    curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-    chmod +x kubectl
-    local dir sudo_cmd
+    echo "Installing kubectl v${KUBECTL_VERSION}..."
+    local tmp dir sudo_cmd base="https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/amd64"
+    tmp="$(mktemp -d)"
+    curl -fsSLo "$tmp/kubectl" "$base/kubectl"
+    echo "$(curl -fsSL "$base/kubectl.sha256")  $tmp/kubectl" | sha256sum -c - >/dev/null
+    chmod +x "$tmp/kubectl"
     dir="$(oa_bin_dir)"; sudo_cmd="$(oa_sudo_for "$dir")"
     mkdir -p "$dir"
-    $sudo_cmd mv kubectl "$dir/kubectl"
+    $sudo_cmd mv "$tmp/kubectl" "$dir/kubectl"
+    rm -rf "$tmp"
     [ "$dir" = /usr/local/bin ] || echo "NOTE: kubectl installed to $dir. Ensure it's in your PATH."
 }
 
@@ -170,61 +185,32 @@ install_shellcheck() {
     "$(dirname "${BASH_SOURCE[0]}")/internal/install-shellcheck.sh"
 }
 
-install_yamllint() {
-    echo "Installing yamllint..."
-    # `python3 -m pip`, not `command -v pip3` — see install_checkov for why:
-    # Python without a pip3 BINARY is the normal case on Ubuntu 24.04.
-    if python3 -m pip --version &> /dev/null; then
-        python3 -m pip install --user yamllint
-    elif command -v apt-get &> /dev/null; then
-        $SUDO apt-get update && $SUDO apt-get install -y yamllint
-    else
-        echo "⚠️  Could not install yamllint automatically. Please install it manually."
-    fi
-}
-
-install_checkov() {
-    echo "Installing checkov..."
-    # `task security` calls checkov directly, but only CI ever had it (a pinned
-    # action), so the task could not pass on a machine set up by this script.
-    # `pip3` is not always a binary even where Python is: prefer pipx, fall back
-    # to `python3 -m pip`, and say so rather than leaving `task security` to die
-    # with "executable file not found".
-    # Kept in this order on purpose: the first three need no sudo, the fourth does.
-    local venv="$HOME/.local/share/openaether/checkov-venv"
-    if command -v pipx &> /dev/null; then
-        pipx install checkov
-    elif python3 -m pip --version &> /dev/null; then
-        python3 -m pip install --user checkov
-    elif mkdir -p "$(dirname "$venv")" && python3 -m venv "$venv" &> /dev/null && [ -x "$venv/bin/pip" ]; then
-        # Ubuntu 24.04 ships python3 with NEITHER pip nor pipx, so the two
-        # branches above miss and the apt one below wants sudo. A venv needs
-        # neither and carries its own pip. Measured 2026-08-24 on exactly that
-        # machine, where `task security` could not be completed at all.
-        # The condition CREATES the venv rather than probing with `--help`:
-        # `import venv` succeeds without python3-venv installed and only the
-        # creation fails, so anything cheaper would answer the wrong question.
-        "$venv/bin/pip" install --quiet checkov
+# pip_install_pinned <package> <version> [binary]
+# apt and brew cannot name a version, so these tools come from PyPI: pipx, then
+# `pip --user`, then a private venv (Ubuntu 24.04 ships python3 with neither
+# pip nor pipx; `--user` is refused there as externally managed). Each step
+# falls through on failure, and none needs sudo except the last apt-for-pipx.
+pip_install_pinned() {
+    local pkg="$1" ver="$2" bin="${3:-$1}" venv="$HOME/.local/share/openaether/$1-venv"
+    echo "Installing $pkg==$ver..."
+    if command -v pipx &> /dev/null && pipx install --force "$pkg==$ver"; then :
+    elif python3 -m pip --version &> /dev/null && python3 -m pip install --user "$pkg==$ver"; then :
+    elif mkdir -p "$(dirname "$venv")" && python3 -m venv "$venv" &> /dev/null \
+         && "$venv/bin/pip" install --quiet "$pkg==$ver"; then
         mkdir -p "$HOME/.local/bin"
-        ln -sf "$venv/bin/checkov" "$HOME/.local/bin/checkov"
-    elif command -v apt-get &> /dev/null; then
-        $SUDO apt-get update && $SUDO apt-get install -y pipx && pipx install checkov
+        ln -sf "$venv/bin/$bin" "$HOME/.local/bin/$bin"
+    elif command -v apt-get &> /dev/null \
+         && $SUDO apt-get update && $SUDO apt-get install -y pipx && pipx install --force "$pkg==$ver"; then :
     else
-        echo "⚠️  Could not install checkov automatically — 'task security' will stop"
-        echo "   at the checkov step. Install it manually: pipx install checkov"
-        return
+        echo "⚠️  Could not install $pkg==$ver automatically. Install it manually: pipx install $pkg==$ver"
+        return 1
     fi
-
-    # Installed is not the same as reachable. pipx and `pip --user` both land in
-    # ~/.local/bin, which is not on PATH on a fresh Ubuntu — so `task security`
-    # still died with "executable file not found" on a machine where checkov was
-    # present. pipx says so in a warning nobody reads; this makes it true instead.
-    if ! command -v checkov &> /dev/null && [ -x "$HOME/.local/bin/checkov" ]; then
+    # Installed is not reachable: ~/.local/bin is not on a fresh Ubuntu's PATH.
+    if ! command -v "$bin" &> /dev/null && [ -x "$HOME/.local/bin/$bin" ]; then
         command -v pipx &> /dev/null && pipx ensurepath >/dev/null 2>&1 || true
         export PATH="$HOME/.local/bin:$PATH"
-        echo "⚠️  checkov is in ~/.local/bin, which was not on your PATH."
-        echo "   Added for the rest of this script and to your shell profile;"
-        echo "   open a new shell, or: export PATH=\"\$HOME/.local/bin:\$PATH\""
+        echo "⚠️  $bin is in ~/.local/bin, which was not on your PATH; added for this script."
+        echo "   Open a new shell, or: export PATH=\"\$HOME/.local/bin:\$PATH\""
     fi
 }
 
@@ -236,11 +222,11 @@ install_task() {
 }
 
 install_awscli_bundle() {
-    echo "Installing AWS CLI v2 from the official bundle..."
+    echo "Installing AWS CLI v${AWSCLI_VERSION} from the official bundle..."
     command -v unzip &> /dev/null || $SUDO apt-get install -y unzip
     local tmp
     tmp="$(mktemp -d)"
-    curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o "$tmp/aws.zip"
+    curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m)-${AWSCLI_VERSION}.zip" -o "$tmp/aws.zip"
     (cd "$tmp" && unzip -q aws.zip && $SUDO ./aws/install --update)
     rm -rf "$tmp"
 }
@@ -261,17 +247,9 @@ install_image_tools() {
         echo "⚠️  Could not auto-install zstd/qemu-img/gpg/jq. Install them manually."
     fi
 
-    # AWS CLI — not in every distro's repos; try brew, then snap, then the
-    # official v2 bundle (used to upload the image to Object Storage).
-    if ! command -v aws &> /dev/null; then
-        if command -v brew &> /dev/null; then
-            brew install awscli
-        elif command -v snap &> /dev/null; then
-            $SUDO snap install aws-cli --classic 2>/dev/null || install_awscli_bundle
-        else
-            install_awscli_bundle
-        fi
-    fi
+    # AWS CLI — the official v2 bundle only: brew and snap cannot name a version.
+    # Used to upload the image to Object Storage.
+    check_cmd aws "$AWSCLI_VERSION" || install_awscli_bundle
 }
 
 install_flux() {
@@ -311,18 +289,7 @@ install_helm() {
 }
 
 install_precommit() {
-    echo "Installing pre-commit..."
-    if command -v apt-get &> /dev/null; then
-        $SUDO apt-get update && $SUDO apt-get install -y pre-commit
-    elif command -v brew &> /dev/null; then
-        brew install pre-commit
-    elif command -v pip3 &> /dev/null; then
-        pip3 install --user pre-commit
-        export PATH=$PATH:$HOME/.local/bin
-    else
-        echo "⚠️  Could not install pre-commit automatically. Please install 'pip3' or 'brew' first."
-        return 1
-    fi
+    pip_install_pinned pre-commit "$PRECOMMIT_VERSION"
 }
 
 # 1. Check OpenTofu
@@ -338,13 +305,13 @@ fi
 "$(dirname "${BASH_SOURCE[0]}")/internal/install-talosctl.sh"
 
 # 3. Check kubectl
-if ! check_cmd kubectl; then
+if ! check_cmd kubectl "$KUBECTL_VERSION"; then
     install_kubectl
 fi
 
 # 4. Check yamllint
-if ! check_cmd yamllint; then
-    install_yamllint
+if ! check_cmd yamllint "$YAMLLINT_VERSION"; then
+    pip_install_pinned yamllint "$YAMLLINT_VERSION"
 fi
 
 # 4b. Check shellcheck — `task lint` gates on it
@@ -378,8 +345,8 @@ if ! check_cmd actionlint; then
 fi
 
 # 5c. Check checkov (`task security` runs it directly; only CI ever had it)
-if ! check_cmd checkov; then
-    install_checkov
+if ! check_cmd checkov "$CHECKOV_VERSION"; then
+    pip_install_pinned checkov "$CHECKOV_VERSION"
 fi
 
 # 5d. gitleaks — `task security` runs it directly, and pre-commit's own
@@ -402,7 +369,9 @@ fi
 # 6. Check Talos image + backup tools (used by `task image-build` and the S3 backups)
 MISSING_IMG_TOOLS=0
 for t in curl zstd qemu-img aws gpg jq; do
-    check_cmd "$t" || MISSING_IMG_TOOLS=1
+    want=""
+    if [ "$t" = aws ]; then want="$AWSCLI_VERSION"; fi
+    check_cmd "$t" "$want" || MISSING_IMG_TOOLS=1
 done
 if [ "$MISSING_IMG_TOOLS" -eq 1 ]; then
     install_image_tools
@@ -441,7 +410,7 @@ if ! check_cmd nc; then
 fi
 
 # 10. Check pre-commit (optional but recommended)
-if ! check_cmd pre-commit; then
+if ! check_cmd pre-commit "$PRECOMMIT_VERSION"; then
     echo -e "${RED}⚠ pre-commit is not installed (recommended for DevSecOps)${NC}"
     # `read` on a closed stdin returns 1, and `set -e` turned that into an abort
     # one line before "Environment ready" — so this script could not finish

@@ -251,6 +251,12 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **`setup.sh` pins the last five tools it installed at "whatever is newest today"**: kubectl (checksum-verified),
+  aws-cli, checkov, yamllint and pre-commit, each behind a `# renovate:` anchor, so Cléa compares a version instead
+  of watching it move (`[[unpinned]]` is now empty in `clea.toml`). The three Python tools share one `pip_install_pinned`
+  (pipx, then `pip --user`, then a private venv); brew, snap and apt are gone for them, as they cannot name a version.
+  yamllint is also held equal to `ci.yml`'s by `check-version-drift.sh`.
+
 - **commitizen 4.19.0 → 4.19.1** in the CI commit-message job, probed green by Cléa (#91). Proof: lint,
   render-check, test-scripts, validate (both roots), `task test` (71/71), checkov 32/0, custom checks 6/0 and
   gitleaks green; trivy not run in the sandbox. Left out: plumber v0.5.20 (`clea bump` refuses its `action-sha`

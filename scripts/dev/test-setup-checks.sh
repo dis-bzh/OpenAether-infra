@@ -171,6 +171,35 @@ sudostub 0
 rm -f "$TMP/bin/sudo"
 
 echo
+echo "=== a Python tool is installed at the pin, and a failing step falls through ==="
+# apt and brew cannot name a version, so pip_install_pinned is the only path
+# for checkov, yamllint and pre-commit: it must ask for exactly pkg==version.
+sed -n '/^pip_install_pinned() {/,/^}/p' "$ROOT/scripts/setup.sh" > "$TMP/pip.sh"
+grep -q 'pipx install' "$TMP/pip.sh" || {
+  echo "✗ could not extract pip_install_pinned from setup.sh" >&2; exit 1; }
+pipstub() { # <name> <rc> — records its arguments in $TMP/calls
+  printf '#!/bin/sh\necho "%s $*" >> "%s/calls"\nexit %s\n' "$1" "$TMP" "$2" > "$TMP/bin/$1"
+  chmod +x "$TMP/bin/$1"
+}
+pipcall() { # <pkg> <ver> — runs the function with only the stubs on PATH
+  : > "$TMP/calls"
+  PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP/home" SUDO="" \
+    bash -c '. "$1"; pip_install_pinned "$2" "$3"' _ "$TMP/pip.sh" "$1" "$2" >/dev/null 2>&1
+}
+mkdir -p "$TMP/home"
+pipstub pipx 0; pipstub python3 0
+pipcall checkov 3.3.22
+grep -qx 'pipx install --force checkov==3.3.22' "$TMP/calls" \
+  && ok "pipx is asked for pkg==version, and --force so an older install is replaced" \
+  || bad "pipx was not asked for checkov==3.3.22: $(cat "$TMP/calls")"
+pipstub pipx 1
+pipcall yamllint 1.38.0
+grep -q 'python3 -m pip install --user yamllint==1.38.0' "$TMP/calls" \
+  && ok "a failing pipx falls through to pip --user at the same pin" \
+  || bad "no pip --user fallback after pipx failed: $(cat "$TMP/calls")"
+rm -f "$TMP/bin/pipx" "$TMP/bin/python3"
+
+echo
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 # A floor, not just a verdict: `FAIL -eq 0` is also true when the harness died
 # before asserting anything, which is the shape this repository keeps meeting.
