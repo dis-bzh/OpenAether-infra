@@ -137,6 +137,8 @@ command -v kubectl >/dev/null 2>&1 || die "kubectl is required"
 [[ -f "$TFVARS" ]] || die "tfvars not found: $TFVARS (run from infrastructure/opentofu/cluster)"
 [[ -f "$TALOSCONFIG_FILE" ]] || die "talosconfig not found: $TALOSCONFIG_FILE"
 [[ -f "$KUBECONFIG_FILE"  ]] || die "kubeconfig not found: $KUBECONFIG_FILE"
+# Every plan below sets talos_bootstrap=true: from a state without the Talos secrets it would mint a new PKI (#66).
+"$(dirname "${BASH_SOURCE[0]}")/../internal/bootstrap-in-state.sh" >/dev/null || exit 1
 
 OUTPUTS="$(tofu output -json 2>/dev/null || echo '{}')"
 # Node identity prefix is "<cluster_name>-<environment>" (cluster/main.tf:249).

@@ -44,6 +44,8 @@ case "$*" in
     esac ;;
   "output -json")
     printf '{"control_plane_private_ips":{"value":%s}}\n' "${OA_STUB_CP_IPS:-[]}" ;;
+  "state list -no-color") # the state's addresses, from a file; empty when none is given
+    [ -z "${OA_STUB_STATE:-}" ] || cat "$OA_STUB_STATE" ;;
 esac
 exit 0
 STUB
@@ -154,6 +156,22 @@ is "exit 1" 1 "$RC"
 is "zero aws calls" 0 "$(calls aws:)"
 grep -q "AccessDenied" <<<"$OUT" && ok "tofu's own error is shown" || bad "the cause is hidden: $OUT"
 grep -q "not 'no backup configured'" <<<"$OUT" && ok "and the two answers are told apart" || bad "$OUT"
+
+echo "--- a state that lost its secrets never replaces the replica (#66) ---"
+# What infra-down-plan leaves behind: the bootstrap is tracked, the machine secrets are not. The replica holds
+# the pre-untrack copy, and replicating now would turn the undo into the same lost state.
+printf 'module.scw[0].scaleway_instance_server.worker[0]\nmodule.talos.talos_machine_bootstrap.this[0]\n' >"$SB/lost.state"
+printf '%s\nmodule.talos.talos_machine_secrets.this[0]\n' "$(cat "$SB/lost.state")" >"$SB/kept.state"
+ENV_EXTRA="OA_STUB_STATE=$SB/lost.state AWS_ACCESS_KEY_ID=AMBIENT-AK SCW_AWS_ACCESS_KEY_ID=PRIMARY-AK SCW_AWS_SECRET_ACCESS_KEY=PRIMARY-SK"
+OUT="$(run "$BS" "$ROOT")"; RC=$?
+[ "$RC" -ne 0 ] && ok "refused (rc=$RC)" || bad "a state without its secrets was replicated: $OUT"
+is "no download and no upload" 0 "$(calls aws:)"
+grep -q "talos_machine_secrets" <<<"$OUT" && grep -q "nothing was replicated" <<<"$OUT" \
+  && ok "and it says why, and that nothing moved" || bad "silent or vague refusal: $OUT"
+ENV_EXTRA="OA_STUB_STATE=$SB/kept.state AWS_ACCESS_KEY_ID=AMBIENT-AK SCW_AWS_ACCESS_KEY_ID=PRIMARY-AK SCW_AWS_SECRET_ACCESS_KEY=PRIMARY-SK"
+OUT="$(run "$BS" "$ROOT")"; RC=$?
+is "the same state with its secrets is replicated" 0 "$RC"
+is "…by one upload" 1 "$(uploads | wc -l)"
 
 echo "--- the download fails: no upload, no ✓ ---"
 ENV_EXTRA="OA_STUB_DL_EXIT=1 AWS_ACCESS_KEY_ID=AMBIENT-AK SCW_AWS_ACCESS_KEY_ID=PRIMARY-AK SCW_AWS_SECRET_ACCESS_KEY=PRIMARY-SK"

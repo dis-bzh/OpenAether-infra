@@ -70,6 +70,12 @@ in one apply on all three clouds. Do not add a retry: `cluster-upgrade.sh`
 deliberately has none, because a retry turns a defect green. The workaround is not
 shown redundant under provider 0.12.0 (#83), so leave it in.
 
+## `talos_version` is the node's Talos, not the config contract
+
+`modules/talos` renders the machine config under `config_contract`, never newer than v1.13: provider
+0.12 turns a 1.14 contract into documents the v1alpha1 patches collide with (#241). Feed the node's
+version, not the contract, to the secrets, the installer and the replace trigger; the tests pin all three.
+
 ## What to watch, beyond "it came back"
 
 - **The node's name is unchanged.** A `talos-xxxxx` entry means the hostname did

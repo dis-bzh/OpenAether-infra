@@ -4,10 +4,9 @@ terraform {
   required_providers {
     talos = {
       source = "siderolabs/talos"
-      # Bounded ceiling so a consumer with a loose root can't drift onto 0.12.x,
-      # which the module's patches cannot drive on Talos 1.14 (#241). Lower bound
-      # wide enough for the cluster root (~> 0.11.0) and the local stack (0.11.0).
-      version = ">= 0.7.0, < 0.12.0"
+      # Bounded ceiling, a gate Renovate is told not to move: a new minor can render a new Talos
+      # contract, and its first run on a real node is what shows the patches still fit (#241).
+      version = ">= 0.7.0, < 0.13.0"
     }
     random = {
       source  = "hashicorp/random"
