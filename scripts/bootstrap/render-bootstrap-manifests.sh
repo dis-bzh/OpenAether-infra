@@ -39,7 +39,7 @@ fi
 # renovate: datasource=helm depName=cilium registryUrl=https://helm.cilium.io/
 CILIUM_VERSION="${CILIUM_VERSION:-1.20.2}"
 # renovate: datasource=github-releases depName=fluxcd/flux2
-FLUX_VERSION="${FLUX_VERSION:-v2.9.3}"
+FLUX_VERSION="${FLUX_VERSION:-v2.9.6}"
 FLUX_URL="https://github.com/fluxcd/flux2/releases/download/${FLUX_VERSION}/install.yaml"
 
 # The chart version is pinned, but the RENDERER is a second input nobody had
@@ -242,22 +242,6 @@ fi
 sed -i 's/[[:space:]]*$//' "${CILIUM_OUTPUT}"
 
 # ─────────────────────────────────────────────────────
-# 1b. Regenerate the upstream artifacts lock (production only)
-# ─────────────────────────────────────────────────────
-# cilium.yaml pins its images by digest; flux-install.yaml pins seven by tag
-# only, so a tag force-moved upstream changes not one byte of either committed
-# file and nothing here would notice (#119). This lock records what THIS
-# render actually wrote, offline-verifiable by
-# check-upstream-artifacts-lock.sh. Gated on OPENAETHER_SKIP_FLUX (already set
-# by --check's own recursive calls above): those render into a throwaway dir
-# that never holds flux-install.yaml, and cilium-local.yaml is gitignored —
-# neither belongs in a lock committed alongside the production artifacts.
-if [[ "$LOCAL_MODE" == "false" && "${OPENAETHER_SKIP_FLUX:-0}" != "1" ]]; then
-  (cd "${MANIFESTS_DIR}" && sha256sum cilium.yaml flux-install.yaml > upstream-artifacts.lock)
-  echo "  🔒 upstream-artifacts.lock regenerated"
-fi
-
-# ─────────────────────────────────────────────────────
 # 2. Download Flux install manifest
 # ─────────────────────────────────────────────────────
 # ⚠️ Opt-in (OPENAETHER_REFRESH_FLUX=1): re-downloading is an upgrade, not a
@@ -271,6 +255,23 @@ if [[ "$LOCAL_MODE" == "false" && "${OPENAETHER_SKIP_FLUX:-0}" != "1" \
     exit 1
   fi
   echo "  ✅ Written to bootstrap-manifests/flux-install.yaml"
+fi
+
+# ─────────────────────────────────────────────────────
+# 2b. Regenerate the upstream artifacts lock (production only)
+# ─────────────────────────────────────────────────────
+# Runs AFTER the download above: before it, a refresh recorded the OLD flux-install.yaml hash and needed a second run.
+# cilium.yaml pins its images by digest; flux-install.yaml pins seven by tag
+# only, so a tag force-moved upstream changes not one byte of either committed
+# file and nothing here would notice (#119). This lock records what THIS
+# render actually wrote, offline-verifiable by
+# check-upstream-artifacts-lock.sh. Gated on OPENAETHER_SKIP_FLUX (already set
+# by --check's own recursive calls above): those render into a throwaway dir
+# that never holds flux-install.yaml, and cilium-local.yaml is gitignored —
+# neither belongs in a lock committed alongside the production artifacts.
+if [[ "$LOCAL_MODE" == "false" && "${OPENAETHER_SKIP_FLUX:-0}" != "1" ]]; then
+  (cd "${MANIFESTS_DIR}" && sha256sum cilium.yaml flux-install.yaml > upstream-artifacts.lock)
+  echo "  🔒 upstream-artifacts.lock regenerated"
 fi
 
 # ─────────────────────────────────────────────────────
