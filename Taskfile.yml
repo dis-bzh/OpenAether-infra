@@ -531,6 +531,8 @@ tasks:
       - ./scripts/dev/test-task-guards.sh
       # infra-plan/infra-apply's talos_bootstrap answer: an unreadable state is refused, not "false".
       - ./scripts/dev/test-bootstrap-in-state.sh
+      # A Flux refresh must leave upstream-artifacts.lock holding the hash of the file it just wrote.
+      - ./scripts/dev/test-render-bootstrap-lock.sh
       # Cilium replaces kube-proxy: every machine config the module builds must disable it.
       - ./scripts/dev/test-kube-proxy-disabled.sh
       # infra-verify.sh's worker data-volume check (#62): names from the tfvars, verdicts from the nodes.
