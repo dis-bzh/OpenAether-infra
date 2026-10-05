@@ -1,33 +1,45 @@
 #!/usr/bin/env bash
 # OpenAether — build + publish the Talos image for a provider (decoupled root).
 #
-# Built once per Talos version, reused by every cluster on that provider. Its
-# own state (one bucket per provider) means building never touches deployed
-# cluster infra.
+# Built once per Talos version, reused by every cluster on that provider. Each version has its OWN
+# state (key talos-image-<provider>-<version>.tfstate in the provider's lane bucket), so a build can
+# only touch its own version and building X never replaces Y. It never touches deployed cluster infra.
 #
 # Credentials: AWS_* = the provider's S3 keys, plus its compute creds
 # (scaleway SCW_*, ovh OS_*, outscale OSC_*, proxmox PROXMOX_VE_*) and
 # TF_VAR_encryption_passphrase.
 #
 # Usage:
-#   ./scripts/bootstrap/talos-image.sh <provider> [talos_version] [--ensure]
-#   task image-build PROVIDER=ovh [VERSION=v1.13.4]
+#   ./scripts/bootstrap/talos-image.sh <provider> [talos_version] [--ensure|--list|--prune|--import-snapshot <id>]
+#   task image-build PROVIDER=ovh [VERSION=v1.13.4] [ENSURE=1|LIST=1|PRUNE=1]
 #
-# --ensure: idempotence gate for `task cluster-up` — plans first and only applies on a
-#   real change, so a rerun with the image already published costs nothing.
+# --ensure: idempotence gate for `task cluster-up`: plan first, apply only on a real change.
+# --list: the versions this lane holds (one state each); builds nothing and creates no bucket.
+# --prune: destroy ONE version's image set (the only way an image leaves the lane); refused while a tfvars pins it.
+# --import-snapshot <id>: Outscale; adopt a snapshot a failed apply orphaned into this version's state (see the module).
+# One mode per run, and one run at a time per checkout: runs share a .terraform data dir.
 set -euo pipefail
 
-ENSURE=false
+MODE=build ENSURE=false SNAP="" NMODES=0
 ARGS=()
-for a in "$@"; do
-  case "$a" in
+while [ $# -gt 0 ]; do
+  case "$1" in
     --ensure) ENSURE=true ;;
-    *) ARGS+=("$a") ;;
+    --list)   MODE=list;  NMODES=$((NMODES + 1)) ;;
+    --prune)  MODE=prune; NMODES=$((NMODES + 1)) ;;
+    --import-snapshot) MODE=import; NMODES=$((NMODES + 1)); SNAP="${2:-}"
+      case "$SNAP" in "" | -*) echo "✗ --import-snapshot needs a snapshot id" >&2; exit 1 ;; esac
+      shift ;;
+    *) ARGS+=("$1") ;;
   esac
+  shift
 done
+# Exclusive on purpose: with the last flag winning, `--list --prune` would destroy.
+[ "$NMODES" -le 1 ] || { echo "✗ --list, --prune and --import-snapshot are exclusive: one per run" >&2; exit 1; }
+[ "$ENSURE" = false ] || [ "$MODE" = build ] || { echo "✗ --ensure only goes with a build" >&2; exit 1; }
 
-RAW="${ARGS[0]:?usage: talos-image.sh <scaleway|ovh|outscale|proxmox> [talos_version] [--ensure]}"
-VERSION="${ARGS[1]:-v1.13.4}"
+INTERNAL="$(cd "$(dirname "${BASH_SOURCE[0]}")/../internal" && pwd)"  # absolute: the script cd's to the root below
+RAW="${ARGS[0]:?usage: talos-image.sh <scaleway|ovh|outscale|proxmox> [talos_version] [--ensure|--list|--prune|--import-snapshot <id>]}"
 P="$(printf '%s' "$RAW" | tr '[:upper:]' '[:lower:]')"
 case "$P" in
   scw | scaleway) P=scaleway; TGT=scaleway; SREGION=fr-par;    SEP="https://s3.fr-par.scw.cloud" ;;
@@ -36,39 +48,33 @@ case "$P" in
   proxmox)        TGT=proxmox;  SREGION="${PROXMOX_S3_REGION:-fr-par}"; SEP="${PROXMOX_S3_ENDPOINT:-https://s3.fr-par.scw.cloud}" ;;
   *) echo "✗ unknown provider: $RAW (expected scaleway|ovh|outscale|proxmox)"; exit 1 ;;
 esac
+[ "$MODE" != import ] || [ "$TGT" = outscale ] || { echo "✗ --import-snapshot is Outscale only" >&2; exit 1; }
+# A bare call builds the pin of the cluster tfvars, never a literal kept here.
+VERSION="${ARGS[1]:-$("$INTERNAL/talos-version.sh" "${OA_ROLE:-management}-${P}.tfvars")}"
 
-# ──────────────────────────────────────────────────────────────────────────────
-# talos-image's root tracks exactly one image PER PROVIDER (backend.tf:
-# key=talos-image.tfstate, not per-version) — retargeting talos_version does not
-# add a second image, it REPLACES the sole one tracked, destroying whatever
-# version another cluster's tfvars still pins. Nothing breaks that cluster until
-# its NEXT plan (Talos boots from local disk, it does not re-fetch the image at
-# runtime) — and by then the account has no visible sign of what happened (#93).
-# Refuse before the spend: same resolution path as everywhere else that reads a
-# cluster's pin (scripts/internal/talos-version.sh), scanned across every real
-# tfvars for THIS provider before a single credential is resolved.
-# ──────────────────────────────────────────────────────────────────────────────
+# A prune is the one deliberate way an image leaves the lane, so it is where a pin is checked:
+# a cluster pinning the version could neither plan nor be DESTROYED once it is gone (#69).
+# Same resolution as everywhere else that reads a pin (talos-version.sh), before any credential.
 # OA_ENVS_DIR: a test harness points this at a sandbox, never at the real envs/ (#191).
 ENVS_DIR="${OA_ENVS_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../infrastructure/opentofu/cluster/envs}"
-INTERNAL="$(dirname "${BASH_SOURCE[0]}")/../internal"
-if [ -d "$ENVS_DIR" ]; then
-  conflict=0
+if [ "$MODE" = prune ] && [ -d "$ENVS_DIR" ]; then
+  pinned=0
   for f in "$ENVS_DIR"/*-"$P".tfvars; do
     [ -e "$f" ] || continue
-    PINNED="$("$INTERNAL/talos-version.sh" "$(basename "$f")" 2>/dev/null || true)"
-    [ -n "$PINNED" ] && [ "$PINNED" != "$VERSION" ] || continue
-    echo "✗ $(basename "$f") pins talos_version = ${PINNED}, but this build targets ${VERSION}." >&2
-    echo "  talos-image tracks ONE image per provider — building ${VERSION} would replace" >&2
-    echo "  the ${PINNED} image that cluster still pins, and it would not notice until its" >&2
-    echo "  next plan/apply. Build ${PINNED} instead, or update $(basename "$f") first." >&2
-    conflict=1
+    [ "$("$INTERNAL/talos-version.sh" "$(basename "$f")" 2>/dev/null || true)" = "$VERSION" ] || continue
+    echo "✗ $(basename "$f") pins talos_version = ${VERSION}: pruning its image would leave that cluster" >&2
+    echo "  unable to plan, or to be destroyed. Move its pin first, then prune." >&2
+    pinned=1
   done
-  [ "$conflict" -eq 0 ] || exit 1
+  [ "$pinned" -eq 0 ] || exit 1
 fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../infrastructure/opentofu/talos-image" && pwd)"
 command -v tofu >/dev/null 2>&1 || { echo "✗ tofu required"; exit 1; }
 command -v aws  >/dev/null 2>&1 || { echo "✗ aws CLI required"; exit 1; }
+command -v jq   >/dev/null 2>&1 || { echo "✗ jq required (the plan gate and the legacy-state check read JSON)"; exit 1; }
+LEGACY_JSON="" PLAN=""
+trap 'rm -f ${LEGACY_JSON:+"$LEGACY_JSON"} ${PLAN:+"$ROOT/$PLAN"}' EXIT
 
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
 oa_aws_compat
@@ -114,7 +120,7 @@ fi
 # ──────────────────────────────────────────────────────────────────────────────
 SCHEMATIC_YAML="$(dirname "${BASH_SOURCE[0]}")/../../infrastructure/opentofu/talos-image/schematic.yaml"
 CLUSTER_VARS="$(dirname "${BASH_SOURCE[0]}")/../../infrastructure/opentofu/cluster/variables.tf"
-if [ -f "$SCHEMATIC_YAML" ] && [ -f "$CLUSTER_VARS" ]; then
+if [ "$MODE" = build ] && [ -f "$SCHEMATIC_YAML" ] && [ -f "$CLUSTER_VARS" ]; then
   LIVE_ID="$(curl -sf -X POST -H 'Content-Type: application/yaml' \
     --data-binary @"$SCHEMATIC_YAML" https://factory.talos.dev/schematics \
     | sed -nE 's/.*"id":"([0-9a-f]+)".*/\1/p')"
@@ -183,8 +189,39 @@ ensure() { # bucket
   exit 1
 }
 
-echo "▶ Ensuring talos-image state bucket on ${TGT} (${STATE_BUCKET})"
-ensure "$STATE_BUCKET"
+bucket_present() { # <bucket>: 0 present, 1 absent (a 404); any other failure is unknown, never guessed
+  local err
+  err="$(aws s3api head-bucket --bucket "$1" --endpoint-url "$SEP" --region "$SREGION" 2>&1)" && return 0
+  case "$err" in *404* | *NoSuchBucket* | *"Not Found"*) return 1 ;; esac
+  echo "✗ cannot reach s3://$1 on ${TGT}: ${err##*: }" >&2; exit 1
+}
+
+case "$MODE" in
+  list | prune) # reads the lane: S3 names are global, so these never create a bucket
+    if ! bucket_present "$STATE_BUCKET"; then
+      [ "$MODE" = list ] && { echo "▶ no state bucket ${STATE_BUCKET} on ${TGT}: nothing held"; exit 0; }
+      echo "✗ nothing to prune: no state bucket ${STATE_BUCKET} on ${TGT}." >&2; exit 1
+    fi ;;
+  *)
+    echo "▶ Ensuring talos-image state bucket on ${TGT} (${STATE_BUCKET})"
+    ensure "$STATE_BUCKET" ;;
+esac
+
+# One state per version. The pre-#69 lane kept every provider's image in ONE state; that object
+# stays the authority for the version it holds until a build of that version copies it (below).
+NEW_KEY="talos-image-${TGT}-${VERSION}.tfstate"
+LEGACY_KEY="talos-image.tfstate"
+# A listing that FAILS is not an empty one: guessing "no states" would build a second copy.
+KEYS="$(aws s3api list-objects-v2 --bucket "$STATE_BUCKET" --prefix talos-image --query 'Contents[].Key' \
+          --output text --endpoint-url "$SEP" --region "$SREGION")" \
+  || { echo "✗ cannot list s3://${STATE_BUCKET}: which versions the lane holds is unknown." >&2; exit 1; }
+KEYS="$(tr '\t' '\n' <<<"$KEYS" | grep -v '^None$' || true)"
+if [ "$MODE" = list ]; then
+  echo "▶ Versions held on ${TGT} (one state each):"
+  sed -nE "s/^talos-image-${TGT}-(v.+)\.tfstate$/    \1/p" <<<"$KEYS"
+  grep -qx "$LEGACY_KEY" <<<"$KEYS" && echo "    (${LEGACY_KEY}: the pre-#69 state, copied to its own key by the next build of the version it holds)"
+  exit 0
+fi
 
 APPLY_VARS=(-var "target_provider=$TGT" -var "talos_version=$VERSION")
 case "$P" in
@@ -193,7 +230,7 @@ case "$P" in
     # as a snapshot. "import", not "staging": this repository spends that word
     # on environments (dev/prod) and reading it as one here is what it cost.
     IMPORT_BUCKET="s3-${IMG_PROJECT}-${TGT}-talos-import"
-    ensure "$IMPORT_BUCKET"
+    [ "$MODE" != build ] || ensure "$IMPORT_BUCKET"  # only a build uploads to it
     APPLY_VARS+=(-var "import_bucket=$IMPORT_BUCKET" -var "region=$SREGION" -var "s3_endpoint=$SEP")
     ;;
   proxmox)
@@ -209,12 +246,98 @@ case "$P" in
     ;;
 esac
 
+# Outscale answers 409 (9015) to CreateImage when an OMI holds the name, but only AFTER the 8-14 min build
+# (download, upload, snapshot import), so ask before: refuse in seconds. The provider's own lookup cannot ask: on a
+# real account `data.outscale_images` fails the whole plan when nothing matches. Deleting an OMI this lane does not
+# track is the OWNER's call, never ours.
+refuse_taken_omi() {
+  [ "$TGT" = outscale ] || return 0
+  local name taken
+  name="$(tofu show -json "$PLAN" | jq -r '
+    [.resource_changes[]? | select(.type == "outscale_image" and (.change.actions | index("create")))] as $c
+    | if ($c | length) == 0 then empty
+      else ($c[0].change.after.image_name // error("the plan does not name the OMI it creates")) end')" \
+    || { echo "✗ cannot read the OMI name from the plan; nothing was applied." >&2; exit 1; }
+  [ -z "$name" ] && return 0
+  taken="$("${OA_OMI_LOOKUP:-$INTERNAL/outscale-omi-ids.py}" "$name" "$SREGION" | paste -sd' ')" \
+    || { echo "✗ cannot list the OMIs of this account; nothing was applied (a refused question is not an empty answer)." >&2; exit 1; }
+  [ -z "$taken" ] && return 0
+  echo "✗ this plan creates the OMI for ${VERSION}, but the account already holds one under that name: ${taken}" >&2
+  echo "  CreateImage would fail with 409 after the snapshot import. Nothing was imported or spent." >&2
+  echo "  An OMI this state does not track is the owner's to delete (with its snapshot); to replace the" >&2
+  echo "  lane's own, --prune this version first (a pin on it must move first). Or build another version." >&2
+  exit 1
+}
+
+init_state() { # <key>
+  tofu init -reconfigure \
+    -backend-config="bucket=$STATE_BUCKET" \
+    -backend-config="key=$1" \
+    -backend-config="region=$SREGION" \
+    -backend-config="endpoint=$SEP"
+}
+
 cd "$ROOT"
-tofu init -reconfigure \
-  -backend-config="bucket=$STATE_BUCKET" \
-  -backend-config="key=talos-image.tfstate" \
-  -backend-config="region=$SREGION" \
-  -backend-config="endpoint=$SEP"
+# Legacy state: read first, moved only by a build of the version it holds (copied, then retired). A
+# build of another version leaves it alone, whatever state it is in; one it cannot read blocks all.
+MIGRATE=false
+if grep -qx "$LEGACY_KEY" <<<"$KEYS" && ! grep -qx "$NEW_KEY" <<<"$KEYS"; then
+  init_state "$LEGACY_KEY"
+  LEGACY_JSON="$(mktemp)"
+  tofu state pull >"$LEGACY_JSON" \
+    || { echo "✗ cannot read ${LEGACY_KEY}; nothing was changed." >&2; exit 1; }
+  HELD="$("$INTERNAL/image-state-version.sh" <"$LEGACY_JSON")" || exit 1
+  LEGACY_VERS="$(sed -n 1p <<<"$HELD")" LEGACY_BAD="$(sed -n 2p <<<"$HELD")"
+  if [[ " $LEGACY_VERS " == *" $VERSION "* ]]; then
+    if [ "$LEGACY_VERS" != "$VERSION" ] || [ -n "$LEGACY_BAD" ]; then
+      echo "✗ ${LEGACY_KEY} holds ${VERSION} but is not clean (versions: ${LEGACY_VERS// /, }; deposed or tainted: ${LEGACY_BAD:-none})." >&2
+      echo "  Copying it would carry the half-finished object. Nothing was moved; another version's build is not blocked." >&2
+      echo "  Clear it first: the owner deletes the cloud objects it names, then \`tofu state rm\` them from ${LEGACY_KEY} (talos-image README, 'The pre-#69 single state')." >&2
+      exit 1
+    fi
+    MIGRATE=true
+  elif [ -n "$LEGACY_VERS" ]; then
+    echo "  ~ ${LEGACY_KEY} holds ${LEGACY_VERS// /, } and stays its authority until a build of one of them copies it."
+  fi
+fi
+if [ "$MODE" = prune ] && [ "$MIGRATE" = false ] && ! grep -qx "$NEW_KEY" <<<"$KEYS"; then
+  echo "✗ nothing to prune: no state holds ${VERSION} on ${TGT} (--list shows what does)." >&2
+  exit 1
+fi
+init_state "$NEW_KEY"
+if [ "$MIGRATE" = true ]; then
+  echo "▶ Copying ${LEGACY_KEY} (${VERSION}) to ${NEW_KEY}"
+  tofu state push "$LEGACY_JSON"
+  # A push into an empty key re-mints lineage and serial (measured: OpenTofu 1.12.6, encrypted S3), so compare what the state holds.
+  [ "$(tofu state pull | jq -S '[.resources, .outputs]')" = "$(jq -S '[.resources, .outputs]' "$LEGACY_JSON")" ] \
+    || { echo "✗ ${NEW_KEY} does not hold the state just pushed; ${LEGACY_KEY} is untouched." >&2; exit 1; }
+  # Retired, not deleted, and not left in place: a legacy object still named so would be copied
+  # back as a ghost the day this version is pruned and built again.
+  aws s3 mv "s3://${STATE_BUCKET}/${LEGACY_KEY}" "s3://${STATE_BUCKET}/${LEGACY_KEY}.migrated-to-${VERSION}" \
+      --endpoint-url "$SEP" --region "$SREGION" >/dev/null \
+    || echo "⚠ copied, but could not retire ${LEGACY_KEY}: rename it by hand to ${LEGACY_KEY}.migrated-to-${VERSION}." >&2
+fi
+
+case "$MODE" in
+  prune)
+    tofu destroy "${APPLY_VARS[@]}"
+    # An emptied state object would be listed as a held version.
+    if LEFT="$(tofu state list -no-color 2>&1)" && [ -z "$LEFT" ]; then
+      aws s3 rm "s3://${STATE_BUCKET}/${NEW_KEY}" --endpoint-url "$SEP" --region "$SREGION" >/dev/null
+    fi
+    exit 0 ;;
+  import)
+    # Adopted without the build in this state, the next plan creates the build and REPLACES the snapshot.
+    BUILD='module.outscale[0].terraform_data.build_and_upload'
+    ADDRS="$(tofu state list 2>&1 || true)"
+    if ! grep -qxF "$BUILD" <<<"$ADDRS"; then
+      echo "✗ ${NEW_KEY} does not hold ${BUILD}: an adopted snapshot would be replaced by the next plan (a second import)." >&2
+      echo "  The way out is the account owner deleting the orphan snapshot, then a normal build." >&2
+      exit 1
+    fi
+    tofu import "${APPLY_VARS[@]}" 'module.outscale[0].outscale_snapshot.talos' "$SNAP"
+    exit 0 ;;
+esac
 
 if [ "$ENSURE" = true ]; then
   echo "▶ --ensure: checking whether the image needs (re)building..."
@@ -223,12 +346,11 @@ if [ "$ENSURE" = true ]; then
   # snapshot import and an image publish. A saved plan never prompts either, so
   # the gate stays unattended, and tofu refuses it if the state moved since.
   PLAN="talos-image-${TGT}.tfplan"
-  trap 'rm -f "$ROOT/$PLAN"' EXIT
   PLAN_EXIT=0
   tofu plan -detailed-exitcode -out="$PLAN" "${APPLY_VARS[@]}" || PLAN_EXIT=$?
   case "$PLAN_EXIT" in
     0) echo "✓ image already up to date — skipping apply" ;;
-    2) tofu apply "$PLAN" ;;
+    2) refuse_taken_omi; tofu apply "$PLAN" ;;
     *)
       echo "✗ tofu plan failed (exit ${PLAN_EXIT})"
       exit 1
@@ -266,6 +388,8 @@ if [ "$P" = ovh ] || [ "$P" = outscale ]; then
   stale=0
   for f in "$ENVS"/*-"$P".tfvars; do
     [ -e "$f" ] || continue
+    # Only a cluster that pins THIS version: another version's image has another id, on purpose.
+    [ "$("$INTERNAL/talos-version.sh" "$(basename "$f")" 2>/dev/null || true)" = "$VERSION" ] || continue
     # Anchored, because `grep -o 'image_id...'` strips the `bastion_` prefix
     # before the filter downstream can see it: with no Talos pin left in the
     # file, the bastion's own image was read as the pin and this guard refused

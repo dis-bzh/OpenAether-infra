@@ -263,6 +263,13 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **The image lane keeps one state per Talos version, so building one version no longer replaces another (refs #69).**
+  `talos-image-<provider>-<version>.tfstate` replaces the single `talos-image.tfstate` (copied by the first build of
+  the version it holds, refused if half-finished); `LIST=1` shows the versions held, `PRUNE=1` removes one, #93's
+  refusal is gone, and on Outscale `--ensure` refuses a plan that creates an OMI whose name is taken, before the
+  import. Details: `infrastructure/opentofu/talos-image/README.md`. Rung: mocked (`test-talos-image.sh`, the image
+  root's first `tofu test`, mutants killed). Not run on any cloud; #69 stays open on the lab protocol.
+
 - **`siderolabs/talos` provider 0.11 → 0.12.0, pinned exactly (refs #241, #44).** The cluster root and the local lane
   pin `0.12.0`, the module's ceiling moves to `< 0.13.0`, and Renovate's hold rule gives way to a `needs-real-run`
   label on the provider's own PRs (the module's ceiling is left to a person). Exact on purpose: no lock file is
