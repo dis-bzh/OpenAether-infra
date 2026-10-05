@@ -51,13 +51,11 @@ widening it.
 
 ## Move the pin, then build the image
 
-The image lane holds one image per provider and refuses a version any tfvars
-does not pin (#93). So the upgrade checks the other clusters' pins, moves
-`talos_version`, then builds; a failed build leaves the pin moved, since past
-its apply the old image is already replaced.
-The upgrade harness stubbed `task`, which hid that order: a stub between two
-scripts hides their contract. Its three Talos-step scenarios now run the real
-`talos-image.sh`.
+Each version has its own image state: a build never replaces another image, and a failed
+one leaves the pin on a version whose image may not exist (re-run, or put the old pin back).
+The pin still moves first: `talos-image.sh` compares a pinned `image_id` only with the image
+of the version it builds. The upgrade harness stubbed `task`, which hid that order: a stub
+between two scripts hides their contract. Its Talos-step scenarios run the real `talos-image.sh`.
 
 ## One apply per bump, and why
 

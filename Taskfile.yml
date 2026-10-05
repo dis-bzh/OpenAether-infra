@@ -550,7 +550,7 @@ tasks:
         [ -z "$written" ] || { echo "✗ a step wrote under envs/:" $written >&2; exit 1; }
 
   test:
-    desc: Run OpenTofu tests (cluster root, then modules/talos)
+    desc: Run OpenTofu tests (cluster root, then modules/talos, then the talos-image root)
     dir: infrastructure/opentofu/cluster
     # Same isolation as `validate`, and for the same reason — the comment there
     # claimed this task already matched it, but only the init flag was copied,
@@ -575,6 +575,8 @@ tasks:
       # Module-level tests: the root's tests above never run a module's own logic.
       - tofu -chdir=../modules/talos init -backend=false -upgrade
       - tofu -chdir=../modules/talos test
+      # The image root's mocked test, with the same data dir (relative, so it resolves there).
+      - cd ../talos-image && tofu init -backend=false -upgrade && tofu test
 
   clea-scan:
     desc: >-
@@ -598,8 +600,9 @@ tasks:
   image-build:
     aliases: [talos-image]
     desc: >-
-      Build + publish the Talos image for a provider. Usage: task talos-image
-      PROVIDER=scaleway|ovh|outscale|proxmox [VERSION=v1.13.4] [ENSURE=1]
+      Build + publish the Talos image for a provider, one state per version. Usage: task talos-image
+      PROVIDER=scaleway|ovh|outscale|proxmox [VERSION=v1.13.4] [ENSURE=1]; LIST=1 shows the versions
+      held, PRUNE=1 VERSION=<v> destroys that one.
     # PROVIDER is REQUIRED, not defaulted. Twenty targets used to fall back to
     # scaleway in silence — including destroy and down — so a command typed
     # while working on another cloud aimed at the wrong account. The refusal is
@@ -628,8 +631,11 @@ tasks:
         sh: ./scripts/internal/talos-version.sh {{.ROLE}}-{{.PROVIDER}}.tfvars
       IMAGE_VERSION: '{{.VERSION | default .PINNED_VERSION}}'
       ENSURE: '{{.ENSURE | default ""}}'
+      LIST: '{{.LIST | default ""}}'
+      PRUNE: '{{.PRUNE | default ""}}'
+      MODE: '{{if .LIST}} --list{{end}}{{if .PRUNE}} --prune{{end}}'
     cmds:
-      - './scripts/bootstrap/talos-image.sh {{.PROVIDER}} {{.IMAGE_VERSION}}{{if .ENSURE}} --ensure{{end}}'
+      - './scripts/bootstrap/talos-image.sh {{.PROVIDER}} {{.IMAGE_VERSION}}{{if .ENSURE}} --ensure{{end}}{{.MODE}}'
 
   cluster-up:
     aliases: [up]

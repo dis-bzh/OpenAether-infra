@@ -20,8 +20,10 @@
 
 locals {
   factory_url = "https://factory.talos.dev/image/${var.schematic_id}/${var.talos_version}/aws-${var.arch}.raw.zst"
-  raw_path    = "${var.cache_dir}/aws-${var.arch}-${var.talos_version}.raw"
-  object_key  = "talos/aws-${var.arch}-${var.talos_version}.raw"
+  # Versioned scratch names: one version's leftovers are never another's.
+  raw_zst    = "${var.cache_dir}/aws-${var.arch}-${var.talos_version}.raw.zst"
+  raw_path   = "${var.cache_dir}/aws-${var.arch}-${var.talos_version}.raw"
+  object_key = "talos/aws-${var.arch}-${var.talos_version}.raw"
 }
 
 # Fetch from Image Factory, decompress, upload the raw disk to OOS for import.
@@ -45,13 +47,13 @@ resource "terraform_data" "build_and_upload" {
       done
       mkdir -p "${var.cache_dir}"
       echo "▶ Downloading Talos ${var.talos_version} (aws-${var.arch}) from Image Factory..."
-      curl -fL --retry 3 "${local.factory_url}" -o "${var.cache_dir}/aws.raw.zst"
+      curl -fL --retry 3 "${local.factory_url}" -o "${local.raw_zst}"
       echo "▶ Decompressing (zstd)..."
-      zstd -f -d "${var.cache_dir}/aws.raw.zst" -o "${local.raw_path}"
+      zstd -f -d "${local.raw_zst}" -o "${local.raw_path}"
       echo "▶ Uploading to OOS: s3://${var.bucket_name}/${local.object_key}"
       aws s3 cp "${local.raw_path}" "s3://${var.bucket_name}/${local.object_key}" \
         --endpoint-url "${var.s3_endpoint}" --region "${var.region}"
-      rm -f "${var.cache_dir}/aws.raw.zst" "${local.raw_path}"
+      rm -f "${local.raw_zst}" "${local.raw_path}"
       echo "✓ Raw image staged for snapshot import."
     EOT
   }
@@ -105,9 +107,10 @@ resource "outscale_snapshot" "talos" {
   # while the import then succeeded, leaving a snapshot OUTSIDE STATE.
   # `ReadSnapshots` reports State/Progress and is the only honest answer about
   # where an import actually is. If the apply dies while the import lives on:
-  # DO NOT re-run the apply as-is (it creates a second import) — import the
-  # existing snapshot into state first, then continue:
-  #   tofu import module.outscale[0].outscale_snapshot.talos <snap-id>
+  # DO NOT re-run the apply as-is (it creates a second import) — adopt the
+  # existing snapshot into THAT version's state first, then continue:
+  #   scripts/bootstrap/talos-image.sh outscale <version> --import-snapshot <snap-id>
+  # (it refuses unless that state holds build_and_upload: the next plan would replace the snapshot)
   timeouts {
     create = "120m"
   }
@@ -167,7 +170,7 @@ resource "outscale_image" "talos" {
 
     # Required for the snapshot's create_before_destroy above: OpenTofu refuses
     # the mode unless every dependent shares it. Names carry the version, so two
-    # OMIs coexist without colliding.
+    # versions coexist; a same-version replacement does not (see refuse_taken_omi in talos-image.sh).
     create_before_destroy = true
   }
 }

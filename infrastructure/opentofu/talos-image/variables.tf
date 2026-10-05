@@ -9,10 +9,11 @@ variable "target_provider" {
   }
 }
 
+# No default: a bare apply would replace the image this state holds with whatever a
+# default names (the old one went stale unnoticed). talos-image.sh always passes it.
 variable "talos_version" {
-  description = "Talos version tag (must exist on Image Factory). Keep in sync with the cluster envs/*.tfvars."
+  description = "Talos version tag (must exist on Image Factory) — the ONE version this state holds."
   type        = string
-  default     = "v1.13.3"
 }
 
 variable "arch" {

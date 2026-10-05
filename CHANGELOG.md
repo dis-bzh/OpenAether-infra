@@ -263,6 +263,12 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **The image lane keeps one state per Talos version, so building one version no longer replaces another (refs #69).**
+  `talos-image-<provider>-<version>.tfstate` replaces the single `talos-image.tfstate` (copied by the first build of
+  the version it holds, refused if half-finished); `LIST=1` shows the versions held, `PRUNE=1` removes one, #93's
+  refusal is gone, and on Outscale `--ensure` refuses a plan that creates an OMI whose name is taken, before the
+  import. Details: `infrastructure/opentofu/talos-image/README.md`. Rung: mocked (`test-talos-image.sh`, the image
+  root's first `tofu test`, mutants killed). Not run on any cloud; #69 stays open on the lab protocol.
 - **`setup.sh` pins the last five tools it installed at "whatever is newest today"**: kubectl (checksum-verified),
   aws-cli, checkov, yamllint and pre-commit, each behind a `# renovate:` anchor, so Cléa compares a version instead
   of watching it move (`[[unpinned]]` is now empty in `clea.toml`). The three Python tools share one `pip_install_pinned`

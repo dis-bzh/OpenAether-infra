@@ -294,9 +294,9 @@ cat <<EOT
     s3-${CN:-<project>}-${PROVIDER}-tfstate-${ENVN:-<env>}
     s3-${CN:-<project>}-${PROVIDER}-${ROLE}-${ENVN:-<env>}
     s3-${CN:-<project>}-*-backups-${ENVN:-<env>}   (restic, all providers)
-  Talos images (reusable — keeping them avoids a rebuild, ~1 h on Outscale):
-    task talos-image PROVIDER=$PROVIDER  re-applies; the talos-image root has
-    its own state (bucket s3-${CN:-<project>}-${PROVIDER}-talos-image).
+  Talos images (reusable — one set per version built; a rebuild is 8 min to over 1 h on Outscale):
+    task talos-image PROVIDER=$PROVIDER LIST=1 shows them, VERSION=<v> PRUNE=1 removes one; the
+    state is one key per version in bucket s3-${CN:-<project>}-${PROVIDER}-talos-image.
   Objects created outside OpenTofu for CAPI (to recreate on the next deployment):
     Outscale keypair 'openaether-capi', pre-created OpenStack FIP (edge-2 certSANs).
   Local: kubeconfig, talosconfig, edge-*.kubeconfig, restic-escrow-*.txt

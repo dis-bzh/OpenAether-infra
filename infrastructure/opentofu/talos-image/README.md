@@ -32,11 +32,53 @@ anymore. An explicit value in the tfvars always overrides the convention.
 ## State
 
 State lives on the **target provider's** S3 — its own bucket per provider
-(`s3-<project>-<provider>-talos-image` / `talos-image.tfstate`), so building one
-provider's image never disturbs another's. The state bucket (and the Scaleway
+(`s3-<project>-<provider>-talos-image`), so building one provider's image never
+disturbs another's, and **one key per version**
+(`talos-image-<provider>-<version>.tfstate`), so a build can only touch its own
+version: building v1.14.2 never replaces v1.14.1. The state bucket (and the Scaleway
 staging bucket) are **auto-created** by `scripts/bootstrap/talos-image.sh`. Proxmox has no
 native object storage, so its state lives on an external S3-compatible store
 (same convention as the cluster root's Proxmox backend).
+
+### Several versions
+
+```bash
+task image-build PROVIDER=ovh LIST=1                  # the versions held, one state each
+task image-build PROVIDER=ovh VERSION=<old> PRUNE=1   # destroy ONE version; refused while an envs/*.tfvars pins it
+```
+
+- **A node on an older image**: build that version, then set
+  `node_distribution.<provider>.image_name = "talos-<provider>-amd64-<older>"` (OVH and
+  Outscale also take `image_id`) and add the node. Nodes ignore later changes of that
+  attribute. Not measured (#69): whether such a node stays on the older Talos or installs
+  the pinned one at its first config; `talosctl version` on it answers. `PRUNE=1` reads
+  `talos_version` only, so drop the `image_name` override before pruning that version.
+- **The pre-#69 single state** (`talos-image.tfstate`) is read, never guessed: the first
+  build of the version it holds copies it to that version's key and renames the old object
+  to `.migrated-to-<version>` (never deleted). A build of another version leaves it alone.
+  It is read off its objects, not the root output (a failed apply rewrites that).
+  **A deposed or tainted object, or objects naming two versions, refuse the version it holds**
+  (a copy would carry the half-finished object); no other version is blocked. To clear it:
+  the account owner deletes the cloud objects it names (or accepts them as orphans), then
+  `tofu state rm` each resource it names, with the root inited on key `talos-image.tfstate`
+  as `talos-image.sh` does (measured on a stand-in: one `state rm` removes the tainted and the
+  deposed instance together). An object naming no readable version blocks every build
+  (unmeasured on older module revisions): copy it by hand (`state pull`, init on the new key,
+  `state push`) and rename the old object.
+- **Outscale, same-name OMI**: an OMI name is unique in the account, and CreateImage fails
+  with 409 only after the 8 to 14 minute build (download, upload, snapshot import). `--ensure`
+  (what `cluster-up` runs) refuses, before it, a plan that creates the OMI while one holds the
+  name; a plain `image-build` still hits the 409. It asks `ReadImages` for this account's own OMIs
+  (`scripts/internal/outscale-omi-ids.py`); an answer it cannot get refuses too. The provider's
+  `outscale_images` data source cannot do this: on a real account it fails every plan of a name
+  nobody holds. Deleting an OMI this state does not
+  track, with its snapshot, is the account owner's call; the script never does. An import that
+  outlived a failed apply: `talos-image.sh outscale <version> --import-snapshot <snap-id>`,
+  only if that version's state already holds `build_and_upload` (else the next plan replaces
+  the adopted snapshot, a second import, and the script refuses).
+- **One run at a time per checkout**: runs share one `.terraform` data dir, so a second run
+  repoints the first one's backend and its next plan reads the other version's state.
+  Scratch files carry the version; each Outscale build needs about 11 GiB of disk.
 
 ## Prerequisites
 
