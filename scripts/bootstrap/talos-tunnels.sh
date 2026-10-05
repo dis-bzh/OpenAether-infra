@@ -6,7 +6,7 @@
 # localhost 50000+i, workers on 50100+i (local Docker uses 52000+ to avoid
 # clashes). Detached so they survive the `tofu apply` that follows; PIDs tracked
 # for a clean teardown. What each ssh says is appended to .talos-tunnel-<port>.log
-# beside the pidfile (gitignored: it names the bastion); `open` and `ensure` quote it.
+# beside the pidfile (gitignored: it names the bastion); `open`, `open-direct` and `ensure` quote it.
 #
 # TALOS_TUNNEL_OFFSET shifts that whole block, so a second cluster can be
 # bootstrapped from the same workstation instead of colliding on the ports —
@@ -51,6 +51,7 @@ log_tail() { # <local-port>
   [[ -s "$l" ]] || { echo "no transcript at $l"; return; }
   echo "log, last written $(date -r "$l" '+%F %T' 2>/dev/null), ends: $(tail -n3 "$l" | paste -sd'|' -)"
 }
+quote_down() { local p; for p in "$@"; do echo "    :${p}  $(log_tail "$p")"; done; } # one line per port that did not come up
 
 if [[ "$ACTION" == "open-direct" ]]; then
   shift
@@ -98,10 +99,10 @@ if [[ "$ACTION" == "open-direct" ]]; then
   ports=()
   for j in "${!CPS[@]}"; do ports+=("$((CP_BASE + j))"); done
   [[ -n "${WKS_CSV:-}" ]] && for j in "${!WKS[@]}"; do ports+=("$((WK_BASE + j))"); done
-  ok=0
-  for p in "${ports[@]}"; do nc -z 127.0.0.1 "$p" 2>/dev/null && ok=$((ok + 1)); done
+  ok=0; down=()
+  for p in "${ports[@]}"; do nc -z 127.0.0.1 "$p" 2>/dev/null && ok=$((ok + 1)) || down+=("$p"); done
   echo "✓ [open-direct] ${ok}/${#ports[@]} tunnels up"
-  [[ "$ok" -eq "${#ports[@]}" ]] || { echo "⚠ some tunnels failed — see 'open' path's troubleshooting notes"; exit 1; }
+  [[ "$ok" -eq "${#ports[@]}" ]] || { echo "⚠ some tunnels failed — see 'open' path's troubleshooting notes"; quote_down "${down[@]}"; exit 1; }
   exit 0
 fi
 
@@ -196,7 +197,7 @@ if [[ "$ACTION" == "ensure" ]]; then
   fi
   echo "▶ ${#BAD[@]}/${TOTAL} Talos tunnel(s) not answering (${BAD[*]}) — rebuilding" >&2
   for p in "${BAD[@]}"; do
-    pgrep -f "[s]sh .*-L ${p}:" >/dev/null && st="ssh running, the node behind it is not answering" || st="ssh EXITED"
+    pgrep -f "[s]sh .*-L ${p}:" >/dev/null && st="ssh still running, nothing answered through it" || st="ssh EXITED"
     echo "    :${p}  ${st}; $(log_tail "$p")" >&2
   done
   "$SELF" open "$TOFU_DIR" || exit 1
@@ -296,6 +297,6 @@ fi
 if [[ "$ok" -ne "${#ports[@]}" ]]; then
   echo "⚠ some tunnels failed. Check: SSH_KEY is correct, the bastion is reachable"
   echo "  (ssh -i $KEY ${BUSER}@${BASTION}), and its routing fix has converged."
-  for p in "${down[@]}"; do echo "    :${p}  $(log_tail "$p")"; done
+  quote_down "${down[@]}"
   exit 1
 fi

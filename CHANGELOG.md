@@ -254,10 +254,12 @@ in git. 0.1.0 is the first entry describing something proven.
 - **The Talos tunnels keep what their ssh said, and `ensure` and a short `open` quote it (#65).** Every tunnel's
   output went to `/dev/null`, so the tunnels that were reported 6/6 up on 2026-08-18 and had no listener later left
   nothing to read. One `spawn_tunnel` now appends each ssh's `LogLevel=VERBOSE` output to `.talos-tunnel-<port>.log`
-  beside the pidfile (gitignored, it names the bastion); `ensure` prints how each tunnel that does not answer ended
-  and whether its ssh still runs, and `open` quotes the log of each port that did not come up. A log says how an
-  ssh ended, not who asked it to. The cause of 2026-08-18 is still unknown and #65 stays open. Rung: mocked
-  (`test-talos-tunnels.sh`, mutants killed); not run against a real bastion.
+  beside the pidfile (gitignored, it names the bastion). `open` and `open-direct` quote the log of each port that did
+  not come up; `ensure` quotes it for each tunnel that does not answer, and says whether its ssh still runs. A log
+  says how an ssh ended, not who asked it to, and a running ssh that nothing answers through says nothing of why. The
+  cause of 2026-08-18 is still unknown. Rung: mocked (`test-talos-tunnels.sh`: what each ssh is asked to do, what the
+  logs hold, what is quoted; mutants killed). Seen once on a real Scaleway bastion with 2 tunnels: after a TERM,
+  `ensure` quoted the client's closing lines and rebuilt 2/2. Not seen there: a drop by the bastion, a KILL, `open-direct`.
 
 - **commitizen 4.19.0 → 4.19.1** in the CI commit-message job, probed green by Cléa (#91). Proof: lint,
   render-check, test-scripts, validate (both roots), `task test` (71/71), checkov 32/0, custom checks 6/0 and
