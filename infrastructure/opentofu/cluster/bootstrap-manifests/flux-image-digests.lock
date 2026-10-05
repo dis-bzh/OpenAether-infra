@@ -1,7 +1,7 @@
-ghcr.io/fluxcd/helm-controller:v1.6.3 sha256:16ada99456385100698a5d7adf90aba8a2089d987ab541c9566b6d7b0e897038
-ghcr.io/fluxcd/image-automation-controller:v1.2.3 sha256:81128adfd127601530d3dffc1deaf7c9eeec5b9aa555b3ab80cab37fa5d909a4
-ghcr.io/fluxcd/image-reflector-controller:v1.2.3 sha256:a47e09e024a9ff2ea4f3878a1b90c2850134cfdc8b292ec52268dbc1e57e1a4c
-ghcr.io/fluxcd/kustomize-controller:v1.9.4 sha256:2b8bec54ffb6caf421bd2a6c005d27f567d5dd4db7feb55794fb51fcabd69b8f
-ghcr.io/fluxcd/notification-controller:v1.9.2 sha256:9ce503e7bcb8493fafe2aaef0c2ac4396df4f6890256acf9cd444a2dcd2a69ed
-ghcr.io/fluxcd/source-controller:v1.9.3 sha256:ff8f3c92f1bcb433e858c948040c3a3393fe73f5dd72048a4502bfaf0a4c26cd
-ghcr.io/fluxcd/source-watcher:v2.2.2 sha256:1d59f752ecf520d1dc56ca413749dfab507497dd363639b6fbaf5036850e05c7
+ghcr.io/fluxcd/helm-controller:v1.6.5 sha256:0d52fff5c4d476277b8fcb6beb9041e269adb5db943fe69f5a806ea0c92b1511
+ghcr.io/fluxcd/image-automation-controller:v1.2.5 sha256:e1a2720d3951694609c39635886d5dcb15b7dffe0b8248461c6693539c522a28
+ghcr.io/fluxcd/image-reflector-controller:v1.2.5 sha256:c83ce5c06fed9ebb308cd5165bd144ee934c720f6b47e0da2180869092063c82
+ghcr.io/fluxcd/kustomize-controller:v1.9.6 sha256:2ebeaa341da77d52b6abbbba5efcee0450d47f8b42f0e6f33b08f9020262d606
+ghcr.io/fluxcd/notification-controller:v1.9.4 sha256:840f318265ee26f0d2c48a158bf7896b22aa4e998e320a18646309f0e40b15da
+ghcr.io/fluxcd/source-controller:v1.9.6 sha256:6a6693172589f8ff26123a231d5fa6ceb194a6efb4dc647cdf057c959f76a2e3
+ghcr.io/fluxcd/source-watcher:v2.2.4 sha256:86743f5a4cd4ea76b9722eb86222d56e8253e776daa0565ecb186ec68ad1d835

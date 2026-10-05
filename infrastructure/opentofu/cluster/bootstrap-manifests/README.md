@@ -19,8 +19,10 @@ Run whenever upgrading Cilium or Flux:
 # Default versions (from script)
 ./scripts/bootstrap/render-bootstrap-manifests.sh
 
-# Override versions
-CILIUM_VERSION=1.20.0 FLUX_VERSION=v2.5.0 ./scripts/bootstrap/render-bootstrap-manifests.sh
+# Override versions. flux-install.yaml is only re-downloaded with OPENAETHER_REFRESH_FLUX=1:
+# without it a FLUX_VERSION bump leaves the vendored file, and `task render-check`, on the old release.
+CILIUM_VERSION=1.20.0 FLUX_VERSION=v2.5.0 OPENAETHER_REFRESH_FLUX=1 ./scripts/bootstrap/render-bootstrap-manifests.sh
+./scripts/dev/check-flux-image-digests.sh --write   # then the controller image digests (network)
 
 # Local Docker testing only (regenerate cilium-local.yaml)
 ./scripts/bootstrap/render-bootstrap-manifests.sh --local
