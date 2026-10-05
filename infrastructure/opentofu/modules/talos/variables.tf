@@ -264,7 +264,10 @@ variable "node_nameservers" {
     encrypted one is a silent plaintext fallback when that one refuses or fails
     TLS, and no rescue for a black-holed one (`talosctl validate` suggests such a
     fallback; this refuses it on purpose). DoT needs egress to tcp/853, DoH to
-    tcp/443. A change is applied to every node in one apply. To check a node
+    tcp/443 (measured open from a pod on OVH and Scaleway, 2026-10-05). A change is applied to every node in one
+    apply, without a reboot. A list no node can reach shows only at the NEXT reboot: such a node never starts its
+    Talos API (it cannot sign its API CSR), the `node_dns_boot_timeout` bound does not rescue it, and only replacing
+    the node recovers it (OVH console log). Check `nc -zvw5 <ip> 853` from a pod before you apply the list. To check a node
     resolves through it: `talosctl get resolvers`, `get timestatus`, `logs
     dns-resolve-cache` (`get dnsupstream` reads healthy for a dead server).
     Schema: https://docs.siderolabs.com/talos/v1.14/reference/configuration/network/resolverconfig
