@@ -195,11 +195,9 @@ locals {
 }
 
 # ==============================================================================
-# Node resolver (node_nameservers): a ResolverConfig, plus a TimeSyncConfig when
-# a server is encrypted, appended to every rendered config.
-# Appended, not a config patch: provider 0.11 rejects `protocol` and
-# `tlsServerName` there. Migrate to config_patches with #241.
-# `hostDNS` stays out: the generated v1alpha1 sets it, and Talos refuses both.
+# node_nameservers: ResolverConfig (+ TimeSyncConfig if encrypted) appended to
+# every config, not config_patches: provider 0.11 rejects `protocol` and
+# `tlsServerName` there (#241). No `hostDNS`: v1alpha1 already sets it.
 # ==============================================================================
 
 locals {
@@ -220,11 +218,12 @@ locals {
       bootTimeout = var.node_dns_boot_timeout
     })] : [],
   )
-  # "" leaves every generated config untouched: an unset list renders byte-identical.
   resolver_tail = join("", [for d in local.appended_documents : "---\n${d}"])
+  # Unset: both are "" and a generated config passes through untouched (byte-identical).
+  resolver_join = local.resolver_tail == "" ? "" : "\n"
 
-  control_plane_configs = [for c in data.talos_machine_configuration.control_plane : local.resolver_tail == "" ? c.machine_configuration : "${trimsuffix(c.machine_configuration, "\n")}\n${local.resolver_tail}"]
-  worker_configs        = [for c in data.talos_machine_configuration.worker : local.resolver_tail == "" ? c.machine_configuration : "${trimsuffix(c.machine_configuration, "\n")}\n${local.resolver_tail}"]
+  control_plane_configs = [for c in data.talos_machine_configuration.control_plane : "${trimsuffix(c.machine_configuration, local.resolver_join)}${local.resolver_join}${local.resolver_tail}"]
+  worker_configs        = [for c in data.talos_machine_configuration.worker : "${trimsuffix(c.machine_configuration, local.resolver_join)}${local.resolver_join}${local.resolver_tail}"]
 }
 
 # ==============================================================================
@@ -531,13 +530,13 @@ resource "talos_machine_configuration_apply" "control_plane" {
   }
 
   lifecycle {
-    # REPLACE on a version or node_nameservers change instead of updating in place. Updating is what
-    # trips siderolabs/terraform-provider-talos#352: when the rendered config is
-    # only known during apply, the provider keeps the OLD
-    # `machine_configuration_hash` in the plan and recomputes it at apply, and
-    # OpenTofu rejects the difference — "Provider produced inconsistent final
-    # plan", once per machine config, on every provider. A create has no prior
-    # value to be inconsistent with.
+    # REPLACE on a version or node_nameservers change instead of updating in
+    # place. Updating is what trips siderolabs/terraform-provider-talos#352:
+    # when the rendered config is only known during apply, the provider keeps
+    # the OLD `machine_configuration_hash` in the plan and recomputes it at
+    # apply, and OpenTofu rejects the difference — "Provider produced
+    # inconsistent final plan", once per machine config, on every provider. A
+    # create has no prior value to be inconsistent with.
     # Replacing costs nothing here: this resource's destroy is a no-op (a config
     # cannot be un-applied) and its create re-sends the same config the update
     # would have. Nodes reboot in `rolling-replace --upgrade`, never here.

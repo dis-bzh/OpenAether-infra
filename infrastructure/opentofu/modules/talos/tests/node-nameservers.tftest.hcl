@@ -1,8 +1,6 @@
-# node_nameservers: one ResolverConfig (plus a TimeSyncConfig when a server is encrypted)
-# appended to every node's generated config; a change replaces the apply resources. Provider
-# mocked: the generated text is unknown at plan, so the composition runs `apply` (nothing reaches
-# a node; the port-ready guard that would run a script is off). That a node accepts the document
-# and resolves through it is a node, not this file.
+# node_nameservers: a ResolverConfig (+ a TimeSyncConfig when a server is encrypted) appended to every
+# node's config; a change replaces the apply resources. Mocked: the generated text is unknown at plan,
+# so the runs that read it apply, and nothing reaches a node. That a node accepts it is not tested here.
 
 mock_provider "talos" {}
 mock_provider "random" {}
@@ -81,6 +79,36 @@ run "an_encrypted_list_is_appended_to_both_roles" {
   }
 }
 
+run "every_node_of_a_larger_fleet_gets_both_documents" {
+  command = apply
+  variables {
+    control_plane_count = 3
+    worker_count        = 2
+    control_plane_ips   = ["10.0.0.10", "10.0.0.11", "10.0.0.12"]
+    worker_ips          = ["10.0.0.20", "10.0.0.21"]
+    node_nameservers    = [{ address = "9.9.9.9", tls_server_name = "dns.quad9.net" }]
+  }
+  assert {
+    condition     = length(output.control_plane_machine_configs) == 3 && alltrue([for i, c in output.control_plane_machine_configs : c == "${trimsuffix(data.talos_machine_configuration.control_plane[i].machine_configuration, "\n")}\n---\n${output.appended_documents[0]}---\n${output.appended_documents[1]}" && talos_machine_configuration_apply.control_plane[i].machine_configuration_input == c])
+    error_message = "every control plane, not only the first, must be handed the generated text then both documents"
+  }
+  assert {
+    condition     = length(output.worker_machine_configs) == 2 && alltrue([for i, c in output.worker_machine_configs : c == "${trimsuffix(data.talos_machine_configuration.worker[i].machine_configuration, "\n")}\n---\n${output.appended_documents[0]}---\n${output.appended_documents[1]}" && talos_machine_configuration_apply.worker[i].machine_configuration_input == c])
+    error_message = "every worker, not only the first, must be handed the generated text then both documents"
+  }
+}
+
+run "a_doh_only_list_is_encrypted_too" {
+  command = plan
+  variables {
+    node_nameservers = [{ address = "1.1.1.1", protocol = "DoH", tls_server_name = "cloudflare-dns.com" }]
+  }
+  assert {
+    condition     = length(output.appended_documents) == 2 && yamldecode(output.appended_documents[0]).nameservers[0] == { address = "1.1.1.1", protocol = "DoH", tlsServerName = "cloudflare-dns.com" } && yamldecode(output.appended_documents[1]).bootTimeout == "90s"
+    error_message = "a DoH entry must carry address, protocol and tlsServerName, and alone it is encrypted: the boot wait applies"
+  }
+}
+
 run "a_plain_list_does_not_touch_the_boot_wait" {
   command = plan
   variables {
@@ -111,11 +139,12 @@ run "dot_and_doh_over_ipv6_are_all_encrypted" {
     node_nameservers = [
       { address = "2606:4700:4700::1111", protocol = "DoH", tls_server_name = "cloudflare-dns.com" },
       { address = "9.9.9.9", protocol = "DoT", tls_server_name = "dns.quad9.net" },
+      { address = "0064:ff9b::909", protocol = "DoT", tls_server_name = "dns.quad9.net" },
     ]
   }
   assert {
-    condition     = length(output.appended_documents) == 2 && yamldecode(output.appended_documents[1]).bootTimeout == "2m" && yamldecode(output.appended_documents[0]).nameservers[0].protocol == "DoH"
-    error_message = "DoH and DoT may be mixed (both encrypted), IPv6 is an address, and the timeout is the operator's"
+    condition     = length(output.appended_documents) == 2 && yamldecode(output.appended_documents[1]).bootTimeout == "2m" && yamldecode(output.appended_documents[0]).nameservers[0].protocol == "DoH" && length(yamldecode(output.appended_documents[0]).nameservers) == 3
+    error_message = "DoH and DoT may be mixed (both encrypted), IPv6 is an address (a zero-padded group is not an IPv4 octet), and the timeout is the operator's"
   }
 }
 
@@ -128,6 +157,30 @@ run "do53_is_fine_on_an_older_talos" {
   assert {
     condition     = length(output.appended_documents) == 1
     error_message = "a plain list carries no 1.14-only key"
+  }
+}
+
+run "dot_is_fine_on_a_later_talos" {
+  command = plan
+  variables {
+    talos_version    = "v1.15.0"
+    node_nameservers = [{ address = "9.9.9.9", tls_server_name = "dns.quad9.net" }]
+  }
+  assert {
+    condition     = length(output.appended_documents) == 2
+    error_message = "the Talos floor is 1.14 and up: a later 1.x must pass"
+  }
+}
+
+run "dot_is_fine_on_talos_2" {
+  command = plan
+  variables {
+    talos_version    = "v2.0.0"
+    node_nameservers = [{ address = "9.9.9.9", tls_server_name = "dns.quad9.net" }]
+  }
+  assert {
+    condition     = length(output.appended_documents) == 2
+    error_message = "the Talos floor is 1.14 and up: a 2.x must pass"
   }
 }
 
@@ -256,6 +309,108 @@ run "a_zero_boot_timeout_is_refused" {
   command = plan
   variables {
     node_dns_boot_timeout = "0s"
+  }
+  expect_failures = [var.node_dns_boot_timeout]
+}
+
+run "doh_needs_a_tls_server_name" {
+  command = plan
+  variables {
+    node_nameservers = [{ address = "1.1.1.1", protocol = "DoH" }]
+  }
+  expect_failures = [var.node_nameservers]
+}
+
+run "a_plain_entry_between_encrypted_ones_is_refused" {
+  command = plan
+  variables {
+    node_nameservers = [
+      { address = "9.9.9.9", tls_server_name = "dns.quad9.net" },
+      { address = "8.8.8.8", protocol = "Do53" },
+      { address = "149.112.112.112", tls_server_name = "dns.quad9.net" },
+    ]
+  }
+  expect_failures = [var.node_nameservers]
+}
+
+run "an_octet_out_of_range_is_refused" {
+  command = plan
+  variables {
+    # The bad octet comes last: the env-data scan reads a leading one as a routable address.
+    node_nameservers = [{ address = "9.9.9.999", tls_server_name = "dns.quad9.net" }]
+  }
+  expect_failures = [var.node_nameservers]
+}
+
+run "an_address_with_a_port_is_refused" {
+  command = plan
+  variables {
+    node_nameservers = [{ address = "9.9.9.9:853", tls_server_name = "dns.quad9.net" }]
+  }
+  expect_failures = [var.node_nameservers]
+}
+
+run "a_leading_zero_in_the_first_octet_is_refused" {
+  command = plan
+  variables {
+    # "0${9}", not a literal: the env-data scan reads a dotted quad here as a routable address.
+    node_nameservers = [{ address = "0${9}.9.9.9", tls_server_name = "dns.quad9.net" }]
+  }
+  expect_failures = [var.node_nameservers]
+}
+
+run "a_leading_zero_in_the_last_octet_is_refused" {
+  command = plan
+  variables {
+    node_nameservers = [{ address = "192.0.2.09", tls_server_name = "dns.quad9.net" }]
+  }
+  expect_failures = [var.node_nameservers]
+}
+
+run "a_url_is_not_a_tls_server_name" {
+  command = plan
+  variables {
+    node_nameservers = [{ address = "9.9.9.9", tls_server_name = "https://dns.quad9.net" }]
+  }
+  expect_failures = [var.node_nameservers]
+}
+
+run "a_tls_server_name_takes_no_port" {
+  command = plan
+  variables {
+    node_nameservers = [{ address = "9.9.9.9", tls_server_name = "dns.quad9.net:853" }]
+  }
+  expect_failures = [var.node_nameservers]
+}
+
+run "a_tls_server_name_takes_no_path" {
+  command = plan
+  variables {
+    node_nameservers = [{ address = "9.9.9.9", tls_server_name = "dns.quad9.net/dns-query" }]
+  }
+  expect_failures = [var.node_nameservers]
+}
+
+run "a_boot_timeout_needs_a_unit" {
+  command = plan
+  variables {
+    node_dns_boot_timeout = "90"
+  }
+  expect_failures = [var.node_dns_boot_timeout]
+}
+
+run "a_boot_timeout_takes_no_trailing_text" {
+  command = plan
+  variables {
+    node_dns_boot_timeout = "90sx"
+  }
+  expect_failures = [var.node_dns_boot_timeout]
+}
+
+run "a_boot_timeout_takes_no_leading_text" {
+  command = plan
+  variables {
+    node_dns_boot_timeout = "x90s"
   }
   expect_failures = [var.node_dns_boot_timeout]
 }

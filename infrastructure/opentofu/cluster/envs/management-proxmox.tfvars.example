@@ -77,9 +77,9 @@ node_distribution = {
 #   ]
 # }
 
-# Node DNS (optional): DNS-over-TLS (tcp/853, Talos 1.14+) for the nodes' own resolver
-# instead of the platform's plaintext one. All encrypted or all plain; rules and
-# trade-offs: modules/talos/variables.tf.
+# Node DNS (optional): DNS-over-TLS (tcp/853, Talos 1.14+) for the nodes' own resolver.
+# Rules and trade-offs: modules/talos/variables.tf.
+# Proxmox's own `nameservers` (node_distribution, cloud-init) is another layer: which wins is not measured.
 # node_nameservers = [
 #   { address = "9.9.9.9", tls_server_name = "dns.quad9.net" },
 #   { address = "149.112.112.112", tls_server_name = "dns.quad9.net" },

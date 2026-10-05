@@ -421,6 +421,17 @@ run "flux_namespace_cannot_leave_the_vendored_manifest" {
   expect_failures = [var.flux_namespace]
 }
 
+# The default users get is declared here too, not only in the module: a changed one would reach every
+# existing cluster as a config apply on every node, and no module test sees it.
+run "node_dns_is_off_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(module.talos.appended_documents) == 0
+    error_message = "node_nameservers must default to empty at the cluster root: opt-in, and no node's config changes."
+  }
+}
+
 # Both node DNS settings must reach modules/talos, where the rules and their tests live.
 run "node_dns_settings_reach_the_talos_module" {
   command = plan

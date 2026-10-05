@@ -257,10 +257,16 @@ variable "node_nameservers" {
     platform's resolver and the rendered config byte-identical. Per entry:
     `address` (an IP), `protocol` (Do53, DoT or DoH; DoT/DoH need Talos 1.14)
     and `tls_server_name` (SNI and certificate name: required for DoT/DoH, empty
-    for Do53). Listed servers replace what the platform's DHCP hands out, and
-    their order is a priority. The list is all encrypted or all plain: a plain
-    entry beside an encrypted one is a silent plaintext fallback when that one
-    refuses or fails TLS. DoT needs egress to tcp/853, DoH to tcp/443.
+    for Do53). Listed servers replace what a DHCP-supplied resolver hands out
+    (measured on a QEMU Talos 1.14.2 node, not on a cloud: what a platform's own
+    layer does, e.g. Proxmox's cloud-init `nameservers`, is open), and their order
+    is a priority. The list is all encrypted or all plain: a plain entry beside an
+    encrypted one is a silent plaintext fallback when that one refuses or fails
+    TLS, and no rescue for a black-holed one (`talosctl validate` suggests such a
+    fallback; this refuses it on purpose). DoT needs egress to tcp/853, DoH to
+    tcp/443. A change is applied to every node in one apply. To check a node
+    resolves through it: `talosctl get resolvers`, `get timestatus`, `logs
+    dns-resolve-cache` (`get dnsupstream` reads healthy for a dead server).
     Schema: https://docs.siderolabs.com/talos/v1.14/reference/configuration/network/resolverconfig
   EOT
   type = list(object({
@@ -276,12 +282,21 @@ variable "node_nameservers" {
     error_message = "node_nameservers[].address must be an IPv4 or IPv6 address, not a hostname: Talos dials it directly."
   }
   validation {
+    # cidrhost accepts an octet with a leading zero; Talos refuses it, and only at apply.
+    condition     = !anytrue([for n in var.node_nameservers : can(regex("(^|\\.)0[0-9]+(\\.|$)", n.address))])
+    error_message = "node_nameservers[].address: an IPv4 octet has no leading zero (9.9.9.9, not 09.9.9.9): Talos refuses it."
+  }
+  validation {
     condition     = alltrue([for n in var.node_nameservers : contains(["Do53", "DoT", "DoH"], n.protocol)])
     error_message = "node_nameservers[].protocol must be Do53, DoT or DoH."
   }
   validation {
     condition     = alltrue([for n in var.node_nameservers : (n.protocol == "Do53") == (n.tls_server_name == "")])
     error_message = "node_nameservers[].tls_server_name is required for DoT/DoH and must be empty for Do53."
+  }
+  validation {
+    condition     = alltrue([for n in var.node_nameservers : n.tls_server_name == "" || can(regex("^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$", n.tls_server_name))])
+    error_message = "node_nameservers[].tls_server_name must be a bare hostname (dns.quad9.net), not a URL or host:port: a wrong name gives a resolver that never answers."
   }
   validation {
     condition     = length(distinct([for n in var.node_nameservers : n.protocol == "Do53"])) <= 1
@@ -301,7 +316,8 @@ variable "node_dns_boot_timeout" {
     etcd, kubelet and trustd waiting: loud, and one applied working config fixes
     it. The bound trades that stall for a node that starts after this delay with
     time unverified and name resolution still dead, which `get timestatus` can
-    then read as synced. Empty keeps Talos's wait. Unused without an encrypted entry.
+    then read as synced (measured on a QEMU node, black hole simulated). Empty keeps
+    Talos's wait. Unused without an encrypted entry.
   EOT
   type        = string
   default     = "90s"
