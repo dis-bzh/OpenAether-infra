@@ -206,6 +206,86 @@ EOF
     || bad "both plans failing (rc=$rc, plans: $(plans | tr '\n' ';')): $(tail -5 "$TMP/out")"
 fi
 
+echo "=== infra-down-plan replicates the state before it untracks the secrets, and only while they are tracked (#66) ==="
+# The real block against a stub tofu (state list / state rm / plan, over a state held in a file) and a stub
+# backup-state.sh, all writing one call log: what matters is which calls happen, and in which order.
+fixture
+C="$repo/infrastructure/opentofu/cluster"
+rm -f "$C/new.tf" "$C/envs/real.tfvars"
+mkdir -p "$repo/scripts/internal" "$repo/scripts/ops" "$TMP/stub"
+printf '#!/usr/bin/env bash\necho placeholder\n' >"$repo/scripts/internal/resolve-s3-cred.sh"
+printf '#!/usr/bin/env bash\necho "-backend-config=path=x"\n' >"$repo/scripts/internal/tf-backend.sh"
+cat >"$repo/scripts/ops/backup-state.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "backup-state $*" >>"$CALLS"
+[ "${BK_RC:-0}" = 0 ] || { echo "✗ could not read backup_targets" >&2; exit "$BK_RC"; }
+echo "${BK_OUT-✓ tfstate replicated (still client-encrypted) to s3://replica/k.tfstate — SAME provider}"
+EOF
+chmod +x "$repo"/scripts/internal/*.sh "$repo/scripts/ops/backup-state.sh"
+cat >"$TMP/stub/tofu" <<'EOF'
+#!/usr/bin/env bash
+echo "tofu $1 ${2-}" >>"$CALLS"
+case "$1 ${2-}" in
+  "state list") [ "${LIST_RC:-0}" = 0 ] || { echo "Error: No state file was found!" >&2; exit "$LIST_RC"; }; cat "$STUB_STATE" ;;
+  "state rm") [ "${RM_RC:-0}" = 0 ] || { echo "Error: Error acquiring the state lock" >&2; exit "$RM_RC"; }
+              grep -vF "$3" "$STUB_STATE" >"$STUB_STATE.new"; mv "$STUB_STATE.new" "$STUB_STATE" ;;
+  plan*) for a in "$@"; do case "$a" in -out=*) : >"${a#-out=}" ;; esac; done ;;
+esac
+exit 0
+EOF
+chmod +x "$TMP/stub/tofu"
+export CALLS="$TMP/calls"
+WITH=$'module.scw[0].x\nmodule.talos.talos_machine_bootstrap.this[0]\nmodule.talos.talos_machine_secrets.this[0]'
+WITHOUT=$'module.scw[0].x\nmodule.talos.talos_machine_bootstrap.this[0]'
+untrack() { # <state held by the stub> [VAR=value…]: the task's stdout in out, its stderr in err
+  local s="$1"; shift; : >"$CALLS"; rm -f "$C/d.tfplan"; printf '%s\n' "$s" >"$TMP/stub.state"
+  env -i PATH="$TMP/stub:$PATH" HOME="$HOME" CALLS="$CALLS" STUB_STATE="$TMP/stub.state" "$@" \
+    task --silent --dir "$repo" infra-down-plan PROVIDER=scaleway ROLE=management OUT=d.tfplan </dev/null >"$TMP/out" 2>"$TMP/err"
+}
+calls() { grep -E '^(tofu state|backup-state)' "$CALLS" | sed 's/^tofu state /state /' | tr '\n' ';'; }
+secrets_tracked() { grep -q talos_machine_secrets "$TMP/stub.state"; }
+
+untrack "$WITH"; rc=$?
+[ "$rc" -eq 0 ] && [ "$(calls)" = 'state list;backup-state .;state rm;state list;' ] && ! secrets_tracked && [ -e "$C/d.tfplan" ] \
+  && ok "secrets tracked: read the state, replicate it, THEN untrack, then plan" \
+  || bad "secrets tracked (rc=$rc, calls: $(calls)): $(cat "$TMP/err")"
+grep -q 'Undo, if you decline' "$TMP/out" && ! grep -q 'NOT replicated' "$TMP/err" && grep -q 'no longer tracks the Talos secrets' "$TMP/out" \
+  && ok "…and says how to undo it, and again beside the plan that was written" \
+  || bad "no undo hint: $(cat "$TMP/out") $(cat "$TMP/err")"
+
+untrack "$WITHOUT"; rc=$?
+[ "$rc" -eq 0 ] && [ "$(calls)" = 'state list;state list;' ] && grep -q 'already out of the state' "$TMP/out" && ! grep -q 'Undo, if you decline' "$TMP/out" \
+  && ok "secrets already out (an earlier run untracked them): nothing replicated and nothing untracked, so the snapshot stays the undo" \
+  || bad "secrets already out (rc=$rc, calls: $(calls)): $(cat "$TMP/out") $(cat "$TMP/err")"
+grep -q 'no longer tracks the Talos secrets' "$TMP/out" && ok "…and the plan's last lines still say so" || bad "no reminder beside the plan: $(cat "$TMP/out")"
+
+untrack "$WITH" LIST_RC=1; rc=$?
+[ "$rc" -eq 0 ] && [ "$(calls)" = 'state list;state list;' ] && grep -q 'cannot read the state' "$TMP/err" && ! grep -q 'already out of the state' "$TMP/out" \
+  && ! grep -q 'no longer tracks' "$TMP/out" && ok "state unreadable: nothing untracked, nothing replicated, said on stderr, the teardown goes on" \
+  || bad "state unreadable (rc=$rc, calls: $(calls)): $(cat "$TMP/out") $(cat "$TMP/err")"
+
+untrack "$WITH" BK_RC=1; rc=$?
+[ "$rc" -eq 0 ] && [ "$(calls)" = 'state list;backup-state .;state rm;state list;' ] && ! secrets_tracked && grep -q 'NOT replicated' "$TMP/err" \
+  && ! grep -q 'Undo, if you decline' "$TMP/out" \
+  && ok "replication fails: the secrets are still untracked, the warning is on stderr, no undo is promised, the exit is 0" \
+  || bad "replication fails (rc=$rc, calls: $(calls)): $(cat "$TMP/out") $(cat "$TMP/err")"
+
+untrack "$WITH" BK_OUT='⚠ no backup_targets output — apply the infra first. Skipping state backup.'; rc=$?
+[ "$rc" -eq 0 ] && grep -q 'NOT replicated' "$TMP/err" && ! grep -q 'Undo, if you decline' "$TMP/out" \
+  && ok "replication skipped (exit 0, no ✓ line): no undo is promised either" \
+  || bad "replication skipped (rc=$rc): $(cat "$TMP/out") $(cat "$TMP/err")"
+
+untrack "$WITH" RM_RC=1; rc=$?
+[ "$rc" -eq 0 ] && secrets_tracked && grep -q 'state rm failed' "$TMP/err" && ! grep -q 'Undo, if you decline' "$TMP/out" \
+  && ! grep -q 'no longer tracks' "$TMP/out" \
+  && ok "state rm fails (a lock): nothing was untracked, no undo is promised, the exit is 0" \
+  || bad "state rm fails (rc=$rc): $(cat "$TMP/out") $(cat "$TMP/err")"
+
+untrack 'module.scw[0].x'; rc=$?
+[ "$rc" -eq 0 ] && [ "$(calls)" = 'state list;state list;' ] && ! grep -q 'no longer tracks' "$TMP/out" \
+  && ok "a state that never held Talos resources: nothing to untrack, and no warning about secrets it never had" \
+  || bad "no Talos resources (rc=$rc, calls: $(calls)): $(cat "$TMP/out") $(cat "$TMP/err")"
+
 echo "=== upgrade hands DRY_RUN and UPGRADE_*_TO to the script, from the command line or the shell ==="
 # A Task variable is not an environment variable and cluster-upgrade.sh reads the
 # environment, so `task upgrade DRY_RUN=1` once started a real upgrade. The script is a stub.
