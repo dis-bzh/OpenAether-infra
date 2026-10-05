@@ -574,6 +574,9 @@ module "talos" {
   # Dedicated worker data volumes (encrypted UserVolumeConfig). Empty on local.
   worker_storage = var.worker_storage
 
+  node_nameservers      = var.node_nameservers
+  node_dns_boot_timeout = var.node_dns_boot_timeout
+
   # The provider modules are DELIBERATELY not listed here. A module-level
   # depends_on makes every resource in this module depend on every resource in
   # those — which made per-node targeting impossible: `rolling-replace` could not

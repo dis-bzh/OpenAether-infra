@@ -16,6 +16,18 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
+- **`node_nameservers`: DNS-over-TLS or -HTTPS for the nodes' own resolver (refs #173).** A list of `{address,
+  protocol, tls_server_name}` rendered as one Talos `ResolverConfig` and appended to every node's config, plus a
+  `TimeSyncConfig` `bootTimeout` when a server is encrypted (`node_dns_boot_timeout`, default `90s`, `""` keeps
+  Talos's wait); both are root variables. Opt-in: unset renders the config byte-identical, and a change replaces
+  the apply resources (upstream #352). Rules, trade-offs and how to check a node: `modules/talos/variables.tf`.
+  Rung: mocked (`modules/talos/tests/node-nameservers.tftest.hcl`) and, on OVH (1 control plane + 1 worker, Talos 1.14.2,
+  2026-10-05), real: unset plans empty; setting the list replaces both apply resources with no "inconsistent final plan"
+  and no reboot; every node then resolves over DoT with NTS kept; pods resolve (a DoT-only list, CoreDNS forwarding to
+  the host) and a capture shows tcp/853 and no udp/53; a healthy reboot is Ready in 47 s. **A list no node can reach
+  leaves a rebooted node without its Talos API**; recovery is replacing it. Egress to 853, 443 and 4460 is open on OVH
+  and Scaleway. Not run: Outscale, three control planes, a cold first boot with the list set.
+
 - **`real-cloud-regression.yml`: a manual deploy, verify and teardown on sandbox accounts, dormant until the owner
   creates its secrets.** `workflow_dispatch` only (the `schedule:` block is written and commented out), one provider
   or all three in turn, behind a "these are sandbox accounts" box, with `if: always()` on both teardown steps and on
@@ -251,6 +263,50 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **`siderolabs/talos` provider 0.11 → 0.12.0, pinned exactly (refs #241, #44).** The cluster root and the local lane
+  pin `0.12.0`, the module's ceiling moves to `< 0.13.0`, and Renovate's hold rule gives way to a `needs-real-run`
+  label on the provider's own PRs (the module's ceiling is left to a person). Exact on purpose: no lock file is
+  committed, so a range would let a later 0.12.x change the rendered text unseen. `replace_triggered_by` (upstream
+  `siderolabs/terraform-provider-talos#352`) stays: fixed upstream in 0.12.0, but no run without it has happened.
+  **After pulling this, run `tofu init -backend=false -upgrade` in `infrastructure/opentofu/cluster` (or `task
+  validate`, which shares the lock):** the lock file is local and gitignored, so every `infra-*` task stops at init
+  until you do. `-upgrade` moves every provider within its constraint, so read the next plan; to move only talos,
+  delete its block from `.terraform.lock.hcl` and run a plain `tofu init`.
+  Rung: mocked, plus a real Scaleway run on 2026-10-05 (one control plane and one worker, Talos 1.14.2, Kubernetes
+  1.37.1, no Flux): on a cluster built under 0.11, `infra-plan` was empty under the contract cap and, after `init
+  -upgrade`, under the pin, and `cluster-up` changed nothing (`cluster-verify` 12/12); rebuilt from an empty state
+  under 0.12.0, `cluster-up` ended on `cluster-verify` 12/12 and `cluster-idempotency` was green. Offline, a cloud
+  cluster's rendered config equals 0.11's; the local Docker lane's rendered config changes in `machine.install.image`
+  only (installer v1.13.0 to v1.14.0), which a disposable lane absorbs. Not measured: three control planes, OVH,
+  Outscale, `cluster-upgrade` 1.13.9 to 1.14.2 under 0.12.0, `task local-up` at 1.14.2, a run without
+  `replace_triggered_by` (#83).
+
+- **`modules/talos` renders the machine configuration under the v1.13 contract on a Talos 1.14 node (refs #241).**
+  On `talos_machine_configuration`, `talos_version` is the config contract, not the node's Talos: provider 0.12
+  renders the 1.14 multi-document config for it and the module's v1alpha1 patches collide with it (seven errors on
+  every config apply). One local, `config_contract` (v1.13, or the node's version when older), now feeds both data
+  sources. Rung: mocked (`modules/talos/tests`, now run by `task test`; 17 of 19 mutants killed; of the other two,
+  the installer image fed the contract is killed by the cluster root's tests, and a 1.13.x node keeping its patch
+  version renders the same text). Measured with the real providers and no node: under 0.11.0
+  the text equals `main`'s for every shape and node version tried (cloud, container, VIP, HA; 1.12, 1.13, 1.14);
+  on a 1.14 node under 0.12.0 it equals what 0.11.0 renders, bar the default installer image in container mode,
+  and `talosctl validate --strict` (1.13.9 and 1.14.2 clients) accepts it. Not measured: any node, any cloud.
+  This commit alone leaves the provider pin at 0.11.
+- **The Talos tunnels keep what their ssh said, and `ensure` and a short `open` quote it (#65).** Every tunnel's
+  output went to `/dev/null`, so the tunnels that were reported 6/6 up on 2026-08-18 and had no listener later left
+  nothing to read. One `spawn_tunnel` now appends each ssh's `LogLevel=VERBOSE` output to `.talos-tunnel-<port>.log`
+  beside the pidfile (gitignored, it names the bastion). `open` and `open-direct` quote the log of each port that did
+  not come up; `ensure` quotes it for each tunnel that does not answer, and says whether its ssh still runs. A log
+  says how an ssh ended, not who asked it to, and a running ssh that nothing answers through says nothing of why. The
+  cause of 2026-08-18 is still unknown. Rung: mocked (`test-talos-tunnels.sh`: what each ssh is asked to do, what the
+  logs hold, what is quoted; mutants killed). Seen once on a real Scaleway bastion with 2 tunnels: after a TERM,
+  `ensure` quoted the client's closing lines and rebuilt 2/2. Not seen there: a drop by the bastion, a KILL, `open-direct`.
+
+- **flux2 2.9.3 → 2.9.6**, with the vendored `flux-install.yaml` and its seven controller image digests refreshed
+  together (Cléa's probe was red on a stale vendored file, #91). A new cluster with `deploy_flux=true` gets the 2.9.6
+  controllers and CRDs; a running cluster manages its own Flux and nothing here touches it. Rung: mocked
+  (`task render-check`, both artifact locks, lint, `task test`); not run on a cluster, no lab sets `deploy_flux`.
+  plumber 0.5.12 → 0.5.20 landed on its own, by `clea bump --sha`.
 - **commitizen 4.19.0 → 4.19.1** in the CI commit-message job, probed green by Cléa (#91). Proof: lint,
   render-check, test-scripts, validate (both roots), `task test` (71/71), checkov 32/0, custom checks 6/0 and
   gitleaks green; trivy not run in the sandbox. Left out: plumber v0.5.20 (`clea bump` refuses its `action-sha`
@@ -325,6 +381,32 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **A state that lost its Talos secrets is refused, and the teardown plan replicates the state before it untracks
+  them (refs #66).** `task infra-down-plan` takes `talos_machine_secrets` out of the state to compute a destroy plan,
+  and `tofu state rm` does the same by hand. Declining the destroy left nodes that trust a PKI the state no longer
+  held: the next `cluster-up` minted another, every Talos call ended in `x509: certificate signed by unknown
+  authority`, Kubernetes stayed healthy, and the provider kept printing `Still modifying...`. Now
+  `bootstrap-in-state.sh` refuses a state that holds the bootstrap, a machine config or the kubeconfig without the
+  secrets, before any plan of `cluster-up`, `infra-plan`, `infra-apply`, `cluster-roll` and `cluster-shrink`;
+  `backup-state.sh` refuses to replicate it, so the replica stays the undo; `infra-down-plan` replicates first, skips
+  both steps when the secrets are already out, never blocks a teardown, and prints the undo only when it exists. The
+  cluster README gains "Lost the Talos secrets": two recoveries, with the commands that ran.
+  Rung: mocked (`test-task-guards.sh` runs the real untrack block against a stub `tofu` and `backup-state.sh`;
+  `test-bootstrap-in-state.sh` runs each caller in a copy of the tree; `test-state-backups.sh`; 38 mutants killed, 1
+  equivalent) and real cloud on Scaleway only (1 control plane + 1 worker, Talos 1.14.2, 2026-10-04/05). The
+  untracking, the symptom and both recoveries (the replica's state put back; the bundle rebuilt from a node's own
+  configuration, no reboot) ran before this change. One pass of the guard and of replicate-then-untrack ran at the
+  branch's first commit: a second `infra-down-plan` skipped both and the replica did not move, `cluster-up` was
+  refused before any plan, the replica copied back planned empty. **Not run on a real cloud:** the untrack block as
+  reworked since, the `backup-state.sh` and `cluster-roll` guards, the wider trigger; OVH and Outscale; three control
+  planes; a replica on another provider; `cluster-verify` on a lost PKI; a cluster with no talosconfig and no replica
+  copy (unrecoverable here). The cause of the 2026-08-15 mismatch is still not established.
+
+- **`render-bootstrap-manifests.sh` recorded the old `flux-install.yaml` hash after a refresh.** The lock was written
+  before the download, so `OPENAETHER_REFRESH_FLUX=1` needed a second run to satisfy `check-upstream-artifacts-lock.sh`;
+  it now follows the download. Cléa's regen lane also refreshes Flux and its digests when Flux is the dependency
+  bumped, instead of leaving the stale vendored file to fail `render-check`. Rung: mocked, `test-render-bootstrap-lock.sh`
+  (5 assertions; the previous script is its mutant).
 - **A changed `admin_ip` can be applied, and the failure says how.** The documented remedy, "update `admin_ip` then
   `task infra-apply`", stopped at the tunnel check on a bootstrapped cluster: the bastion no longer let this machine
   in, so the tunnels could not be rebuilt, and the escape hatch (`OA_SKIP_TUNNEL_GUARD=1`) existed only in a

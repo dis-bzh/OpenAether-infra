@@ -66,7 +66,7 @@ the leader-last fix: that run moved Talos only, the 5 s one also moved Kubernete
 
 **Scaleway, the 1.14 climb, 2026-10-03**, from an empty project with encrypted worker data disks. `cluster-up` was interrupted twice on purpose in phase 2 and recovered each time (#40 and #67, closed): the tunnels killed before the bootstrap call (a plain re-run resumed), and `SIGKILL` right after it (`adopt-bootstrap` found 3 etcd members and imported the bootstrap; the stale state lock the kill left needed a `tofu force-unlock`, which `explain-failure.sh` now names). Longhorn 1.13 on the encrypted user volumes at Talos 1.13.9, a 5 MiB blob written, then `cluster-upgrade` 1.13.9/1.36.3 → 1.14.2/1.37.1 with a one-replica stateful pod and a Service probe running: 6 failed apiserver probes in 764 for the Talos step and 9 in 805 for the Kubernetes step (longest 2 s each), the Service 0 failed, the blob's hash unchanged, the stateful pod gapped 20 s and 16 s. The roll stopped once on a defect of ours, the Longhorn gate waiting for a rebuild its own cordon prevented (#229). The same day, on the exact pair #181 names (Talos 1.14.1, Kubernetes 1.37.0): Longhorn written, read from other workers and across a node reboot, and the worker volumes read back by `cluster-verify` (#62). A worker was then added by one `task cluster-up` three times running, 3 to 6 (`grow-nodes.sh`, #59). This row is what moved the pin to 1.14.2 / 1.37.1.
 
-**Removing nodes, 2026-10-04**, on the three clouds' 3-control-plane clusters at Talos 1.14.2: `task cluster-shrink` took a worker and then one control plane (3 to 2, `--allow-below-ha`) off each of Scaleway, OVH and Outscale, `cluster-verify` green after every run, the provider's API listing exactly the machines left. The load balancer kept sending one request in three to the control plane that had left etcd until its health check dropped it: 8 failed `/readyz` of 350 on Scaleway, 13 of 374 on OVH, 13 of 220 on Outscale, none longer than 3 probes in a row. Longhorn ran on Scaleway only, where its eviction was measured (a sole replica moved off the node, data intact, a two-replica volume refused); CNPG ran there too (a replica moved with its volume, data intact; a primary on the departing node failed over: 2 of 368 inserts failed, none acknowledged lost). Figures and mechanism: [`upgrade.md`](upgrade.md#removing-nodes).
+**Removing nodes, 2026-10-04**, on the three clouds' 3-control-plane clusters at Talos 1.14.2: `task cluster-shrink` took a worker and then one control plane (3 to 2, `--allow-below-ha`) off each of Scaleway, OVH and Outscale, `cluster-verify` green after every run, the provider's API listing exactly the machines left. The load balancer kept sending one request in three to the control plane that had left etcd for 40 to 76 s: a few failed `/readyz` probes, which a client that retries does not see. Longhorn ran on Scaleway only, where its eviction was measured (a sole replica moved off the node, data intact, a two-replica volume refused); CNPG ran there too (a replica moved with its volume, data intact; a primary on the departing node failed over: 2 of 368 inserts failed, none acknowledged lost). Figures and mechanism: [`upgrade.md`](upgrade.md#removing-nodes).
 
 **What the release delivers besides a cluster.** Every task is `<noun>-<verb>`
 (`cluster-up`, `infra-plan/apply/down`, `tunnels-up`, `cluster-verify/upgrade/roll/down`).
@@ -154,12 +154,18 @@ alone, #57; only `restore-artifacts` was read back byte-identical, on one provid
 unattended to completion; and a control-plane roll with zero failed probes has not happened on any cloud
 (#42: 1 s on Scaleway and OVH, 3 s on Outscale, 9 s once Kubernetes moves there).
 
-**Talos provider 0.12.0 cannot carry a 1.14 cluster yet.** At `talos_version` 1.14.x it renders Talos's
-multi-document config and the module's v1alpha1 patches conflict (seven errors on every config apply,
-measured on OVH). Inside the 1.13 contract it works: a fresh deploy and a bump 1.13.9→1.13.11 ran through
-on OVH and on Outscale (13/13, plan empty after), though with our `replace_triggered_by` workaround still
-in, so it does not show that the upstream fix alone suffices (#83, closed). The pin stays on 0.11.0 until
-the patches move to 1.14 documents ([#241](https://github.com/dis-bzh/OpenAether-infra/issues/241)).
+**Talos provider 0.12.0 is pinned** ([#241](https://github.com/dis-bzh/OpenAether-infra/issues/241)); a 1.14 node
+is rendered under a capped contract, and `config_contract` in `modules/talos/main.tf` says why. Measured on Scaleway on
+2026-10-05, one control plane and one worker at Talos 1.14.2 and Kubernetes 1.37.1, no Flux: a cluster built under 0.11
+planned empty under the pin and `cluster-up` changed nothing (`cluster-verify` 12/12); rebuilt from an empty state under
+0.12.0, `cluster-up` ended on `cluster-verify` 12/12 and `cluster-idempotency` was green. Inside the 1.13 contract 0.12.0
+had already run through on OVH and on Outscale (a fresh deploy and a bump 1.13.9→1.13.11, 13/13, plan empty after), with
+our `replace_triggered_by` workaround still in (#83, closed).
+**Not proven**: a 1.14 cluster under 0.12.0 with three control planes, or on OVH or Outscale; `cluster-upgrade` 1.13.9 to
+1.14.2 under 0.12.0 (only offline renders, which differ in the installer image alone); a run without
+`replace_triggered_by`; `task local-up` at 1.14.2, which did not start on the one host tried (kernel 6.12), so the
+container-mode install image change (v1.13.0 to v1.14.0) is unmeasured there; `talos_machine`
+([#44](https://github.com/dis-bzh/OpenAether-infra/issues/44)) is not adopted.
 
 **Six gates were green on something they had stopped checking**, found on
 2026-08-28 by auditing what the pipeline actually constrains rather than what it
@@ -174,7 +180,9 @@ the authority — required a variable no module has ever declared.
 
 **Resume here**: the pin is 1.14.2 / 1.37.1 and every cloud's newest row says so. Still unseen on a real
 cloud: the failover (#57), a roll with zero failed probes (#42), a Proxmox apply (#48, #201: no hardware),
-and the CA mismatch of #66 (the version flip is refused by `prevent_destroy`; the interrupted-apply path
-was not broken). Standing items only a person can close are in the issues: #43 (Outscale support), #61,
-#73 (two old staging buckets, a delete the owner runs). Upstream, Feint's fix for #179 is on its `main`
-and waits for their next release.
+and the wider cases of #66. Its CA mismatch was reproduced on Scaleway (1 control plane, 2026-10-04) through
+`infra-down-plan`'s untracking and recovered two ways (`cluster/README.md`, "Lost the Talos secrets"); the version
+flip is refused by `prevent_destroy` and the interrupted-apply path was not broken. Unseen: OVH and Outscale, three
+control planes, a replica on another provider, a cluster with no talosconfig and no replica copy. Standing items
+only a person can close are in the issues: #43 (Outscale support), #61, #73 (two old staging buckets, a delete the
+owner runs). Upstream, Feint's fix for #179 is on its `main` and waits for their next release.

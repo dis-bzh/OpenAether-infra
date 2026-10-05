@@ -7,8 +7,10 @@ A rule built on a metric nobody produces evaluates cleanly, reports no error,
 and never fires. It is indistinguishable from "nothing is wrong" — the exact
 failure this platform's alerting is meant to remove. Three instances were found
 by hand on 2026-07-29, each silent for as long as it had existed:
-  * `gotk_reconcile_condition` — every Flux monitoring guide cites it; Flux 2.8
-    stopped emitting it;
+  * `gotk_reconcile_condition` — the Flux 2.3 metrics page still cites it, as
+    deprecated; the controllers stopped recording it by about Flux 2.5 (inferred
+    from flux2's go.mod, not measured). Per-object state is `gotk_resource_info`
+    (kube-state-metrics), Ready being a label, not a value;
   * `kube_*` — kube-state-metrics had no NetworkPolicy, so nothing reached it;
   * `node_*` — the scrape named a port the chart does not use, so the target was
     never even discovered.

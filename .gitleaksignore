@@ -18,3 +18,11 @@
 # later commit carries it whole; this pins the one commit that introduced it,
 # which a full-history scan re-reads forever.
 48f097bd1ed192718daa8a7a2882338fa786dda5:scripts/dev/check-gitleaks-rules.sh:github-pat:25
+
+# Three fixtures of the node_nameservers validation: a dotted quad with an out-of-range or
+# zero-padded octet, which the module refuses and which is nobody's address. The env-data rule
+# reads them as routable. The next commit spells them so it does not; this pins the three lines
+# of the one that introduced them, which a scan of the PR's commits re-reads.
+67cbbf91aa94bc830643297504d0f6b9a7badc00:infrastructure/opentofu/modules/talos/tests/node-nameservers.tftest.hcl:openaether-public-ipv4:339
+67cbbf91aa94bc830643297504d0f6b9a7badc00:infrastructure/opentofu/modules/talos/tests/node-nameservers.tftest.hcl:openaether-public-ipv4:355
+67cbbf91aa94bc830643297504d0f6b9a7badc00:infrastructure/opentofu/modules/talos/tests/node-nameservers.tftest.hcl:openaether-public-ipv4:363
