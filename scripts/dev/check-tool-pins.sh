@@ -13,15 +13,11 @@
 # unpinned. The ALLOWLIST below is this repository's own prior decision, one
 # line each — most are generic OS utilities with no meaningful version to
 # track (apt's actual candidates drift by Ubuntu release), a few are pinned by
-# a different mechanism entirely (a GPG-verified apt channel), and `yamllint`
-# is listed once, for the apt FALLBACK only: Ubuntu 24.04's own candidate
-# (1.33.0-1) does not track the pip pin the primary path uses, so pinning it
-# here would assert a version apt does not have.
+# a different mechanism entirely (a GPG-verified apt channel).
 #
 # `python3 -m pip install` is deliberately invisible to the pip pattern below
-# (it matches bare `pip install` only) — setup.sh's `python3 -m pip install
-# --user yamllint/checkov` is a wider, separate gap already tracked in
-# clea.toml's `[[unpinned]]`, not this check.
+# (it matches bare `pip install` only); setup.sh's own installs go through
+# pip_install_pinned, which takes the pin from an anchored variable.
 #
 # Usage: check-tool-pins.sh
 set -uo pipefail
@@ -40,12 +36,10 @@ declare -A ALLOW=(
   [openssh-server]="generic OS utility (ssh-ca-check.sh's throwaway Docker sshd, torn down every run)"
   [openssh-client]="generic OS utility (ssh-ca-check.sh's throwaway Docker sshd, torn down every run)"
   [pipx]="a package manager, not a tracked tool"
-  [pre-commit]="tracked in clea.toml [[unpinned]] instead — no anchor form fits it yet"
   [curl]="bootstrap prerequisite needed before any pinned download can even run"
   [ca-certificates]="bootstrap prerequisite needed before any pinned download can even run"
   [incus]="pinned by the Zabbly stable channel + GPG key fingerprint one step above (ci.yml), not by an apt package version"
   [incus-client]="same as incus — one apt line, one pin, on the channel"
-  [yamllint]="apt FALLBACK only (setup.sh install_yamllint, no pip on the machine) — Ubuntu's apt candidate does not track the pip pin, see setup.sh"
 )
 
 PASS=0

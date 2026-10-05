@@ -269,6 +269,11 @@ in git. 0.1.0 is the first entry describing something proven.
   refusal is gone, and on Outscale `--ensure` refuses a plan that creates an OMI whose name is taken, before the
   import. Details: `infrastructure/opentofu/talos-image/README.md`. Rung: mocked (`test-talos-image.sh`, the image
   root's first `tofu test`, mutants killed). Not run on any cloud; #69 stays open on the lab protocol.
+- **`setup.sh` pins the last five tools it installed at "whatever is newest today"**: kubectl (checksum-verified),
+  aws-cli, checkov, yamllint and pre-commit, each behind a `# renovate:` anchor, so Cléa compares a version instead
+  of watching it move (`[[unpinned]]` is now empty in `clea.toml`). The three Python tools share one `pip_install_pinned`
+  (pipx, then `pip --user`, then a private venv); brew, snap and apt are gone for them, as they cannot name a version.
+  yamllint is also held equal to `ci.yml`'s by `check-version-drift.sh`.
 
 - **`siderolabs/talos` provider 0.11 → 0.12.0, pinned exactly (refs #241, #44).** The cluster root and the local lane
   pin `0.12.0`, the module's ceiling moves to `< 0.13.0`, and Renovate's hold rule gives way to a `needs-real-run`
