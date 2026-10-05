@@ -252,11 +252,22 @@ in git. 0.1.0 is the first entry describing something proven.
 ### Changed
 
 - **`siderolabs/talos` provider 0.11 → 0.12.0, pinned exactly (refs #241, #44).** The cluster root and the local lane
-  pin `0.12.0`, the module's ceiling moves to `< 0.13.0` and Renovate's hold rule is gone. Exact on purpose: no lock
-  file is committed, so a range would let a later 0.12.x change the rendered text unseen. `replace_triggered_by`
-  (#352) stays: fixed upstream in 0.12.0, but no run without it has happened. Rung: mocked. With the contract
-  cap above, a cloud cluster's rendered config equals 0.11's (offline); the local Docker lane's changes in
-  container mode (the default installer image), which a disposable lane absorbs. Not measured: any node, any cloud.
+  pin `0.12.0`, the module's ceiling moves to `< 0.13.0`, and Renovate's hold rule gives way to a `needs-real-run`
+  label on the provider's own PRs (the module's ceiling is left to a person). Exact on purpose: no lock file is
+  committed, so a range would let a later 0.12.x change the rendered text unseen. `replace_triggered_by` (upstream
+  `siderolabs/terraform-provider-talos#352`) stays: fixed upstream in 0.12.0, but no run without it has happened.
+  **After pulling this, run `tofu init -backend=false -upgrade` in `infrastructure/opentofu/cluster` (or `task
+  validate`, which shares the lock):** the lock file is local and gitignored, so every `infra-*` task stops at init
+  until you do. `-upgrade` moves every provider within its constraint, so read the next plan; to move only talos,
+  delete its block from `.terraform.lock.hcl` and run a plain `tofu init`.
+  Rung: mocked, plus a real Scaleway run on 2026-10-05 (one control plane and one worker, Talos 1.14.2, Kubernetes
+  1.37.1, no Flux): on a cluster built under 0.11, `infra-plan` was empty under the contract cap and, after `init
+  -upgrade`, under the pin, and `cluster-up` changed nothing (`cluster-verify` 12/12); rebuilt from an empty state
+  under 0.12.0, `cluster-up` ended on `cluster-verify` 12/12 and `cluster-idempotency` was green. Offline, a cloud
+  cluster's rendered config equals 0.11's; the local Docker lane's rendered config changes in `machine.install.image`
+  only (installer v1.13.0 to v1.14.0), which a disposable lane absorbs. Not measured: three control planes, OVH,
+  Outscale, `cluster-upgrade` 1.13.9 to 1.14.2 under 0.12.0, `task local-up` at 1.14.2, a run without
+  `replace_triggered_by` (#83).
 
 - **`modules/talos` renders the machine configuration under the v1.13 contract on a Talos 1.14 node (refs #241).**
   On `talos_machine_configuration`, `talos_version` is the config contract, not the node's Talos: provider 0.12

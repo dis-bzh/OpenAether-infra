@@ -122,6 +122,12 @@ sous un contrat plafonné (`config_contract` dans `modules/talos/main.tf`, qui d
 bump vers 1.14 change l'image d'installation dans la configuration ; les rendus hors ligne sous
 le provider 0.12.0 ne montrent rien d'autre, mais aucun `cluster-upgrade` n'a encore tourné sous lui.
 
+**Après avoir tiré le pin du provider 0.12.0**, lancer `tofu init -backend=false -upgrade` dans
+`infrastructure/opentofu/cluster` (ou `task validate`, qui partage le lock). Le fichier de lock est
+local et ignoré par git : toutes les tâches `infra-*` s'arrêtent à l'init tant que ce n'est pas fait.
+`-upgrade` déplace chaque provider dans sa contrainte : lire le plan suivant. Pour ne déplacer que
+talos, supprimer son bloc de `.terraform.lock.hcl` et lancer un `tofu init` simple.
+
 **Sur Outscale, la construction de l'image domine tout l'upgrade.** L'image est
 enregistrée depuis un snapshot importé via une file côté provider : 8 min le
 2026-08-18, plus de 60 min le 2026-07-25. Elle bloque avant qu'un seul nœud soit
@@ -243,11 +249,11 @@ inchangé. Ouvert en issue.
 
 Le premier apply après un bump de `talos_version` échouait une fois sur OVH et
 Outscale avec « Provider produced inconsistent final plan » (issue amont
-`siderolabs/terraform-provider-talos` #352, corrigée seulement dans la ligne
-0.12.0 en pré-version). Le module remplace désormais chaque application de machine
-config lors d'un changement de version (`replace_triggered_by`), donc le bump passe
-en un seul apply : les montées du 2026-10-03 sont passées par `cluster-upgrade`, qui
-n'a aucun retry, sur les trois clouds.
+`siderolabs/terraform-provider-talos` #352, corrigée dans la 0.12.0, qui est
+épinglée). Le module remplace chaque application de machine config lors d'un
+changement de version (`replace_triggered_by`), donc le bump passe en un seul apply :
+les montées du 2026-10-03 sont passées par `cluster-upgrade`, qui n'a aucun retry,
+sur les trois clouds. Le contournement reste tant qu'un run sans lui n'a pas passé (#83).
 
 ## Ce qu'il faut vérifier, au-delà de « c'est revenu »
 

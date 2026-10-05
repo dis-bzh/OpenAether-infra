@@ -4,8 +4,8 @@ terraform {
   required_providers {
     talos = {
       source = "siderolabs/talos"
-      # Bounded ceiling: a new minor can render a new Talos contract, and its first run
-      # on a real node is what shows the patches still fit (#241).
+      # Bounded ceiling, a gate Renovate is told not to move: a new minor can render a new Talos
+      # contract, and its first run on a real node is what shows the patches still fit (#241).
       version = ">= 0.7.0, < 0.13.0"
     }
     random = {

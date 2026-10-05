@@ -5,7 +5,7 @@ terraform {
     talos = {
       source = "siderolabs/talos"
       # Exact: a provider release can change the rendered text, and the module's patches were
-      # checked against 0.12.0's alone (#241). Renovate proposes each release.
+      # checked against 0.12.0's alone (#241). Renovate's PR for a release is labelled needs-real-run.
       version = "0.12.0"
     }
     scaleway = {
