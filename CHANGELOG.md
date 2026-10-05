@@ -16,6 +16,18 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
+- **`node_nameservers`: DNS-over-TLS or -HTTPS for the nodes' own resolver (refs #173).** A list of `{address,
+  protocol, tls_server_name}` rendered as one Talos `ResolverConfig` and appended to every node's config, plus a
+  `TimeSyncConfig` `bootTimeout` when a server is encrypted (`node_dns_boot_timeout`, default `90s`, `""` keeps
+  Talos's wait); both are root variables. Opt-in: unset renders the config byte-identical, and a change replaces
+  the apply resources (upstream #352). Rules, trade-offs and how to check a node: `modules/talos/variables.tf`.
+  Rung: mocked (`modules/talos/tests/node-nameservers.tftest.hcl`) and, on OVH (1 control plane + 1 worker, Talos 1.14.2,
+  2026-10-05), real: unset plans empty; setting the list replaces both apply resources with no "inconsistent final plan"
+  and no reboot; every node then resolves over DoT with NTS kept; pods resolve (a DoT-only list, CoreDNS forwarding to
+  the host) and a capture shows tcp/853 and no udp/53; a healthy reboot is Ready in 47 s. **A list no node can reach
+  leaves a rebooted node without its Talos API**; recovery is replacing it. Egress to 853, 443 and 4460 is open on OVH
+  and Scaleway. Not run: Outscale, three control planes, a cold first boot with the list set.
+
 - **`real-cloud-regression.yml`: a manual deploy, verify and teardown on sandbox accounts, dormant until the owner
   creates its secrets.** `workflow_dispatch` only (the `schedule:` block is written and commented out), one provider
   or all three in turn, behind a "these are sandbox accounts" box, with `if: always()` on both teardown steps and on

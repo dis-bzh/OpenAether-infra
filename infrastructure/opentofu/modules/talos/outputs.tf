@@ -24,13 +24,13 @@ output "kubeconfig_raw" {
 
 output "control_plane_config" {
   description = "Control plane machine configuration (for backup)"
-  value       = length(data.talos_machine_configuration.control_plane) > 0 ? data.talos_machine_configuration.control_plane[0].machine_configuration : null
+  value       = length(local.control_plane_configs) > 0 ? local.control_plane_configs[0] : null
   sensitive   = true
 }
 
 output "worker_config" {
   description = "Worker machine configuration (for backup)"
-  value       = length(data.talos_machine_configuration.worker) > 0 ? data.talos_machine_configuration.worker[0].machine_configuration : null
+  value       = length(local.worker_configs) > 0 ? local.worker_configs[0] : null
   sensitive   = true
 }
 
@@ -59,13 +59,13 @@ output "control_plane_count" {
 # via USERDATA when config_delivery = "userdata" (Docker/container platforms).
 output "control_plane_machine_configs" {
   description = "Generated control plane machine configurations (one per node)"
-  value       = [for c in data.talos_machine_configuration.control_plane : c.machine_configuration]
+  value       = local.control_plane_configs
   sensitive   = true
 }
 
 output "worker_machine_configs" {
   description = "Generated worker machine configurations (one per node)"
-  value       = [for c in data.talos_machine_configuration.worker : c.machine_configuration]
+  value       = local.worker_configs
   sensitive   = true
 }
 
@@ -95,4 +95,9 @@ output "inline_manifest_names" {
     position is "off" is a deletion nobody wrote down.
   EOT
   value       = [for m in local.inline_manifests : m.name]
+}
+
+output "appended_documents" {
+  description = "The ResolverConfig (and TimeSyncConfig) appended to every node's config, empty when node_nameservers is. Exposed because the rendered configs are unknown at plan."
+  value       = local.appended_documents
 }
