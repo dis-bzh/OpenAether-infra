@@ -278,6 +278,27 @@ variable "worker_storage" {
   default = { disks = [], volumes = [] }
 }
 
+variable "node_nameservers" {
+  description = <<-EOT
+    DNS-over-TLS/HTTPS (or plain) resolvers for the nodes' own DNS, instead of the
+    platform's plaintext one. Empty (default) changes nothing. Entries are
+    { address, protocol = "DoT" | "DoH" | "Do53", tls_server_name }; the rules and the
+    trade-offs are on the variable of the same name in modules/talos/variables.tf.
+  EOT
+  type = list(object({
+    address         = string
+    protocol        = optional(string, "DoT")
+    tls_server_name = optional(string, "")
+  }))
+  default = []
+}
+
+variable "node_dns_boot_timeout" {
+  description = "How long a booting node waits for time sync when node_nameservers is encrypted (\"\" keeps Talos's endless wait). Trade-off: modules/talos/variables.tf."
+  type        = string
+  default     = "90s"
+}
+
 variable "admin_ip" {
   description = "Allowed source IPs/CIDRs for admin access (SSH, K8s API LB ACL)"
   type        = list(string)

@@ -235,6 +235,8 @@ Manual equivalent (two steps are required):
 #    cluster's root of trust) and are state-only (no cloud object). You cannot just
 #    -exclude them either: module.talos depends_on module.scw, so excluding the
 #    secrets cascades to keeping the whole provider module (0 destroyed).
+#    Replicate the state first (`task backup-state`) or use `task infra-down-plan`, which does; undo: see
+#    "Lost the Talos secrets".
 tofu state rm module.talos.talos_machine_secrets.this[0]
 
 # 2. Destroy with talos_bootstrap=false so the Talos resources resolve to count=0.
@@ -303,6 +305,56 @@ tofu init -reconfigure \
   -backend-config="region=<replica-region>" \
   -backend-config="endpoint=<replica-endpoint>"
 ```
+
+### Lost the Talos secrets
+
+`task infra-down-plan` (behind `task cluster-down`) and `tofu state rm` take `talos_machine_secrets` out of the
+state. The nodes still trust the PKI it held, the next apply mints another one, and every Talos call ends in
+`x509: certificate signed by unknown authority` while Kubernetes stays healthy (the provider keeps printing
+`Still modifying...`; in the lab the x509 error came out only when the apply was interrupted).
+`bootstrap-in-state.sh` refuses that state before any plan of `cluster-up`, `infra-plan`, `infra-apply`,
+`cluster-roll` and `cluster-shrink`, and `backup-state.sh` refuses to replicate it, so the replica stays the undo.
+Measured on Scaleway (1 control plane + 1 worker, Talos 1.14.2, 2026-10-04): the symptom, and both recoveries below,
+which ended with `talosctl version` answering and an empty strict plan (the second also with no node reboot: uptimes only
+grew). Followed again from this text on OVH, the provider of the original incident, 2026-10-05 (same size): the symptom,
+the refusals of `cluster-up` and `backup-state`, the replica as the undo, and recovery 2 (empty strict plan, uptimes
+only grew); that run is how the `talosconfig.restored` step below was found missing. Not run: Outscale, three control
+planes, a replica on another provider, `cluster-verify` on a lost PKI (read, not run: `infra-verify.sh` turns an
+unreadable node into a warning, so it should stay green).
+
+1. **A replica that still holds the secrets.** `infra-down-plan` replicates the state before it untracks and prints
+   the object (`✓ tfstate replicated ... to s3://<replica-bucket>/<key>`). Put that ciphertext back over the primary
+   key, then `task kubeconfig PROVIDER=<p>` (rewrites the talosconfig) and `task infra-plan PROVIDER=<p> STRICT=1`
+   says `No changes`. The lab copied bucket to bucket inside one store; a replica on another provider needs the two
+   steps below (`backup-state.sh` read backwards), which were not run:
+   ```bash
+   AWS_ACCESS_KEY_ID=<replica key> AWS_SECRET_ACCESS_KEY=<replica secret> \
+     aws s3 cp s3://<replica-bucket>/<key> state.enc --endpoint-url <replica endpoint> --region <replica region>
+   AWS_ACCESS_KEY_ID=<primary key> AWS_SECRET_ACCESS_KEY=<primary secret> \
+     aws s3 cp state.enc s3://<primary-bucket>/<key> --endpoint-url <primary endpoint> --region <primary region>
+   ```
+2. **Only a talosconfig the nodes still trust.** `task tunnels-up PROVIDER=<p>`, then from this directory, backend
+   inited by an earlier `task` run (the Taskfile sets the first two variables for its own targets, a bare `tofu` does
+   not; without the offset the import's health read waits 15 minutes on ports nothing listens on):
+   ```bash
+   export TF_DATA_DIR=.terraform-<role>-<p> TF_VAR_talos_tunnel_port_offset="${TALOS_TUNNEL_OFFSET:-0}"
+   export AWS_ACCESS_KEY_ID=<primary key> AWS_SECRET_ACCESS_KEY=<primary secret> TF_VAR_encryption_passphrase=<passphrase>
+   task restore-artifacts PROVIDER=<p> FROM=replica   # ./talosconfig is the refused one: this writes ./talosconfig.restored
+   talosctl --talosconfig ./talosconfig.restored -e 127.0.0.1:$((50000 + ${TALOS_TUNNEL_OFFSET:-0})) -n 127.0.0.1 \
+     get machineconfig -o yaml | awk 'f{sub(/^    /,""); print} /^spec: \|/{f=1}' | awk '/^---$/{exit} {print}' > cp.yaml
+   talosctl gen secrets --from-controlplane-config cp.yaml -o secrets.yaml
+   tofu state rm 'module.talos.talos_machine_secrets.this[0]'   # only if an apply already created new ones
+   tofu import -input=false -var-file=envs/<role>-<p>.tfvars 'module.talos.talos_machine_secrets.this[0]' secrets.yaml
+   ```
+   Keep the first document only: in a VM lab the whole output held three and `gen secrets` rejected it. Then
+   `tofu plan -out=f` and `tofu show -json f` must show no create, delete or replace of a `talos_*` resource; then
+   `task cluster-up PROVIDER=<p> APPROVE=auto` (the provider's "inconsistent final plan",
+   siderolabs/terraform-provider-talos#352, stopped the first apply of each lost-secrets run in the lab, not this
+   one: run it again if it appears).
+
+Never run `cluster-up`, `infra-apply` or `cluster-roll` from a state without the secrets, push a state nobody
+verified with `-force`, or replace `random_password` (the disk key; importing it plans a replacement). Not
+recoverable from here: no talosconfig and no replica copy.
 
 > Rebuilding from scratch on another provider instead? That path has no command
 > yet — see the note under "Failover" above. The replica it would read from does

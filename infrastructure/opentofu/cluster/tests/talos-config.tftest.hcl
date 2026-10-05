@@ -420,3 +420,42 @@ run "flux_namespace_cannot_leave_the_vendored_manifest" {
 
   expect_failures = [var.flux_namespace]
 }
+
+# The default users get is declared here too, not only in the module: a changed one would reach every
+# existing cluster as a config apply on every node, and no module test sees it.
+run "node_dns_is_off_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(module.talos.appended_documents) == 0
+    error_message = "node_nameservers must default to empty at the cluster root: opt-in, and no node's config changes."
+  }
+}
+
+# Both node DNS settings must reach modules/talos, where the rules and their tests live.
+run "node_dns_settings_reach_the_talos_module" {
+  command = plan
+
+  variables {
+    node_dns_boot_timeout = "2m"
+    node_nameservers      = [{ address = "9.9.9.9", tls_server_name = "dns.quad9.net" }]
+  }
+
+  assert {
+    condition     = length(module.talos.appended_documents) == 2 && yamldecode(module.talos.appended_documents[0]).nameservers[0].address == "9.9.9.9" && yamldecode(module.talos.appended_documents[1]).bootTimeout == "2m"
+    error_message = "node_nameservers and node_dns_boot_timeout must be passed to the talos module."
+  }
+}
+
+run "node_nameservers_alone_get_the_default_boot_wait" {
+  command = plan
+
+  variables {
+    node_nameservers = [{ address = "9.9.9.9", tls_server_name = "dns.quad9.net" }]
+  }
+
+  assert {
+    condition     = yamldecode(module.talos.appended_documents[1]).bootTimeout == "90s"
+    error_message = "the root default for node_dns_boot_timeout must stay the module's (90s)."
+  }
+}
