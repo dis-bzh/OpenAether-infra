@@ -251,6 +251,11 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **flux2 2.9.3 → 2.9.6**, with the vendored `flux-install.yaml` and its seven controller image digests refreshed
+  together (Cléa's probe was red on a stale vendored file, #91). A new cluster with `deploy_flux=true` gets the 2.9.6
+  controllers and CRDs; a running cluster manages its own Flux and nothing here touches it. Rung: mocked
+  (`task render-check`, both artifact locks, lint, `task test`); not run on a cluster, no lab sets `deploy_flux`.
+  plumber 0.5.12 → 0.5.20 landed on its own, by `clea bump --sha`.
 - **commitizen 4.19.0 → 4.19.1** in the CI commit-message job, probed green by Cléa (#91). Proof: lint,
   render-check, test-scripts, validate (both roots), `task test` (71/71), checkov 32/0, custom checks 6/0 and
   gitleaks green; trivy not run in the sandbox. Left out: plumber v0.5.20 (`clea bump` refuses its `action-sha`
@@ -325,6 +330,11 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **`render-bootstrap-manifests.sh` recorded the old `flux-install.yaml` hash after a refresh.** The lock was written
+  before the download, so `OPENAETHER_REFRESH_FLUX=1` needed a second run to satisfy `check-upstream-artifacts-lock.sh`;
+  it now follows the download. Cléa's regen lane also refreshes Flux and its digests when Flux is the dependency
+  bumped, instead of leaving the stale vendored file to fail `render-check`. Rung: mocked, `test-render-bootstrap-lock.sh`
+  (5 assertions; the previous script is its mutant).
 - **A changed `admin_ip` can be applied, and the failure says how.** The documented remedy, "update `admin_ip` then
   `task infra-apply`", stopped at the tunnel check on a bootstrapped cluster: the bastion no longer let this machine
   in, so the tunnels could not be rebuilt, and the escape hatch (`OA_SKIP_TUNNEL_GUARD=1`) existed only in a

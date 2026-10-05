@@ -153,7 +153,12 @@ consumed_by = "scripts/setup.sh (install_precommit)"
 # generator whose output is committed; bumping the pin without re-rendering
 # leaves the two disagreeing, and `task render-check` is what says so. Rendering
 # here means the probe branch carries both halves — the bump and its artifact.
-regen = ["./scripts/bootstrap/render-bootstrap-manifests.sh"]
+# fluxcd/flux2 also needs the vendored install.yaml and its image digests re-downloaded: the generator only does
+# that on request, so without this a Flux probe fails render-check on a stale file. Other bumps must not move them.
+regen = [
+  "./scripts/bootstrap/render-bootstrap-manifests.sh",
+  "[ \"$DEP\" != fluxcd/flux2 ] || { OPENAETHER_REFRESH_FLUX=1 ./scripts/bootstrap/render-bootstrap-manifests.sh && ./scripts/dev/check-flux-image-digests.sh --write; }",
+]
 
 # The gates, on the bumped tree. `task lint` is the one that earns its place:
 # it runs check-version-drift.sh, which is exactly the "did the bump leave a
