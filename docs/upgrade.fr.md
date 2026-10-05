@@ -117,6 +117,17 @@ qui bloque. Un build qui échoue après son apply a déjà remplacé l'ancienne
 image : laisser le pin sur la nouvelle version et relancer. Les montées du 2026-10-03
 ont suivi cet ordre sur les trois clouds.
 
+`talos_version` est le Talos du nœud, pas le contrat de configuration machine : le module génère
+sous un contrat plafonné (`config_contract` dans `modules/talos/main.tf`, qui dit pourquoi). Un
+bump vers 1.14 change l'image d'installation dans la configuration ; les rendus hors ligne sous
+le provider 0.12.0 ne montrent rien d'autre, mais aucun `cluster-upgrade` n'a encore tourné sous lui.
+
+**Après avoir tiré le pin du provider 0.12.0**, lancer `tofu init -backend=false -upgrade` dans
+`infrastructure/opentofu/cluster` (ou `task validate`, qui partage le lock). Le fichier de lock est
+local et ignoré par git : toutes les tâches `infra-*` s'arrêtent à l'init tant que ce n'est pas fait.
+`-upgrade` déplace chaque provider dans sa contrainte : lire le plan suivant. Pour ne déplacer que
+talos, supprimer son bloc de `.terraform.lock.hcl` et lancer un `tofu init` simple.
+
 **Sur Outscale, la construction de l'image domine tout l'upgrade.** L'image est
 enregistrée depuis un snapshot importé via une file côté provider : 8 min le
 2026-08-18, plus de 60 min le 2026-07-25. Elle bloque avant qu'un seul nœud soit
@@ -238,11 +249,11 @@ inchangé. Ouvert en issue.
 
 Le premier apply après un bump de `talos_version` échouait une fois sur OVH et
 Outscale avec « Provider produced inconsistent final plan » (issue amont
-`siderolabs/terraform-provider-talos` #352, corrigée seulement dans la ligne
-0.12.0 en pré-version). Le module remplace désormais chaque application de machine
-config lors d'un changement de version (`replace_triggered_by`), donc le bump passe
-en un seul apply : les montées du 2026-10-03 sont passées par `cluster-upgrade`, qui
-n'a aucun retry, sur les trois clouds.
+`siderolabs/terraform-provider-talos` #352, corrigée dans la 0.12.0, qui est
+épinglée). Le module remplace chaque application de machine config lors d'un
+changement de version (`replace_triggered_by`), donc le bump passe en un seul apply :
+les montées du 2026-10-03 sont passées par `cluster-upgrade`, qui n'a aucun retry,
+sur les trois clouds. Le contournement reste tant qu'un run sans lui n'a pas passé (#83).
 
 ## Ce qu'il faut vérifier, au-delà de « c'est revenu »
 
@@ -396,12 +407,17 @@ s'est terminé par un `cluster-verify` vert (13/13 après un worker, 12/12 aprè
 restantes (aucun volume, port, adresse ni NIC du nœud retiré). La destruction ciblée était exactement le lot lu :
 un worker fait 5 ou 6 ressources, un control plane de 3 (Outscale) à 5, plus l'appartenance au load balancer mise à
 jour dans le même apply. Un `/readyz` authentifié à travers le load balancer chaque seconde, pendant le retrait du
-control plane : Scaleway 8 échecs sur 350 (jamais deux de suite, sur 40 s), OVH 13 sur 374 (isolés, sur 76 s),
-Outscale 13 sur 220 (plus longue série 3 sondes, sur 58 s). Cette fenêtre, c'est le load balancer qui envoie encore
-une requête sur trois à un control plane sorti d'etcd, jusqu'à ce que sa sonde le déclare mort ; un client qui
-réessaie ne la voit pas. Sortir le membre du load balancer d'abord la raccourcirait et n'est pas construit. Les
-retraits de workers : Outscale 1 sonde en échec sur 215, OVH aucune (hors l'instant où `cluster-verify` a réécrit le
-kubeconfig que la sonde lisait) ; celui de Scaleway n'a pas été sondé.
+control plane : Scaleway 12 échecs sur 350 (huit délais d'attente isolés sur 40 s, puis quatre échecs instantanés de
+suite environ 20 s avant la fin du run : attribués, sans l'avoir isolé, à la sonde qui lisait le kubeconfig pendant
+que `task kubeconfig` le réécrivait, comme pour le worker d'OVH ci-dessous), OVH 13 sur 374 (isolés, sur 76 s),
+Outscale 13 sur 220 (plus longue série 3 sondes, sur 57 s). Les échecs isolés, c'est le load balancer qui envoie
+encore une requête sur trois à un control plane sorti d'etcd ; un client qui réessaie ne les voit pas. La durée
+d'OVH correspond à sa sonde de santé (5 × 15 s) ; celle de Scaleway est plus courte (40 s contre 75 s) et la mise à
+jour du membre dans le même apply n'a pas été horodatée : ce qui a arrêté les échecs n'y est pas séparé. Sortir le
+membre du load balancer d'abord n'est pas construit ; son effet n'a pas été mesuré. Les retraits de workers :
+Outscale 1 sonde en échec sur 215, OVH aucune (hors l'instant où `cluster-verify` a réécrit le kubeconfig que la
+sonde lisait) ; celui de Scaleway n'a pas été sondé. La sonde lisait le kubeconfig vivant jusqu'au run worker d'OVH,
+une copie privée ensuite.
 
 Sur Scaleway, le cluster a ensuite été reconstitué à 3 + 2 par un seul `cluster-up` : `cluster-verify` 13/13, et
 `cluster-idempotency` a passé (plan vide, les cinq nœuds inchangés).

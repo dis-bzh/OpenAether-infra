@@ -109,6 +109,17 @@ A build that fails after its apply has already replaced the old image, so leave
 the pin at the new version and re-run. The 2026-10-03 climbs ran through that
 order on all three clouds.
 
+`talos_version` is the node's Talos, not the machine-config contract: the module renders under a
+capped one (`config_contract` in `modules/talos/main.tf`, which says why). A bump to 1.14 changes
+the installer image in the config; offline renders under provider 0.12.0 show nothing else, but
+no `cluster-upgrade` has run under it yet.
+
+**After pulling the provider 0.12.0 pin**, run `tofu init -backend=false -upgrade` in
+`infrastructure/opentofu/cluster` (or `task validate`, which shares the lock). The lock file is
+local and gitignored, so every `infra-*` task stops at init until you do. `-upgrade` moves every
+provider within its constraint: read the next plan. To move only talos, delete its block from
+`.terraform.lock.hcl` and run a plain `tofu init`.
+
 **On Outscale the image build dominates the whole upgrade.** The image is
 registered from a snapshot imported through a provider-side queue: 8 min on
 2026-08-18, over 60 min on 2026-07-25. It blocks before a single node is touched,
@@ -222,10 +233,11 @@ untouched. Open as an issue.
 
 The first apply after a `talos_version` bump used to fail once on OVH and
 Outscale with "Provider produced inconsistent final plan" (upstream
-`siderolabs/terraform-provider-talos` #352, fixed only in the 0.12.0 pre-release
-line). The module now replaces each machine-config apply on a version change
+`siderolabs/terraform-provider-talos` #352, fixed in 0.12.0, which is pinned).
+The module replaces each machine-config apply on a version change
 (`replace_triggered_by`), so the bump goes through in one apply: the 2026-10-03
-climbs ran through `cluster-upgrade`, which has no retry, on all three clouds.
+climbs ran through `cluster-upgrade`, which has no retry, on all three clouds. The
+workaround stays until a run without it passes (#83).
 
 ## What to check, beyond "it came back"
 
@@ -370,12 +382,17 @@ CNPG on it: a worker, then one control plane (3 to 2), on each of Scaleway, OVH 
 exactly the members left, and the provider's API listing exactly the machines left (no volume, port, address or
 NIC of the removed node). The targeted destroy was exactly the bundle read: a worker is 5 or 6 resources, a control
 plane 3 (Outscale) to 5, plus the load balancer's membership updated in the same apply. An authenticated
-`/readyz` through the load balancer each second, during the control-plane removal: Scaleway 8 failed of 350
-(never two in a row, over 40 s), OVH 13 of 374 (isolated, over 76 s), Outscale 13 of 220 (longest run 3 probes, over
-58 s). That window is the load balancer still sending one request in three to a control plane that has left
-etcd, until its health check marks it down; a client that retries does not see it. Taking the member out of the
-load balancer first would shorten it and is not built. Worker removals: Outscale 1 failed probe of 215, OVH none
-(apart from the moment `cluster-verify` rewrote the kubeconfig the probe was reading); Scaleway's was not probed.
+`/readyz` through the load balancer each second, during the control-plane removal: Scaleway 12 failed of 350
+(eight isolated timeouts over 40 s, then four instant failures in a row about 20 s before the end of the run:
+attributed, not isolated, to the probe reading the kubeconfig while `task kubeconfig` rewrote it, as for OVH's
+worker below), OVH 13 of 374 (isolated, over 76 s), Outscale 13 of 220 (longest run 3 probes, over 57 s). The
+isolated failures are the load balancer still sending one request in three to a control plane that has left etcd;
+a client that retries does not see them. OVH's span matches its health check (5 × 15 s); Scaleway's is shorter
+(40 s against 75 s) and the membership update in the same apply was not timestamped, so what ended the failures
+there was not separated. Taking the member out of the load balancer first is not built; its effect was not
+measured. Worker removals: Outscale 1 failed probe of 215, OVH none (apart from the moment `cluster-verify`
+rewrote the kubeconfig the probe was reading); Scaleway's was not probed. The probe read the live kubeconfig until
+the OVH worker run and a private copy after.
 
 On Scaleway the cluster was then grown back to 3 + 2 with one `cluster-up`: `cluster-verify` 13/13, and
 `cluster-idempotency` passed (empty plan, the five nodes unchanged).

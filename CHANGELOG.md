@@ -251,6 +251,45 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **`siderolabs/talos` provider 0.11 → 0.12.0, pinned exactly (refs #241, #44).** The cluster root and the local lane
+  pin `0.12.0`, the module's ceiling moves to `< 0.13.0`, and Renovate's hold rule gives way to a `needs-real-run`
+  label on the provider's own PRs (the module's ceiling is left to a person). Exact on purpose: no lock file is
+  committed, so a range would let a later 0.12.x change the rendered text unseen. `replace_triggered_by` (upstream
+  `siderolabs/terraform-provider-talos#352`) stays: fixed upstream in 0.12.0, but no run without it has happened.
+  **After pulling this, run `tofu init -backend=false -upgrade` in `infrastructure/opentofu/cluster` (or `task
+  validate`, which shares the lock):** the lock file is local and gitignored, so every `infra-*` task stops at init
+  until you do. `-upgrade` moves every provider within its constraint, so read the next plan; to move only talos,
+  delete its block from `.terraform.lock.hcl` and run a plain `tofu init`.
+  Rung: mocked, plus a real Scaleway run on 2026-10-05 (one control plane and one worker, Talos 1.14.2, Kubernetes
+  1.37.1, no Flux): on a cluster built under 0.11, `infra-plan` was empty under the contract cap and, after `init
+  -upgrade`, under the pin, and `cluster-up` changed nothing (`cluster-verify` 12/12); rebuilt from an empty state
+  under 0.12.0, `cluster-up` ended on `cluster-verify` 12/12 and `cluster-idempotency` was green. Offline, a cloud
+  cluster's rendered config equals 0.11's; the local Docker lane's rendered config changes in `machine.install.image`
+  only (installer v1.13.0 to v1.14.0), which a disposable lane absorbs. Not measured: three control planes, OVH,
+  Outscale, `cluster-upgrade` 1.13.9 to 1.14.2 under 0.12.0, `task local-up` at 1.14.2, a run without
+  `replace_triggered_by` (#83).
+
+- **`modules/talos` renders the machine configuration under the v1.13 contract on a Talos 1.14 node (refs #241).**
+  On `talos_machine_configuration`, `talos_version` is the config contract, not the node's Talos: provider 0.12
+  renders the 1.14 multi-document config for it and the module's v1alpha1 patches collide with it (seven errors on
+  every config apply). One local, `config_contract` (v1.13, or the node's version when older), now feeds both data
+  sources. Rung: mocked (`modules/talos/tests`, now run by `task test`; 17 of 19 mutants killed; of the other two,
+  the installer image fed the contract is killed by the cluster root's tests, and a 1.13.x node keeping its patch
+  version renders the same text). Measured with the real providers and no node: under 0.11.0
+  the text equals `main`'s for every shape and node version tried (cloud, container, VIP, HA; 1.12, 1.13, 1.14);
+  on a 1.14 node under 0.12.0 it equals what 0.11.0 renders, bar the default installer image in container mode,
+  and `talosctl validate --strict` (1.13.9 and 1.14.2 clients) accepts it. Not measured: any node, any cloud.
+  This commit alone leaves the provider pin at 0.11.
+- **The Talos tunnels keep what their ssh said, and `ensure` and a short `open` quote it (#65).** Every tunnel's
+  output went to `/dev/null`, so the tunnels that were reported 6/6 up on 2026-08-18 and had no listener later left
+  nothing to read. One `spawn_tunnel` now appends each ssh's `LogLevel=VERBOSE` output to `.talos-tunnel-<port>.log`
+  beside the pidfile (gitignored, it names the bastion). `open` and `open-direct` quote the log of each port that did
+  not come up; `ensure` quotes it for each tunnel that does not answer, and says whether its ssh still runs. A log
+  says how an ssh ended, not who asked it to, and a running ssh that nothing answers through says nothing of why. The
+  cause of 2026-08-18 is still unknown. Rung: mocked (`test-talos-tunnels.sh`: what each ssh is asked to do, what the
+  logs hold, what is quoted; mutants killed). Seen once on a real Scaleway bastion with 2 tunnels: after a TERM,
+  `ensure` quoted the client's closing lines and rebuilt 2/2. Not seen there: a drop by the bastion, a KILL, `open-direct`.
+
 - **flux2 2.9.3 → 2.9.6**, with the vendored `flux-install.yaml` and its seven controller image digests refreshed
   together (Cléa's probe was red on a stale vendored file, #91). A new cluster with `deploy_flux=true` gets the 2.9.6
   controllers and CRDs; a running cluster manages its own Flux and nothing here touches it. Rung: mocked
