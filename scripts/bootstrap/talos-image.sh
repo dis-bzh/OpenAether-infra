@@ -15,8 +15,8 @@
 #
 # --ensure: idempotence gate for `task cluster-up`: plan first, apply only on a real change.
 # --list: the versions this lane holds (one state each); builds nothing and creates no bucket.
-# --prune: destroy ONE version's image set (the only way an image leaves the lane); refused while a tfvars pins it.
-# --retain: keep the two highest versions held (the rollback medium) and --prune every other, lowest first; takes no version.
+# --prune: destroy ONE version's image set (the only way an image leaves the lane); refused while a tfvars names it.
+# --retain: keep N (the newest tfvars pin) and the highest held below it; --prune the rest, lowest first, bar what a tfvars names. No version.
 # --import-snapshot <id>: Outscale; adopt a snapshot a failed apply orphaned into this version's state (see the module).
 # One mode per run, and one run at a time per checkout: runs share a .terraform data dir.
 set -euo pipefail
@@ -56,26 +56,51 @@ esac
 # A bare call builds the pin of the cluster tfvars, never a literal kept here.
 VERSION="${ARGS[1]:-$("$INTERNAL/talos-version.sh" "${OA_ROLE:-management}-${P}.tfvars")}"
 
-# A prune is how an image leaves the lane (--retain runs one per version), so a pin is checked here: a cluster pinning
-# the version could neither plan nor be DESTROYED once it is gone (#69). Read like everywhere else (talos-version.sh).
+# A prune is how an image leaves the lane (--retain runs one per version), so what the clusters still name is read first:
+# one that names the version could neither plan nor be DESTROYED once it is gone (#69).
 # OA_ENVS_DIR: a test harness points this at a sandbox, never at the real envs/ (#191).
-ENVS_DIR="${OA_ENVS_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../infrastructure/opentofu/cluster/envs}"
+# Absolute, and exported for talos-version.sh: this script cd's to the image root below.
+ENVS_DIR="$(cd "${OA_ENVS_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../infrastructure/opentofu/cluster/envs}" 2>/dev/null && pwd)" || ENVS_DIR=""
+[ -z "$ENVS_DIR" ] || export OA_ENVS_DIR="$ENVS_DIR"
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"  # absolute: --retain re-runs it after the cd below
-pinned_by() { # <version>: the env files of this provider that pin it, one name per line
-  local f
-  [ -d "$ENVS_DIR" ] || return 0
+# Every image an envs/*-<provider>.tfvars names, "<version> <file> <how>" per line: its talos_version (the variables.tf
+# default when it pins none), and an image_name / talos_image_file_id override naming a lane image. Fails, saying why,
+# when that cannot be known (no envs dir, an unreadable file, an image_id: an id names no version): a destroy never
+# decides on missing evidence.
+pin_refs() {
+  local f b v body
+  [ -n "$ENVS_DIR" ] || { echo "✗ no envs directory to read the pins from: what a cluster still needs is unknown." >&2; return 1; }
   for f in "$ENVS_DIR"/*-"$P".tfvars; do
     [ -e "$f" ] || continue
-    [ "$("$INTERNAL/talos-version.sh" "$(basename "$f")" 2>/dev/null || true)" = "$1" ] && basename "$f"
+    b="$(basename "$f")"
+    [ -r "$f" ] || { echo "✗ cannot read ${b}: what it pins is unknown." >&2; return 1; }
+    v="$("$INTERNAL/talos-version.sh" "$b")" || { echo "✗ cannot read the pin of ${b}." >&2; return 1; }
+    echo "$v $b talos_version"
+    body="$(sed 's/#.*$//' "$f")"
+    if grep -qE '(^|[^[:alnum:]_])image_id[[:space:]]*=[[:space:]]*"[^"]' <<<"$body"; then  # not bastion_image_id
+      echo "✗ ${b} sets image_id: an id names no version, so what that cluster still needs is unknown." >&2
+      echo "  Drop it (the name resolves the image from talos_version), then run this again." >&2
+      return 1
+    fi
+    while read -r v; do
+      [ -z "$v" ] || echo "$v $b override"
+    done < <(grep -oE "image_name[[:space:]]*=[[:space:]]*\"talos-${P}-amd64-[^\"]+\"" <<<"$body" | sed -E 's/.*-amd64-([^"]+)"$/\1/'
+             grep -oE 'talos_image_file_id[[:space:]]*=[[:space:]]*"[^"]*/talos-[^"]+-nocloud-amd64\.img"' <<<"$body" | sed -E 's/.*\/talos-(.+)-nocloud-amd64\.img"$/v\1/')
   done
   return 0
 }
+pinned_by() { awk -v v="$1" '$1 == v {print $2}' <<<"$PIN_REFS" | sort -u; }  # <version>: the env files naming it, one per line
+PIN_REFS=""
+if [ "$MODE" = prune ] || [ "$MODE" = retain ]; then
+  PIN_REFS="$(pin_refs)" || exit 1
+  [ "$MODE" != prune ] || [ -n "$PIN_REFS" ] || echo "  ~ no envs/*-${P}.tfvars here: no cluster was asked whether it still needs ${VERSION}." >&2
+fi
 if [ "$MODE" = prune ]; then
   pinned="$(pinned_by "$VERSION")"
   if [ -n "$pinned" ]; then
     while read -r f; do
-      echo "✗ ${f} pins talos_version = ${VERSION}: pruning its image would leave that cluster" >&2
-      echo "  unable to plan, or to be destroyed. Move its pin first, then prune." >&2
+      echo "✗ ${f} still names ${VERSION} (its talos_version, or an image_name / talos_image_file_id override): pruning" >&2
+      echo "  its image would leave that cluster unable to plan, or to be destroyed. Move that first, then prune." >&2
     done <<<"$pinned"
     exit 1
   fi
@@ -300,24 +325,45 @@ read_legacy() { # sets LEGACY_JSON, LEGACY_VERS (the versions its objects name) 
   LEGACY_VERS="$(sed -n 1p <<<"$HELD")" LEGACY_BAD="$(sed -n 2p <<<"$HELD")"
 }
 
-# --retain: keep the RETAIN_KEEP highest versions held (a node can still be made on N-1 while N runs) and --prune each
-# other one, lowest first, through this script's own --prune. Never destroyed: a version a tfvars pins, and one that is
-# not vMAJOR.MINOR.PATCH, which oa_semver_lt cannot order (a pre-release): both are kept and named.
+# a < b over vMAJOR.MINOR.PATCH[-pre]: a pre-release is below its own release; two of them order as version strings.
+SEMVER_RE='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+ver_lt() {
+  local ca="${1%%-*}" cb="${2%%-*}" pa pb
+  pa="${1#"$ca"}" pb="${2#"$cb"}"
+  [ "$ca" = "$cb" ] || { oa_semver_lt "$ca" "$cb"; return; }
+  [ "$pa" != "$pb" ] || return 1
+  [ -n "$pb" ] || return 0
+  [ -n "$pa" ] || return 1
+  [ "$(printf '%s\n%s\n' "$pa" "$pb" | sort -V | sed -n 1p)" = "$pa" ]
+}
+
+# --retain: relative to the cluster, not to what the lane happens to hold. N is the newest talos_version a tfvars pins;
+# keep the RETAIN_KEEP highest versions held at or below N (N and the one before it, so a node can still be made on
+# N-1) and --prune each other one, lowest first, through this script's own --prune. Kept and named, never destroyed:
+# a version a tfvars names, one above N (built ahead, or a bump reverted), and a key that is no version at all.
 RETAIN_KEEP=2
 retain_lane() {
-  local v i n start pins held=() ranked=() unranked=() drop=() pinned=() destroyed=() rest=()
+  local v i n start pins top="" held=() ranked=() ahead=() odd=() drop=() pinned=() destroyed=() rest=()
+  [ -n "$PIN_REFS" ] || { echo "✗ no envs/*-${P}.tfvars: nothing says which version a cluster is on, so nothing is retained." >&2; exit 1; }
+  while read -r v _ how; do  # N: the newest version a cluster is ON (an override below it is a node on an older image)
+    [ "$how" = talos_version ] && [[ "$v" =~ $SEMVER_RE ]] || continue
+    if [ -z "$top" ] || ver_lt "$top" "$v"; then top="$v"; fi
+  done <<<"$PIN_REFS"
+  [ -n "$top" ] || { echo "✗ no talos_version pin is a vMAJOR.MINOR.PATCH version: there is no N to retain around." >&2; exit 1; }
   LEGACY_VERS=""
   if grep -qx "$LEGACY_KEY" <<<"$KEYS"; then read_legacy; fi
   while read -r v; do  # the keys and the legacy state name the same version once, never twice
     [ -z "$v" ] || [[ " ${held[*]} " == *" $v "* ]] || held+=("$v")
   done < <(held_by_key; tr ' ' '\n' <<<"$LEGACY_VERS")
   for v in "${held[@]}"; do
-    if [[ "$v" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then  # insertion sort, ascending, by semver (never lexicographic)
+    if ! [[ "$v" =~ $SEMVER_RE ]]; then
+      odd+=("$v")
+    elif ver_lt "$top" "$v"; then
+      ahead+=("$v")
+    else  # insertion sort, ascending (never lexicographic: v1.9.0 is below v1.14.0)
       i=${#ranked[@]}
-      while [ "$i" -gt 0 ] && oa_semver_lt "$v" "${ranked[i-1]}"; do ranked[i]="${ranked[i-1]}"; i=$((i - 1)); done
+      while [ "$i" -gt 0 ] && ver_lt "$v" "${ranked[i-1]}"; do ranked[i]="${ranked[i-1]}"; i=$((i - 1)); done
       ranked[i]="$v"
-    else
-      unranked+=("$v")
     fi
   done
   for ((i = 0; i < ${#ranked[@]} - RETAIN_KEEP; i++)); do
@@ -325,9 +371,10 @@ retain_lane() {
     if [ -n "$pins" ]; then pinned+=("${ranked[i]} (${pins})"); else drop+=("${ranked[i]}"); fi
   done
   n=${#ranked[@]}; start=$((n > RETAIN_KEEP ? n - RETAIN_KEEP : 0))
-  echo "▶ ${TGT} holds ${held[*]:-no version}; keeping the ${RETAIN_KEEP} highest: ${ranked[*]:start}"
-  [ "${#pinned[@]}" -eq 0 ] || echo "  kept, pinned by a tfvars: ${pinned[*]}"
-  [ "${#unranked[@]}" -eq 0 ] || echo "  kept, not vMAJOR.MINOR.PATCH so not ranked: ${unranked[*]}"
+  echo "▶ ${TGT} holds ${held[*]:-no version}; the newest pin is ${top}; keeping the ${RETAIN_KEEP} highest at or below it: ${ranked[*]:start}"
+  [ "${#ahead[@]}" -eq 0 ] || echo "  kept, above every pin (built ahead, or a bump reverted): ${ahead[*]}"
+  [ "${#pinned[@]}" -eq 0 ] || echo "  kept, named by a tfvars: ${pinned[*]}"
+  [ "${#odd[@]}" -eq 0 ] || echo "  kept, not a version so not ranked: ${odd[*]}"
   if [ "${#drop[@]}" -eq 0 ]; then echo "✓ nothing to destroy"; exit 0; fi
   echo "  will destroy, lowest first: ${drop[*]}"
   for i in "${!drop[@]}"; do
@@ -384,11 +431,13 @@ fi
 case "$MODE" in
   prune)
     tofu destroy "${APPLY_VARS[@]}"
-    # An emptied state object would be listed as a held version.
+    # An emptied state object would be listed as a held version; one not confirmed empty is kept AND is a failure.
     if LEFT="$(tofu state list -no-color 2>&1)" && [ -z "$LEFT" ]; then
       aws s3 rm "s3://${STATE_BUCKET}/${NEW_KEY}" --endpoint-url "$SEP" --region "$SREGION" >/dev/null
+      exit 0
     fi
-    exit 0 ;;
+    echo "✗ ${VERSION}: its state still lists objects, or could not be listed. It is kept, and --list still shows it." >&2
+    exit 1 ;;
   import)
     # Adopted without the build in this state, the next plan creates the build and REPLACES the snapshot.
     BUILD='module.outscale[0].terraform_data.build_and_upload'

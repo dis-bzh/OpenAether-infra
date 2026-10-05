@@ -449,7 +449,7 @@ else:
 # the plain path prompts. So the unattended entry must carry ENSURE.
 hdr('the image build the entry point triggers is the non-interactive one')
 # A retention edge destroys instead of building: it has no apply to make non-interactive and is held to its own guard below.
-img = [(callee, kv) for c, callee, _, kv in EDGES if c == ENTRY and callee == 'image-build' and 'RETAIN' not in kv]
+img = [(callee, kv) for c, callee, _, kv in EDGES if c == ENTRY and callee == 'image-build' and not unquote(kv.get('RETAIN', ''))]
 if not img:
     bad(f'{ENTRY} no longer calls image-build — this check is measuring a journey that moved')
 def ensures(v):

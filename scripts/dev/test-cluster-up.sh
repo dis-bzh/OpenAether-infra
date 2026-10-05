@@ -40,7 +40,7 @@ case "\$(basename "\$0") \$*" in
   ssh-keygen*) exit 1 ;;
   infra-verify.sh*) echo "fixture verifier \$*: exit \${VERIFY_RC:?}"; exit "\$VERIFY_RC" ;;
   adopt-bootstrap.sh*) exit "\${ADOPT_RC:-0}" ;;
-  talos-image.sh*--retain*) exit "\${RETAIN_RC:-0}" ;;
+  talos-image.sh*--retain*) echo "fixture retention \$*"; exit "\${RETAIN_RC:-0}" ;;
 esac
 exit 0
 EOF
@@ -140,7 +140,7 @@ c="$(line_of "$W/calls.log" '^converge-versions.sh ')"; i="$(line_of "$W/calls.l
 
 echo "--- old images: pruned after the verdict, only where someone can answer, never fatal ---"
 RET='^talos-image.sh .*--retain'
-HINT='~ images older than the two highest Talos versions are pruned by a person, not here:'
+HINT='~ images below the cluster'"'"'s version and the one under it are pruned by a person, not here:'
 # APPROVE=auto never answers a destroy, so it is left, and said.
 run 0 "${UP[@]}" PROVIDER=ovh ROLE=workload; rc=$?
 { [ "$rc" = 0 ] && [ "$(calls "$RET")" = 0 ] && grep -qxF "$HINT" "$O" \
@@ -162,8 +162,12 @@ TTY=1 run 0 "${ASK[@]}" PROVIDER=ovh ROLE=workload; rc=$?
   || bad "retention was called $(calls "$RET") times: $(grep '^talos-image' "$W/calls.log" | tr '\n' '|')"
 v="$(line_of "$W/calls.log" '^infra-verify.sh')"; r="$(line_of "$W/calls.log" "$RET")"
 { [ -n "$v" ] && [ -n "$r" ] && [ "$r" -gt "$v" ]; } \
-  && ok "after the verifier, not before: until N is verified, N-1 is the rollback medium" \
+  && ok "after the verifier, not before: until N is verified, N-1's image is the one still needed" \
   || bad "verifier at ${v:-none}, retention at ${r:-none}"
+r="$(line_of "$O" '^fixture retention')"; s="$(line_of "$O" '^✓ cluster-up complete')"
+{ [ -n "$r" ] && [ -n "$s" ] && [ "$r" -lt "$s" ]; } \
+  && ok "and before the closing success line, which stays the last thing the operator reads" \
+  || bad "retention printed at line ${r:-none}, the success line at ${s:-none}"
 { ! grep -qxF "$HINT" "$O" && ! grep -q '^⚠ image retention' "$O"; } \
   && ok "and a retention that succeeds says nothing of the unattended hint or of a failure" \
   || bad "a successful retention printed the unattended hint or a warning: $(tail_of)"
@@ -177,8 +181,12 @@ EXTRA=RETAIN_RC=1 TTY=1 run 0 "${ASK[@]}" PROVIDER=ovh ROLE=workload; rc=$?
 EXTRA=VERSION=v9.9.9 TTY=1 run 0 "${ASK[@]}" PROVIDER=ovh ROLE=workload; rc=$?
 { [ "$rc" = 0 ] && grep -qx 'talos-image.sh ovh --retain' "$W/calls.log"; } \
   && ok "an exported VERSION does not reach the retention" || bad "VERSION reached the retention (exit $rc): $(grep '^talos-image' "$W/calls.log" | tr '\n' '|')"
+# An exported RETAIN would turn the BUILD into a retention, which the script refuses: cluster-up blanks it, as VERSION.
+EXTRA=RETAIN=1 run 0 "${UP[@]}" PROVIDER=ovh ROLE=workload; rc=$?
+{ [ "$rc" = 0 ] && [ "$(calls "$RET")" = 0 ] && grep -q '^talos-image.sh ovh .*--ensure' "$W/calls.log"; } \
+  && ok "an exported RETAIN=1 does not reach cluster-up's image build" || bad "RETAIN reached the build (exit $rc): $(grep '^talos-image' "$W/calls.log" | tr '\n' '|')"
 TTY=1 run 1 "${ASK[@]}" PROVIDER=ovh ROLE=workload; rc=$?
-{ [ "$rc" != 0 ] && [ "$(calls "$RET")" = 0 ] && ! grep -q '^~ images older' "$O"; } \
+{ [ "$rc" != 0 ] && [ "$(calls "$RET")" = 0 ] && ! grep -q '^~ images below' "$O"; } \
   && ok "a failing verifier prunes nothing" || bad "retention ran after a failed verdict (exit $rc, calls $(calls "$RET"))"
 
 echo "--- a failing adoption stops phase 2 before its plan ---"
