@@ -40,6 +40,8 @@ FEINT="$(pin scripts/dev/feint.sh FEINT_VERSION)"
 HELM_SETUP="$(pin scripts/setup.sh HELM_VERSION)"
 HELM_CI="$(sed -nE 's/^[[:space:]]*HELM_VERSION:[[:space:]]*"([^"]+)".*/\1/p' .github/workflows/ci.yml | head -1)"
 TOFU_SETUP="$(pin scripts/setup.sh TOFU_VERSION)"
+YAMLLINT_SETUP="$(pin scripts/setup.sh YAMLLINT_VERSION)"
+YAMLLINT_CI="$(sed -nE 's/.*pip install yamllint==([^[:space:]"]+).*/\1/p' .github/workflows/ci.yml | head -1)"
 TOFU_CI="$(sed -nE 's/^[[:space:]]*tofu_version:[[:space:]]*"([^"]+)".*/\1/p' .github/workflows/ci.yml | head -1)"
 # Talos has no second pin to compare: ci.yml installs it through
 # scripts/internal/install-talosctl.sh, which reads the cluster's own. So the
@@ -60,7 +62,7 @@ PLUMBER_CI="$(sed -nE 's/.*getplumber\/plumber@[0-9a-f]+[[:space:]]*#[[:space:]]
 # ZERO FLOOR. If the extractors return nothing the comparisons below all pass
 # vacuously, and this file becomes a green line that proves nothing — the exact
 # shape it is written against.
-for v in CILIUM HELM_MAJOR FEINT HELM_SETUP HELM_CI TOFU_SETUP TOFU_CI TALOS_CLUSTER GITLEAKS_INSTALL GITLEAKS_PRECOMMIT PLUMBER_INSTALL PLUMBER_CI; do
+for v in CILIUM HELM_MAJOR FEINT HELM_SETUP HELM_CI TOFU_SETUP TOFU_CI YAMLLINT_SETUP YAMLLINT_CI TALOS_CLUSTER GITLEAKS_INSTALL GITLEAKS_PRECOMMIT PLUMBER_INSTALL PLUMBER_CI; do
   [ -n "${!v}" ] || { echo "✗ could not extract ${v} — the extractor is broken, not the repository" >&2; exit 1; }
 done
 
@@ -85,6 +87,13 @@ if [ "$TOFU_SETUP" = "$TOFU_CI" ]; then
   ok "OpenTofu ${TOFU_SETUP}: setup.sh and ci.yml agree"
 else
   bad "OpenTofu: setup.sh installs ${TOFU_SETUP}, ci.yml pins ${TOFU_CI} — a contributor and CI would not run the same binary"
+fi
+
+# yamllint: setup.sh pins it for a contributor's machine, ci.yml for the lint job.
+if [ "$YAMLLINT_SETUP" = "$YAMLLINT_CI" ]; then
+  ok "yamllint ${YAMLLINT_SETUP}: setup.sh and ci.yml agree"
+else
+  bad "yamllint: setup.sh installs ${YAMLLINT_SETUP}, ci.yml pins ${YAMLLINT_CI} — a contributor and CI would not lint with the same rules"
 fi
 
 # Talos: the drift here was invisible for a different reason than the others —
