@@ -40,7 +40,7 @@ out="$(PATH="$STUB_DIR:$PATH" "$CHECK" 2>&1)"; rc=$?
 elapsed=$(( $(date +%s) - start ))
 [ "$rc" -eq 1 ] && ok "exit 1" || bad "exit $rc, want 1"
 [ "$elapsed" -lt 5 ] && ok "refused in ${elapsed}s, not 90" || bad "took ${elapsed}s — the whole point was not to wait"
-echo "$out" | grep -q "CAP_SYS_RESOURCE" && ok "names the actual capability" || bad "message doesn't name it: $out"
+grep -q "CAP_SYS_RESOURCE" <<<"$out" && ok "names the actual capability" || bad "message doesn't name it: $out"
 
 echo "=== the negation forms in capsh's own output must not fool a bare grep ==="
 # Reproduces the trap the real check's comment warns about: capsh names

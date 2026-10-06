@@ -112,7 +112,7 @@ fi
 
 # --- 3. upgrade in place -----------------------------------------------------
 UP_OUT="$(in_box "$INSTALLER 2>&1; echo ---; $VERSION_CMD" 2>&1)"
-if printf '%s' "$UP_OUT" | grep -qE "$(version_re "$VERSION")"; then
+if grep -qE "$(version_re "$VERSION")" <<<"$UP_OUT"; then
   ok "upgrade over ${OLD_VERSION:-an existing install} reached ${VERSION}"
 else
   bad "upgrade did not reach ${VERSION} — the installer left ${OLD_VERSION:-what was there}"
@@ -122,7 +122,7 @@ fi
 # --- 4. install from cold, in a container that never had it ------------------
 start_box || exit 1
 COLD_OUT="$(in_box "$INSTALLER 2>&1; echo ---; $VERSION_CMD" 2>&1)"
-if printf '%s' "$COLD_OUT" | grep -qE "$(version_re "$VERSION")"; then
+if grep -qE "$(version_re "$VERSION")" <<<"$COLD_OUT"; then
   ok "cold install on a machine that never had it reached ${VERSION}"
 else
   bad "cold install did not reach ${VERSION}"
