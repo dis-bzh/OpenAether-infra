@@ -317,8 +317,8 @@ task cluster-down PROVIDER=scaleway PLAN=destroy-management-scaleway.tfplan APPR
 python3 scripts/ops/purge-orphans/scaleway.py
 ```
 
-**Détruire prend deux commandes et ne peut pas se réduire à une** — c'est le but,
-pas une gêne. La première calcule la destruction et ne détruit rien ; la seconde
+**Détruire prend deux commandes et ne peut pas se réduire à une** (sauf pour un cluster
+`dev`, plus bas) — c'est le but, pas une gêne. La première calcule la destruction et ne détruit rien ; la seconde
 applique exactement ce que tu as lu. Ni `--yes`, ni `TF_CLI_ARGS_destroy`, ni
 `APPROVE=auto` ne passent la première.
 
@@ -334,6 +334,21 @@ par leur nom.
 
 Plus rien ne doit être facturé ensuite. Le script de purge interroge le provider
 plutôt que le fichier d'état ; c'est la seule réponse qui compte.
+
+**En dev seulement : une commande.** `task teardown-all PROVIDER=scaleway` (ou `all`, tous les
+providers qui ont un tfvars) calcule le plan, te fait taper l'id du cluster, détruit exactement ce
+plan, puis demande au provider s'il reste quelque chose. Elle refuse, sans rien planifier et sans
+flag pour lever le refus, sauf si le tfvars dit `environment = "dev"`, et tant qu'un interrupteur
+est posé : `export OA_NO_TEARDOWN_ALL=1` dans le `.env.sh` d'un hôte de production (défini, même
+vide, il verrouille ; seuls les shells qui le sourcent sont protégés), ou un fichier
+`.no-teardown-all` vide à la racine du dépôt (tous les shells de ce checkout). Sans terminal,
+passe `CONFIRM=<cluster_name>-dev-<provider>` (`CONFIRM=all` pour `all`). Elle fait confiance à
+l'environnement déclaré : un cluster de production déployé en `dev` n'est pas protégé. Code de
+sortie : 0 prouvé propre, 1 rien détruit, 3 détruit (ou à moitié) et non prouvé propre, 4 détruit sans
+contrôle côté provider (proxmox). Les buckets, images et keypairs restent et continuent d'être
+facturés, et le plan n'est pas en lecture seule (il retire les secrets Talos du state : après un
+abandon, voir « Lost the Talos secrets » dans [le README du
+cluster](../infrastructure/opentofu/cluster/README.md)). Toutes ses règles : `scripts/ops/teardown-all.sh`.
 
 ## 9. Si tu perds l'accès
 

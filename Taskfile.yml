@@ -59,7 +59,8 @@ tasks:
           task cluster-verify  PROVIDER=…         ask the cluster whether it is what we promise
           task cluster-upgrade PROVIDER=… KEY=…   Kubernetes then Talos, measuring the outage
 
-        Destroying takes TWO commands, on purpose — no single line can do it:
+        Destroying takes TWO commands, on purpose — no single line can do it, unless the tfvars say
+        environment = "dev" (then `task teardown-all PROVIDER=…` does both behind a guard):
           task cluster-down PROVIDER=… -- --plan                  computes, destroys nothing
           task cluster-down PROVIDER=… -- --plan-file F --yes     lands exactly that plan
 
@@ -429,6 +430,8 @@ tasks:
       # the queries that turn "the apply returned" into "the cluster works".
       # Both use a stub kubectl, need no credentials, and cost ~10s together.
       - ./scripts/dev/test-teardown.sh
+      # The dev fast lane's guard: each refusal proves nothing ran, each condition has a test that fails without it.
+      - ./scripts/dev/test-teardown-all.sh
       - ./scripts/dev/test-cluster-checks.sh
       # The purge scripts are the last sentence between a failed teardown and a
       # bill, and both said "clean" when every API call was refused. Forced-403,
@@ -1500,7 +1503,8 @@ tasks:
       left to purge by hand (buckets, images, keypairs). The order is not
       negotiable: a child outliving the management means orphaned, billed VMs.
       Two commands, always: `task cluster-down PROVIDER=…` computes a plan and destroys
-      nothing, then `task cluster-down PROVIDER=… PLAN=f APPROVE=auto` lands exactly it.
+      nothing, then `task cluster-down PROVIDER=… PLAN=f APPROVE=auto` lands exactly it
+      (`task teardown-all` wraps both for a dev cluster, behind a guard).
       Usage: task cluster-down PROVIDER=ovh [ROLE=management] [PLAN=f] [APPROVE=auto]
     # PROVIDER is REQUIRED, not defaulted. Twenty targets used to fall back to
     # scaleway in silence — including destroy and down — so a command typed
@@ -1536,6 +1540,27 @@ tasks:
           *) if [ "{{.APPROVE}}" = auto ]; then ARGS="$ARGS --yes"; fi ;;
         esac
         ./scripts/ops/fleet-down.sh {{.PROVIDER}} --role {{.ROLE}} $ARGS {{.CLI_ARGS}}
+
+  teardown-all:
+    desc: >-
+      DEV fast lane: plan, confirm, destroy and check a whole cluster in one command. REFUSED unless the tfvars
+      say environment = "dev", and while the kill switch is on (OA_NO_TEARDOWN_ALL, or a .no-teardown-all file);
+      production keeps the two commands of cluster-down. Usage: task teardown-all
+      PROVIDER=scaleway|ovh|outscale|proxmox|all [ROLE=management] [CONFIRM=<cluster id>, or all]
+      [-- --force-no-edges]. See scripts/ops/teardown-all.sh.
+    requires:
+      vars: [PROVIDER]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+      CONFIRM: '{{.CONFIRM | default ""}}'
+    cmds:
+      - defer: *receipt
+      # CONFIRM goes as an argument: a CONFIRM given on the command line is not in the script's environment,
+      # so one that is there was inherited, and the script refuses it.
+      - >-
+        ./scripts/ops/teardown-all.sh {{.PROVIDER | shellQuote}} --role {{.ROLE | shellQuote}}
+        --confirm {{.CONFIRM | shellQuote}} -- {{.CLI_ARGS}}
 
   etcd-snapshot:
     desc: >-
