@@ -45,6 +45,21 @@ went, and nobody noticed until Cléa was written. `[report] watch_bot` and
 `.github/workflows/clea.yml` is the whole wiring. It carries no provider
 credential and must fail rather than acquire one.
 
+## What a bump must pass to be offered
+
+A release a day old can still be yanked, retagged or found vulnerable. So a bump
+joins the report's action list (and gets a probe branch) only once it is **7 days
+old**, not yanked or marked draft/pre-release, **its tag has not moved** since the
+last scan, and **OSV holds no advisory** against it. Anything else is listed under
+*Held back* with its reason; an advisory against the pin we run now is its own line.
+
+- The 7 days are `[policy] min_release_age_days` in `clea.toml`; `renovate.json5`
+  carries the same number as `minimumReleaseAge`, and `task test-scripts` fails if
+  they differ.
+- A release with no obtainable date reads `age unknown` and is never offered. OSV
+  unreachable reads `advisories unknown`, never `none`, and holds nothing back.
+- The rules and their sources are in [`scripts/clea/README.md`](../scripts/clea/README.md).
+
 ## Where the report is
 
 One GitHub issue, labelled `clea`, **rewritten in place** every run — never a

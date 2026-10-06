@@ -104,6 +104,21 @@ worse than no check, because it reads as an answer.
 hour from an IP shared with every other customer of the platform. A 401, 403 or
 429 raises and names `GITHUB_TOKEN`; it is never reported as "up to date".
 
+## What is offered
+
+A bump reaches the report's action list and the probe matrix only if all four
+hold. Otherwise it sits under **Held back**, with every reason:
+
+| rule | read from | when it cannot be known |
+|---|---|---|
+| released at least `[policy] min_release_age_days` ago (7; 0 = off) | PyPI file upload time, GitHub release publish time, a tag's own date (annotated: tagger, else commit), a Helm chart's `created` | `age unknown` — never offered |
+| not withdrawn | PyPI `yanked`, GitHub release `draft` / `prerelease` | — |
+| its tag has not moved since the last scan | the commit the tag points at, kept in the state | no earlier scan, nothing to compare; kept until upstream tags another version |
+| no OSV advisory against it | `api.osv.dev`: package + exact version (PyPI), commit (GitHub) | `advisories unknown` — shown, does not hold it back |
+
+An advisory against the pin you run **now** is a line of its own: it argues for
+bumping sooner. `terraform-provider` and `url-text` have no date source here.
+
 ## The probe
 
 `probe.sh` runs two lanes in a bare `ubuntu:24.04`, never on the runner image —
@@ -147,6 +162,9 @@ exclude = ["docs/**"]
 [report]
 title = "Cléa — dependency report"
 label = "clea"
+
+[policy]
+min_release_age_days = 7        # keep equal to Renovate's minimumReleaseAge
 
 [[inventory]]                   # what to cross-check against
 kind = "renovate"

@@ -48,6 +48,23 @@ avant l'écriture de Cléa. `[report] watch_bot` et `silent_after_days` dans
 `.github/workflows/clea.yml` est tout le câblage. Il ne porte aucune
 identification de provider et doit échouer plutôt que d'en acquérir une.
 
+## Ce qu'une montée de version doit passer pour être proposée
+
+Une version vieille d'un jour peut encore être retirée, retaguée ou se révéler
+vulnérable. Une montée n'entre donc dans la liste d'actions du rapport (et n'a de
+branche de sonde) qu'une fois la version vieille de **7 jours**, ni retirée ni
+marquée brouillon/pré-version, **son tag n'ayant pas bougé** depuis le dernier scan,
+et **sans aucun avis OSV** à son encontre. Tout le reste est listé sous *Held back*
+avec sa raison ; un avis contre la version que nous exécutons déjà a sa propre ligne.
+
+- Les 7 jours sont `[policy] min_release_age_days` dans `clea.toml` ; `renovate.json5`
+  porte le même nombre en `minimumReleaseAge`, et `task test-scripts` échoue s'ils
+  diffèrent.
+- Une version dont la date est introuvable affiche `age unknown` et n'est jamais
+  proposée. OSV injoignable affiche `advisories unknown`, jamais `none`, et ne retient
+  rien.
+- Les règles et leurs sources sont dans [`scripts/clea/README.md`](../scripts/clea/README.md).
+
 ## Où est le rapport
 
 Une issue GitHub, étiquetée `clea`, **réécrite sur place** à chaque exécution —
