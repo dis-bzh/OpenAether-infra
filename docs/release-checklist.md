@@ -119,8 +119,8 @@ credential pair or the passphrase is missing, and ends by asking tofu's own yes
 for each old image the retention destroys (§7, image lane).
 
 - [ ] **deploy from an empty project** under a fresh `bucket_suffix` (`task
-      bucket-suffix`; recorded on Scaleway only, #68). Record duration and
-      resource count.
+      bucket-suffix`; recorded on Scaleway, #68, and on OVH, the failover drill
+      of §7). Record duration and resource count.
 - [ ] **`task cluster-verify`** green. A warning is a finding: it now reads each
       control plane's failure domain and each worker's data volume (the volume read
       needs `task tunnels-up`; without a tunnel it warns instead of passing).
@@ -177,7 +177,7 @@ on the old module; the kept layout is the mocked plan's reading).
 - [ ] the same pillars as §4, `cluster-verify` green with three subregions.
 - [ ] teardown as in §4, then the two reads below instead of "clean". After
       `fleet-down` the account lists a load balancer and a Net as `deleting` for
-      about three minutes (#69's lab): read again before calling anything dirty.
+      about three minutes (PR #269): read again before calling anything dirty.
 
 **Outscale exemption: `purge-orphans` cannot end clean here, and its line is never
 ticked as clean.** While the pre-fix Net of #43 exists, the purge lists its
@@ -260,18 +260,14 @@ What to run, what `docs/status.md` records (rung and date), and what it does
       *Recorded:* a worker, then a control plane (3 to 2), on Scaleway, OVH and
       Outscale, 2026-10-04, real cloud once by hand: verify green, the API listing
       exactly the machines left, failed `/readyz` for 40 to 76 s while the load
-      balancer still served the departed control plane (12 of 350 on Scaleway, four
-      attributed to the probe's own kubeconfig read; 13 of 374; 13 of 220). On
-      Scaleway only, Longhorn's eviction (Longhorn 1.13.0: a sole replica moved before the
-      drain, a two-replica volume refused at `--plan`; `status.md`, `upgrade.md`,
-      commit a95482d) and CNPG (1.30.1, one control plane and two workers): a
-      replica moved with its volume, and a primary failed over (2 of 368 inserts
-      failed, none acknowledged lost), 2026-10-04. In the matrix and changelog
-      only: a lowered count refused on two real Scaleway plans, applied nowhere.
-      **Not recorded:** Longhorn and CNPG on OVH and Outscale (both ran on
-      Scaleway only, 2026-10-04); a removal that stops half-way; Proxmox; a real
-      refusal for a node not Ready, a short etcd, too little CPU or a plan that
-      moved (mocked only).
+      balancer still served the departed control plane (figures: `upgrade.md`,
+      Removing nodes). On Scaleway only, Longhorn's eviction (1.13.0) and CNPG
+      (1.30.1: a replica moved, a primary failed over), 2026-10-04 (`status.md`,
+      `upgrade.md`). In the matrix and changelog only: a lowered count refused on
+      two real Scaleway plans, applied nowhere.
+      **Not recorded:** Longhorn and CNPG on OVH and Outscale; a removal that stops
+      half-way; Proxmox; a real refusal for a node not Ready, a short etcd, too
+      little CPU or a plan that moved (mocked only).
 - [ ] **Failure-domain verdict** — `cluster-verify` fails when all control planes
       share one zone (#38); a 2+1 split warns.
       *Recorded:* read on real accounts 2026-10-03: red on Outscale in one
@@ -314,7 +310,8 @@ What to run, what `docs/status.md` records (rung and date), and what it does
       *Recorded:* byte-identical from the primary and from a replica on another
       cloud's store, an OVH and a Scaleway cluster, 2026-10-05 (`status.md`; the
       failover row below). **Not recorded:** an Outscale cluster's own artifacts.
-      The drill found four defects of the replica path (#57, Fixed).
+      #271 fixed defects of the replica path; the drill itself found
+      `image-build` ignoring `ROLE=` (#57, Fixed).
 - [ ] **Reader talosconfig** — `task talosconfig-new`, then `TALOSCONFIG=<it> task
       cluster-verify`.
       *Recorded:* OVH only, 2026-10-03, real cloud: verify green with it; `get
@@ -340,10 +337,11 @@ What to run, what `docs/status.md` records (rung and date), and what it does
       one cloud with its replica on a second cloud's store, B on another; destroy A
       in the two commands, then, in a shell holding only B's and the replica
       store's keys, `task restore-artifacts PROVIDER=<a> FROM=replica OUT=<dir>`,
-      `task restore-state PROVIDER=<b> ROLE=failover FROM=<A's env file>`, `task
-      cluster-up PROVIDER=<b> ROLE=failover`. Pass when `cluster-verify` is green,
-      the strict plan is empty, A's saved kubeconfig and talosconfig open B, and
-      A's objects are unchanged afterwards.
+      `task restore-state PROVIDER=<b> ROLE=failover FROM=<A's env name>` (the file
+      under `envs/` without `.tfvars`, e.g. `management-<a>`), `task cluster-up
+      PROVIDER=<b> ROLE=failover`. Pass when `cluster-verify` is green, the strict
+      plan is empty, A's saved kubeconfig and talosconfig open B, and A's objects
+      are unchanged afterwards.
       *Recorded:* one pair, OVH to Scaleway (B's replica on Outscale's store), 1+1,
       `prod`, 2026-10-05, real cloud once by hand: 13/13, `No changes`.
       **Not recorded:** any other pair; three control planes; Talos discovery with
@@ -355,30 +353,21 @@ What to run, what `docs/status.md` records (rung and date), and what it does
       the cluster's version N and the one below it (plus what a tfvars names), the
       provider's own listing agrees (images and snapshots), a second `RETAIN=1`
       says `nothing to destroy`, and a worker created on the previous image joins
-      and reads `MIXED` until `cluster-up` rolls it. `cluster-up` prunes only when
-      a person answers and never under `APPROVE=auto`; `cluster-upgrade` never: a
-      release run with `APPROVE=auto` keeps every image, and the notes say so.
+      and reads `MIXED` until `cluster-up` rolls it. Retention never prunes under
+      `APPROVE=auto` and `cluster-upgrade` never runs it: a release run with
+      `APPROVE=auto` keeps every image, and the notes say so.
       *Recorded:* Scaleway and Outscale, 2026-10-05, real cloud by hand: the legacy
       state migrated, two versions at once, the older-image worker, `PRUNE=1`,
       `RETAIN=1` (the hook was driven with a stub, not a real tofu prompt).
-      **Not recorded:** OVH's lane; the hook under a real terminal; a legacy state
-      holding the oldest version on a real backend; Proxmox.
-- [ ] **Rollback of an upgrade: an OPEN GAP, nothing to run yet (#270).** The lane
-      keeps the previous image, which only lets a NEW node boot the previous Talos.
-      `converge-versions.sh` refuses a pin below what the fleet runs and no script
-      or runbook wraps `talosctl rollback`, so taking upgraded nodes back from N to
-      N-1 has no supported route and no recorded run. #270 names the proof to
-      obtain (on a real cloud, a climb and a return with the upgrade probe on) and
-      the decisions that are the owner's. Until it exists the notes say rollback is
-      unproven, and this line stays a gap, not a step.
+      **Not recorded:** what Known limits of the changelog lists for the lane.
+
 - [ ] **Node resolver** — `node_nameservers`: unset plans empty, the list applies
       without a reboot, nodes and pods resolve over DoT. Before any reboot with a
       list, `nc -zvw5 <ip> 853` from a pod: `cluster-verify` does not read the
       resolver and an unreachable list is found at the next reboot.
-      *Recorded:* OVH only, 1+1, Talos 1.14.2, 2026-10-05, real cloud once (matrix,
-      `OP-node-dns`). **Not recorded:** Outscale (no tracked record), Scaleway's
-      apply (only its egress), three control planes, a cold first boot with the
-      list set.
+      *Recorded:* DoT on OVH only, 1+1, Talos 1.14.2, 2026-10-05, real cloud once
+      (matrix, `OP-node-dns`). **Not recorded:** what the changelog's Added bullet
+      lists (DoH and Do53 have no node run).
 - [ ] **Lost Talos secrets** (#66) — `task infra-down-plan`, decline the destroy,
       then `task cluster-up`: refused before any plan; the replica put back, or
       recovery 2 of `cluster/README.md`, "Lost the Talos secrets".
@@ -386,9 +375,14 @@ What to run, what `docs/status.md` records (rung and date), and what it does
       cloud by hand: the symptom, the refusals, both recoveries on Scaleway,
       recovery 2 on OVH. **Not recorded:** anything real at the merged head (the
       reworked untrack printing and the `backup-state.sh` and `cluster-roll`
-      guards are mocked only); Outscale; three control planes; a replica on
-      another provider; a cluster with no talosconfig and no replica copy (not
-      recoverable here).
+      guards are mocked only); the rest is in the changelog's Known limits. A
+      cluster with no talosconfig and no replica copy is not recoverable here.
+
+Not a row, because there is nothing to run: **rolling an upgrade back** (#270).
+The lane keeps the previous image, which only lets a NEW node boot the previous
+Talos; `converge-versions.sh` refuses a pin below what the fleet runs and no
+script or runbook wraps `talosctl rollback`. The notes say it is unproven.
+#270 names the proof to obtain and the decisions, which are the owner's.
 
 ## 8. Release mechanics
 
@@ -412,15 +406,16 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       has only run mocked; the measured climbs used `cluster-upgrade`);
       `tofu init -backend=false -upgrade` after pulling the provider pin; three
       control planes in one failure domain now end red (OVH on `nova`, Outscale
-      built before #58).
+      built before #58); OVH's default zones moved off `nova`.
 - [ ] lines the runs above contradict, amended before the tag: the Taskfile's
       comment on `talosconfig-new` ("never been run"; OVH ran it 2026-10-03);
       `docs/status.md`'s OVH 1.14 row (13/13 was read after the lab was removed)
       and its Scaleway 2+1 sentence; `docs/first-cluster.md` ("3 to 5 workers"
       against 3 to 6, and its "What is not proven": OVH and Outscale read red,
       11/11, and the artifacts "never fetched back out of a real bucket" against
-      the failover drill, which read both stores); `talos-image/README.md` ("Not
-      measured (#69)": a node on the older image, which #269's message measured on
+      the failover drill, which read both stores; its `bucket_suffix` line, "Scaleway
+      only", against the drill's OVH cluster); `talos-image/README.md` ("Not
+      measured (#69)": a node on the older image, which PR #269's message measured on
       Scaleway and Outscale); the French twins. `docs/status.md` and the matrix
       have no row for the image lane, #66's recoveries or the provider pin: add
       them or say why not (the first bullet of this section).
@@ -429,7 +424,8 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       git grep -n '0\.1\.0' -- . ':!CHANGELOG.md'     # read every hit, FR twins too
       ```
       History stays; a sentence saying what the *current* release is or is not
-      changes: the README (version section, roadmap — add the 0.2.0 row), the
+      changes: the README (version section; the roadmap's 0.2.0 row exists and still
+      points at `[Unreleased]`, in `README.fr.md` too), the
       lede of `docs/status.md`, `first-cluster.md`, `capacity.md`,
       `admin-access.md`, `capi-bootstrap.md`, the matrix header, the `deploy_flux`
       text in `cluster/variables.tf`, code comments, `CONTRIBUTING.md`, the
