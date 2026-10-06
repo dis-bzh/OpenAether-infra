@@ -182,12 +182,28 @@ task bootstrap-phase2 ROLE=workload PROVIDER=ovh KEY=~/.ssh/yourkey
 
 ### Cross-provider failover — second management on another cloud
 
-There is no failover command. `failover-management.sh` was deleted in 0.5.0: it
-re-implemented `task cluster-up` with a hardcoded SSH key and its own tunnel loop, had
-never been run, and a broken skeleton is a worse starting point than none. The
-prerequisite — a state and artifacts replica on a SECOND provider — is real and
-measured (`docs/status.md`); rebuilding a cluster from it is designed work that
-has not been done. `envs/failover-*.tfvars.example` still describes the role.
+Provider A is gone; its backups survive on B's store. The state replica is the only copy of the
+Talos PKI, so a cluster built from it is one A's saved kubeconfig and talosconfig still open. It is
+a rebuild, not a restore: etcd contents and application data are not in it. **Run once on real
+accounts, OVH to Scaleway** ([`docs/status.md`](../../../docs/status.md), #57); no other pair has run.
+
+```bash
+# A prod B needs a replica off B's cloud too, and A is down: an example whose replica endpoint points back at A cannot be created.
+cp envs/failover-<b>.tfvars.example envs/failover-<b>.tfvars
+task restore-artifacts PROVIDER=<a> FROM=replica OUT=/abs/existing/dir   # A's kubeconfig + talosconfig
+task restore-state PROVIDER=<b> ROLE=failover FROM=management-<a>  # A's replica -> B's state key, PKI kept
+task cluster-up PROVIDER=<b> ROLE=failover
+```
+
+Both restore commands read A's env file (`envs/management-<a>.tfvars`, gitignored, in no store). If the workstation
+is lost with it, rebuild it from the `.example` with A's `cluster_name`, `environment`, `bucket_suffix` and replica
+endpoint and region: `aws s3 ls` on B's store shows the bucket they must reproduce (`s3-<project>-<a>-tfstate-<env>-backup`).
+
+Keep `talos_version` at or above the one A recorded (a lower one plans a replacement of the secrets,
+which `prevent_destroy` refuses). Run nothing that reads outputs between `restore-state` and `cluster-up`:
+until its first apply the state still carries A's. What shows the PKI carried over: A's restored talosconfig
+opens B (`talosctl --talosconfig /abs/existing/dir/talosconfig -e 127.0.0.1:50000 -n <cp ip> version`, through B's tunnels).
+A's Talos discovery records can outlive A by up to 30 minutes: read `talosctl get members` on B.
 
 **Steering traffic between two live clusters** (the optional multi-cluster overlay, not the
 cold rebuild above) is health-checked DNS from a zone that shares no fate with either
@@ -306,6 +322,9 @@ tofu init -reconfigure \
   -backend-config="endpoint=<replica-endpoint>"
 ```
 
+> That re-inits against the replica to operate the SAME cluster. A rebuild on another
+> provider is `task restore-state`: see "Cross-provider failover" above.
+
 ### Lost the Talos secrets
 
 `task infra-down-plan` (behind `task cluster-down`) and `tofu state rm` take `talos_machine_secrets` out of the
@@ -356,9 +375,7 @@ Never run `cluster-up`, `infra-apply` or `cluster-roll` from a state without the
 verified with `-force`, or replace `random_password` (the disk key; importing it plans a replacement). Not
 recoverable from here: no talosconfig and no replica copy.
 
-> Rebuilding from scratch on another provider instead? That path has no command
-> yet — see the note under "Failover" above. The replica it would read from does
-> exist and is verified across providers.
+> Rebuilding from scratch on another provider instead is `task restore-state`: see "Cross-provider failover" above.
 
 ## Module Structure
 

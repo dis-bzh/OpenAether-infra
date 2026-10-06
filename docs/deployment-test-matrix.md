@@ -154,7 +154,7 @@ What this lane still cannot carry: see "Known gaps" in
 |---|---|---|---|
 | `OP-twophase` | `talos_bootstrap=false` then `true` | Documented `task infra-apply` → `task bootstrap-phase2` split. | ✅ |
 | `OP-autotunnels` | `auto_tunnels=true` | EXPERIMENTAL single-apply. | ⬜ |
-| `OP-failover` | `failover-<p>.tfvars`, no command yet | Rebuild on provider B from B's replica. The replica is verified; the rebuild is undesigned. | ⬜ |
+| `OP-failover` | `failover-<p>.tfvars`, `task restore-state` then `task cluster-up` | Rebuild on provider B from the replica A left on B's store: the PKI carries over, nothing else does. Run on real accounts once, OVH to Scaleway, 2026-10-05 (#57); no other pair. | ✅ |
 | `OP-destroy` | `task cluster-down` / `task infra-down` | Ordered teardown (children then management). | ✅ |
 | `OP-tftest` | mocked | The unit-test suite (no credentials). | ✅ (CI) |
 | `OP-backup` | `backup_enabled=true`, cross-provider replica (`<STORE>_AWS_*`) | DR: tfstate + kube/talosconfig to primary + replica; client-encrypted restic. | ✅ *(local + real cloud SCW+OVH)* |
@@ -175,7 +175,7 @@ What this lane still cannot carry: see "Known gaps" in
 5. **`worker_storage` on the workload role** (`*-work-*`) — LUKS2 `UserVolumeConfig` and
    block-volume attach were applied and read back on the management role on all three
    clouds on 2026-10-03, not on a workload one.
-6. **`OP-failover`** — DR path unproven.
+6. **`OP-failover`** — only OVH to Scaleway has run; other pairs are unproven.
 
 ## D) Findings — `SCW-vip` real apply (2026-07-15)
 

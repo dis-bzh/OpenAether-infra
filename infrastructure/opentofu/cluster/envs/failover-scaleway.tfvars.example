@@ -8,7 +8,7 @@
 # the cluster on the SAME provider (the everyday recovery). This file is the
 # CROSS-provider failover — same role, different cloud.
 #
-# Usage: there is no failover command yet — see "Cross-provider failover" in
+# Usage: task restore-state, then task cluster-up — see "Cross-provider failover" in
 # ../README.md.
 #
 # After rebuild:
@@ -17,10 +17,9 @@
 #   3. Update DNS for management endpoints (automated in Phase 4)
 # ==============================================================================
 
-# ⚠️ NEVER EXECUTED. This describes the disaster-recovery drill (primary provider
-# gone, cluster rebuilt on another) that is still undone (docs/status.md).
-# Nothing here has been deployed, so read it as a design intent, not as a proven
-# procedure. Note also that `ROLE=failover` only picks THIS FILE: the Flux overlay
+# ⚠️ The drill (primary provider gone, cluster rebuilt on another) ran once, OVH to Scaleway, on
+# 2026-10-05 (docs/status.md); every other pair is unrun, so read this file as design intent.
+# Note also that `ROLE=failover` only picks THIS FILE: the Flux overlay
 # and the bucket segment come from cluster_role below, which is "management".
 
 cluster_name       = "openaether"

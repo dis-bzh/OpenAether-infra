@@ -149,10 +149,17 @@ no container, volume, network or credential.
 [#87](https://github.com/dis-bzh/OpenAether-infra/issues/87) is closed on that
 basis; what it does not answer is below.
 
-**Not proven**: a failover (provider A treated as gone, the cluster rebuilt on B from B's replica
-alone, #57; only `restore-artifacts` was read back byte-identical, on one provider); no lane has ever run
-unattended to completion; and a control-plane roll with zero failed probes has not happened on any cloud
-(#42: 1 s on Scaleway and OVH, 3 s on Outscale, 9 s once Kubernetes moves there).
+**Failover ([#57](https://github.com/dis-bzh/OpenAether-infra/issues/57)), measured 2026-10-05**: A = OVH (1 control
+plane + 1 worker) with its replica on Scaleway's store, B = Scaleway (1 + 1) with its replica on Outscale's. A's kubeconfig
+and talosconfig read back byte-identical from both of A's stores; A destroyed; then, in a shell holding only B's and
+Outscale's keys (a negative control confirmed A's primary store was out of reach), the same files from the replica
+alone were identical again, `restore-state` put A's PKI in B's state key, `cluster-up` reached `cluster-verify`
+13/13 with an empty strict plan, A's saved kubeconfig and talosconfig opened B, and A's stores were unchanged
+afterwards. Untested: any other provider pair, three control planes, Talos discovery with a live A, etcd contents
+(a rebuild, not a restore).
+
+**Not proven**: no lane has ever run unattended to completion; and a control-plane roll with zero failed probes has
+not happened on any cloud (#42: 1 s on Scaleway and OVH, 3 s on Outscale, 9 s once Kubernetes moves there).
 
 **Talos provider 0.12.0 is pinned** ([#241](https://github.com/dis-bzh/OpenAether-infra/issues/241)); a 1.14 node
 is rendered under a capped contract, and `config_contract` in `modules/talos/main.tf` says why. Measured on Scaleway on
@@ -179,7 +186,7 @@ directory in fourteen. `provider-contract.md` — the document `CLAUDE.md` calls
 the authority — required a variable no module has ever declared.
 
 **Resume here**: the pin is 1.14.2 / 1.37.1 and every cloud's newest row says so. Still unseen on a real
-cloud: the failover (#57), a roll with zero failed probes (#42), a Proxmox apply (#48, #201: no hardware),
+cloud: a roll with zero failed probes (#42), a Proxmox apply (#48, #201: no hardware),
 and the wider cases of #66. Its CA mismatch was reproduced on Scaleway (1 control plane, 2026-10-04) through
 `infra-down-plan`'s untracking and recovered two ways (`cluster/README.md`, "Lost the Talos secrets"); the version
 flip is refused by `prevent_destroy` and the interrupted-apply path was not broken. Unseen: OVH and Outscale, three

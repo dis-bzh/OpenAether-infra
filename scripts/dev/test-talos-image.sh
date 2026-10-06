@@ -857,7 +857,7 @@ echo "--- the Taskfile forwards LIST and PRUNE to the script, and \`task test\` 
 grep -q -- '--prune' <<<"$(task -n image-build PROVIDER=ovh PRUNE=1 VERSION=v1.13.4 2>&1)" \
   && grep -q -- '--list' <<<"$(task -n image-build PROVIDER=ovh LIST=1 2>&1)" \
   && ok "task image-build PRUNE=1 / LIST=1 reach talos-image.sh" || bad "the Taskfile does not forward --prune/--list"
-is "task image-build RETAIN=1 passes --retain and no version" "./scripts/bootstrap/talos-image.sh ovh --retain" \
+is "task image-build RETAIN=1 passes --retain and no version" "OA_ROLE=management ./scripts/bootstrap/talos-image.sh ovh --retain" \
    "$(task -n image-build PROVIDER=ovh RETAIN=1 2>&1 | sed -E 's/\x1b\[[0-9;]*m//g' | sed -nE 's/^task: \[image-build\] //p')"
 grep -q -- 'ovh v1.13.4 --retain' <<<"$(task -n image-build PROVIDER=ovh RETAIN=1 VERSION=v1.13.4 2>&1)" \
   && ok "a typed VERSION still reaches the script, which refuses it" || bad "a VERSION given with RETAIN=1 was dropped silently"
@@ -878,6 +878,12 @@ mkdir -p "$SB/nojq"
 for f in /usr/bin/*; do [ "${f##*/}" = jq ] || ln -sf "$f" "$SB/nojq/${f##*/}"; done
 OUT="$(RUN_PATH="$SB:$SB/nojq" run 2 --ensure)"; RC=$?
 { [ "$RC" -ne 0 ] && grep -q 'jq required' <<<"$OUT"; } && ok "a missing jq stops the run before anything is read or built" || bad "no jq did not stop the script (rc=$RC): ${OUT:0:200}"
+
+echo "--- the image-build task hands its ROLE to the script: the lane's bucket namespace is that role's tfvars ---"
+# Without it a failover cluster looked for management-<provider>.tfvars, absent on the machine that has only the failover file,
+# and fell back to the shared 'openaether' namespace, a bucket name another customer may own.
+grep -q 'OA_ROLE=failover ./scripts/bootstrap/talos-image.sh scaleway' <<<"$(task -n image-build PROVIDER=scaleway ROLE=failover VERSION=v1.14.2 2>&1)" \
+  && ok "task image-build ROLE=failover runs the script with OA_ROLE=failover" || bad "the image-build task does not pass ROLE to the script"
 
 echo "--- floors: the stubs really ran (all of the above is vacuous otherwise) ---"
 OUT="$(run 2 --ensure)"

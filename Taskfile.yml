@@ -440,6 +440,9 @@ tasks:
       # The backup path had no inverse until 0.5.0. This is the round trip —
       # the real enc() against the real dec(), offline.
       - ./scripts/dev/test-restore.sh
+      # The failover seeds a cluster from the OTHER provider's replica; what it untracks is the
+      # difference between a PKI carried over and a destroy plan against a cloud that is gone.
+      - ./scripts/dev/test-restore-state.sh
       # `nc -z` calls a dead ssh -L tunnel healthy. Two local listeners measure
       # the difference the whole tunnel guard rests on.
       - ./scripts/dev/test-endpoint-probe.sh
@@ -641,7 +644,9 @@ tasks:
       # RETAIN takes no version, so only a typed VERSION reaches the script, which refuses it.
       VERSION_ARG: '{{if or (not .RETAIN) .VERSION}} {{.IMAGE_VERSION}}{{end}}'
     cmds:
-      - './scripts/bootstrap/talos-image.sh {{.PROVIDER}}{{.VERSION_ARG}}{{if .ENSURE}} --ensure{{end}}{{.MODE}}'
+      - >-
+        OA_ROLE={{.ROLE}} ./scripts/bootstrap/talos-image.sh {{.PROVIDER}}{{.VERSION_ARG}}{{if .ENSURE}}
+        --ensure{{end}}{{.MODE}}
 
   cluster-up:
     aliases: [up]
@@ -1685,8 +1690,9 @@ tasks:
   restore-artifacts:
     desc: >-
       Recover kubeconfig + talosconfig from the encrypted backups. Usage:
-      task restore-artifacts PROVIDER=scaleway [ROLE=management] [FROM=primary|replica] [FORCE=1]
+      task restore-artifacts PROVIDER=scaleway [ROLE=management] [FROM=primary|replica] [OUT=dir] [FORCE=1]
       FROM=replica reads the cross-provider copy — the one that answers when the cluster's own cloud does not.
+      OUT= keeps the files out of the cluster dir, where a live cluster's own kubeconfig sits.
     dir: infrastructure/opentofu/cluster
     # PROVIDER is REQUIRED, not defaulted. Twenty targets used to fall back to
     # scaleway in silence — including destroy and down — so a command typed
@@ -1699,11 +1705,29 @@ tasks:
       ROLE: '{{.ROLE | default "management"}}'
       FROM: '{{.FROM | default "primary"}}'
       FORCE: '{{.FORCE | default ""}}'
+      OUT: '{{.OUT | default ""}}'
     env: *provider-env
     cmds:
       - >-
         ../../../scripts/ops/restore-artifacts.sh {{.PROVIDER}}
-        --role {{.ROLE}} --from {{.FROM}}{{if .FORCE}} --force{{end}}
+        --role {{.ROLE}} --from {{.FROM}}{{if .FORCE}} --force{{end}}{{if .OUT}} --out {{.OUT}}{{end}}
+
+  restore-state:
+    desc: >-
+      Failover: seed this cluster's state from the replica of the provider that is gone, see
+      scripts/ops/restore-state.sh. Usage: task restore-state PROVIDER=<B> ROLE=failover FROM=<A's env file>
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER, FROM]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+    env: *provider-env
+    cmds:
+      # The target bucket must exist, and the prod replica rule is better refused before anything is copied.
+      - ../../../scripts/internal/ensure-buckets.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars --preflight
+      - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
+      - ../../../scripts/ops/restore-state.sh envs/{{.FROM}}.tfvars envs/{{.ROLE}}-{{.PROVIDER}}.tfvars
 
   cluster-upgrade:
     aliases: [upgrade]

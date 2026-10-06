@@ -114,14 +114,18 @@ sed -E "s/^bucket_suffix.*//" infrastructure/opentofu/cluster/envs/management-sc
 printf '\nbucket_suffix = "%s"\n' "$SUF" >>"$FIX"
 CNAME="$(grep -E '^cluster_name' "$FIX" | head -1 | sed -E 's/.*"([^"]*)".*/\1/')"
 ENVV="$(grep -E '^environment' "$FIX" | head -1 | sed -E 's/.*"([^"]*)".*/\1/')"
-WANT="$(oa_artifact_bucket "$(oa_project "$CNAME" "$SUF")" scaleway oatest "$ENVV")-backup"
+# --role picks the FILE (oatest-scaleway.tfvars); the bucket's role segment is the file's cluster_role,
+# as backup.tf and ensure-buckets.sh read it. The fixture declares "management", the file prefix does not.
+CROLE="$(grep -E '^cluster_role' "$FIX" | head -1 | sed -E 's/.*"([^"]*)".*/\1/')"
+[ "$CROLE" = management ] && ok "the fixture declares cluster_role management" || bad "fixture cluster_role is '$CROLE'"
+WANT="$(oa_artifact_bucket "$(oa_project "$CNAME" "$SUF")" scaleway "$CROLE" "$ENVV")-backup"
 
 for kind in primary replica; do
   want="$WANT"; [ "$kind" = primary ] && want="${WANT%-backup}"
   got="$(PATH="$SB:$PATH" TF_VAR_encryption_passphrase=x SCW_AWS_ACCESS_KEY_ID=k SCW_AWS_SECRET_ACCESS_KEY=k \
          ./scripts/ops/restore-artifacts.sh scaleway --role oatest --from "$kind" 2>&1 |
          sed -nE 's#.*s3://([a-z0-9-]+)/backups/.*#\1#p' | head -1)"
-  eq "restore --from $kind targets the suffixed bucket" "$got" "$want"
+  eq "restore --from $kind targets the suffixed bucket, named by the file's cluster_role" "$got" "$want"
 done
 
 echo "=== the Day-1 seeder names the SAME backups bucket backup.tf publishes ==="
@@ -185,7 +189,12 @@ blocks = re.split(r'\n  (?=[a-z_][a-z0-9_-]*:\n)', raw)
 bad = []
 for b in blocks:
     name = b.split(':', 1)[0].strip()
-    if '*provider-env' not in b and '&provider-env' not in b:
+    has_env = '*provider-env' in b or '&provider-env' in b
+    # A backend init without the anchor is how restore-state could have shipped with no data dir and no S3 keys.
+    if not has_env and any('tofu init -reconfigure' in l for l in b.splitlines() if not l.lstrip().startswith('#')):
+        bad.append(f'{name}: runs tofu init -reconfigure without *provider-env (no TF_DATA_DIR, no S3 keys)')
+        continue
+    if not has_env:
         continue
     spec = t.get(name) or {}
     env = spec.get('env') or {}

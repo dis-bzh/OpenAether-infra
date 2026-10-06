@@ -156,7 +156,7 @@ Ce que cette voie ne sait pas encore porter : voir « Manques connus » dans
 |---|---|---|---|
 | `OP-twophase` | `talos_bootstrap=false` puis `true` | Découpage documenté `task infra-apply` → `task bootstrap-phase2`. | ✅ |
 | `OP-autotunnels` | `auto_tunnels=true` | EXPÉRIMENTAL, apply unique. | ⬜ |
-| `OP-failover` | `failover-<p>.tfvars`, pas encore de commande | Reconstruire chez B depuis le réplica de B. Le réplica est vérifié ; la reconstruction reste à concevoir. | ⬜ |
+| `OP-failover` | `failover-<p>.tfvars`, `task restore-state` puis `task cluster-up` | Reconstruire chez B depuis le réplica laissé par A dans le magasin de B : la PKI est reprise, rien d'autre. Joué sur comptes réels une fois, OVH vers Scaleway, 2026-10-05 (#57) ; aucune autre paire. | ✅ |
 | `OP-destroy` | `task cluster-down` / `task infra-down` | Chemin de destruction ordonné (enfants puis management). | ✅ |
 | `OP-tftest` | mocké | Suite de tests unitaires (sans credentials). | ✅ (CI) |
 | `OP-backup` | `backup_enabled=true`, réplica cross-provider (`<MAGASIN>_AWS_*`) | DR : tfstate + kube/talosconfig vers primaire et réplica ; restic chiffré client. | ✅ *(local + cloud réel SCW+OVH)* |
@@ -178,7 +178,7 @@ Ce que cette voie ne sait pas encore porter : voir « Manques connus » dans
 5. **`worker_storage` sur le rôle workload** (`*-work-*`) — LUKS2 `UserVolumeConfig` et
    attachement de volumes ont été appliqués et relus sur le rôle management des trois
    clouds le 2026-10-03, pas sur un rôle workload.
-6. **`OP-failover`** — chemin DR non prouvé.
+6. **`OP-failover`** — seule la paire OVH vers Scaleway a tourné ; les autres ne sont pas prouvées.
 
 ## D) Constats — apply réel `SCW-vip` (2026-07-15)
 

@@ -13,14 +13,13 @@
 #   export OSC_SECRET_KEY=<outscale_secret_key>
 #   export OSC_REGION=eu-west-2
 #
-# Usage: there is no failover command yet — see "Cross-provider failover" in
+# Usage: task restore-state, then task cluster-up — see "Cross-provider failover" in
 # ../README.md.
 # ==============================================================================
 
-# ⚠️ NEVER EXECUTED. This describes the disaster-recovery drill (primary provider
-# gone, cluster rebuilt on another) that is still undone (docs/status.md).
-# Nothing here has been deployed, so read it as a design intent, not as a proven
-# procedure. Note also that `ROLE=failover` only picks THIS FILE: the Flux overlay
+# ⚠️ The drill (primary provider gone, cluster rebuilt on another) ran once, OVH to Scaleway, on
+# 2026-10-05 (docs/status.md); every other pair is unrun, so read this file as design intent.
+# Note also that `ROLE=failover` only picks THIS FILE: the Flux overlay
 # and the bucket segment come from cluster_role below, which is "management".
 
 cluster_name       = "openaether"

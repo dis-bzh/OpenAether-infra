@@ -378,9 +378,8 @@ What is still open:
   that already had the toolchain — step 1 on a bare host is unwalked. OVH was
   driven by its operator, not by following this page.
 - **The full failover.** Provider A treated as gone, state and artifacts fetched
-  from B alone, cluster rebuilt on B. `envs/failover-*.tfvars.example` exists for
-  exactly that and has never been run. The transport underneath it is proven; the
-  failover is not.
+  from B alone, cluster rebuilt on B. Run once, OVH to Scaleway (2026-10-05,
+  `docs/status.md`); every other provider pair is unrun.
 - **The kubeconfig and the talosconfig have never been fetched back out of a
   real bucket.** The round trip is proven offline, `enc()` against `dec()` byte
   for byte (`scripts/dev/test-restore.sh`), and the tfstate's transport is proven

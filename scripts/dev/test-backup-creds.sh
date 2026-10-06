@@ -185,11 +185,12 @@ for f in infrastructure/opentofu/cluster/envs/*.tfvars.example; do
 done
 [ "$N" -gt 0 ] && [ -z "$BROKEN" ] && ok "all $N prod examples keep the replica off the primary's cloud" \
   || bad "prod examples cluster-up would refuse (of $N):${BROKEN}"
-# Only cluster-up may arm it: infra-apply is what cluster-upgrade and
-# converge-versions call, and no destroy path reaches ensure-buckets at all.
+# Only a NEW cluster may be armed: cluster-up, and restore-state, whose target is empty by construction
+# (a seeded state would otherwise turn the rule into a warning). infra-apply is what cluster-upgrade
+# and converge-versions call, and no destroy path reaches ensure-buckets at all.
 CALLERS="$(awk '/^  [a-z0-9_-]+:$/ {t=$1} /ensure-buckets\.sh/ && !/^[[:space:]]*#/ {print t, (/--preflight/ ? "armed" : "plain")}' Taskfile.yml)"
-is "Taskfile.yml: --preflight is passed by cluster-up alone" \
-   "cluster-up: armed|infra-apply: plain" "$(paste -sd'|' <<<"$CALLERS")"
+is "Taskfile.yml: --preflight is passed by cluster-up and restore-state alone" \
+   "cluster-up: armed|infra-apply: plain|restore-state: armed" "$(paste -sd'|' <<<"$CALLERS")"
 
 
 SCW_EP=https://s3.fr-par.scw.cloud
