@@ -59,6 +59,25 @@ if [ -n "$LOCK" ]; then
 TXT
 fi
 
+# The bastion carries the Talos tunnels: an apply that modifies, replaces or stops it kills them mid-run, and every
+# config apply after that dials a closed local port (OVH replaced it, Outscale modified it in place, 2026-10-06).
+# Transcript only: both lines must be there, a refused port alone is not this.
+if [ -f "$LOG" ]; then
+  CLEAN="$(sed -E 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null)"
+  if grep -Eq '\.bastion: (Modifying|Destroying|Creating)\.\.\.' <<<"$CLEAN" &&
+     grep -Eq 'dial tcp 127\.0\.0\.1:[0-9]+: connect: connection refused' <<<"$CLEAN"; then
+    printf '\n\033[33m─── the bastion changed under the tunnels ───\033[0m\n' >&2
+    cat >&2 <<'TXT'
+This apply modified, replaced or stopped the bastion, and the Talos tunnels run through it: they died with the
+old one, so the config applies after it dialled a closed local port. The bastion change LANDED. Re-run the same
+command: the tunnels are rebuilt at its start and the plan no longer touches the bastion; the config applies that
+failed are created again and send the same configuration, which changes nothing on a node. If it fails the same
+way, run `task tunnels-up PROVIDER=<p>` and read what it says.
+
+TXT
+  fi
+fi
+
 STATE="$(timeout 90 tofu state pull 2>/dev/null)" || exit 0
 [ -n "$STATE" ] || exit 0
 
