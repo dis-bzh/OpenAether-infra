@@ -282,9 +282,10 @@ is the cluster's active provider (`scaleway`/`ovh`/`outscale`).
 Both reuse the **same** `TF_VAR_encryption_passphrase`. Artifacts are pushed during
 the Phase-2 apply (`backup-artifacts.sh`); the state is replicated **after** the
 apply (`backup-state.sh` / `task backup-state`), because the backend only flushes
-the new state on apply exit. Beside the current replica object it keeps dated **generations**
-(`<key>.<UTC timestamp>`, the newest `STATE_GENERATIONS` of them), each a state that holds the Talos secrets; the
-script header says how they are written and pruned, and `task backup-state PROVIDER=<p> -- --list` prints them.
+the new state on apply exit. Beside the current replica object it keeps dated **generations** (`<key>.<UTC timestamp>`):
+one per run, only for a state that holds Talos secrets, the newest `STATE_GENERATIONS` of them (five unchanged re-runs
+push older states out). The script header says how they are written and pruned, and
+`task backup-state PROVIDER=<p> -- --list` prints them.
 
 The four buckets are **auto-provisioned** (idempotent) by `task infra-apply ROLE=management PROVIDER=<p>` /
 `task cluster-up` before it builds anything, and `task infra-apply` again before
@@ -346,14 +347,18 @@ planes, a replica on another provider, `cluster-verify` on a lost PKI (read, not
 unreadable node into a warning, so it should stay green).
 
 1. **A replica generation that still holds the secrets.** `infra-down-plan` replicates before it untracks, and
-   `backup-state.sh` writes a generation only for a state that holds the secrets, so the newest generation is the last
-   state that held them. List them, read-only and with the secrets gone (`task backup-state PROVIDER=<p> -- --list`, or with
-   no tofu: `aws s3 ls s3://<replica-bucket>/<key>. --endpoint-url <replica endpoint> --region <replica region>`), and
-   take the newest; an older one also forgets what was applied since, and plans to recreate it. Put that ciphertext back
-   over the primary key, then `task kubeconfig PROVIDER=<p>` (rewrites the talosconfig) and
-   `task infra-plan PROVIDER=<p> STRICT=1` says `No changes`. The lab copied the current object bucket to bucket inside
-   one store, before generations existed; the commands below (`backup-state.sh` read backwards) and the listing were not
-   run on a real store (#267):
+   `backup-state.sh` writes a generation for every state that holds secrets, so the most recent one is normally the
+   last state that held the PKI the nodes trust. List them, read-only and with the secrets gone
+   (`task backup-state PROVIDER=<p> -- --list`, or with no tofu: `aws s3 ls s3://<replica-bucket>/<key>.
+   --endpoint-url <replica endpoint> --region <replica region>`), and take the one with the most recent LastModified
+   (the first generation row of the task; `aws s3 ls` sorts by key, so read its date), not the key's stamp: a machine
+   with a wrong clock writes a wrong one. An older one also forgets what was applied since, and plans to recreate it.
+   Put that ciphertext back over the primary key, then
+   `task kubeconfig PROVIDER=<p>` (rewrites the talosconfig). A generation holds a PKI, not necessarily the one the
+   nodes trust (an apply that got past the guard can mint another): if `talosctl version` is rejected now, put back the
+   next older one. Then `task infra-plan PROVIDER=<p> STRICT=1` says `No changes`. The lab copied the current object
+   bucket to bucket inside one store, before generations existed; the commands below (`backup-state.sh` read
+   backwards) and the listing were not run on a real store (#267):
    ```bash
    AWS_ACCESS_KEY_ID=<replica key> AWS_SECRET_ACCESS_KEY=<replica secret> \
      aws s3 cp s3://<replica-bucket>/<key>.<timestamp> state.enc --endpoint-url <replica endpoint> --region <replica region>
@@ -382,12 +387,14 @@ unreadable node into a warning, so it should stay green).
 Never run `cluster-up`, `infra-apply` or `cluster-roll` from a state without the secrets, push a state nobody
 verified with `-force`, or replace `random_password` (the disk key; importing it plans a replacement).
 
-**Not recoverable from here: no talosconfig the nodes trust and no replica generation that holds the secrets.** The
-answer is to rebuild the cluster. A configured node answers no unauthenticated call, and a reset needs the credential
-and mints a new PKI, which is a new cluster (measured on Talos 1.14.2: a privileged pod sees an empty STATE directory).
-Lost with it: etcd's contents, and any application data with no copy in the backup stores (restic, CNPG PITR, Longhorn:
+**Not recoverable from here: no talosconfig the nodes trust and no replica generation that holds the secrets.** No way
+back was measured, so the decision is to rebuild the cluster. A configured node answers no unauthenticated call, and a
+reset needs the credential and mints a new PKI, which is a new cluster. Not tried: what else a privileged pod could
+read on the node (etcd data, kubelet paths; the earlier probe of the STATE directory left no kept output), a reboot
+into maintenance mode through the provider, reading the encrypted STATE partition from outside the node. Lost with the
+rebuild: etcd's contents, and any application data with no copy in the backup stores (restic, CNPG PITR, Longhorn:
 [`docs/admin-access.md`](../../../docs/admin-access.md)). What keeps a state there out of reach: the guards above, and
-the generations, which keep the last state holding the secrets beside the current object. The rebuild is the teardown
+the generations, which keep the last states that held secrets beside the current object. The rebuild is the teardown
 (`task cluster-down`, never blocked by the missing secrets) then `task cluster-up`.
 
 > Rebuilding from scratch on another provider instead is `task restore-state`: see "Cross-provider failover" above.
