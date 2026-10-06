@@ -97,6 +97,26 @@ echo "▶ the fleet does not match the pin:"
 [ "$have_talos" = "$want_talos" ] || echo "    Talos      running ${have_talos:-?} → pinned ${want_talos}"
 [ "$have_k8s"   = "$want_k8s"   ] || echo "    Kubernetes running ${have_k8s:-?} → pinned ${want_k8s}"
 
+# The apply that writes the pin reaches every node BEFORE any roll, so a Kubernetes pin the RUNNING
+# Talos cannot host is refused by the node itself, late and cryptically ("1.37.1 is too new to be used
+# with Talos 1.13.9", Scaleway 2026-10-06). cluster-upgrade.sh walks the pair one minor at a time.
+if [ -n "$want_k8s" ] && [ "$have_k8s" != "$want_k8s" ] && [ -n "$have_talos" ]; then
+  support="$CLUSTER_DIR/version-support.json"
+  km="$(sed -E 's/^v?[0-9]+\.([0-9]+).*/\1/' <<<"$want_k8s")"
+  IFS=',' read -ra _talos_vs <<<"$have_talos"
+  for v in "${_talos_vs[@]}"; do
+    range="$(jq -r --arg m "$(sed -E 's/^v?([0-9]+\.[0-9]+).*/\1/' <<<"$v")" \
+             '.talos_minors[$m] // empty | "\(.k8s_min) \(.k8s_max)"' "$support")" ||
+      fail "cannot read $support, so whether Talos ${v} can host Kubernetes ${want_k8s} is UNKNOWN."
+    read -r lo hi <<<"$range"
+    # A Talos minor the matrix has never heard of is the plan-time guard's to refuse.
+    [ -z "${lo:-}" ] || { [ "$km" -ge "$lo" ] && [ "$km" -le "$hi" ]; } ||
+      fail "the fleet runs Talos ${v}, which supports Kubernetes 1.${lo} to 1.${hi}, and the config pins ${want_k8s}.
+  The apply would push that pin to nodes that refuse it, before any roll. Nothing was planned or applied.
+  Move the pair one minor at a time instead: task cluster-upgrade PROVIDER=${PROVIDER} ROLE=${ROLE}"
+  done
+fi
+
 if [ "$CHECK_ONLY" = 1 ]; then
   echo "    Approving below also approves rolling every node, one at a time, to close this."
   exit 0

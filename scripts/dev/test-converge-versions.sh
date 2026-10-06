@@ -103,6 +103,40 @@ grep -qi 'downgrade' <<<"$out" && bad "an upgrade (pin above running) was misrea
 [ -s "$STUB_DIR/task.log" ] && ok "the guard let a real upgrade proceed to infra-apply/cluster-roll" ||
   bad "a legitimate upgrade never reached infra-apply/cluster-roll"
 
+# --- a pin the RUNNING Talos cannot host is refused before anything is planned (#278) ------------
+echo
+echo "=== converge-versions.sh: the pair the running Talos can host ==="
+
+# Talos 1.13 supports Kubernetes 1.31 to 1.36 (cluster/version-support.json): 1.37.1 on 1.13.9 is the
+# 0.1.0 -> 0.2.0 climb, and the node refuses it only after the apply has started.
+for mode in --check apply; do
+  out="$(run v1.14.2 v1.37.1 v1.13.9 v1.36.3 ${mode/apply/})"; rc=$?
+  if [ "$rc" -ne 0 ] && grep -q 'supports Kubernetes 1.31 to 1.36' <<<"$out"; then
+    ok "Talos 1.13.9 with a Kubernetes 1.37.1 pin is refused, with the supported range (${mode/apply/the roll}, rc=${rc})"
+  else bad "Talos 1.13.9 with a Kubernetes 1.37.1 pin was not refused as such (${mode/apply/the roll}, rc=${rc}): ${out:0:200}"; fi
+  grep -q 'task cluster-upgrade' <<<"$out" && ok "…and names task cluster-upgrade" || bad "the refusal does not name task cluster-upgrade"
+  [ -s "$STUB_DIR/task.log" ] && bad "task ran despite the refusal (${mode/apply/the roll})" || ok "…and nothing was applied or rolled"
+done
+
+out="$(run v1.14.2 v1.37.1 v1.13.9,v1.14.2 v1.36.3 --check)"; rc=$?
+{ [ "$rc" -ne 0 ] && grep -q 'Talos v1.13.9' <<<"$out"; } && ok "a mixed fleet is refused on its LOWEST Talos" || bad "a mixed fleet with one Talos 1.13 node was not refused (rc=${rc})"
+
+out="$(run v1.14.2 v1.37.1 v1.14.2 v1.36.3)"
+grep -q 'supports Kubernetes' <<<"$out" && bad "a valid pair (Talos 1.14.2 hosts Kubernetes 1.37.1) was refused" || ok "a valid pair is not refused"
+grep -q 'infra-apply' "$STUB_DIR/task.log" && ok "…and reaches the apply" || bad "a valid pair never reached infra-apply"
+
+out="$(run v1.13.9 v1.36.3 v1.13.8 v1.36.3 --check)"; rc=$?
+{ [ "$rc" -eq 0 ] && ! grep -q 'supports Kubernetes' <<<"$out"; } && ok "a Talos-patch-only lag is not touched by the guard" || bad "a Talos-patch-only lag was refused (rc=${rc})"
+
+out="$(run v1.99.1 v1.37.1 v1.99.0 v1.36.3 --check)"; rc=$?
+{ [ "$rc" -eq 0 ] && ! grep -q 'supports Kubernetes' <<<"$out"; } && ok "a Talos minor the matrix does not know is left to the plan-time guard" || bad "an unknown Talos minor was refused here (rc=${rc})"
+
+# A matrix that cannot be read is a question not answered, so a refusal, never a pass.
+printf '#!/usr/bin/env bash\nexit 2\n' >"$STUB_DIR/jq"; chmod +x "$STUB_DIR/jq"
+out="$(run v1.14.2 v1.37.1 v1.13.9 v1.36.3 --check)"; rc=$?
+rm -f "$STUB_DIR/jq"
+{ [ "$rc" -ne 0 ] && grep -q 'UNKNOWN' <<<"$out"; } && ok "an unreadable support matrix refuses (rc=${rc})" || bad "an unreadable support matrix was read as a pass (rc=${rc})"
+
 echo
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 # A floor, not just a verdict: `FAIL -eq 0` is also true when the harness died

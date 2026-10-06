@@ -160,6 +160,8 @@ ln -s "$ROOT/scripts/dev/cluster-upgrade.sh" "$FAKE/scripts/dev/cluster-upgrade.
 ln -s "$ROOT/scripts/dev/infra-verify.sh" "$FAKE/scripts/dev/infra-verify.sh"
 # Sourced by infra-verify, converge-versions and talos-image.sh.
 ln -s "$ROOT/scripts/lib/common.sh" "$FAKE/scripts/lib/common.sh"
+# Read by converge-versions' pair guard, which refuses when it cannot (#278).
+ln -s "$ROOT/infrastructure/opentofu/cluster/version-support.json" "$CLUSTER/version-support.json"
 UPGRADE="$FAKE/scripts/dev/cluster-upgrade.sh"
 KEYFILE="$STUB_DIR/ssh-key-fixture"; : >"$KEYFILE"
 
@@ -1020,7 +1022,28 @@ _eat="$(walk_path v1.12.7 v1.30.0 7 <<<"$CLIMB7" | grep -cE '^(k8s|talos) ' || t
   && ok "a step that reads stdin cannot swallow the rest of the climb" \
   || bad "a stdin-reading step truncated the climb to ${_eat}/7 dispatches"
 
-unset -f upgrade_k8s_to upgrade_talos_to walk_path
+# An axis that does not move is pinned where it runs (#279). The stubs read the pin AT CALL TIME: an unset
+# pin is the shipped default (Kubernetes v1.37.1), which Talos 1.13.9 refuses.
+PINS="$STUB_DIR/pins"
+tfvar_get() {
+  local v; v="$(sed -nE "s/^$1=//p" "$PINS" 2>/dev/null)"
+  if [ -n "$v" ]; then echo "$v"; elif [ "$1" = kubernetes_version ]; then echo v1.37.1; else echo v1.14.2; fi
+}
+tfvar_set() { { grep -v "^$1=" "$PINS" 2>/dev/null; echo "$1=$2"; } >"$PINS.n"; mv "$PINS.n" "$PINS"; }
+upgrade_k8s_to()   { echo "k8s $1 talos-pin=$(tfvar_get talos_version)"; }
+upgrade_talos_to() { echo "talos $1 k8s-pin=$(tfvar_get kubernetes_version)"; }
+: >"$PINS"
+_pin="$(walk_path v1.13.9 v1.36.3 2 <<<$'v1.14.2 v1.36.3\nv1.14.2 v1.37.1' | grep -E '^(k8s|talos) ' | tr '\n' '|')"
+[ "$_pin" = 'talos v1.14.2 k8s-pin=v1.36.3|k8s v1.37.1 talos-pin=v1.14.2|' ] \
+  && ok "an unpinned Kubernetes is pinned to what runs while Talos moves, and Talos stays put while Kubernetes moves" \
+  || bad "the non-moving axis was left at the default: $_pin"
+printf 'kubernetes_version=v1.36.3\n' >"$PINS"
+walk_path v1.13.9 v1.36.3 1 <<<'v1.14.2 v1.36.3' >/dev/null
+[ "$(grep -c '^kubernetes_version=' "$PINS")" = 1 ] && [ "$(tfvar_get kubernetes_version)" = v1.36.3 ] \
+  && ok "a pin that already says what runs is left alone" \
+  || bad "an existing pin was rewritten or duplicated"
+
+unset -f upgrade_k8s_to upgrade_talos_to walk_path tfvar_get tfvar_set
 echo "=== converge-versions: the half of cluster-up that OpenTofu cannot do ==="
 
 # Its own stub, because both reads ask the SAME question — `custom-columns` on the
@@ -1140,6 +1163,39 @@ printf '%s passed, %s failed, %s hung, %s skipped, %s known defect(s) in the scr
 { [ "$KNOWN" -eq 0 ] || [ "${STRICT_DEFECTS:-0}" = 1 ]; } ||
   printf 'known defects are reported, not fixed: this file owns the tests. STRICT_DEFECTS=1 makes them fatal.\n'
 RC=0
+echo "=== no script pipes aws into grep -q: under pipefail the SIGPIPE reads as 'not found' ==="
+# infra-verify did, against a replica holding several objects, and failed 2 runs in 6 with the replica present.
+PIPED="$(grep -rnE '^[^#]*aws[^|#]*\|[[:space:]]*grep[[:space:]]+-q' "$ROOT/scripts" --include='*.sh' | grep -v '/dev/test-' || true)"
+[ -z "$PIPED" ] && ok "no aws call is piped into grep -q" || bad "aws piped into grep -q (capture the output first): ${PIPED:0:240}"
+
+echo "=== Scaleway: a network built before the subnet pin keeps its subnet (the pin must not replace it) ==="
+# Planning the pin over a 0.1.0 network replaced it and every node's private NIC; a mocked plan cannot show it (an
+# override cannot set the block field), so the two lines that prevent it are pinned here, and a real climb shows the rest.
+SCWNET="$(awk '/resource "scaleway_vpc_private_network" "this"/,/^}/' "$ROOT/infrastructure/opentofu/modules/providers/scw/network.tf")"
+grep -qE 'ignore_changes[[:space:]]*=[[:space:]]*\[ipv4_subnet\]' <<<"$SCWNET" \
+  && ok "the private network ignores changes to ipv4_subnet" || bad "the Scaleway private network no longer ignores ipv4_subnet: an existing cluster's network would be replaced"
+grep -q 'from = local.scw_subnet_in_use' "$ROOT/infrastructure/opentofu/modules/providers/scw/security.tf" \
+  && ! grep -q 'local.scw_cluster_subnet' "$ROOT/infrastructure/opentofu/modules/providers/scw/security.tf" \
+  && ok "the node security rules follow the subnet in use, not the pinned constant" || bad "a Scaleway security rule uses the pinned constant: an adopted network's mesh would be cut"
+
+echo "=== the bastion cloud-init renders, with SSH-CA off, the bytes 0.1.0 shipped ==="
+# user_data forces replacement on OVH and Outscale: a comment edit replaced the bastion mid-apply of an upgrade,
+# killed the Talos tunnels with it and failed phase 2 (measured on OVH, 2026-10-06). The hash is 0.1.0's render.
+if command -v tofu >/dev/null 2>&1; then
+  BASTION_TPL="$ROOT/infrastructure/opentofu/modules/providers/_shared/bastion-cloud-init.yaml.tftpl"
+  # No stdin and a timeout: CI's tofu is wrapped, and `tofu console` waited on a stdin the wrapper never closes (15 min).
+  mkdir -p "$STUB_DIR/bastion-render"
+  cat >"$STUB_DIR/bastion-render/main.tf" <<TF
+output "sha" { value = sha256(templatefile("$BASTION_TPL", {ssh_keys = ["k"], bastion_user = "bastion", private_cidr = "10.0.0.0/24", extra_packages = [], extra_write_files = [], extra_runcmd = [], ssh_ca_public_key = "", ssh_ca_principals = ""})) }
+TF
+  BASTION_SHA="$(cd "$STUB_DIR/bastion-render" && timeout 120 tofu apply -auto-approve -input=false -no-color </dev/null >/dev/null 2>&1 && tofu output -raw sha </dev/null 2>/dev/null)"
+  [ "$BASTION_SHA" = 1f09a8566681c3e4f3e6c5dde34060a3c1509aa6e0b4db0ad7dc295479637c47 ] \
+    && ok "the default render is 0.1.0's, byte for byte" \
+    || bad "the default bastion render changed (${BASTION_SHA:-no answer}): every OVH/Outscale bastion is replaced on upgrade — keep the default bytes, or update this hash AND the CHANGELOG upgrade notes"
+else
+  skip "tofu not installed: the bastion render was not compared"
+fi
+
 [ "$FAIL" -eq 0 ] || RC=1
   # Zero failures is also what a harness that never asserted reports.
   [ "$PASS" -gt 0 ] || { printf 'NOT green: no assertion ran at all.\n'; RC=1; }

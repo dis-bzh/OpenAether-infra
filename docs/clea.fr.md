@@ -31,8 +31,8 @@ deux bots se disputent une même dépendance.
 | lane | quand | ce qu'elle exerce |
 |---|---|---|
 | scan + couverture | tous les jours, 04:17 UTC | chaque ancre lue, résolue en amont, et comparée à `renovate.json5` |
-| sondes outils | tous les jours | installation à froid et mise à jour sur place de chaque outil qui a bougé, dans un `ubuntu:24.04` nu, puis les gates propres au dépôt (`[lane] repo` dans `clea.toml`) sur l'arbre modifié |
-| cluster local | toutes les semaines, dimanche 03:41 UTC | `task local-up` sur le couple Talos / Kubernetes publié en amont, puis `task local-verify`, en 1 plan de contrôle + 1 worker |
+| sondes outils | tous les jours | installation à froid et mise à jour sur place de chaque outil qui a bougé et qui est proposé, dans un `ubuntu:24.04` nu, puis les gates propres au dépôt (`[lane] repo` dans `clea.toml`) sur l'arbre modifié |
+| cluster local | toutes les semaines, dimanche 03:41 UTC | `task local-up` sur le couple Talos / Kubernetes publié en amont et proposé par le rapport, puis `task local-verify`, en 1 plan de contrôle + 1 worker |
 | cloud réel | jamais | à la main, par quelqu'un qui regarde — voir [`CONTRIBUTING.md`](../CONTRIBUTING.md) |
 
 Le scan demande aussi quand `renovate[bot]` a proposé quelque chose pour la
@@ -47,6 +47,16 @@ avant l'écriture de Cléa. `[report] watch_bot` et `silent_after_days` dans
 
 `.github/workflows/clea.yml` est tout le câblage. Il ne porte aucune
 identification de provider et doit échouer plutôt que d'en acquérir une.
+
+## Ce qu'une montée de version doit passer pour être proposée
+
+Une version vieille d'un jour peut encore être retirée, retaguée ou se révéler
+vulnérable : une montée n'est donc listée sous *Behind upstream* (et sondée) qu'une
+fois la version assez vieille et les autres contrôles passés, et reste sous *Held back*
+sinon. Les règles, et ce que chacune lit, sont dans
+[`scripts/clea/README.md`](../scripts/clea/README.md) ; l'âge est `[policy]` dans
+`clea.toml`, et `task test-scripts` échoue si `renovate.json5` porte un autre nombre. La
+lane cluster hebdomadaire suit les mêmes règles.
 
 ## Où est le rapport
 

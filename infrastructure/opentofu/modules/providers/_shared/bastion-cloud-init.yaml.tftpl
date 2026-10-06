@@ -10,9 +10,7 @@
 #
 # Vars: ssh_keys, bastion_user, private_cidr (required);
 #       extra_packages, extra_write_files, extra_runcmd (optional, runcmd runs
-#       BEFORE nftables is enabled);
-#       ssh_ca_public_key, ssh_ca_principals (optional, default "" = SSH-CA
-#       off — see the "SSH-CA" write_files block below).
+#       BEFORE nftables is enabled).
 
 groups:
   - bastion-admins
@@ -85,8 +83,7 @@ write_files:
       ClientAliveInterval 300
       ClientAliveCountMax 2
 
-      # SSH-CA: off by default (ssh_ca_public_key = "" -> empty trust file, no
-      # cert can verify). Set both ssh_ca_* vars to activate.
+      # SSH-CA forward-compat (empty files = no-op until CA is activated)
       TrustedUserCAKeys /etc/ssh/trusted_user_ca.pub
       AuthorizedPrincipalsFile /etc/ssh/auth_principals/%u
 
@@ -135,9 +132,8 @@ write_files:
       }
 
   # --------------------------------------------------------------------------
-  # SSH-CA — ssh_ca_public_key defaults to "" (empty trust file = today's
-  # inert behaviour, byte for byte). Populate it (typically from OpenBao) to
-  # activate cert-based auth.
+  # SSH-CA forward-compat — empty placeholder files (no-op today)
+  # When SSH CA is activated via OpenBao, populate these files and reload sshd.
   # --------------------------------------------------------------------------
   - path: /etc/ssh/trusted_user_ca.pub
     permissions: '0644'
@@ -186,9 +182,7 @@ mounts:
   - [tmpfs, /tmp, tmpfs, "size=64m,mode=1777,nosuid,nodev,noexec", "0", "0"]
 
 runcmd:
-  # SSH-CA principals directory — created even when ssh_ca_principals is ""
-  # (cloud-init only creates parents for files it writes) so the directory
-  # always exists for AuthorizedPrincipalsFile to point at.
+  # SSH-CA principals directory (no-op placeholder)
   - mkdir -p /etc/ssh/auth_principals && chmod 755 /etc/ssh/auth_principals
   # Ensure authorized_keys.d has correct ownership
   - chown root:root /etc/ssh/authorized_keys.d && chmod 755 /etc/ssh/authorized_keys.d

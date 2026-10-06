@@ -104,6 +104,30 @@ worse than no check, because it reads as an answer.
 hour from an IP shared with every other customer of the platform. A 401, 403 or
 429 raises and names `GITHUB_TOKEN`; it is never reported as "up to date".
 
+## What is offered
+
+A bump reaches the report's **Behind upstream** table and the probe matrix only if all
+four hold. Otherwise it sits under **Held back**, with every reason:
+
+| rule | read from | when it cannot be known |
+|---|---|---|
+| released at least `[policy] min_release_age_days` ago (0 = off) | PyPI file upload time, GitHub release publish time, a tag's own date (annotated: tagger, else commit), a Helm chart's `created` | `age unknown`: held |
+| not withdrawn | PyPI `yanked`, GitHub release `draft` / `prerelease` | — |
+| its tag has not moved | the commit each tag pointed at, kept in the state per dependency: a moved tag stays held until upstream tags another version | no earlier scan, nothing to compare |
+| no OSV advisory *new* in it (ids the pin you run already carries do not count) | `api.osv.dev` by package and exact version: PyPI, and every `[[osv]]` row of `clea.toml` | `advisories unknown`: shown, holds nothing |
+
+OSV is asked by package only where it can be: a GitHub release with no `[[osv]]` row is
+asked by commit, which matches git ranges only. It can find an advisory but an empty
+answer clears nothing, so it reads `advisories unknown`, like helm charts without a row,
+`terraform-provider` and `url-text`, which are never asked.
+
+An advisory against the pin you run **now** is a line of its own. A candidate that clears
+one skips the age rule (Renovate's security updates skip `minimumReleaseAge` too); a
+withdrawn, retagged or newly advised one is still held. `terraform-provider` and
+`url-text` have no date source here. Renovate's `minimumReleaseAge` must carry the
+number `[policy]` sets; the weekly cluster lane bumps Talos and Kubernetes only when
+they are offered.
+
 ## The probe
 
 `probe.sh` runs two lanes in a bare `ubuntu:24.04`, never on the runner image —
@@ -147,6 +171,14 @@ exclude = ["docs/**"]
 [report]
 title = "Cléa — dependency report"
 label = "clea"
+
+[policy]
+min_release_age_days = 7        # keep equal to Renovate's minimumReleaseAge
+
+[[osv]]                         # which OSV package to ask about a dependency
+dep = "owner/tool"
+ecosystem = "Go"
+package = "example.com/owner/tool"
 
 [[inventory]]                   # what to cross-check against
 kind = "renovate"

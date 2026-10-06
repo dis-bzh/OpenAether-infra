@@ -302,7 +302,7 @@ jobs:
       - name: The toolchain this repository ships
         run: printf 'y\n' | ./scripts/setup.sh
 
-      - name: Bump Talos and Kubernetes to what upstream publishes
+      - name: Bump Talos and Kubernetes to what upstream publishes and the report offers
         continue-on-error: true
         env:
           STATE: ${{ needs.scan.outputs.state }}
@@ -310,12 +310,11 @@ jobs:
           set -euo pipefail
           printf '%s' "$STATE" > clea-state.json
           python3 - <<'PY' > bumps.sh
-          import json
+          import json, sys
+          sys.path.insert(0, "scripts/clea")
+          import clea
           state = json.load(open("clea-state.json"))
-          wanted = ("siderolabs/talos", "kubernetes/kubernetes")
-          for dep in state["deps"]:
-              if dep["dep"] in wanted and dep.get("behind") and dep.get("pinned"):
-                  print(f'python3 scripts/clea/clea.py bump {dep["dep"]} {dep["latest"]}')
+          print("\n".join(clea.lane_bumps(state, ("siderolabs/talos", "kubernetes/kubernetes"))))
           PY
           bash -x bumps.sh
           git --no-pager diff --stat

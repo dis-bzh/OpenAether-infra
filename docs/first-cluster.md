@@ -307,8 +307,8 @@ task cluster-down PROVIDER=scaleway PLAN=destroy-management-scaleway.tfplan APPR
 python3 scripts/ops/purge-orphans/scaleway.py
 ```
 
-**Destroying takes two commands and cannot be collapsed into one** — that is the
-point, not an inconvenience. The first computes the destruction and destroys
+**Destroying takes two commands and cannot be collapsed into one** (but for a `dev`
+cluster, below) — that is the point, not an inconvenience. The first computes the destruction and destroys
 nothing; the second lands exactly what you read. Neither `--yes` nor
 `TF_CLI_ARGS_destroy` nor `APPROVE=auto` gets past the first.
 
@@ -323,6 +323,20 @@ also deletes any possibility of restoring. `fleet-down` lists them by name.
 
 Nothing should be billing afterwards. The purge script asks the provider rather
 than the state file; that is the only answer that counts.
+
+**Dev only: one command.** `task teardown-all PROVIDER=scaleway` (or `all`, every provider
+with a tfvars) plans, asks you to type the cluster id, destroys exactly that plan, then asks
+the provider whether anything is left. It refuses, with nothing planned and no flag to lift
+it, unless the tfvars say `environment = "dev"`, and while a kill switch is on:
+`export OA_NO_TEARDOWN_ALL=1` in the `.env.sh` of a production host (set, even empty, locks;
+only shells that source it are protected), or an empty `.no-teardown-all` file at the repo
+root (every shell of that checkout). Without a terminal, pass `CONFIRM=<cluster_name>-dev-<provider>`
+(`CONFIRM=all` for `all`). It trusts the declared environment: a production cluster deployed
+as `dev` is not protected. Exit code: 0 proven clean, 1 nothing destroyed, 3 destroyed (or
+half) and not proven clean, 4 destroyed with no provider-side check (proxmox). The buckets, images
+and keypairs are left and keep billing, and the plan is not read-only (it untracks the Talos
+secrets: after an abort, see "Lost the Talos secrets" in [the cluster
+README](../infrastructure/opentofu/cluster/README.md)). All its rules: `scripts/ops/teardown-all.sh`.
 
 ## 9. If you lose access
 
@@ -344,6 +358,12 @@ without it, the recovered copy lands beside the existing one as
 
 Nothing recovers these without `TF_VAR_encryption_passphrase`. There is no
 second key and no reset.
+
+The Talos secrets live in the state, and the replica keeps a dated generation per backup run (the last five) for a
+state that holds them (`task backup-state PROVIDER=<p> -- --list`). With neither one of those nor a talosconfig the
+nodes still trust, no way back was measured and the decision is to rebuild the cluster, since a new PKI is a new
+cluster. The recipes, what was not tried, and what the rebuild loses:
+[the cluster README](../infrastructure/opentofu/cluster/README.md), "Lost the Talos secrets".
 
 ## What is not proven
 
