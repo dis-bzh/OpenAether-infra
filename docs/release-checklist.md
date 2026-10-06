@@ -144,6 +144,9 @@ for each old image the retention destroys (§7, image lane).
       account (teardown skill). The plan step replicates the state before it
       untracks the Talos secrets and prints the undo (#66): read it before you
       decline a destroy.
+- [ ] **a bucket renamed this release is emptied by hand on every cloud.** `purge-orphans` matches the project's
+      resources, not buckets, and `fleet-down` only lists them: the old `…-talos-staging` bucket sat on two clouds for
+      six weeks after its rename (#73). List the old name with each cloud's own S3 keys, then `aws s3 rb … --force`.
 - [ ] if the budget allows, none with a recorded result: the **`workload` role on
       any cloud** (`SCW-work-ha`, `SCW-storage`, `OVH-work-ha`, `OVH-storage`,
       `OSC-work-ha`: all untested; worker volumes were read back on the management

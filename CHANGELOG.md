@@ -359,6 +359,12 @@ upgrade. A longest outage is the longest run of consecutive failed one-second pr
 
 ### Fixed
 
+- **The Proxmox VM bastion's user is `bastion`, not the image's `ubuntu` (#201).** cloud-init ignores a second definition of a
+  user the image already has, so `ubuntu` would never join `bastion-admins` and sshd would refuse the key (measured on OVH).
+  One local feeds the VM and the output. Rung: mocked; never applied on a real Proxmox host.
+- **A bastion change under the Talos tunnels is explained (#65).** When an apply modifies, replaces or stops the bastion and
+  the config applies then fail on refused tunnel ports, `explain-failure` says the change landed and that re-running is the
+  fix. Rung: mocked, the pattern checked against the real Outscale transcript.
 - **Upgrading a 0.1.0 cluster to this release, found by running it on real clouds (#79, #81, #278, #279).** Four defects stood
   between `git pull` and a working upgrade. A Scaleway network built under 0.1.0 had its subnet replaced by the new pin, and
   every private NIC behind it. The shared bastion cloud-init had four comment lines edited, which replaced the bastion on

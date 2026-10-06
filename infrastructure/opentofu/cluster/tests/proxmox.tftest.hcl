@@ -143,7 +143,7 @@ run "verify_provider_contract" {
 
 # ==============================================================================
 # Test 2b: bastion_user — the root reports what the module reports (VM bastion
-# creates "ubuntu"; host-as-bastion uses host_ssh_user), not pmx_dist's value.
+# creates "bastion"; host-as-bastion uses host_ssh_user), not pmx_dist's value.
 # ==============================================================================
 
 run "verify_bastion_user_vm_bastion" {
@@ -176,8 +176,8 @@ run "verify_bastion_user_vm_bastion" {
   }
 
   assert {
-    condition     = output.bastion_user == "ubuntu"
-    error_message = "With enable_bastion=true the VM bastion's user is 'ubuntu' whatever host_ssh_user says."
+    condition     = output.bastion_user == "bastion"
+    error_message = "With enable_bastion=true the VM bastion's user is 'bastion' (never the image's 'ubuntu') whatever host_ssh_user says."
   }
 }
 
