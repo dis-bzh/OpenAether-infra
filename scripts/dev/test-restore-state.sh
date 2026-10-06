@@ -219,6 +219,14 @@ task: [restore-state] tofu init -reconfigure $(../../../scripts/internal/tf-back
 task: [restore-state] ../../../scripts/ops/restore-state.sh envs/management-scaleway.tfvars envs/failover-ovh.tfvars'
   got="$(tdry restore-state PROVIDER=ovh ROLE=failover FROM=management-scaleway)"
   [ "$got" = "$WANT_TASK" ] && ok "preflight armed on B's file, init on B's file, then restore-state.sh <A's file> <B's file>" || bad "rendered: $got"
+  # A Task CLI variable is not in the script's environment: STATE_GENERATION reaches it only if the task forwards it.
+  WANT_GEN='task: [restore-state] STATE_GENERATION=20261006T120000Z ../../../scripts/ops/restore-state.sh envs/management-scaleway.tfvars envs/failover-ovh.tfvars'
+  got="$(tdry restore-state PROVIDER=ovh ROLE=failover FROM=management-scaleway STATE_GENERATION=20261006T120000Z | grep restore-state.sh)"
+  [ "$got" = "$WANT_GEN" ] && ok "STATE_GENERATION given the Task way is in the script's environment" || bad "rendered: $got"
+  got="$(cd "$ROOT" && env -i PATH="$PATH" HOME="$TMP" STATE_GENERATION=20261006T120000Z task -n restore-state PROVIDER=ovh ROLE=failover FROM=management-scaleway 2>&1 | sed -E 's/\x1b\[[0-9;]*m//g' | grep restore-state.sh)"
+  [ "$got" = "$WANT_GEN" ] && ok "...and so is one exported in the shell" || bad "rendered: $got"
+  got="$(tdry restore-state PROVIDER=ovh ROLE=failover FROM=management-scaleway "STATE_GENERATION=x; touch $TMP/injected" | grep restore-state.sh)"
+  grep -qF "STATE_GENERATION='x; touch " <<<"$got" && ok "a value is quoted as one word" || bad "rendered: $got"
   for missing in 'FROM=x:PROVIDER' 'PROVIDER=ovh:FROM'; do
     got="$(tdry restore-state "${missing%%:*}")"
     grep -q "missing required variables: ${missing##*:}" <<<"$got" && ! grep -q 'restore-state\.sh' <<<"$got" && ok "without ${missing##*:}: refused before anything is rendered" || bad "without ${missing##*:}: $got"

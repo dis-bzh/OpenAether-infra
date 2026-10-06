@@ -9,10 +9,13 @@
 # Run AFTER each apply (the backend only flushes state on apply exit). The
 # bucket/endpoint/key/provider come from the `backup_targets` tofu output.
 #
-# Next to the current object it keeps dated GENERATIONS, <key>.<UTC timestamp>, the newest
-# STATE_GENERATIONS of them (the one place the retention is set). Each is a state that holds the
-# Talos secrets, written before the current object is touched, so a state without them is never
-# the only copy (#267). `--list` prints them, newest first, and works with the secrets gone.
+# Next to the current object it keeps dated GENERATIONS, <key>.<UTC timestamp>: one per run (identical
+# states too, so two uploads of the state), only for a state that holds Talos secrets, written before
+# the current object is touched (#267). The newest STATE_GENERATIONS are kept (the one place retention
+# is set). `--list` prints them, most recently written first, and works with the secrets gone. Limits:
+# a generation holds A PKI, not necessarily the one the nodes trust; and its label is tofu's view of the
+# backend while its bytes are the primary bucket's, one object only while the backend is that bucket
+# (not after a reconfigure against the replica).
 #
 # Creds:
 #   primary : the ambient AWS_* (the Taskfile sets it to the cluster provider's keys)
@@ -45,14 +48,18 @@ cd "$TOFU_DIR"
 # achieved nothing on its own.
 ERR="$(mktemp)"; trap 'rm -f "$ERR"' EXIT
 T="$(tofu output -json backup_targets 2>"$ERR")" || T=""
+# A listing that finds no target has listed nothing: it is a failure with the tofu-free way, never a skipped backup.
+LS_HINT='Without tofu: aws s3 ls s3://<replica-bucket>/<key>. --endpoint-url <replica endpoint> --region <replica region>'
 if [ -z "$T" ] || [ "$T" = null ]; then
   if grep -qiE 'no outputs|not found|does not have an output' "$ERR" 2>/dev/null || [ ! -s "$ERR" ]; then
+    [ "$LIST" = 0 ] || { echo "✗ no backup_targets output, so there is nothing to list from here. $LS_HINT" >&2; exit 1; }
     echo "⚠ no backup_targets output — apply the infra first (or backup_enabled=false). Skipping state backup."
     exit 0
   fi
-  echo "✗ could not read backup_targets, so nothing was replicated and nothing can" >&2
+  echo "✗ could not read backup_targets, so nothing was $([ "$LIST" = 1 ] && echo listed || echo replicated) and nothing can" >&2
   echo "  confirm the copy exists. This is not 'no backup configured':" >&2
   sed 's/^/    /' "$ERR" >&2
+  [ "$LIST" = 0 ] || echo "  $LS_HINT" >&2
   exit 1
 fi
 
@@ -78,8 +85,8 @@ rows() { replica s3api list-objects-v2 --bucket "$REPLICA_BUCKET" --prefix "$KEY
 JQ_GEN='def gen: .[0] | startswith($k + ".") and (ltrimstr($k + ".") | test("^[0-9]{8}T[0-9]{6}Z$"));'
 
 if [ "$LIST" = 1 ]; then
-  echo "s3://$REPLICA_BUCKET/ on ${REPLICA_EP}, newest first. Restore one by copying it over the state key (README, \"Lost the Talos secrets\")."
-  rows | jq -r --arg k "$KEY" "$JQ_GEN"' (. // []) | ([.[] | select(.[0] == $k)] + ([.[] | select(gen)] | sort_by(.[0]) | reverse))
+  echo "s3://$REPLICA_BUCKET/ on ${REPLICA_EP}, most recently written first (LastModified, not the key's stamp: that is the writing machine's clock). Restore one by copying it over the state key (README, \"Lost the Talos secrets\")."
+  rows | jq -r --arg k "$KEY" "$JQ_GEN"' (. // []) | ([.[] | select(.[0] == $k)] + ([.[] | select(gen)] | sort_by([.[1], .[0]]) | reverse))
     | if length == 0 then "  (no state object under \($k))" else .[] | ["  " + (if .[0] == $k then "current   " else "generation" end), .[1], .[2], .[0]] | @tsv end'
   exit 0
 fi

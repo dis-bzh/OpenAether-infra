@@ -56,7 +56,7 @@ STUB
 # aws: logs the access key it was handed (that is the whole cross-provider
 # question), captures every upload, fabricates every download. With OA_STUB_STORE
 # it is also a small object store (one file per s3://bucket/key) that serves
-# list, put and delete, so retention is checked on what a bucket would hold.
+# list (with the real answer's shape, size and date), put and delete, so retention is checked on what a bucket would hold.
 cat >"$SB/aws" <<'STUB'
 #!/usr/bin/env bash
 printf 'aws:%s|%s\n' "${AWS_ACCESS_KEY_ID:-<unset>}" "$*" >>"$OA_STUB_LOG"
@@ -72,10 +72,14 @@ case "$1 $2" in
   "s3api list-objects-v2")
     [ -z "${OA_STUB_LIST_FAIL:-}" ] || exit 1
     if [ -n "${OA_STUB_STORE:-}" ]; then
-      while [ $# -gt 0 ]; do case "$1" in --bucket) bucket="$2" ;; --prefix) prefix="$2" ;; esac; shift; done
-      ( cd "$OA_STUB_STORE/$bucket" 2>/dev/null && find . -type f | sed 's#^\./##' | LC_ALL=C sort ) \
-        | while IFS= read -r k; do case "$k" in "$prefix"*) printf '%s\n' "$k" ;; esac; done \
-        | jq -Rn '[inputs | [., "2026-10-06T00:00:00+00:00", 1]] | if length == 0 then null else . end'
+      q=""; while [ $# -gt 0 ]; do case "$1" in --bucket) bucket="$2" ;; --prefix) prefix="$2" ;; --query) q="$2" ;; esac; shift; done
+      # The real CLI applies the JMESPath query to {"Contents":[{Key,LastModified,Size,ETag,...}]}. Only the one the script
+      # sends is understood here, so a changed projection fails instead of passing on a pre-shaped answer.
+      [ "$q" = 'Contents[].[Key,LastModified,Size]' ] || { echo "stub aws: unsupported --query '$q'" >&2; exit 255; }
+      ( cd "$OA_STUB_STORE/$bucket" 2>/dev/null && find . -type f -printf '%P\t%T@\t%s\n' | LC_ALL=C sort ) \
+        | { if [ -n "${OA_STUB_DESC:-}" ]; then tac; else cat; fi; } | awk -F'\t' -v p="$prefix" 'index($1, p) == 1' \
+        | jq -Rn '[inputs | split("\t") | {Key: .[0], LastModified: (.[1] | tonumber | floor | strftime("%Y-%m-%dT%H:%M:%S+00:00")), Size: (.[2] | tonumber), ETag: "\"x\"", StorageClass: "STANDARD"}]
+                  | if length == 0 then null else map([.Key, .LastModified, .Size]) end'
     else printf '%s\n' "${OA_STUB_LIST:-null}"; fi ;;
 esac
 exit 0
@@ -209,12 +213,25 @@ echo "--- generations: a dated copy first, then the current object, the same byt
 REPL=s3-example-scaleway-tfstate-test-backup; KEYP=cluster/terraform.tfstate; ST="$SB/store"
 GEN_ENV="OA_STUB_STORE=$ST OA_STUB_STATE=$SB/kept.state AWS_ACCESS_KEY_ID=AMBIENT-AK SCW_AWS_ACCESS_KEY_ID=PRIMARY-AK SCW_AWS_SECRET_ACCESS_KEY=PRIMARY-SK"
 ts()   { printf '202610%02dT000000Z' "$1"; }                       # the n-th day of a made-up October
-seed() { mkdir -p "$ST/$REPL/$(dirname "$KEYP")"; printf '%s' "${2:-SEEDED-$1}" >"$ST/$REPL/$KEYP${3:-}"; }   # <ts> [body] [.suffix]: one object
+seed() { mkdir -p "$ST/$REPL/$(dirname "$KEYP")"; printf '%s' "${2:-SEEDED-$1}" >"$ST/$REPL/$KEYP${3:-}"; touch -d "${4:-2026-10-06T00:00:00Z}" "$ST/$REPL/$KEYP${3:-}"; }   # <ts> [body] [.suffix] [mtime]: one object
 held() { (cd "$ST/$REPL" 2>/dev/null && find . -type f | sed 's#^\./##' | LC_ALL=C sort); }              # every key the replica holds
 gens() { held | grep -E '\.[0-9]{8}T[0-9]{6}Z$' | sed "s#^$KEYP\.##" | tr '\n' ' '; }                     # the timestamps among them
 want() { local t; for t in "$@"; do printf '%s ' "$(ts "$t")"; done; }                                  # gens' answer for days n…
 bak()  { ENV_EXTRA="$GEN_ENV OA_STUB_NOW=${2:-$(ts "$1")} OA_STUB_BODY=STATE-$1 ${3:-}"; OUT="$(run "$BS" "$ROOT")"; RC=$?; }  # <n> [ts] [env]
 body() { cat "$ST/$REPL/$KEYP${1:-}" 2>/dev/null; }
+# The aws calls of the last run that went to the wrong store or with the wrong key. The one download reads the PRIMARY store
+# with the ambient (cluster) keys; every other call (put, list, delete) is the REPLICA's, with the keys, endpoint and region of
+# the cloud that holds it. Nothing is printed when every call is right; <n> calls must have been looked at.
+wrong_store() { # <replica ak> <replica endpoint> <replica region>
+  local l ak args
+  while IFS= read -r l; do
+    ak="$(key_of "$l")"; args="${l#*|}"
+    case "$args" in
+      "s3 cp s3://"*) { [ "$ak" = AMBIENT-AK ] && [[ "$args" == *"--endpoint-url $SCW_EP --region fr-par" ]]; } || echo "$l" ;;
+      *) { [ "$ak" = "$1" ] && [[ "$args" == *"--endpoint-url $2 --region $3" ]]; } || echo "$l" ;;
+    esac
+  done < <(grep '^aws:' "$LOG")
+}
 
 rm -rf "$ST"; bak 1
 is "the run completes" 0 "$RC"
@@ -235,6 +252,8 @@ is "five generations are all kept" "$(want 1 2 3 4 5)" "$(gens)"
 is "…and nothing was removed on the way (fewer than N is never a negative slice)" 0 "$(rms | wc -l)"
 bak 6
 is "the sixth run removes exactly one object" 1 "$(rms | wc -l)"
+is "…and it made five aws calls: the download, two uploads, one listing, one delete" 5 "$(calls aws:)"
+is "…every one but the download is the replica's: its key (the primary's here, not the ambient one), its region" "" "$(wrong_store PRIMARY-AK "$SCW_EP" eu-west-2)"
 grep -qF "s3://$REPL/$KEYP.$(ts 1) " <<<"$(rms)" && ok "…the oldest generation" || bad "removed: $(rms)"
 is "the five newest remain" "$(want 2 3 4 5 6)" "$(gens)"
 is "the current object is untouched by the prune and holds the latest state" STATE-6 "$(body)"
@@ -258,12 +277,22 @@ bak 6 20200101T000000Z
 is "a generation with an old clock survives its own run" "20200101T000000Z $(want 2 3 4 5)" "$(gens)"
 is "…it holds the newest state" STATE-6 "$(body .20200101T000000Z)"
 
+echo "--- the replica on another cloud: the listing and the delete are signed and addressed for IT, not for the cluster's store ---"
+targets scaleway "$OSC_EP"
+OSC_KEYS="OUTSCALE_BACKUP_AWS_ACCESS_KEY_ID=OSC-BK-AK OUTSCALE_BACKUP_AWS_SECRET_ACCESS_KEY=OSC-BK-SK"
+rm -rf "$ST"; for n in 1 2 3 4 5; do seed "$(ts "$n")" "" ".$(ts "$n")"; done
+bak 6 "" "$OSC_KEYS"
+is "the run completes, removes the oldest, and made five aws calls" "0 1 5" "$RC $(rms | wc -l) $(calls aws:)"
+is "every call but the download goes to the replica's endpoint and region, with the replica cloud's keys" "" "$(wrong_store OSC-BK-AK "$OSC_EP" eu-west-2)"
+is "…and the download alone reads the primary store with the ambient keys" 1 "$(downloads | wc -l)"
+targets scaleway "$SCW_EP"
+
 echo "--- only a generation is ever removed ---"
 rm -rf "$ST"; for n in 1 2 3 4 5 6; do seed "$(ts "$n")" "" ".$(ts "$n")"; done
-for stray in .bak .20261001 ".$(ts 1).bak" .old 2; do seed x "KEEP-ME" "$stray"; done
+for stray in .bak .20261001 ".$(ts 1).bak" ".x$(ts 1)" .old 2; do seed x "KEEP-ME" "$stray"; done
 bak 7
 is "the oldest two generations go" "$(want 3 4 5 6 7)" "$(gens)"
-for stray in .bak .20261001 ".$(ts 1).bak" .old 2; do
+for stray in .bak .20261001 ".$(ts 1).bak" ".x$(ts 1)" .old 2; do
   [ "$(body "$stray")" = KEEP-ME ] && ok "$KEYP$stray was not touched" || bad "$KEYP$stray was removed or changed"
 done
 
@@ -326,26 +355,68 @@ for bad_n in 0 -1 abc 2.5; do
     && ok "STATE_GENERATIONS=$bad_n: refused, naming the variable, with no call made" || bad "STATE_GENERATIONS=$bad_n: rc=$RC calls=$(wc -l <"$LOG") $OUT"
 done
 
-echo "--- --list: what the replica holds, newest first, readable, read-only ---"
+echo "--- --list: what the replica holds, most recently written first, readable, read-only ---"
 rm -rf "$ST"; for n in 1 3 2; do seed "$(ts "$n")" "" ".$(ts "$n")"; done; seed x CURRENT
-for stray in .bak 2 ".$(ts 1).bak"; do seed x STRAY "$stray"; done
+for stray in .bak 2 ".$(ts 1).bak" ".x$(ts 1)"; do seed x STRAY "$stray"; done
 ENV_EXTRA="OA_STUB_STORE=$ST OA_STUB_STATE=$SB/kept.state AWS_ACCESS_KEY_ID=AMBIENT-AK SCW_AWS_ACCESS_KEY_ID=PRIMARY-AK SCW_AWS_SECRET_ACCESS_KEY=PRIMARY-SK"
 OUT="$(run "$BS" --list "$ROOT")"; RC=$?
 is "the listing completes" 0 "$RC"
-is "current object first, then the generations newest first, no stray key" \
+is "current object first, then the generations (the same time: newest name first), no stray key" \
   "$KEYP $KEYP.$(ts 3) $KEYP.$(ts 2) $KEYP.$(ts 1)" "$(awk -F'\t' '/^  (current|generation)/ {printf "%s ", $4}' <<<"$OUT" | sed 's/ $//')"
-grep -qP '^  generation\t' <<<"$OUT" && grep -qP '\t2026-10-06T00:00:00\+00:00\t1\t' <<<"$OUT" && ok "each row carries its kind, its date and its size" || bad "row layout: $OUT"
+is "the current object is labelled current and the others generation" "current generation generation generation" \
+  "$(awk -F'\t' '/^  (current|generation)/ {gsub(/ /, "", $1); printf "%s ", $1}' <<<"$OUT" | sed 's/ $//')"
+grep -qP "^  current +\t2026-10-06T00:00:00\+00:00\t7\t$KEYP\$" <<<"$OUT" && grep -qP "^  generation\t2026-10-06T00:00:00\+00:00\t23\t$KEYP\.$(ts 3)\$" <<<"$OUT" \
+  && ok "each row carries its kind, its LastModified, its real size and its key" || bad "row layout: $OUT"
 is "one aws call, a read: no download, no upload, no delete" "1 0 0 0" "$(calls aws:) $(downloads | wc -l) $(uploads | wc -l) $(rms | wc -l)"
+is "…to the replica's store, with its key and region" "" "$(wrong_store PRIMARY-AK "$SCW_EP" eu-west-2)"
+ENV_EXTRA="$ENV_EXTRA OA_STUB_DESC=1"; OUT="$(run "$BS" --list "$ROOT")"
+is "a store that answers in descending key order changes nothing: ties still go newest name first" \
+  "$KEYP $KEYP.$(ts 3) $KEYP.$(ts 2) $KEYP.$(ts 1)" "$(awk -F'\t' '/^  (current|generation)/ {printf "%s ", $4}' <<<"$OUT" | sed 's/ $//')"
+# A key's stamp is the clock of the machine that wrote it: the generation written LAST may carry the earliest name.
+rm -rf "$ST"; seed x CURRENT; seed "$(ts 10)" "" ".$(ts 10)" 2026-10-01T00:00:00Z; seed "$(ts 5)" "" ".$(ts 5)" 2026-10-03T00:00:00Z; seed "$(ts 7)" "" ".$(ts 7)" 2026-10-02T00:00:00Z
+ENV_EXTRA="OA_STUB_STORE=$ST OA_STUB_STATE=$SB/kept.state AWS_ACCESS_KEY_ID=AMBIENT-AK SCW_AWS_ACCESS_KEY_ID=PRIMARY-AK SCW_AWS_SECRET_ACCESS_KEY=PRIMARY-SK"
+OUT="$(run "$BS" --list "$ROOT")"
+is "the generation written last is first, whatever its key says (a skewed clock never makes an older state look newest)" \
+  "$KEYP $KEYP.$(ts 5) $KEYP.$(ts 7) $KEYP.$(ts 10)" "$(awk -F'\t' '/^  (current|generation)/ {printf "%s ", $4}' <<<"$OUT" | sed 's/ $//')"
+grep -q "LastModified" <<<"$(head -1 <<<"$OUT")" && ok "and the header says the order is LastModified, not the key" || bad "header: $(head -1 <<<"$OUT")"
 ENV_EXTRA="OA_STUB_STORE=$ST OA_STUB_STATE=$SB/lost.state AWS_ACCESS_KEY_ID=AMBIENT-AK SCW_AWS_ACCESS_KEY_ID=PRIMARY-AK SCW_AWS_SECRET_ACCESS_KEY=PRIMARY-SK"
 OUT="$(run "$BS" --list "$ROOT")"; RC=$?
 is "with the secrets gone from the state, which is when it is wanted, it still lists" "0 4" "$RC $(grep -cE '^  (current|generation)' <<<"$OUT")"
 rm -rf "$ST"; OUT="$(run "$BS" --list "$ROOT")"; RC=$?
 grep -q "no state object under $KEYP" <<<"$OUT" && [ "$RC" = 0 ] && ok "an empty replica is said to be empty" || bad "empty replica: rc=$RC $OUT"
+targets scaleway "$OSC_EP"; seed x CURRENT; seed "$(ts 1)" "" ".$(ts 1)"
+ENV_EXTRA="OA_STUB_STORE=$ST OA_STUB_STATE=$SB/kept.state AWS_ACCESS_KEY_ID=AMBIENT-AK SCW_AWS_ACCESS_KEY_ID=PRIMARY-AK SCW_AWS_SECRET_ACCESS_KEY=PRIMARY-SK $OSC_KEYS"
+OUT="$(run "$BS" --list "$ROOT")"; RC=$?
+is "a replica on another cloud is listed at its own endpoint and region with its own key, by one call" "0 1 " "$RC $(calls aws:) $(wrong_store OSC-BK-AK "$OSC_EP" eu-west-2)"
+targets scaleway "$SCW_EP"
+# `tofu output` says there is no target (the state after a full destroy, or an empty backend), or cannot be asked.
+for mode in absent broken; do
+  ENV_EXTRA="OA_STUB_TOFU_MODE=$mode AWS_ACCESS_KEY_ID=AMBIENT-AK"
+  OUT="$(run "$BS" --list "$ROOT")"; RC=$?
+  [ "$RC" -ne 0 ] && [ "$(calls aws:)" = 0 ] && grep -q 'aws s3 ls' <<<"$OUT" && ! grep -q "Skipping" <<<"$OUT" \
+    && ok "--list with backup_targets $mode: fails (rc=$RC), calls nothing, never says it skipped a backup, and gives the tofu-free command" \
+    || bad "--list, targets $mode: rc=$RC aws=$(calls aws:) $OUT"
+done
+grep -q "AccessDenied" <<<"$OUT" && ok "…and for a broken backend tofu's own error is shown" || bad "$OUT"
 
-echo "--- the Taskfile lets the flag through ---"
+echo "--- the Taskfile lets the flag and the retention through (a Task CLI variable is not in the script's environment) ---"
 if command -v task >/dev/null 2>&1; then
-  got="$(cd "$ROOT" && env -i PATH="$PATH" HOME="$SB" task -n backup-state PROVIDER=ovh -- --list 2>&1 | sed -E 's/\x1b\[[0-9;]*m//g' | grep -F 'backup-state.sh')"
+  tdry() { (cd "$ROOT" && env -i PATH="$PATH" HOME="$SB" "$@" 2>&1 | sed -E 's/\x1b\[[0-9;]*m//g' | grep -F 'backup-state.sh'); }
+  got="$(tdry task -n backup-state PROVIDER=ovh -- --list)"
   grep -qE 'backup-state\.sh +--list +\.$' <<<"$got" && ok "task backup-state PROVIDER=<p> -- --list runs backup-state.sh --list ." || bad "rendered: $got"
+  got="$(tdry task -n backup-state PROVIDER=ovh STATE_GENERATIONS=3)"
+  grep -qE '\] STATE_GENERATIONS=3 \.\./\.\./\.\./scripts/ops/backup-state\.sh +\.$' <<<"$got" && ok "STATE_GENERATIONS=3 given the Task way reaches the script's environment" || bad "rendered: $got"
+  got="$(tdry task -n backup-state PROVIDER=ovh)"
+  grep -q 'STATE_GENERATIONS' <<<"$got" && bad "no STATE_GENERATIONS given, one was rendered: $got" || ok "no STATE_GENERATIONS given: none is forced on the script (its own default applies)"
+  # Run for real (nothing is called: the script refuses a retention of 0 before any aws or tofu call), so what the script SAW is shown.
+  runtask() { : >"$LOG"; (cd "$ROOT" && env -i PATH="$SB:$PATH" HOME="$SB" OA_STUB_LOG="$LOG" SCW_AWS_ACCESS_KEY_ID=ak SCW_AWS_SECRET_ACCESS_KEY=sk $RT_ENV task backup-state PROVIDER=scaleway "$@" 2>&1); }
+  RT_ENV=""; OUT="$(runtask STATE_GENERATIONS=0)"
+  grep -q "STATE_GENERATIONS must be a whole number.*got '0'" <<<"$OUT" && [ ! -s "$LOG" ] \
+    && ok "task backup-state STATE_GENERATIONS=0 is refused by the script, which names the value it received, before any call" || bad "task layer: $OUT"
+  RT_ENV="STATE_GENERATIONS=0"; OUT="$(runtask)"
+  grep -q "got '0'" <<<"$OUT" && ok "…and so is STATE_GENERATIONS=0 exported in the shell" || bad "exported: $OUT"
+  RT_ENV=""; OUT="$(runtask "STATE_GENERATIONS=0; touch $SB/injected")"
+  [ ! -e "$SB/injected" ] && grep -q "got '0; touch" <<<"$OUT" && ok "a value is passed as one word: shell syntax in it is not run" || bad "injection: $OUT"
 else
   echo "  ↷ task is not installed: the Taskfile entry is not exercised here"
 fi

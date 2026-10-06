@@ -1449,8 +1449,8 @@ tasks:
   backup-state:
     desc: >-
       Replicate the (encrypted) tfstate to the -backup store (post-apply), with dated generations beside it. Set
-      BACKUP_AWS_* for a cross-provider replica. Usage: task backup-state PROVIDER=<p> [-- --list] (--list prints
-      the replica's generations, read-only)
+      BACKUP_AWS_* for a cross-provider replica. Usage: task backup-state PROVIDER=<p> [STATE_GENERATIONS=5]
+      [-- --list] (--list prints the replica's generations, read-only)
     # `dir:` is NOT cosmetic here: the *provider-env anchor resolves the S3
     # credentials with `../../../scripts/...`, a path that is only correct from
     # infrastructure/opentofu/cluster. Without it every use of this target exits
@@ -1466,9 +1466,11 @@ tasks:
     preconditions: *refuse-local
     vars:
       ROLE: '{{.ROLE | default "management"}}'
+      # A CLI variable is not in the script's environment: unforwarded, it is silently dropped.
+      GEN_ENV: '{{if .STATE_GENERATIONS}}STATE_GENERATIONS={{.STATE_GENERATIONS | shellQuote}} {{end}}'
     env: *provider-env
     cmds:
-      - ../../../scripts/ops/backup-state.sh {{.CLI_ARGS}} .
+      - '{{.GEN_ENV}}../../../scripts/ops/backup-state.sh {{.CLI_ARGS}} .'
 
   edge-down:
     desc: >-
@@ -1717,18 +1719,21 @@ tasks:
     desc: >-
       Failover: seed this cluster's state from the replica of the provider that is gone, see
       scripts/ops/restore-state.sh. Usage: task restore-state PROVIDER=<B> ROLE=failover FROM=<A's env file>
+      [STATE_GENERATION=<timestamp>]
     dir: infrastructure/opentofu/cluster
     requires:
       vars: [PROVIDER, FROM]
     preconditions: *refuse-local
     vars:
       ROLE: '{{.ROLE | default "management"}}'
+      # A CLI variable is not in the script's environment: unforwarded, it is silently dropped.
+      GEN_ENV: '{{if .STATE_GENERATION}}STATE_GENERATION={{.STATE_GENERATION | shellQuote}} {{end}}'
     env: *provider-env
     cmds:
       # The target bucket must exist, and the prod replica rule is better refused before anything is copied.
       - ../../../scripts/internal/ensure-buckets.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars --preflight
       - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
-      - ../../../scripts/ops/restore-state.sh envs/{{.FROM}}.tfvars envs/{{.ROLE}}-{{.PROVIDER}}.tfvars
+      - '{{.GEN_ENV}}../../../scripts/ops/restore-state.sh envs/{{.FROM}}.tfvars envs/{{.ROLE}}-{{.PROVIDER}}.tfvars'
 
   cluster-upgrade:
     aliases: [upgrade]
