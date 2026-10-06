@@ -421,6 +421,18 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **Upgrading a 0.1.0 cluster to this release, found by running it on real clouds (refs #79, #81, #278, #279).** Four
+  defects stood between `git pull` and a working upgrade, each now closed:
+  a Scaleway network built under 0.1.0 had its subnet replaced by the new pin, and every private NIC behind it
+  (`ignore_changes = [ipv4_subnet]`, the node security rules follow the subnet in use); the shared bastion cloud-init
+  had four comment lines edited, which replaced the bastion on OVH and Outscale mid-apply and killed the Talos tunnels
+  (the default render is 0.1.0's bytes again, and a guard hashes it); `task cluster-up` pushed a Kubernetes pin the
+  running Talos refuses, four minutes into the apply (`converge-versions.sh` now stops before the plan and names
+  `task cluster-upgrade`); and `cluster-upgrade` left the axis that does not move at the shipped default, so its first
+  step did the same (it pins that axis where it runs). **To upgrade:** `task cluster-upgrade`, not `cluster-up`: the
+  versions move one minor at a time. Rung: mocked for each guard (every one was removed once to see its test go red);
+  real cloud: see the release notes for what ran on which provider.
+
 - **A state that lost its Talos secrets is refused, and the teardown plan replicates the state before it untracks
   them (refs #66).** `task infra-down-plan` takes `talos_machine_secrets` out of the state to compute a destroy plan,
   and `tofu state rm` does the same by hand. Declining the destroy left nodes that trust a PKI the state no longer
