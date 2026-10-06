@@ -34,8 +34,8 @@ output "bastion_ip" {
 }
 
 output "bastion_user" {
-  description = "SSH user for the jump host (host_ssh_user by default; 'ubuntu' for the VM bastion)"
-  value       = var.enable_bastion ? "ubuntu" : var.host_ssh_user
+  description = "SSH user for the jump host (host_ssh_user by default; 'bastion' for the VM bastion)"
+  value       = var.enable_bastion ? local.bastion_vm_user : var.host_ssh_user
 }
 
 # No managed app LB: expose the worker IPs so the caller can point ingress/DNS at
