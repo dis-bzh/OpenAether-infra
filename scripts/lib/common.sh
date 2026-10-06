@@ -74,6 +74,25 @@ tfv() {
     | head -1 | sed 's/[[:space:]]*$//'
 }
 
+# --- tfvars: the string tofu would read, or a refusal, for a caller that must not guess.
+# Unlike tfv, `key = "value"` (optional trailing comment) must be the only mention, at column 0 (an indented
+# one may sit in a map), and a /* */ or a heredoc `<<` anywhere is doubt: tofu could read another value.
+# rc 0 found (value on stdout, verbatim), 1 absent, 2 unreadable / duplicated / indented / not a plain quoted string.
+# Usage: tfv_strict <tfvars-file> <key>
+tfv_strict() {
+  local code mentions v
+  { [ -f "$1" ] && [ -r "$1" ]; } || return 2
+  code="$(sed -E 's/(#|\/\/).*$//' "$1")" || return 2   # tofu ignores what follows a comment mark
+  case "$code" in *'/*'* | *'<<'*) return 2 ;; esac
+  mentions="$(grep -cE "(^|[^[:alnum:]_-])$2[[:space:]]*=" <<<"$code")" || true   # grep -c exits 1 on 0
+  [ "$mentions" -eq 0 ] && return 1
+  [ "$mentions" -eq 1 ] || return 2
+  # The "=" prefix keeps an empty value ("") apart from a line that did not parse.
+  v="$(sed -nE "s/^$2[[:space:]]*=[[:space:]]*\"([^\"\\\\]*)\"[[:space:]]*((#|\/\/).*)?\$/=\1/p" "$1")"
+  [ -n "$v" ] || return 2
+  printf '%s' "${v#=}"
+}
+
 # --- Detect the active provider (scaleway|ovh|outscale|proxmox) from node_distribution.
 # Usage: tfv_provider <tfvars-file>
 tfv_provider() {

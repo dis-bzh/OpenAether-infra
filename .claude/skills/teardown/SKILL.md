@@ -37,7 +37,8 @@ bill.
 
 ## Two commands, always — and who is allowed to run them
 
-Destroying takes two deliberate commands and cannot be collapsed into one:
+Destroying takes two deliberate commands and cannot be collapsed into one (`environment = "dev"` has its own
+guarded lane, below):
 
 ```
 task cluster-down PROVIDER=<p> -- --plan                              computes, destroys nothing
@@ -62,6 +63,22 @@ What limits the blast radius is not the tool but the workflow and its credential
 environment's workflow**, and point CI at an account that only holds what it
 creates. That choice belongs to whoever writes the pipeline, and the tool should
 not make it for them.
+
+## The dev fast lane: `task teardown-all`
+
+One command for a throwaway cluster: plan, typed cluster id, destroy, proof. Production keeps the two
+commands above: the friction a dev or lab cluster does not need is the one that protects a production one,
+so this is a separate, narrower lane and `cluster-down` is unchanged for everything that is not `dev`.
+The rules, the refusals and the exit codes live in the header of `scripts/ops/teardown-all.sh`; what to remember:
+
+- **No lever for a refusal:** not a flag, not a variable, not a test seam (the harness runs a copy of the tree).
+  The kill switch is `OA_NO_TEARDOWN_ALL` (set, even empty) or a `.no-teardown-all` file at the repo root.
+- **Children follow the guarded cluster:** fleet-down deletes the CAPI children of the cluster its kubeconfig
+  reaches, and a checkout has one kubeconfig path. The script fetches the target's own before each call.
+- **A plan is not read-only:** it untracks the Talos secrets, so every exit after one says so and points at the undo.
+- **Never:** `purge-orphans --apply`, deleting buckets, images or keypairs, or `--force-no-edges` unless typed.
+- **Limit:** it trusts the declared environment. A production cluster deployed as `dev` is not protected.
+  Rung: mocked (`test-teardown-all.sh`); the happy path on a real cloud is still owed.
 
 ## Per-provider, learned the expensive way
 

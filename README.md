@@ -218,7 +218,8 @@ deploys applications.
 
 ### Teardown
 
-Two commands, always, and no flag collapses them into one.
+Two commands, always, and no flag collapses them into one. The exception is a cluster whose tfvars say
+`environment = "dev"`: `task teardown-all`, behind a guard ([docs/first-cluster.md](docs/first-cluster.md#8-tear-it-down)).
 
 ```bash
 source .env.sh

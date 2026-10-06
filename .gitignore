@@ -32,6 +32,8 @@ go.work.sum
 # `.env*` (no dot) also catches variants like `.env-anonimised.sh`.
 .env*
 !.env.example
+# The per-host kill switch of `task teardown-all`: an empty file is enough.
+/.no-teardown-all
 
 # Editor/IDE
 # .idea/

@@ -16,6 +16,18 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
+- **`task teardown-all`: take a dev cluster down in one guarded command (refs #277).** `PROVIDER=<p>|all [ROLE=management]
+  [CONFIRM=<cluster id>|all] [-- --force-no-edges]` plans through `fleet-down.sh --plan`, asks for the cluster id (typed after
+  the plan on a terminal, else `CONFIRM=` checked before it), lands exactly that plan file, then asks the provider
+  (`purge-orphans` dry-run, whole project, and `verify-provider-clean.py`). It refuses before any network call, with no flag and
+  no variable to lift it, unless the tfvars say `environment = "dev"`, and while a kill switch is on (`OA_NO_TEARDOWN_ALL` set,
+  even empty, or a `.no-teardown-all` file). It deletes the CAPI children of the target's own kubeconfig, never the caller's.
+  Exit: 0 proven clean, 1 nothing destroyed, 3 destroyed but not proven clean or half done, 4 destroyed with no provider-side
+  check (proxmox). Never `purge-orphans --apply`, a bucket, an image or a keypair. Production keeps the two commands of
+  `cluster-down`; the rules are in the header of `scripts/ops/teardown-all.sh`. Rung: mocked (`test-teardown-all.sh`, each
+  condition broken on purpose and seen red). Not run: a real cloud, so the happy path (the real fleet-down on a real state,
+  the proof scripts on a destroyed management) is unproven.
+
 - **The replica of the state keeps dated generations, so a state without the Talos secrets, or holding ones the nodes do
   not trust, is no longer the only copy (refs #267).** `backup-state.sh` already refused a state that holds Talos
   resources but not `talos_machine_secrets`, yet the replica was one object and two kinds of state pass that guard and

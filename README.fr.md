@@ -221,7 +221,8 @@ qui déploie des applications.
 
 ### Teardown
 
-Deux commandes, toujours, et aucun drapeau ne les réduit à une.
+Deux commandes, toujours, et aucun drapeau ne les réduit à une. L'exception est un cluster dont le tfvars dit
+`environment = "dev"` : `task teardown-all`, derrière un garde-fou ([docs/first-cluster.fr.md](docs/first-cluster.fr.md#8-détruire)).
 
 ```bash
 source .env.sh

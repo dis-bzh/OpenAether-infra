@@ -43,7 +43,7 @@ TARGETS = {
                      "test-cnpg-gates-local", "ssh-ca-check"), ("local-docker", "docker")),
     **dict.fromkeys(("infra-plan", "infra-apply", "infra-down-plan", "infra-down", "cluster-up",
                      "cluster-verify", "cluster-roll", "cluster-upgrade", "cluster-shrink",
-                     "cluster-shrink-plan", "cluster-idempotency", "cluster-down"),
+                     "cluster-shrink-plan", "cluster-idempotency", "cluster-down", "teardown-all"),
                     ("real-cloud", "tofu")),
 }
 # A plan applies nothing: recorded, and a red one fails the check, but it cannot

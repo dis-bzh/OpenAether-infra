@@ -72,7 +72,7 @@ the leader-last fix: that run moved Talos only, the 5 s one also moved Kubernete
 (`cluster-up`, `infra-plan/apply/down`, `tunnels-up`, `cluster-verify/upgrade/roll/down`).
 `APPROVE=auto|ask` names WHO answers the approval, never whether there is one:
 every apply plans to a file and applies THAT file, and a saved plan never prompts.
-Destroy always takes two commands and no flag collapses them. S3 credentials are
+Destroy always takes two commands and no flag collapses them (a dev tfvars has `task teardown-all`, behind a guard). S3 credentials are
 namespaced by the cloud that HOLDS the bucket, and a cross-provider backup is
 proven — an encrypted tfstate at Outscale while the cluster runs on Scaleway.
 Every offline assertion is mutation-tested; the count and harness total are not
