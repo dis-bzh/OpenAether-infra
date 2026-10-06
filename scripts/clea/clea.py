@@ -1511,10 +1511,10 @@ def render_report(state: dict) -> str:
                          _age_text(verdict_of[id(d)]["age"]),
                          "; ".join(verdict_of[id(d)]["holds"]),
                          f"`{d['file']}:{d['line']}`", notes])
-        lines += ["## Held back", "",
-                  "Behind upstream, and not offered: not probed, not in the table above. "
-                  "A hold ends with its cause; a moved tag stays held until upstream "
-                  "tags another version.", "",
+        held_note = ("Behind upstream, and not offered: not probed, not in the table above. "
+                     "A hold ends with its cause; a moved tag stays held until upstream "
+                     "tags another version.")
+        lines += ["## Held back", "", held_note, "",
                   _table(rows, ["dependency", "pinned", "upstream", "age", "held because",
                                 "where", "release"]), ""]
 
@@ -1604,11 +1604,13 @@ def render_report(state: dict) -> str:
             lines += [f"> - `{d['dep']}` {d['current']} → {d['latest']} "
                       f"(`{d['file']}:{d['line']}`)" for d in actionable] + [""]
         elif actionable:
-            lines += [f"{len(actionable)} behind and within its window — nothing "
-                      "to conclude yet.", ""]
+            quiet = (f"{len(actionable)} behind and within its window — nothing "
+                     "to conclude yet.")
+            lines += [quiet, ""]
         else:
-            lines += ["Nothing it watches is behind and old enough for it to propose, so its "
-                      "silence proves nothing either way.", ""]
+            quiet = ("Nothing it watches is behind and old enough for it to propose, so its "
+                     "silence proves nothing either way.")
+            lines += [quiet, ""]
 
     failed = [p for p in state.get("probes", []) if not p["green"]]
     if failed:
@@ -1650,21 +1652,22 @@ def render_report(state: dict) -> str:
             lines += [f"- …and {len(grouped) - 8} other failure(s)"]
         lines += [""]
 
-    lines += ["## What this did not test", "",
-              "- **\"none\" under advisories means OSV answered with nothing** for that exact "
-              "version — it knows what was reported, no more — and an age is the date upstream "
-              "gave: with no date the bump is held while the age rule is on.",
-              "- **No real cloud, ever.** This lane carries no provider credential and "
-              "must fail if it ever needs one. A deploy on Scaleway, OVH or Outscale is "
-              "run by hand, by someone watching — see `CONTRIBUTING.md`.",
-              "- A green probe means the tool installs from cold, upgrades over its "
-              "previous version, and the repository's own checks still pass. It does not "
-              "mean the new version behaves the same on a running cluster.",
-              "- **A dependency pinned only inside `.github/workflows/` cannot be "
-              "probed** unless a `CLEA_WORKFLOW_TOKEN` secret is set (a classic PAT, "
-              "scope `workflow`) — GITHUB_TOKEN cannot push such a change in any "
-              "repository, and no `permissions:` grant can fix that. The warning at "
-              "the top of the report names the ones this run could not push."]
+    untested_osv = ("- **\"none\" under advisories means OSV answered with nothing** for that exact "
+                    "version — it knows what was reported, no more — and an age is the date upstream "
+                    "gave: with no date the bump is held while the age rule is on.")
+    untested_cloud = ("- **No real cloud, ever.** This lane carries no provider credential and "
+                      "must fail if it ever needs one. A deploy on Scaleway, OVH or Outscale is "
+                      "run by hand, by someone watching — see `CONTRIBUTING.md`.")
+    untested_probe = ("- A green probe means the tool installs from cold, upgrades over its "
+                      "previous version, and the repository's own checks still pass. It does not "
+                      "mean the new version behaves the same on a running cluster.")
+    untested_workflow = ("- **A dependency pinned only inside `.github/workflows/` cannot be "
+                         "probed** unless a `CLEA_WORKFLOW_TOKEN` secret is set (a classic PAT, "
+                         "scope `workflow`) — GITHUB_TOKEN cannot push such a change in any "
+                         "repository, and no `permissions:` grant can fix that. The warning at "
+                         "the top of the report names the ones this run could not push.")
+    lines += ["## What this did not test", "", untested_osv, untested_cloud, untested_probe,
+              untested_workflow]
     cluster = state.get("cluster_lane")
     if cluster:
         lines += [f"- Weekly local cluster lane: **{cluster.get('verdict', '?')}**, "
