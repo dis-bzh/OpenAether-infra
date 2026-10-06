@@ -41,6 +41,14 @@ data "http" "schematic" {
   }
 
   request_body = file("${path.module}/schematic.yaml")
+
+  # One failed request failed the whole plan, and with it `cluster-up`'s first step ("giving up after 1
+  # attempt", seen on a release run). The POST is idempotent, so retrying is safe.
+  retry {
+    attempts     = 4
+    min_delay_ms = 1000
+    max_delay_ms = 10000
+  }
 }
 
 locals {
