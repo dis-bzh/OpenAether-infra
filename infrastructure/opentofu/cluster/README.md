@@ -356,9 +356,10 @@ unreadable node into a warning, so it should stay green).
    Put that ciphertext back over the primary key, then
    `task kubeconfig PROVIDER=<p>` (rewrites the talosconfig). A generation holds a PKI, not necessarily the one the
    nodes trust (an apply that got past the guard can mint another): if `talosctl version` is rejected now, put back the
-   next older one. Then `task infra-plan PROVIDER=<p> STRICT=1` says `No changes`. The lab copied the current object
-   bucket to bucket inside one store, before generations existed; the commands below (`backup-state.sh` read
-   backwards) and the listing were not run on a real store (#267):
+   next older one. Then `task infra-plan PROVIDER=<p> STRICT=1` says `No changes`. The listing and the copy down were read on two real
+   stores (Scaleway's and OVH's S3 as replicas, 2026-10-06: the current object plus five dated generations, the newest
+   byte-identical to the current object); the copy back onto the primary and Outscale's store as a replica were not
+   run (#267):
    ```bash
    AWS_ACCESS_KEY_ID=<replica key> AWS_SECRET_ACCESS_KEY=<replica secret> \
      aws s3 cp s3://<replica-bucket>/<key>.<timestamp> state.enc --endpoint-url <replica endpoint> --region <replica region>
