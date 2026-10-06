@@ -13,6 +13,18 @@ resource "scaleway_vpc_private_network" "this" {
   ipv4_subnet {
     subnet = local.scw_cluster_subnet
   }
+
+  lifecycle {
+    # A network built before the pin keeps the subnet Scaleway gave it. Changing it replaces the network, and with it every
+    # private NIC, the gateway and load-balancer attachments: the 0.1.0 to 0.2.0 climb did that to a live cluster.
+    ignore_changes = [ipv4_subnet]
+  }
+}
+
+locals {
+  # What the network really uses: the pin for a new one, the existing one for a network built before the pin. The node
+  # security rules and the output below follow it, never the constant.
+  scw_subnet_in_use = scaleway_vpc_private_network.this.ipv4_subnet[0].subnet
 }
 
 # Reserve IPs for control plane nodes via IPAM (VPC v2)
