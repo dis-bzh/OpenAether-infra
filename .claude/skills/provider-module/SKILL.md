@@ -31,6 +31,11 @@ Implement it; do not restate it here. The rest of the stack — `modules/talos`,
   wrong value — and it gets one.
 - **Outscale `region` ≠ subregion.** `eu-west-2a` in the credentials secret builds
   an API host that does not resolve. Use `eu-west-2`.
+- **OVH: a node can be `ACTIVE` and dead (#49), at first boot as well as after a reboot.** Nova says `ACTIVE`,
+  `power_state 1`, and `tcp/50000` stays closed from the bastion for minutes on that one node. Read before any reset,
+  because a reset erases it: `nc -zvw3 <ip> 50000` from the bastion (refused or timed out), Nova's status fields and
+  `os-instance-actions`, the Neutron port status. The console tail was no use (it stops at the same second on a
+  healthy node). A Nova HARD reboot brought the API up 20 s later; an in-guest reboot never does, so do not wait on one.
 
 ## The image lane
 

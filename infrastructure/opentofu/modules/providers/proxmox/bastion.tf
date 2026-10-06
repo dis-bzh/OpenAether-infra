@@ -10,6 +10,12 @@
 # cloud-init template, reached at bastion_public_ip (host-mapped/failover IP).
 # ==============================================================================
 
+locals {
+  # Never the image's default user ("ubuntu"): cloud-init ignores the second definition of a user it already has, so
+  # it would never join bastion-admins (measured on OVH, see ovh/bastion.tf). One value for the VM and the output.
+  bastion_vm_user = "bastion"
+}
+
 resource "proxmox_virtual_environment_vm" "bastion" {
   count     = var.enable_bastion && (var.control_plane_count + var.worker_count) > 0 ? 1 : 0
   name      = "${var.cluster_name}-bastion"
@@ -69,7 +75,7 @@ resource "proxmox_virtual_environment_file" "bastion_cloud_init" {
   source_raw {
     file_name = "${var.cluster_name}-bastion-cloud-init.yaml"
     data = templatefile("${path.module}/../_shared/bastion-cloud-init.yaml.tftpl", {
-      bastion_user      = "ubuntu"
+      bastion_user      = local.bastion_vm_user
       ssh_keys          = var.bastion_ssh_keys
       private_cidr      = var.network_cidr
       extra_packages    = []

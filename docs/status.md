@@ -191,7 +191,7 @@ and the wider cases of #66. Its CA mismatch was reproduced on Scaleway (1 contro
 `infra-down-plan`'s untracking and recovered two ways (`cluster/README.md`, "Lost the Talos secrets"); the version
 flip is refused by `prevent_destroy` and the interrupted-apply path was not broken. Unseen: OVH and Outscale, three
 control planes, a replica on another provider. A cluster with no talosconfig and no replica copy has no measured way
-back, only a written decision (a rebuild, `cluster/README.md`); the replica generations behind it (#267) are mocked,
-not run on a real store. Standing items
+back, only a written decision (a rebuild, `cluster/README.md`); the replica generations behind it (#267) were read on two real stores
+(Scaleway's and OVH's S3, 2026-10-06); a restore from one and Outscale's store as a replica were not run. Standing items
 only a person can close are in the issues: #43 (Outscale support), #61, #73 (two old staging buckets, a delete the
 owner runs). Upstream, Feint's fix for #179 is on its `main` and waits for their next release.

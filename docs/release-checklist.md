@@ -182,6 +182,9 @@ credential pair or the passphrase is missing.
       what preceded it left nothing — that is a fact about a previous run, not a
       result for yours.
       → 2026-08-20: `Nothing to purge — the project is clean.`
+- [ ] **a bucket renamed this release is emptied by hand on every cloud.** `purge-orphans` matches the project's
+      resources, not buckets, and `fleet-down` only lists them: the old `…-talos-staging` bucket sat on two clouds for
+      six weeks after its rename (#73). List the old name with each cloud's own S3 keys, then `aws s3 rb … --force`.
 
 ### Worth the extra spend, in priority order
 
