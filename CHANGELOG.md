@@ -42,9 +42,10 @@ in git. 0.1.0 is the first entry describing something proven.
   variable is not in the script's environment. The cluster README says that no way back from a lost PKI with no
   generation was measured, what was not tried, and that the decision is to rebuild. Rung: mocked (`test-state-backups.sh`
   runs the real script against a fake object store, and the Task layer for a refused retention; 30 deliberate breaks
-  were caught on the first version, 26 more on the fixes to the store, listing, order and tasks). Not run: a real store,
-  so `list-objects-v2 --prefix`, the delete of the oldest generation and the key names are unproven on Scaleway, OVH and
-  Outscale.
+  were caught on the first version, 26 more on the fixes to the store, listing, order and tasks). Real stores, 2026-10-06 (the 0.2.0
+  validation, 59 writes on Scaleway's and OVH's S3): the listing, the dated key names and the pruning to five held, and
+  the newest generation is byte-identical to the current object. Not run: Outscale's store as a replica, a restore
+  from a generation.
 
 - **`node_nameservers`: DNS-over-TLS or -HTTPS for the nodes' own resolver (refs #173).** A list of `{address,
   protocol, tls_server_name}` rendered as one Talos `ResolverConfig` and appended to every node's config, plus a
