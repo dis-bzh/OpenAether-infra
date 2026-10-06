@@ -20,6 +20,10 @@ Commands
   pick-issue which open, labelled issue is Cléa's OWN report — not just the newest.
   prune      name the probe branches whose pin already landed on the base branch.
 
+A bump is OFFERED (the report's "Behind upstream" table, the probe matrix) only when
+its release is old enough, not withdrawn, its tag has not moved and OSV holds no
+advisory new in it. The rules are in README.md, "What is offered".
+
 The two rules this file will not bend
 -------------------------------------
 * **Zero floor.** An extractor that matches nothing, a datasource that returns
@@ -37,12 +41,13 @@ import fnmatch
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 try:
@@ -52,6 +57,12 @@ except ModuleNotFoundError:  # pragma: no cover - only on very old interpreters
     raise SystemExit(1) from None
 
 USER_AGENT = "clea/1 (+https://github.com/dis-bzh/OpenAether-infra)"
+# Module attributes, not literals at the call site, so a test can point them at a local server.
+PYPI_API = "https://pypi.org/pypi"
+OSV_QUERY_URL = "https://api.osv.dev/v1/query"
+DEFAULT_MIN_AGE_DAYS = 7  # test-clea.sh keeps it equal to clea.toml
+MAX_MIN_AGE_DAYS = 3650  # beyond this the date arithmetic overflows: a typo, not a policy
+TAG_MEMORY = 3  # tags remembered per dependency, so one scan where `latest` flips forgets none
 SKIP_DIRS = {".git", "node_modules", ".terraform", ".terraform-validate", "vendor"}
 
 
@@ -486,16 +497,28 @@ def apply_extract(tag: str, extract_version: str | None) -> str:
     return m.group(1) if rx.groups else m.group(0)
 
 
+def parse_when(value) -> datetime | None:
+    """An ISO 8601 stamp as an aware UTC datetime; None for anything unreadable."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        at = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return (at if at.tzinfo else at.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
+
+
+def _clean(text, limit: int = 80) -> str:
+    """Upstream free text, bounded and on one line, with nothing that opens a code span."""
+    one = " ".join(str(text).split()).replace("`", "'")
+    return one if len(one) <= limit else one[:limit - 1] + "…"
+
+
 # ---------------------------------------------------------------------------
 # Datasources
 # ---------------------------------------------------------------------------
 
-def http_get(url: str, token: str | None = None, accept: str | None = None) -> bytes:
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    if accept:
-        request.add_header("Accept", accept)
-    if token and urllib.parse.urlparse(url).hostname == "api.github.com":
-        request.add_header("Authorization", f"Bearer {token}")
+def _send(request: urllib.request.Request, url: str, hint: str) -> bytes:
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             return response.read()
@@ -509,13 +532,27 @@ def http_get(url: str, token: str | None = None, accept: str | None = None) -> b
             # Never let this read as "no new version". Unauthenticated GitHub
             # allows 60 requests an hour from an IP shared with every other
             # runner, and a silent 403 here is a report that says all is well.
-            raise CleaError(
-                f"{url} -> HTTP {exc.code}. Rate limited or unauthorised — export "
-                f"GITHUB_TOKEN. Body: {body}"
-            ) from exc
+            raise CleaError(f"{url} -> HTTP {exc.code}. Rate limited or unauthorised{hint}. "
+                            f"Body: {body}") from exc
         raise CleaError(f"{url} -> HTTP {exc.code}: {body}") from exc
     except (urllib.error.URLError, TimeoutError, ValueError) as exc:
         raise CleaError(f"{url} -> {exc}") from exc
+
+
+def http_get(url: str, token: str | None = None, accept: str | None = None) -> bytes:
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    if accept:
+        request.add_header("Accept", accept)
+    if token and urllib.parse.urlparse(url).hostname == "api.github.com":
+        request.add_header("Authorization", f"Bearer {token}")
+    return _send(request, url, " — export GITHUB_TOKEN")
+
+
+def http_post_json(url: str, payload: dict) -> bytes:
+    request = urllib.request.Request(
+        url, data=json.dumps(payload).encode("utf-8"),
+        headers={"User-Agent": USER_AGENT, "Content-Type": "application/json"})
+    return _send(request, url, "")
 
 
 def _gh_json(path: str, token: str | None):
@@ -524,17 +561,25 @@ def _gh_json(path: str, token: str | None):
     return json.loads(raw)
 
 
-def resolve_commit(dep: str, tag: str, token: str | None) -> str:
-    """The commit a tag points at, peeling an annotated tag: what `@<sha>` must hold."""
+def tag_facts(dep: str, tag: str, token: str | None) -> dict:
+    """The commit a tag points at (peeling an annotated tag: what `@<sha>` must hold)
+    and, for an annotated one, the date it was made: `date` is None for a lightweight tag.
+    """
     data = _gh_json(f"/repos/{dep}/git/ref/tags/{urllib.parse.quote(tag, safe='/')}", token) or {}
     if data.get("ref") != f"refs/tags/{tag}":
         raise CleaError(f"{dep}@{tag}: the API answered for another ref ({data.get('ref')!r})")
-    obj = data.get("object") or {}
+    obj, when = data.get("object") or {}, None
     if obj.get("type") == "tag":
-        obj = (_gh_json(f"/repos/{dep}/git/tags/{obj.get('sha', '')}", token) or {}).get("object") or {}
+        annotated = _gh_json(f"/repos/{dep}/git/tags/{obj.get('sha', '')}", token) or {}
+        obj, when = annotated.get("object") or {}, (annotated.get("tagger") or {}).get("date")
     if obj.get("type") != "commit" or not SHA40.fullmatch(obj.get("sha", "")):
         raise CleaError(f"{dep}@{tag}: the tag does not resolve to a commit")
-    return obj["sha"]
+    return {"commit": obj["sha"], "date": when}
+
+
+def commit_date(dep: str, sha: str, token: str | None) -> str | None:
+    commit = _gh_json(f"/repos/{dep}/git/commits/{sha}", token) or {}
+    return (commit.get("committer") or {}).get("date")
 
 
 def latest_github_releases(dep: str, token: str | None, **_) -> dict:
@@ -542,10 +587,15 @@ def latest_github_releases(dep: str, token: str | None, **_) -> dict:
     tag = data.get("tag_name")
     if not tag:
         raise CleaError(f"github-releases {dep}: no tag_name in the answer")
+    # /releases/latest already skips drafts and pre-releases; read anyway, so the day
+    # that stops being true the bump is held back instead of offered.
+    withdrawn = ("GitHub release is a draft" if data.get("draft")
+                 else "GitHub release is marked pre-release" if data.get("prerelease") else None)
     return {
         "tag": tag,
         "released_at": data.get("published_at"),
         "notes_url": data.get("html_url"),
+        "withdrawn": withdrawn,
     }
 
 
@@ -560,12 +610,25 @@ def latest_github_tags(dep: str, token: str | None, **_) -> dict:
 
 
 def latest_pypi(dep: str, _token: str | None, **_) -> dict:
-    data = json.loads(http_get(f"https://pypi.org/pypi/{dep}/json"))
-    version = data.get("info", {}).get("version")
+    try:
+        data = json.loads(http_get(f"{PYPI_API}/{dep}/json"))
+    except ValueError as exc:
+        raise CleaError(f"pypi {dep}: the answer is not JSON ({exc})") from exc
+    info = data.get("info", {})
+    version = info.get("version")
     if not version:
         raise CleaError(f"pypi {dep}: no info.version")
-    return {"tag": version, "released_at": None,
-            "notes_url": f"https://pypi.org/project/{dep}/{version}/"}
+    # The release date is its earliest file upload; `urls` holds this version's files.
+    files = data.get("urls") or (data.get("releases") or {}).get(version) or []
+    stamps = [(parse_when(f.get("upload_time_iso_8601")), f.get("upload_time_iso_8601"))
+              for f in files]
+    stamps = [(at, raw) for at, raw in stamps if at]
+    yanked = info.get("yanked") or (bool(files) and all(f.get("yanked") for f in files))
+    reason = _clean(info.get("yanked_reason") or next(
+        (f["yanked_reason"] for f in files if f.get("yanked_reason")), None) or "")
+    return {"tag": version, "released_at": min(stamps)[1] if stamps else None,
+            "notes_url": f"https://pypi.org/project/{dep}/{version}/",
+            "withdrawn": ("yanked on PyPI" + (f": {reason}" if reason else "")) if yanked else None}
 
 
 def latest_helm(dep: str, _token: str | None, registry_url: str | None = None, **_) -> dict:
@@ -584,7 +647,10 @@ def latest_helm(dep: str, _token: str | None, registry_url: str | None = None, *
         raise CleaError(f"helm {dep}: no registryUrl on the anchor")
     text = http_get(registry_url.rstrip("/") + "/index.yaml").decode("utf-8", "replace")
     semver = re.compile(r"(?:-\s+)?version:\s*[\"']?(\d+\.\d+\.\d+[0-9A-Za-z.+-]*)[\"']?$")
-    versions: list[str] = []
+    created_re = re.compile(r"(?:-\s+)?created:\s*[\"']?([^\"'\s]+)[\"']?$")
+    found: list[tuple[str, str | None]] = []  # (version, created) per chart item
+    version: str | None = None
+    created: str | None = None
     entry_indent: int | None = None
     item_indent: int | None = None
     key_indent: int | None = None
@@ -613,14 +679,23 @@ def latest_helm(dep: str, _token: str | None, registry_url: str | None = None, *
             continue
         if (indent + 2 if dashed else indent) != key_indent:
             continue
+        if dashed:  # a new chart item: keep the previous one's pair
+            if version:
+                found.append((version, created))
+            version = created = None
         m = semver.match(stripped)
         if m:
-            versions.append(m.group(1))
-    versions = [v for v in versions if not is_prerelease(v)]
-    if not versions:
+            version = m.group(1)
+        m = created_re.match(stripped)
+        if m:
+            created = m.group(1)
+    if version:
+        found.append((version, created))
+    found = [(v, c) for v, c in found if not is_prerelease(v)]
+    if not found:
         raise CleaError(f"helm {dep}: no chart version under entries in {registry_url}")
-    tag = max(versions, key=version_key)
-    return {"tag": tag, "released_at": None, "notes_url": registry_url}
+    tag, at = max(found, key=lambda f: version_key(f[0]))
+    return {"tag": tag, "released_at": at, "notes_url": registry_url}
 
 
 def latest_terraform_provider(dep: str, _token: str | None,
@@ -693,6 +768,126 @@ DATASOURCES = {
 
 
 # ---------------------------------------------------------------------------
+# Advisories (OSV)
+# ---------------------------------------------------------------------------
+# An answer is `{"ids": [...]}` or `{"unknown": why}`; empty ids mean OSV said none for
+# that exact package and version. A commit query matches git ranges only, which most
+# advisories do not carry: it can find (`"by": "commit"`), never clear.
+
+GITHUB_SOURCES = ("github-releases", "github-tags")
+OSV_NOT_CLEARED = "no [[osv]] row for it, and by commit OSV found nothing, which clears nothing"
+OSV_MAX_PAGES = 10
+
+
+def osv_ids(query: dict) -> list[str]:
+    """Advisory ids OSV holds for one query; CleaError unless the answer is well-formed."""
+    ids: list[str] = []
+    page = None
+    for _ in range(OSV_MAX_PAGES):
+        body = dict(query, page_token=page) if page else query
+        try:
+            data = json.loads(http_post_json(OSV_QUERY_URL, body))
+        except ValueError as exc:
+            raise CleaError(f"{OSV_QUERY_URL} -> the answer is not JSON ({exc})") from exc
+        vulns = data.get("vulns", []) if isinstance(data, dict) else None
+        if not isinstance(vulns, list) or not all(
+                isinstance(v, dict) and isinstance(v.get("id"), str) for v in vulns):
+            raise CleaError(f"{OSV_QUERY_URL} -> unexpected answer shape")
+        ids += [v["id"] for v in vulns if not v.get("withdrawn")]
+        page = data.get("next_page_token")
+        if not page:
+            return sorted(set(ids))
+    raise CleaError(f"{OSV_QUERY_URL} -> more than {OSV_MAX_PAGES} pages of advisories")
+
+
+def osv_rows(cfg: dict) -> dict[str, tuple[str, str]]:
+    """clea.toml's `[[osv]]` rows as {dep: (ecosystem, package)}; a malformed row stops the run."""
+    rows: dict[str, tuple[str, str]] = {}
+    for row in cfg.get("osv", []):
+        got = [row.get(k) if isinstance(row, dict) else None for k in ("dep", "ecosystem", "package")]
+        if not all(isinstance(v, str) and v for v in got):
+            raise CleaError(f"clea.toml: an [[osv]] row needs dep, ecosystem and package as "
+                            f"non-empty strings (got {row!r})")
+        if got[0] in rows:
+            raise CleaError(f"clea.toml: two [[osv]] rows for {got[0]}")
+        rows[got[0]] = (got[1], got[2])
+    return rows
+
+
+class Osv:
+    """One scan's OSV session: an answer per query, kept; and given up on after
+    three failures in a row, so a blackholed network costs three timeouts rather
+    than one per dependency. Failures land in `errors` too, so --strict sees them."""
+
+    def __init__(self, errors: list[str], rows: dict[str, tuple[str, str]] | None = None) -> None:
+        self.errors, self.cache, self.failures, self.rows = errors, {}, 0, rows or {}
+
+    def ask(self, datasource: str, dep: str, version: str, commit: str | None) -> dict:
+        """The exact dep+version where OSV can be asked by package (PyPI, or an `[[osv]]`
+        row); else by commit for a GitHub-hosted release, which can only find."""
+        package = self.rows.get(dep) or (("PyPI", dep) if datasource == "pypi" else None)
+        by_commit = False
+        if package:
+            plain = re.sub(r"^v(?=\d)", "", version)  # OSV versions carry no `v`
+            query = {"package": {"name": package[1], "ecosystem": package[0]}, "version": plain}
+        elif datasource in GITHUB_SOURCES:
+            if not commit:
+                return {"unknown": "no [[osv]] row for it, and no commit to ask by"}
+            query, by_commit = {"commit": commit}, True
+        else:
+            return {"unknown": f"no OSV mapping for datasource {datasource}"}
+        key = json.dumps(query, sort_keys=True)
+        if key not in self.cache:
+            if self.failures >= 3:
+                return {"unknown": "OSV did not answer"}
+            try:
+                ids = osv_ids(query)
+            except CleaError as exc:
+                self.errors.append(str(exc))
+                self.failures += 1
+                return {"unknown": "OSV did not answer"}
+            self.failures = 0
+            if not by_commit:
+                self.cache[key] = {"ids": ids}
+            else:
+                self.cache[key] = {"ids": ids, "by": "commit"} if ids else {"unknown": OSV_NOT_CLEARED}
+        return self.cache[key]
+
+
+def pinned_sha(root: Path, anchor: "Anchor") -> str | None:
+    """The commit an `action-sha` or `precommit-rev` pin holds, read off its own line."""
+    if anchor.form not in UNSAFE_BUMP_FORMS or not anchor.value_line:
+        return None
+    try:
+        lines = (root / anchor.path).read_text(encoding="utf-8").splitlines()
+        found = SHA40.search(lines[anchor.value_line - 1])
+    except (OSError, IndexError):
+        return None
+    return found.group(0) if found else None
+
+
+def advisory_ids(result) -> list[str]:
+    return result.get("ids", []) if isinstance(result, dict) else []
+
+
+def by_version(result) -> bool:
+    """OSV answered for the exact version, so what it did not list is not there."""
+    return isinstance(result, dict) and "ids" in result and result.get("by") != "commit"
+
+
+def short_ids(ids: list[str], shown: int = 4) -> str:
+    """A few ids and a count: one kernel-sized dependency must not fill the issue body."""
+    more = f" and {len(ids) - shown} more" if len(ids) > shown else ""
+    return ", ".join(ids[:shown]) + more
+
+
+def advisory_text(result) -> str:
+    if not isinstance(result, dict) or "ids" not in result:
+        return "advisories unknown"
+    return short_ids(result["ids"]) or "none"
+
+
+# ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
@@ -700,6 +895,8 @@ DEFAULT_CONFIG = {
     "scan": {"marker": "# renovate:", "exclude": [], "include": []},
     "report": {"title": "Cléa — dependency report", "label": "clea",
               "bot_login": "github-actions[bot]"},
+    "policy": {"min_release_age_days": DEFAULT_MIN_AGE_DAYS},
+    "osv": [],
     "inventory": [],
     "tool": [],
     "unpinned": [],
@@ -805,14 +1002,97 @@ def _load_previous(path: str | None) -> dict:
         return {}
 
 
-def mark_movement(entry: dict, previous: dict[str, dict]) -> dict:
-    """Did upstream move since the last scan? Keyed on dependency AND file, so
-    the same tool pinned in two places is two rows, which is how a drift between
-    them shows up at all."""
+def tag_memory(previous: dict) -> dict[str, dict]:
+    """{dep: {tag: {"commit", "moved"?}}} from a previous state, merged across the rows of
+    a dependency: a commit belongs to (dep, tag), not to the file that pins it, so a row
+    added since the last scan inherits what the others saw."""
+    out: dict[str, dict] = {}
+    for d in previous.get("deps", []):
+        for tag, rec in (d.get("tags") or {}).items():
+            if not isinstance(rec, dict):
+                continue
+            have = out.setdefault(d.get("dep", "?"), {}).setdefault(tag, {})
+            if rec.get("moved") or not have:  # a row that saw the tag move wins
+                have.clear()
+                have.update(rec)
+    return out
+
+
+def mark_movement(entry: dict, previous: dict[str, dict], memory: dict[str, dict]) -> dict:
+    """Did upstream move since the last scan? `moved_since_last_scan` is keyed on
+    dependency AND file, so the same tool pinned in two places is two rows, which is
+    how a drift between them shows up at all."""
     was = previous.get(entry["dep"] + "@" + entry["file"], {})
     entry["moved_since_last_scan"] = bool(
         was.get("latest") and entry.get("latest") and was["latest"] != entry["latest"])
+    # A retagged release keeps its version string: only the commit shows it. Remembered per
+    # tag and carried through a scan that could not look it up, or one failed request would
+    # erase the baseline and the retagged bump be offered after all.
+    mem = memory.setdefault(entry["dep"], {})
+    tag, commit = entry.get("tag"), entry.get("tag_commit")
+    if tag and commit:
+        rec = mem.pop(tag, {})  # re-added last: the most recent tag
+        if rec.get("commit") and rec["commit"] != commit:
+            rec["moved"] = {"from": rec["commit"], "to": commit}
+        rec["commit"] = commit
+        mem[tag] = rec
+        while len(mem) > TAG_MEMORY:
+            del mem[next(iter(mem))]
+    if mem:
+        entry["tags"] = mem
+    if tag and mem.get(tag, {}).get("moved"):
+        entry["tag_moved"] = mem[tag]["moved"]
     return entry
+
+
+def assess(d: dict, now: datetime, min_days: int) -> dict:
+    """Why a behind dependency is, or is not, offered. `holds` empty = offered.
+
+    `young` is a KNOWN date that is too recent: Renovate's minimumReleaseAge holds
+    that one too (same number, assumed rather than measured), so it alone explains the
+    bot's silence. A candidate that clears an advisory of the pin we run (`fixes`)
+    skips the age rule, as Renovate's security updates do. 0 days switches the age rule off.
+    """
+    holds: list[str] = []
+    at = parse_when(d.get("released_at"))
+    age = max(0, (now - at).days) if at else None
+    osv = d.get("osv") or {}
+    cand, cur = osv.get("candidate"), osv.get("current")
+    fixes = ([i for i in advisory_ids(cur) if i not in advisory_ids(cand)]
+             if by_version(cand) and by_version(cur) else [])
+    young = False
+    if min_days > 0 and not fixes:
+        if at is None:
+            holds.append("age unknown")
+        elif now < at + timedelta(days=min_days):
+            on = (at + timedelta(days=min_days)).date()
+            holds.append(f"too young, eligible on {on}")
+            young = True
+    if d.get("withdrawn"):
+        holds.append(str(d["withdrawn"]))
+    moved = d.get("tag_moved")
+    if isinstance(moved, dict):
+        holds.append(f"tag {d.get('tag', '?')} moved since last scan "
+                     f"({str(moved.get('from'))[:7]} → {str(moved.get('to'))[:7]})")
+    # Only what the pin we run does not already carry: an advisory with no fix would
+    # otherwise hold every later bump of that dependency, and a bump cannot make it worse.
+    new = [i for i in advisory_ids(cand) if i not in advisory_ids(cur)]
+    if new:
+        holds.append(f"advisory {short_ids(new)} against {d.get('tag') or d.get('latest')}")
+    return {"age": age, "young": young, "holds": holds, "fixes": fixes}
+
+
+def valid_days(days) -> bool:
+    return isinstance(days, int) and not isinstance(days, bool) and 0 <= days <= MAX_MIN_AGE_DAYS
+
+
+def policy_of(state: dict) -> tuple[datetime, int]:
+    """The clock and the minimum age a state was scanned under. A state that
+    carries no policy is judged by the default, never waved through."""
+    now = parse_when(state.get("generated_at")) or datetime.now(timezone.utc)
+    days = (state.get("policy") or {}).get("min_release_age_days", DEFAULT_MIN_AGE_DAYS)
+    ok = valid_days(days)
+    return now, days if ok else DEFAULT_MIN_AGE_DAYS
 
 
 def cmd_scan(args) -> int:
@@ -820,6 +1100,12 @@ def cmd_scan(args) -> int:
     cfg = load_config(root / args.config)
     scan = cfg["scan"]
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    min_days = cfg["policy"].get("min_release_age_days")
+    if not valid_days(min_days):
+        raise CleaError("clea.toml: [policy] min_release_age_days must be a whole number "
+                        f"of days, 0 to {MAX_MIN_AGE_DAYS} (got {min_days!r})")
+    errors: list[str] = []
+    osv = Osv(errors, osv_rows(cfg))
     anchors, novalue = scan_anchors(root, scan["marker"], scan["exclude"], scan["include"])
     if not anchors:
         print("✗ no readable anchor — nothing to scan", file=sys.stderr)
@@ -830,12 +1116,14 @@ def cmd_scan(args) -> int:
 
     previous = _load_previous(args.previous)
     prev_by_key = {d["dep"] + "@" + d["file"]: d for d in previous.get("deps", [])}
+    memory = tag_memory(previous)
 
     # One upstream call per (datasource, dep), not per anchor: helm is pinned in
     # two files here and the API does not need asking twice.
     cache: dict[tuple[str, str], dict | str] = {}
-    commits: dict[tuple[str, str], str] = {}
-    deps, errors = [], []
+    facts_cache: dict[tuple[str, str], dict | CleaError] = {}
+    dates: dict[tuple[str, str], str | None] = {}
+    deps = []
 
     def resolve(datasource: str, name: str, **kwargs) -> dict:
         key = (datasource, name)
@@ -875,26 +1163,48 @@ def cmd_scan(args) -> int:
             entry.update(tag=upstream["tag"],
                          latest=latest, released_at=upstream.get("released_at"),
                          notes_url=upstream.get("notes_url"),
+                         withdrawn=upstream.get("withdrawn"),
                          behind=is_newer(anchor.value, latest),
                          shape_ok=same_shape(anchor.value, latest))
-            if anchor.form == "action-sha" and entry["behind"] and anchor.datasource in (
-                    "github-releases", "github-tags"):
-                # `bump` cannot move the commit an action pin holds without being
-                # told it; kept off the other anchors so the lookups stay one per pin.
-                try:
-                    key = (anchor.dep, upstream["tag"])
-                    if key not in commits:
-                        commits[key] = resolve_commit(anchor.dep, upstream["tag"], token)
-                    entry["sha"] = commits[key]
-                except CleaError as exc:
-                    errors.append(str(exc))
+            github = anchor.datasource in GITHUB_SOURCES
+            if github and entry["behind"]:
+                # The tag's commit: `bump --sha` needs it for an action pin, the
+                # moved-tag check compares it with last scan's, and OSV is asked by it.
+                # Kept off the other anchors so the lookups stay one per pin.
+                fkey = (anchor.dep, upstream["tag"])
+                if fkey not in facts_cache:
+                    try:
+                        facts_cache[fkey] = tag_facts(anchor.dep, upstream["tag"], token)
+                    except CleaError as exc:
+                        facts_cache[fkey] = exc
+                got = facts_cache[fkey]
+                if isinstance(got, CleaError):
+                    errors.append(str(got))
+                else:
+                    entry["tag_commit"] = got["commit"]
+                    if anchor.form == "action-sha":
+                        entry["sha"] = got["commit"]
+                    # No release date from upstream: the tag's own, as Renovate reads it.
+                    if not entry["released_at"]:
+                        try:
+                            if (anchor.dep, got["commit"]) not in dates:
+                                dates[(anchor.dep, got["commit"])] = got["date"] or commit_date(
+                                    anchor.dep, got["commit"], token)
+                            entry["released_at"] = dates[(anchor.dep, got["commit"])]
+                        except CleaError as exc:
+                            errors.append(str(exc))
+            entry["osv"] = {"current": osv.ask(anchor.datasource, anchor.dep, anchor.value,
+                                               pinned_sha(root, anchor))}
+            if entry["behind"]:
+                entry["osv"]["candidate"] = osv.ask(anchor.datasource, anchor.dep,
+                                                    upstream["tag"], entry.get("tag_commit"))
         except CleaError as exc:
             entry.update(latest=None, error=str(exc), behind=False)
             errors.append(str(exc))
         tool = next((t for t in cfg["tool"] if t["name"] == anchor.dep), None)
         if tool:
             entry["tool"] = tool
-        deps.append(mark_movement(entry, prev_by_key))
+        deps.append(mark_movement(entry, prev_by_key, memory))
 
     for item in cfg["unpinned"]:
         entry = {"dep": item["name"], "datasource": item["datasource"],
@@ -909,10 +1219,11 @@ def cmd_scan(args) -> int:
         except CleaError as exc:
             entry.update(latest=None, error=str(exc), behind=False)
             errors.append(str(exc))
-        deps.append(mark_movement(entry, prev_by_key))
+        deps.append(mark_movement(entry, prev_by_key, memory))
 
     state = {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "policy": {"min_release_age_days": min_days},
         "deps": deps,
         "novalue": [{"dep": a.dep, "file": a.path, "line": a.line,
                      "reason": a.reason} for a in novalue],
@@ -961,7 +1272,9 @@ def cmd_scan(args) -> int:
 
     Path(args.state).write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
     behind = [d for d in deps if d.get("behind")]
-    print(f"{len(deps)} dependencies, {len(behind)} behind, "
+    now, days = policy_of(state)
+    held = [d for d in behind if assess(d, now, days)["holds"]]
+    print(f"{len(deps)} dependencies, {len(behind)} behind ({len(held)} held back), "
           f"{len(state['unwatched'])} unwatched, "
           f"{len(state['errors'])} distinct error(s)")
 
@@ -1006,10 +1319,13 @@ def cmd_matrix(args) -> int:
     same tree twice.
     """
     state = json.loads(Path(args.state).read_text(encoding="utf-8"))
+    now, min_days = policy_of(state)
     seen: dict[str, dict] = {}
     for dep in state.get("deps", []):
         if not (dep.get("behind") and dep.get("pinned")):
             continue
+        if assess(dep, now, min_days)["holds"]:
+            continue  # a probe branch is an offer too: nothing is probed that is held back
         if not dep.get("shape_ok", True):
             continue  # bumping it would write a value its consumers read differently
         tool = dep.get("tool") or {}
@@ -1045,14 +1361,41 @@ def cmd_matrix(args) -> int:
     return 0
 
 
+def lane_bumps(state: dict, wanted: tuple[str, ...]) -> list[str]:
+    """Shell lines for a lane that bumps some dependencies itself (the weekly cluster
+    lane: Talos and Kubernetes): a `bump` for each that is offered, an `echo` naming each
+    that is held back. Same `assess` as the matrix, or the lane would run a version the
+    report says is held back."""
+    now, days = policy_of(state)
+    out = []
+    for d in state.get("deps", []):
+        if d.get("dep") not in wanted or not (d.get("behind") and d.get("pinned")):
+            continue
+        holds = assess(d, now, days)["holds"]
+        if holds:
+            out.append("echo " + shlex.quote(
+                f"held back, not bumped: {d['dep']} {d['latest']} ({'; '.join(holds)})"))
+        else:
+            out.append(f"python3 scripts/clea/clea.py bump {shlex.quote(d['dep'])} {shlex.quote(d['latest'])}")
+    return out
+
+
 # ---------------------------------------------------------------------------
 # report
 # ---------------------------------------------------------------------------
 
+def _cell(text) -> str:
+    """One table cell. Upstream text (a yank reason, an advisory id) reaches the cells:
+    a bare `|` or newline would add a column or split the row, and a `<!--` would hide
+    the rest of the page."""
+    return (" ".join(str(text).split()).replace("|", "\\|")
+            .replace("<", "&lt;").replace(">", "&gt;"))
+
+
 def _table(rows: list[list[str]], head: list[str]) -> str:
     out = ["| " + " | ".join(head) + " |",
            "|" + "|".join(["---"] * len(head)) + "|"]
-    out += ["| " + " | ".join(r) + " |" for r in rows]
+    out += ["| " + " | ".join(_cell(c) for c in r) + " |" for r in rows]
     return "\n".join(out)
 
 
@@ -1097,19 +1440,33 @@ def push_notice(state: dict) -> list[str]:
     return out + [""]
 
 
+def _age_text(age: int | None) -> str:
+    return "unknown" if age is None else f"{age} day{'s' if age != 1 else ''}"
+
+
+def _names(names: list[str]) -> str:
+    names = list(dict.fromkeys(names))
+    more = f" and {len(names) - 6} more" if len(names) > 6 else ""
+    return ", ".join(f"`{n}`" for n in names[:6]) + more
+
+
 def render_report(state: dict) -> str:
     deps = state.get("deps", [])
     behind = [d for d in deps if d.get("behind")]
     unpinned = [d for d in deps if not d.get("pinned")]
+    now, min_days = policy_of(state)
+    verdict_of = {id(d): assess(d, now, min_days) for d in behind}
+    offered = [d for d in behind if not verdict_of[id(d)]["holds"]]
+    held = [d for d in behind if verdict_of[id(d)]["holds"]]
     lines = [f"_Generated {state.get('generated_at', '?')} by "
              "[Cléa](../blob/main/scripts/clea/README.md). "
              "This issue is rewritten in place; do not open another._", ""]
     lines += push_notice(state)
 
     lines += ["## Behind upstream", ""]
-    if behind:
+    if offered:
         rows = []
-        for d in behind:
+        for d in offered:
             # Matched on the TAG, not on `latest`. `cmd_matrix` hands the probe
             # `dep.get("tag") or dep["latest"]` — the raw upstream tag, unstripped
             # — because a dependency can be pinned in two shapes across its
@@ -1133,12 +1490,66 @@ def render_report(state: dict) -> str:
                     else "❌ probe failed"
             notes = f"[notes]({d['notes_url']})" if d.get("notes_url") else "—"
             shape = "" if d.get("shape_ok", True) else " ⚠️ prefix differs"
+            fixes = verdict_of[id(d)]["fixes"]
+            clears = f"; clears {short_ids(fixes)}, so the age rule is skipped" if fixes else ""
             rows.append([f"`{d['dep']}`", f"`{d['current']}`", f"`{d['latest']}`{shape}",
+                         _age_text(verdict_of[id(d)]["age"]),
+                         advisory_text((d.get("osv") or {}).get("candidate")) + clears,
                          f"`{d['file']}:{d['line']}`", verdict, notes])
-        lines += [_table(rows, ["dependency", "pinned", "upstream", "where",
-                                "probe", "release"]), ""]
+        lines += [_table(rows, ["dependency", "pinned", "upstream", "age", "advisories",
+                                "where", "probe", "release"]), ""]
+    elif behind:
+        lines += ["Nothing is offered: every dependency that is behind is held back, below.", ""]
     else:
         lines += ["Nothing is behind. Every pin matches its upstream.", ""]
+
+    if held:
+        rows = []
+        for d in held:
+            notes = f"[notes]({d['notes_url']})" if d.get("notes_url") else "—"
+            rows.append([f"`{d['dep']}`", f"`{d['current']}`", f"`{d['latest']}`",
+                         _age_text(verdict_of[id(d)]["age"]),
+                         "; ".join(verdict_of[id(d)]["holds"]),
+                         f"`{d['file']}:{d['line']}`", notes])
+        held_note = ("Behind upstream, and not offered: not probed, not in the table above. "
+                     "A hold ends with its cause; a moved tag stays held until upstream "
+                     "tags another version.")
+        lines += ["## Held back", "", held_note, "",
+                  _table(rows, ["dependency", "pinned", "upstream", "age", "held because",
+                                "where", "release"]), ""]
+
+    if any(d.get("osv") for d in deps):
+        hits: dict[tuple[str, str], tuple[list[str], dict]] = {}
+        unknown: dict[str, list[str]] = {}
+        for d in deps:
+            got = (d.get("osv") or {}).get("current")
+            if got is None:
+                continue
+            if "ids" not in got:
+                unknown.setdefault(got.get("unknown", "?"), []).append(d["dep"])
+            elif got["ids"]:
+                hits.setdefault((d["dep"], d["current"]), (got["ids"], d))
+        lines += ["## Advisories on what is pinned now", ""]
+        for (dep, current), (ids, d) in hits.items():
+            verdict = verdict_of.get(id(d))
+            if verdict is None:
+                fix = "no newer upstream version."
+            elif verdict["holds"]:
+                fix = f"`{d['latest']}` is held back ({'; '.join(verdict['holds'])})."
+            elif verdict["fixes"]:
+                fix = f"`{d['latest']}` is offered above: an argument for bumping sooner."
+            elif by_version((d.get("osv") or {}).get("candidate")):
+                fix = f"`{d['latest']}` is offered above, but it carries them too."
+            else:
+                fix = f"`{d['latest']}` is offered above, but OSV could not say whether it clears them."
+            lines += [f"- ⚠️ `{dep}` `{current}` — {short_ids(ids)}. {fix}"]
+        answered = len({(d["dep"], d["current"]) for d in deps
+                        if by_version((d.get("osv") or {}).get("current"))})
+        if answered and not hits:
+            lines += [f"None against the {answered} pin(s) OSV answered for by version."]
+        for reason, names in unknown.items():
+            lines += [f"- advisories unknown for {_names(names)}: {reason}"]
+        lines += [""]
 
     unwatched = state.get("unwatched", [])
     novalue = state.get("novalue", [])
@@ -1168,8 +1579,10 @@ def render_report(state: dict) -> str:
 
     bot = state.get("bot")
     if bot:
-        actionable = [d for d in deps
-                      if d.get("behind") and d.get("pinned") and d.get("watched")]
+        # Not what is KNOWN to be too young: Renovate's minimumReleaseAge (same number) is
+        # assumed to hold it. An undated row stays counted: Renovate may know a date Cléa could not.
+        actionable = [d for d in behind
+                      if d.get("pinned") and d.get("watched") and not verdict_of[id(d)]["young"]]
         limit = bot.get("silent_after_days", 8)
         days = bot.get("days")
         lines += [f"## {bot['bot']}", ""]
@@ -1191,11 +1604,13 @@ def render_report(state: dict) -> str:
             lines += [f"> - `{d['dep']}` {d['current']} → {d['latest']} "
                       f"(`{d['file']}:{d['line']}`)" for d in actionable] + [""]
         elif actionable:
-            lines += [f"{len(actionable)} behind and within its window — nothing "
-                      "to conclude yet.", ""]
+            quiet = (f"{len(actionable)} behind and within its window — nothing "
+                     "to conclude yet.")
+            lines += [quiet, ""]
         else:
-            lines += ["Nothing it watches is behind, so its silence proves "
-                      "nothing either way.", ""]
+            quiet = ("Nothing it watches is behind and old enough for it to propose, so its "
+                     "silence proves nothing either way.")
+            lines += [quiet, ""]
 
     failed = [p for p in state.get("probes", []) if not p["green"]]
     if failed:
@@ -1237,18 +1652,22 @@ def render_report(state: dict) -> str:
             lines += [f"- …and {len(grouped) - 8} other failure(s)"]
         lines += [""]
 
-    lines += ["## What this did not test", "",
-              "- **No real cloud, ever.** This lane carries no provider credential and "
-              "must fail if it ever needs one. A deploy on Scaleway, OVH or Outscale is "
-              "run by hand, by someone watching — see `CONTRIBUTING.md`.",
-              "- A green probe means the tool installs from cold, upgrades over its "
-              "previous version, and the repository's own checks still pass. It does not "
-              "mean the new version behaves the same on a running cluster.",
-              "- **A dependency pinned only inside `.github/workflows/` cannot be "
-              "probed** unless a `CLEA_WORKFLOW_TOKEN` secret is set (a classic PAT, "
-              "scope `workflow`) — GITHUB_TOKEN cannot push such a change in any "
-              "repository, and no `permissions:` grant can fix that. The warning at "
-              "the top of the report names the ones this run could not push."]
+    untested_osv = ("- **\"none\" under advisories means OSV answered with nothing** for that exact "
+                    "version — it knows what was reported, no more — and an age is the date upstream "
+                    "gave: with no date the bump is held while the age rule is on.")
+    untested_cloud = ("- **No real cloud, ever.** This lane carries no provider credential and "
+                      "must fail if it ever needs one. A deploy on Scaleway, OVH or Outscale is "
+                      "run by hand, by someone watching — see `CONTRIBUTING.md`.")
+    untested_probe = ("- A green probe means the tool installs from cold, upgrades over its "
+                      "previous version, and the repository's own checks still pass. It does not "
+                      "mean the new version behaves the same on a running cluster.")
+    untested_workflow = ("- **A dependency pinned only inside `.github/workflows/` cannot be "
+                         "probed** unless a `CLEA_WORKFLOW_TOKEN` secret is set (a classic PAT, "
+                         "scope `workflow`) — GITHUB_TOKEN cannot push such a change in any "
+                         "repository, and no `permissions:` grant can fix that. The warning at "
+                         "the top of the report names the ones this run could not push.")
+    lines += ["## What this did not test", "", untested_osv, untested_cloud, untested_probe,
+              untested_workflow]
     cluster = state.get("cluster_lane")
     if cluster:
         lines += [f"- Weekly local cluster lane: **{cluster.get('verdict', '?')}**, "
@@ -1257,15 +1676,20 @@ def render_report(state: dict) -> str:
     else:
         lines += ["- The weekly local cluster lane has not reported yet."]
 
-    # A GitHub issue body caps at 65536 characters. The probe logs are already
-    # rendered above, so they are the first thing to drop from the copy carried
-    # forward — a state that makes the write fail loses the state entirely.
+    # An issue body caps at 65536 characters and an over-long write loses the state. Drop what
+    # the page already shows from the carried copy: probe logs first, then advisory answers.
+    budget = 60000 - sum(len(line) + 1 for line in lines)
     embedded = json.dumps(state, separators=(",", ":"))
-    if len(embedded) > 40000:
+    if len(embedded) > budget:
         trimmed = dict(state)
         trimmed["probes"] = [{k: v for k, v in p.items() if k != "log"}
                              for p in state.get("probes", [])]
         embedded = json.dumps(trimmed, separators=(",", ":"))
+    if len(embedded) > budget:
+        trimmed["deps"] = [{k: v for k, v in d.items() if k != "osv"} for d in deps]
+        embedded = json.dumps(trimmed, separators=(",", ":"))
+    # Upstream text can hold `-->`; as JSON escapes it still reads back identically.
+    embedded = embedded.replace("<", "\\u003c").replace(">", "\\u003e")
     lines += ["", "<!-- clea-state " + embedded + " -->"]
     return "\n".join(lines) + "\n"
 
