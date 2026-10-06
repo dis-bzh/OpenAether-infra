@@ -396,9 +396,12 @@ else
   # in production the replica is on a different provider's account — so reading
   # it with the cluster provider's keys fails precisely when the release's
   # cross-provider objective is satisfied.
-  elif AWS_ACCESS_KEY_ID="$("$ROOT/scripts/internal/resolve-s3-cred.sh" "$PROVIDER" ak backup "${REPL_EP:-$PRIM_EP}")" \
+  # The listing is captured, then grepped: `aws ... | grep -q` exits on the first match, aws gets SIGPIPE while it
+  # still writes the next object, and pipefail then reads the whole check as "no replica" (measured on a replica
+  # with generations: 2 of 6 runs failed).
+  elif REPL_LIST="$(AWS_ACCESS_KEY_ID="$("$ROOT/scripts/internal/resolve-s3-cred.sh" "$PROVIDER" ak backup "${REPL_EP:-$PRIM_EP}")" \
        AWS_SECRET_ACCESS_KEY="$("$ROOT/scripts/internal/resolve-s3-cred.sh" "$PROVIDER" sk backup "${REPL_EP:-$PRIM_EP}")" \
-       timeout 90 aws s3 ls "s3://${BUCKET}/" --endpoint-url "${REPL_EP:-$PRIM_EP}" 2>/dev/null | grep -q 'tfstate'; then
+       timeout 90 aws s3 ls "s3://${BUCKET}/" --endpoint-url "${REPL_EP:-$PRIM_EP}" 2>/dev/null)" && grep -q 'tfstate' <<<"$REPL_LIST"; then
     ok "a tfstate replica exists in ${BUCKET}"
     # …and OPEN it. Listing a filename proved nothing about its contents, and
     # "the state is encrypted" was declared in backend.tf, implemented, and never
