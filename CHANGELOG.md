@@ -16,6 +16,20 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
+- **The replica of the state keeps dated generations, and a state that lost the Talos secrets can no longer be the
+  only copy (refs #267).** `backup-state.sh` replaced one replica object on every run, so once `infra-down-plan` (or a
+  `tofu state rm`) had taken `talos_machine_secrets` out and a later run had replicated the result, nothing held the
+  PKI: a configured node answers no unauthenticated call and a reset mints a new PKI, which is a new cluster
+  (measured on Talos 1.14.2). Beside the current object it now writes `<key>.<UTC timestamp>` as separate objects
+  (bucket versioning differs between Outscale's and OVH's S3), only for a state that holds the secrets and before the
+  current object is replaced, and keeps the newest `STATE_GENERATIONS` (5, set at the top of the script); only keys of
+  that exact form are ever removed, never the one just written. `backup-state.sh --list` (`task backup-state
+  PROVIDER=<p> -- --list`) prints them without needing the secrets, `restore-state.sh` takes one with
+  `STATE_GENERATION=<timestamp>`, and the cluster README says what a lost PKI costs: a rebuild. Rung: mocked
+  (`test-state-backups.sh` runs the real script against a fake object store; 30 deliberate breaks were caught). Not run:
+  a real store, so `list-objects-v2 --prefix`, the delete of the oldest generation and the key names are unproven on
+  Scaleway, OVH and Outscale.
+
 - **`node_nameservers`: DNS-over-TLS or -HTTPS for the nodes' own resolver (refs #173).** A list of `{address,
   protocol, tls_server_name}` rendered as one Talos `ResolverConfig` and appended to every node's config, plus a
   `TimeSyncConfig` `bootTimeout` when a server is encrypted (`node_dns_boot_timeout`, default `90s`, `""` keeps

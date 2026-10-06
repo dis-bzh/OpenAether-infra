@@ -190,6 +190,7 @@ cloud: a roll with zero failed probes (#42), a Proxmox apply (#48, #201: no hard
 and the wider cases of #66. Its CA mismatch was reproduced on Scaleway (1 control plane, 2026-10-04) through
 `infra-down-plan`'s untracking and recovered two ways (`cluster/README.md`, "Lost the Talos secrets"); the version
 flip is refused by `prevent_destroy` and the interrupted-apply path was not broken. Unseen: OVH and Outscale, three
-control planes, a replica on another provider, a cluster with no talosconfig and no replica copy. Standing items
+control planes, a replica on another provider. A cluster with no talosconfig and no replica copy has a written
+answer (a rebuild, `cluster/README.md`); the replica generations behind it (#267) are mocked, not run on a real store. Standing items
 only a person can close are in the issues: #43 (Outscale support), #61, #73 (two old staging buckets, a delete the
 owner runs). Upstream, Feint's fix for #179 is on its `main` and waits for their next release.
