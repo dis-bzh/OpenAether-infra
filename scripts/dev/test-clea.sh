@@ -12,7 +12,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CLEA="$ROOT/scripts/clea/clea.py"
+CLEA="${CLEA:-$ROOT/scripts/clea/clea.py}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -460,6 +460,9 @@ def fake(path, token):
     if path.endswith("/git/ref/tags/v1%232"): return {"ref": "refs/tags/v1#2", "object": {"type": "commit", "sha": C1}}
     raise clea.CleaError("unexpected " + path)
 clea._gh_json = fake
+# OSV must never be reached from here: every scan asks it, and this harness stays offline.
+osv_posts = []
+clea.http_post_json = lambda url, payload: osv_posts.append(payload) or b"{}"
 
 def refuses(tag):
     try: clea.resolve_commit("acme/action", tag, None); return False
@@ -512,9 +515,14 @@ checks += [
     ("the scan records the commit on every action-sha anchor of the dependency",
      [d.get("sha") for d in by["acme/action"]] == [C1, C1]),
     ("…and on no other anchor", all("sha" not in d for d in state["deps"] if d["form"] != "action-sha")),
-    ("one lookup per action pin, not one per anchor, with the scan's own token",
-     [c for c in looked if "/repos/acme/action/" in c[0]] == [("/repos/acme/action/git/ref/tags/v1.1.0", "tok-scan")]),
-    ("an action pin that is not behind is never looked up", not any("/repos/acme/current/" in c[0] for c in calls)),
+    ("one lookup of the bump's tag per action pin, not one per anchor, with the scan's own token",
+     [c for c in looked if c[0].endswith("/repos/acme/action/git/ref/tags/v1.1.0")]
+     == [("/repos/acme/action/git/ref/tags/v1.1.0", "tok-scan")]),
+    # The pinned tag IS looked up now (OSV is asked by commit), but it is no commit to bump with.
+    ("an action pin that is not behind has no commit to bump with, and only its own tag is looked up",
+     all("sha" not in d for d in by["acme/current"])
+     and [c[0] for c in calls if "/repos/acme/current/" in c[0]] == ["/repos/acme/current/git/ref/tags/v1.1.0"]),
+    ("OSV is asked by the commit the scan resolved, and never reached for real", {"commit": C1} in osv_posts),
     ("an action pin on a datasource that is not GitHub is never looked up",
      not any("acme-notgh" in c[0] for c in calls) and "sha" not in by["acme-notgh"][0]),
     ("a failed lookup is an error in the report…", any("boom: lookup failed" in e for e in state["errors"])),
@@ -528,7 +536,8 @@ def matrix(deps):
     with contextlib.redirect_stdout(buf): clea.main(["--root", work, "matrix", "--state", p])
     return {e["dep"]: e for e in json.loads(buf.getvalue())}
 def row(dep, tag, sha=None):
-    r = {"dep": dep, "behind": True, "pinned": True, "tag": tag, "latest": tag.lstrip("v")}
+    r = {"dep": dep, "behind": True, "pinned": True, "tag": tag, "latest": tag.lstrip("v"),
+         "released_at": "2000-01-01T00:00:00Z"}
     if sha: r["sha"] = sha
     return r
 checks += [
@@ -664,7 +673,7 @@ clea = importlib.util.module_from_spec(spec); spec.loader.exec_module(clea)
 def state(days, behind=True, watched=True):
     return {"generated_at": "now", "deps": [{
         "dep": "helm/helm", "file": "scripts/setup.sh", "line": 225,
-        "current": "4.2.3", "latest": "4.2.4", "pinned": True,
+        "current": "4.2.3", "latest": "4.2.4", "pinned": True, "released_at": "2000-01-01T00:00:00Z",
         "behind": behind, "watched": watched, "shape_ok": True}],
         "bot": {"bot": "renovate[bot]", "number": 11, "at": "2026-07-30",
                 "days": days, "scanned": 100, "silent_after_days": 8}}
@@ -916,7 +925,7 @@ state = {
     "generated_at": "now",
     "deps": [{"dep": "acme/stripped", "file": "f", "line": 1, "current": "8.0.0",
               "latest": "9.0.0", "tag": "v9.0.0", "pinned": True, "behind": True,
-              "shape_ok": True, "notes_url": None}],
+              "released_at": "2000-01-01T00:00:00Z", "shape_ok": True, "notes_url": None}],
     # The matrix bumped it with the TAG, so that is what the probe recorded —
     # matching cmd_matrix's own dep.get("tag") or dep["latest"] expression.
     "probes": [{"dep": "acme/stripped", "version": "v9.0.0", "green": True,
@@ -1015,6 +1024,403 @@ PY
 if [ $? -eq 0 ]; then PASS=$((PASS + 2)); else FAIL=$((FAIL + 1)); fi
 
 echo
+echo "=== a bump is offered only if old enough, not withdrawn, not retagged, not advised against (#263) ==="
+# A fresh release can be yanked, retagged or found vulnerable within days, so Cléa
+# does not put one in the action list or the probe matrix until it has aged and
+# OSV has had a look. Offline: PyPI and OSV are a local server that the real HTTP
+# code talks to, and GitHub is a patched `_gh_json`.
+RENOVATE_CFG="${RENOVATE_CFG:-$ROOT/renovate.json5}" CLEA_TOML="${CLEA_TOML:-$ROOT/clea.toml}" COUNTFILE="$TMP/count-offer" python3 - "$CLEA" <<'PY'
+import contextlib, http.server, importlib.util, io, json, os, re, socket, sys, tempfile, threading
+from datetime import datetime, timedelta, timezone
+
+spec = importlib.util.spec_from_file_location("clea", sys.argv[1])
+clea = importlib.util.module_from_spec(spec); spec.loader.exec_module(clea)
+
+NOW = datetime.now(timezone.utc)
+def ago(**kw): return (NOW - timedelta(**kw)).isoformat(timespec="seconds").replace("+00:00", "Z")
+checks = []
+def check(name, ok): checks.append((name, bool(ok)))
+
+# --- the rules, on a bare row ------------------------------------------------
+def row(**kw):
+    d = {"dep": "x/y", "tag": "v2", "latest": "2", "current": "1", "pinned": True,
+         "behind": True, "released_at": ago(days=30)}
+    d.update(kw); return d
+def holds(d, days=7, now=NOW): return clea.assess(d, now, days)["holds"]
+
+three = NOW - timedelta(days=3)
+check("a release 3 days old is held, with the date it becomes eligible",
+      holds(row(released_at=three.isoformat())) == [f"too young, eligible on {(three + timedelta(days=7)).date()}"])
+check("its age is reported in whole days", clea.assess(row(released_at=ago(days=3)), NOW, 7)["age"] == 3)
+clock = datetime(2026, 1, 15, tzinfo=timezone.utc)
+check("a release exactly N days old is eligible, on the clock's own tick",
+      holds(row(released_at="2026-01-08T00:00:00Z"), now=clock) == []
+      and len(holds(row(released_at="2026-01-08T00:00:01Z"), now=clock)) == 1)
+check("one second short of N days is still held",
+      len(holds(row(released_at=(NOW - timedelta(days=7) + timedelta(seconds=2)).isoformat()))) == 1)
+check("an old release with nothing against it is not held", holds(row()) == [])
+for label, value in (("missing", None), ("unreadable", "last tuesday")):
+    check(f"a {label} date is `age unknown`, never eligible",
+          holds(row(released_at=value)) == ["age unknown"])
+check("a date with no `released_at` key at all is unknown too",
+      holds({k: v for k, v in row().items() if k != "released_at"}) == ["age unknown"])
+check("a helm date with nine fractional digits is read", holds(row(released_at="2000-04-10T13:11:52.123456789Z")) == [])
+check("0 days switches the age rule off: young and undated are offered",
+      holds(row(released_at=ago(days=0)), days=0) == [] and holds(row(released_at=None), days=0) == [])
+check("…and still holds a yanked one", holds(row(withdrawn="yanked on PyPI"), days=0) == ["yanked on PyPI"])
+check("a withdrawn release is held, with the reason it carries",
+      holds(row(withdrawn="yanked on PyPI: broken wheel")) == ["yanked on PyPI: broken wheel"])
+check("a tag that moved is held, naming both commits",
+      holds(row(tag_moved={"from": "a" * 40, "to": "b" * 40})) == ["tag v2 moved since last scan (aaaaaaa → bbbbbbb)"])
+check("an advisory against the candidate holds it, ids listed",
+      holds(row(osv={"candidate": {"ids": ["GHSA-1", "GHSA-2"]}})) == ["advisory GHSA-1, GHSA-2 against v2"])
+check("an advisory against the CURRENT pin does not hold the candidate",
+      holds(row(osv={"current": {"ids": ["GHSA-1"]}, "candidate": {"ids": []}})) == [])
+check("`advisories unknown` does not hold it either, and is never printed as none",
+      holds(row(osv={"candidate": {"unknown": "OSV did not answer"}})) == []
+      and clea.advisory_text({"unknown": "x"}) == "advisories unknown"
+      and clea.advisory_text(None) == "advisories unknown"
+      and clea.advisory_text({"ids": []}) == "none")
+check("every cause is listed, not only the first",
+      len(holds(row(released_at=ago(days=1), withdrawn="w", tag_moved={"from": "a", "to": "b"},
+                    osv={"candidate": {"ids": ["G"]}}))) == 4)
+check("a state without a policy is judged by the default, not waved through",
+      clea.policy_of({"generated_at": ago(days=0)})[1] == 7
+      and clea.policy_of({"policy": {"min_release_age_days": True}})[1] == 7
+      and clea.policy_of({"policy": {"min_release_age_days": 3}})[1] == 3)
+
+# --- the report and the matrix, on a hand-made state -------------------------
+def state(*deps, **extra):
+    return {"generated_at": ago(days=0), "policy": {"min_release_age_days": 7}, "deps": list(deps), **extra}
+def dep(name, **kw):
+    d = row(dep=name, file="f", line=1, shape_ok=True, notes_url=None, watched=True); d.update(kw); return d
+def offered_part(report): return report.split("## Behind upstream")[1].split("## ")[0]
+
+only_young = state(dep("a/young", released_at=ago(days=2)))
+check("when every dependency behind is held, the report says nothing is offered",
+      "Nothing is offered" in clea.render_report(only_young) and "## Held back" in clea.render_report(only_young))
+check("…and `Nothing is behind` is kept for the case where nothing is",
+      "Nothing is behind" in clea.render_report(state()))
+beat = lambda days, *deps: clea.render_report(state(*deps, bot={"bot": "renovate[bot]", "number": 1, "at": "x", "days": days,
+                                                                "scanned": 9, "silent_after_days": 8}))
+check("a release too young for Renovate does not make its silence a fault",
+      "and it has proposed nothing" not in beat(30, dep("a/young", released_at=ago(days=2))))
+check("an old one still does", "and it has proposed nothing" in beat(30, dep("a/old")))
+check("so does one held for a reason Renovate cannot know (yanked)",
+      "and it has proposed nothing" in beat(30, dep("a/yanked", withdrawn="yanked on PyPI")))
+check("an undated one is not blamed on the bot either",
+      "and it has proposed nothing" not in beat(30, dep("a/undated", released_at=None)))
+
+hit = dep("a/pin", osv={"current": {"ids": ["GHSA-pin"]}, "candidate": {"ids": []}}, latest="2")
+rep = clea.render_report(state(hit, dep("b/clean", osv={"current": {"ids": []}, "candidate": {"ids": []}}),
+                               dep("c/helm", behind=False, osv={"current": {"unknown": "no OSV mapping for datasource helm"}})))
+check("an advisory against the current pin is its own line, with the argument to bump",
+      re.search(r"`a/pin` `1` — GHSA-pin\. `2` is offered above: an argument for bumping sooner", rep) is not None)
+check("a pin OSV could not be asked about is named as unknown, with why",
+      "advisories unknown for `c/helm`: no OSV mapping for datasource helm" in rep)
+check("a clean pin gets no advisory line", "`b/clean` `1` —" not in rep)
+check("when the fix is held back, the line says why",
+      "is held back (too young" in clea.render_report(state(dep("a/pin", released_at=ago(days=1),
+          osv={"current": {"ids": ["GHSA-pin"]}, "candidate": {"ids": []}}))))
+check("with no OSV answer at all the report does not claim there is none",
+      "None against" not in clea.render_report(state(dep("a/x", osv={"current": {"unknown": "OSV did not answer"}}))))
+
+# --- the network layer: a local server speaking PyPI's and OSV's shapes ------
+SERVER = {"pypi": lambda name: (404, b""), "osv": lambda body: (200, b"{}")}
+POSTS = []
+class Handler(http.server.BaseHTTPRequestHandler):
+    def _reply(self, status, body):
+        self.send_response(status); self.send_header("Content-Length", str(len(body)))
+        self.end_headers(); self.wfile.write(body)
+    def do_GET(self):
+        m = re.fullmatch(r"/pypi/([^/]+)/json", self.path)
+        self._reply(*(SERVER["pypi"](m.group(1)) if m else (404, b"")))
+    def do_POST(self):
+        raw = self.rfile.read(int(self.headers["Content-Length"]))
+        POSTS.append((self.path, self.headers.get("Content-Type"), json.loads(raw)))
+        self._reply(*SERVER["osv"](json.loads(raw)))
+    def log_message(self, *a): pass
+sock = socket.socket(); sock.bind(("127.0.0.1", 0)); port = sock.getsockname()[1]; sock.close()
+httpd = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
+threading.Thread(target=httpd.serve_forever, daemon=True).start()
+BASE = f"http://127.0.0.1:{port}"
+clea.PYPI_API, clea.OSV_QUERY_URL = BASE + "/pypi", BASE + "/osv/v1/query"
+sock = socket.socket(); sock.bind(("127.0.0.1", 0)); dead = f"http://127.0.0.1:{sock.getsockname()[1]}/v1/query"; sock.close()
+
+def pypi_file(at, yanked=False, reason=None):
+    return {"filename": "x.whl", "upload_time": at[:19], "upload_time_iso_8601": at, "yanked": yanked, "yanked_reason": reason}
+def pypi_doc(version, files, yanked=False, reason=None, urls=True):
+    return json.dumps({"info": {"version": version, "yanked": yanked, "yanked_reason": reason}, "last_serial": 1,
+                       "urls": files if urls else [], "releases": {version: files}, "vulnerabilities": []}).encode()
+def pypi(doc): SERVER["pypi"] = lambda name: (200, doc)
+def latest(): return clea.latest_pypi("acme-py", None)
+
+pypi(pypi_doc("2.0.0", [pypi_file("2026-01-13T07:47:53.276685Z"), pypi_file("2026-01-13T07:47:51.343950Z")]))
+got = latest()
+check("PyPI: the release date is its EARLIEST file upload, not the first listed",
+      got["released_at"] == "2026-01-13T07:47:51.343950Z" and got["tag"] == "2.0.0" and got["withdrawn"] is None)
+pypi(pypi_doc("2.0.0", [pypi_file("2026-01-13T07:47:51Z")], urls=False))
+check("PyPI: with no `urls`, the date comes from `releases[version]`", latest()["released_at"] == "2026-01-13T07:47:51Z")
+pypi(pypi_doc("2.0.0", []))
+check("PyPI: no file at all means no date, not today", latest()["released_at"] is None)
+pypi(pypi_doc("2.0.0", [pypi_file("2026-01-13T07:47:51Z")], yanked=True, reason="broken build"))
+check("PyPI: a yanked release is withdrawn, with PyPI's own reason", latest()["withdrawn"] == "yanked on PyPI: broken build")
+pypi(pypi_doc("2.0.0", [pypi_file("2026-01-13T07:47:51Z", True), pypi_file("2026-01-13T07:47:52Z", True, "bad")]))
+check("PyPI: every file yanked is yanked, even when `info` says nothing", latest()["withdrawn"] == "yanked on PyPI: bad")
+pypi(pypi_doc("2.0.0", [pypi_file("2026-01-13T07:47:51Z", True), pypi_file("2026-01-13T07:47:52Z")]))
+check("PyPI: one file yanked out of two is not a yanked release", latest()["withdrawn"] is None)
+SERVER["pypi"] = lambda name: (200, b"<html>maintenance</html>")
+try: latest(); check("PyPI: an answer that is not JSON is a Cléa error", False)
+except clea.CleaError: check("PyPI: an answer that is not JSON is a Cléa error", True)
+
+# GitHub: the release flags, and a tag's date
+def release(**kw): return {"tag_name": "v1", "published_at": "2026-01-01T00:00:00Z", "html_url": "u", "draft": False, "prerelease": False, **kw}
+for label, kw, want in (("a draft", {"draft": True}, "GitHub release is a draft"),
+                        ("a pre-release", {"prerelease": True}, "GitHub release is marked pre-release"),
+                        ("a plain release", {}, None)):
+    clea._gh_json = lambda path, token, kw=kw: release(**kw)
+    check(f"GitHub: {label} -> withdrawn is {want!r}", clea.latest_github_releases("a/b", None)["withdrawn"] == want)
+C1, C2 = "1" * 40, "2" * 40
+def gh_tags(path, token):
+    if path.endswith("/git/ref/tags/ann"): return {"ref": "refs/tags/ann", "object": {"type": "tag", "sha": C2}}
+    if path.endswith("/git/tags/" + C2): return {"tagger": {"date": "2026-02-02T00:00:00Z"}, "object": {"type": "commit", "sha": C1}}
+    if path.endswith("/git/ref/tags/light"): return {"ref": "refs/tags/light", "object": {"type": "commit", "sha": C1}}
+    if path.endswith("/git/commits/" + C1): return {"committer": {"date": "2026-03-03T00:00:00Z"}}
+    raise clea.CleaError("unexpected " + path)
+clea._gh_json = gh_tags
+check("GitHub: an annotated tag's date is the tagger's, and its commit is peeled",
+      clea.tag_facts("a/b", "ann", None) == {"commit": C1, "date": "2026-02-02T00:00:00Z"})
+check("GitHub: a lightweight tag has no date of its own; the commit's is read",
+      clea.tag_facts("a/b", "light", None)["date"] is None and clea.commit_date("a/b", C1, None) == "2026-03-03T00:00:00Z")
+
+# Helm: `created` of the chart item that is the newest, not of the item above it
+INDEX = b'''entries:
+  cilium:
+  - apiVersion: v2
+    created: "2000-01-01T00:00:00.123456789Z"
+    version: 1.19.2
+  - annotations:
+      artifacthub.io/links: |
+        - name: a
+          created: 1999-01-01T00:00:00Z
+    apiVersion: v2
+    created: "2000-02-02T00:00:00.5Z"
+    version: 1.20.1
+  - apiVersion: v2
+    created: "2000-03-03T00:00:00Z"
+    version: 1.21.0-rc.1
+'''
+real_get = clea.http_get
+clea.http_get = lambda url, *a, **k: INDEX
+helm = clea.latest_helm("cilium", None, registry_url="https://example.invalid")
+clea.http_get = real_get
+check("helm: the date is the newest chart's `created`, not a neighbour's or a nested one",
+      helm["tag"] == "1.20.1" and helm["released_at"] == "2000-02-02T00:00:00.5Z")
+clea.http_get = lambda url, *a, **k: INDEX.replace(b'    created: "2000-02-02T00:00:00.5Z"\n', b"")
+helm = clea.latest_helm("cilium", None, registry_url="https://example.invalid")
+clea.http_get = real_get
+check("helm: a newest chart with no `created` has no date, it does not borrow the one above",
+      helm["tag"] == "1.20.1" and helm["released_at"] is None)
+
+# OSV, on the wire
+Q = {"package": {"name": "acme-py", "ecosystem": "PyPI"}, "version": "1.0.0"}
+def osv(fn): SERVER["osv"] = fn
+def jbody(o): return 200, json.dumps(o).encode()
+POSTS.clear(); osv(lambda body: jbody({}))
+check("OSV: `{}` is none", clea.osv_ids(Q) == [])
+check("OSV: the query goes out as a JSON POST with exactly the package, ecosystem and version",
+      POSTS == [("/osv/v1/query", "application/json", Q)])
+osv(lambda body: jbody({"vulns": [{"id": "B"}, {"id": "A"}, {"id": "A"}, {"id": "W", "withdrawn": "2025-01-01T00:00:00Z"}]}))
+check("OSV: ids are deduplicated and sorted, and a withdrawn advisory is not one", clea.osv_ids(Q) == ["A", "B"])
+POSTS.clear()
+osv(lambda body: jbody({"vulns": [{"id": "P2" if body.get("page_token") else "P1"}],
+                        **({} if body.get("page_token") else {"next_page_token": "tok2"})}))
+check("OSV: a second page is fetched with its token and merged",
+      clea.osv_ids(Q) == ["P1", "P2"] and POSTS[1][2] == dict(Q, page_token="tok2"))
+osv(lambda body: jbody({"vulns": [{"id": "X"}], "next_page_token": "again"}))
+def fails(fn):
+    try: fn(); return False
+    except clea.CleaError: return True
+check("OSV: pagination that never ends is an error, not an endless loop", fails(lambda: clea.osv_ids(Q)))
+for label, answer in (("HTTP 500", (500, b"oops")), ("HTTP 429", (429, b"slow down")), ("a 200 that is not JSON", (200, b"<html>")),
+                      ("a JSON list", jbody([])), ("vulns that is not a list", jbody({"vulns": "x"})),
+                      ("a vuln with no id", jbody({"vulns": [{"summary": "s"}]}))):
+    osv(lambda body, a=answer: a)
+    check(f"OSV: {label} is a Cléa error, never an empty list", fails(lambda: clea.osv_ids(Q)))
+osv(lambda body: (429, b"slow down"))
+try: clea.osv_ids(Q)
+except clea.CleaError as exc: check("OSV: a 429 does not tell the reader to export GITHUB_TOKEN", "GITHUB_TOKEN" not in str(exc) and "429" in str(exc))
+clea.OSV_QUERY_URL = dead
+check("OSV: an unreachable server is a Cléa error, never an empty list", fails(lambda: clea.osv_ids(Q)))
+clea.OSV_QUERY_URL = BASE + "/osv/v1/query"
+
+# Osv.ask: what each datasource is asked, and what unknown looks like
+errs = []; session = clea.Osv(errs); POSTS.clear(); osv(lambda body: jbody({"vulns": [{"id": "GHSA-x"}]}))
+check("OSV: a PyPI package is asked by name, ecosystem and exact version",
+      session.ask("pypi", "acme-py", "1.0.0", None) == {"ids": ["GHSA-x"]} and POSTS[-1][2] == Q)
+check("OSV: a GitHub-hosted release is asked by commit",
+      session.ask("github-releases", "a/b", "v1", C1) == {"ids": ["GHSA-x"]} and POSTS[-1][2] == {"commit": C1})
+n = len(POSTS)
+check("OSV: a GitHub release whose commit is unknown is unknown, and nothing is sent",
+      session.ask("github-tags", "a/b", "v1", None) == {"unknown": "commit of v1 unknown"} and len(POSTS) == n)
+check("OSV: a datasource with no mapping is unknown, and nothing is sent",
+      session.ask("helm", "cilium", "1.0.0", None) == {"unknown": "no OSV mapping for datasource helm"} and len(POSTS) == n)
+session.ask("pypi", "acme-py", "1.0.0", None)
+check("OSV: the same query is not sent twice", len(POSTS) == n)
+errs = []; session = clea.Osv(errs); POSTS.clear(); osv(lambda body: (500, b"down"))
+answers = [session.ask("pypi", f"p{i}", "1", None) for i in range(6)]
+check("OSV: a failed query is unknown, and lands in the errors", answers[0] == {"unknown": "OSV did not answer"} and errs)
+check("OSV: after three failures in a row it is not asked again", len(POSTS) == 3 and all("unknown" in a for a in answers))
+errs = []; session = clea.Osv(errs); POSTS.clear()
+script = iter([(500, b""), (500, b""), jbody({}), (500, b""), (500, b""), jbody({})])
+osv(lambda body: next(script))
+for i in range(6): session.ask("pypi", f"p{i}", "1", None)
+check("OSV: an answer resets the count of failures", len(POSTS) == 6)
+
+# --- a whole scan, offline: GitHub patched, PyPI and OSV on the local server --
+C = {c: c * 40 for c in "abcdef98"}
+DEPS = {  # dep: (published, candidate commit, current commit)
+    "acme/ok": (ago(days=30), C["a"], C["b"]), "acme/mid": (ago(days=6), C["a"], C["b"]),
+    "acme/young": (ago(days=2), C["a"], C["b"]), "acme/retagged": (ago(days=30), C["c"], C["b"]),
+    "acme/advised": (ago(days=30), C["d"], C["b"]), "acme/pinadv": (ago(days=30), C["a"], C["e"]),
+    "acme/undated": (None, C["a"], C["b"]), "acme/tagged": (None, C["f"], C["b"]),
+    "acme/novee": (ago(days=30), C["a"], C["8"]),  # tags 1.0.0 / 1.1.0, no leading v
+}
+TAGS = {"acme/novee": ("1.1.0", "1.0.0")}
+STATE = {"retag": C["c"], "retag_tag": "v1.1.0"}
+def gh(path, token):
+    m = re.match(r"/repos/(acme/[a-z]+)/(.*)", path)
+    if not m or m.group(1) not in DEPS: raise clea.CleaError("unexpected " + path)
+    name, rest = m.groups(); published, cand, cur = DEPS[name]
+    tag, pinned = TAGS.get(name, ("v1.1.0", "v1.0.0"))
+    if name == "acme/retagged": tag, cand = STATE["retag_tag"], STATE["retag"]
+    if rest == "releases/latest":
+        return {"tag_name": tag, "published_at": published, "html_url": "u", "draft": False, "prerelease": False}
+    if rest == "tags?per_page=100": return [{"name": tag}]
+    m = re.match(r"git/ref/tags/(.*)", rest)
+    if m and m.group(1) in (tag, pinned):  # any other spelling of a tag is a 404, as on GitHub
+        return {"ref": "refs/tags/" + m.group(1), "object": {"type": "commit", "sha": cand if m.group(1) == tag else cur}}
+    if rest.startswith("git/commits/") and name == "acme/tagged": return {"committer": {"date": ago(days=40)}}
+    raise clea.CleaError(f"{path}: no such thing in this fixture")
+clea._gh_json = gh
+PYDEPS = {"acme-py-ok": (ago(days=30), False), "acme-py-yanked": (ago(days=30), True), "acme-py-adv": (ago(days=30), False)}
+def pypi_by_name(name):
+    if name not in PYDEPS: return 404, b""
+    at, yanked = PYDEPS[name]
+    return 200, pypi_doc("1.1.0", [pypi_file(at, yanked, "broken build" if yanked else None)], yanked, "broken build" if yanked else None)
+SERVER["pypi"] = pypi_by_name
+ADVISED = {C["d"]: ["GHSA-aaaa-bbbb-cccc"], C["e"]: ["GHSA-pppp-pppp-pppp"], C["8"]: ["GHSA-novee"]}
+def osv_by(body):
+    if "commit" in body: ids = ADVISED.get(body["commit"], [])
+    else: ids = ["PYSEC-2099-1"] if body["package"]["name"] == "acme-py-adv" and body["version"] == "1.1.0" else []
+    return jbody({"vulns": [{"id": i} for i in ids]} if ids else {})
+osv(osv_by)
+
+work = tempfile.mkdtemp()
+os.makedirs(work + "/.github/workflows")
+sh = "".join(f'# clea-test: datasource={"github-tags" if n == "acme/tagged" else "github-releases"} depName={n} '
+             f'extractVersion=^v(?<version>.*)$\n{n.split("/")[1].upper()}_V="1.0.0"\n' for n in DEPS)
+open(work + "/install.sh", "w").write(sh)
+open(work + "/.github/workflows/ci.yml", "w").write("jobs:\n  a:\n    steps:\n" + "".join(
+    f"      # clea-test: datasource=pypi depName={n}\n      - run: pip install {n}==1.0.0\n" for n in PYDEPS))
+open(work + "/clea.toml", "w").write('[scan]\nmarker = "# clea-test:"\n[policy]\nmin_release_age_days = 5\n')
+os.environ["GITHUB_TOKEN"] = "t"
+
+def scan(previous=None):
+    path = work + "/state.json"
+    argv = ["--root", work, "scan", "--state", path] + (["--previous", previous] if previous else [])
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        rc = clea.main(argv)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out): clea.main(["--root", work, "matrix", "--state", path])
+    st = json.load(open(path)); snap = work + f"/state{len(os.listdir(work))}.json"
+    json.dump(st, open(snap, "w"))
+    return rc, st, clea.render_report(st), {e["dep"] for e in json.loads(out.getvalue())}, snap
+def by(st, name): return next(d for d in st["deps"] if d["dep"] == name)
+
+rc, st1, rep1, probed1, snap1 = scan()
+OFFERED = {"acme/ok", "acme/mid", "acme/pinadv", "acme/retagged", "acme/tagged", "acme/novee", "acme-py-ok"}
+check("scan: the policy is recorded in the state, from clea.toml (5, not the default 7)", st1["policy"] == {"min_release_age_days": 5})
+check("scan: a 6-day-old release is offered under a 5-day policy, a 2-day-old one is not",
+      "`acme/mid`" in offered_part(rep1) and "`acme/young`" not in offered_part(rep1))
+held = rep1.split("## Held back")[1].split("## ")[0]
+HELD = {"acme/young", "acme/undated", "acme-py-yanked", "acme/advised", "acme-py-adv"}
+check("scan: the held-back table has exactly the young, undated, yanked and advised ones",
+      {d["dep"] for d in st1["deps"] if f"`{d['dep']}`" in held} == HELD)
+check("scan: a young release reads `too young, eligible on <date>`",
+      f"too young, eligible on {(datetime.fromisoformat(DEPS['acme/young'][0].replace('Z', '+00:00')) + timedelta(days=5)).date()}" in held)
+check("scan: an undated release reads `age unknown`", "age unknown" in held and by(st1, "acme/undated")["released_at"] is None)
+check("scan: a yanked PyPI release is held with PyPI's reason", "yanked on PyPI: broken build" in held)
+check("scan: an advisory against a candidate holds it and names the id",
+      "advisory GHSA-aaaa-bbbb-cccc against v1.1.0" in held and "advisory PYSEC-2099-1 against 1.1.0" in held)
+check("scan: a tag's date is read when upstream gives none (github-tags -> its commit's date)",
+      by(st1, "acme/tagged")["released_at"] is not None and "`acme/tagged`" in offered_part(rep1))
+check("scan: the age column shows the age", re.search(r"`acme/ok` \| `1\.0\.0` \| `1\.1\.0` \| 30 days \| none \|", rep1) is not None)
+check("scan: the current pin's advisory is its own line, and the fix is offered",
+      "`acme/pinadv` `1.0.0` — GHSA-pppp-pppp-pppp. `1.1.0` is offered above" in rep1)
+check("scan: the pinned tag is found whether upstream's tags carry a v (v1.0.0) or not (1.0.0)",
+      "`acme/novee` `1.0.0` — GHSA-novee" in rep1 and "`acme/pinadv` `1.0.0` — GHSA-pppp-pppp-pppp" in rep1)
+check("scan: the probe matrix carries the offered ones only", probed1 == OFFERED)
+check("scan: every pinned row records what OSV said for its pin",
+      len([d for d in st1["deps"] if "current" in d.get("osv", {})]) == len(DEPS) + len(PYDEPS))
+
+STATE["retag"] = C["9"]  # the same tag, another commit
+rc, st2, rep2, probed2, snap2 = scan(snap1)
+moved = by(st2, "acme/retagged")
+check("scan: a tag that now points elsewhere is flagged, with both commits", moved["tag_moved"] == {"from": C["c"], "to": C["9"]})
+check("scan: `moved_since_last_scan` alone does NOT see it (the version string is the same)", moved["moved_since_last_scan"] is False)
+check("scan: the retagged release is held back and not probed",
+      "moved since last scan (ccccccc → 9999999)" in rep2 and "acme/retagged" not in probed2 and probed2 == OFFERED - {"acme/retagged"})
+rc, st3, rep3, probed3, snap3 = scan(snap2)
+check("scan: the hold survives the next scan, where the commit no longer changes",
+      by(st3, "acme/retagged")["tag_moved"] == {"from": C["c"], "to": C["9"]} and "acme/retagged" not in probed3)
+STATE["retag_tag"], STATE["retag"] = "v1.2.0", C["f"]
+rc, st4, rep4, probed4, snap4 = scan(snap3)
+check("scan: a new tag is a new release: the hold is gone", "tag_moved" not in by(st4, "acme/retagged") and "acme/retagged" in probed4)
+old_state = json.load(open(snap1)); old_state["deps"] = [{k: v for k, v in d.items() if k != "tag_commit"} for d in old_state["deps"]]
+json.dump(old_state, open(work + "/legacy.json", "w"))
+STATE["retag_tag"], STATE["retag"] = "v1.1.0", C["9"]
+rc, st5, rep5, probed5, _ = scan(work + "/legacy.json")
+check("scan: a previous state with no recorded commit flags nothing (it cannot know)", "tag_moved" not in by(st5, "acme/retagged"))
+
+clea.OSV_QUERY_URL = dead
+rc, st6, rep6, probed6, _ = scan()
+check("scan, OSV unreachable: every row says its advisories are unknown",
+      all(d["osv"]["current"] == {"unknown": "OSV did not answer"} for d in st6["deps"])
+      and all(d["osv"]["candidate"] == {"unknown": "OSV did not answer"} for d in st6["deps"] if d.get("behind")))
+check("scan, OSV unreachable: the report reads `advisories unknown` and never `none` for a candidate",
+      "advisories unknown |" in offered_part(rep6) and "| none |" not in offered_part(rep6) and "None against" not in rep6)
+check("scan, OSV unreachable: the failure is in the errors, so --strict fails", any(clea.OSV_QUERY_URL in e for e in st6["errors"]))
+check("scan, OSV unreachable: unknown holds nothing back (the two advised ones are probed, as OSV cannot say)",
+      probed6 == OFFERED | {"acme/advised", "acme-py-adv"})
+clea.OSV_QUERY_URL = BASE + "/osv/v1/query"
+
+for bad in ("-1", '"7"', "true", "7.5"):
+    open(work + "/clea.toml", "w").write(f'[scan]\nmarker = "# clea-test:"\n[policy]\nmin_release_age_days = {bad}\n')
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+        rc = clea.main(["--root", work, "scan", "--state", work + "/x.json"])
+    check(f"scan: min_release_age_days = {bad} is refused, naming the key", rc == 1 and "min_release_age_days" in err.getvalue())
+
+# --- Renovate and Cléa read one number ---------------------------------------
+from pathlib import Path
+cfg = clea.load_json5(Path(os.environ["RENOVATE_CFG"]))
+import tomllib  # the file itself, not load_config: a deleted knob must not hide behind the default
+days_set = tomllib.loads(Path(os.environ["CLEA_TOML"]).read_text()).get("policy", {}).get("min_release_age_days")
+m = re.fullmatch(r"(\d+) days?", str(cfg.get("minimumReleaseAge", "")))
+check("renovate.json5 sets minimumReleaseAge, in days", m is not None)
+check("…to the same number clea.toml sets, so the two agree",
+      m is not None and days_set is not None and int(m.group(1)) == days_set and days_set > 0)
+
+httpd.shutdown()
+for name, ok in checks:
+    print(("  \033[32m\u2713\033[0m " if ok else "  \033[31m\u2717\033[0m ") + name)
+open(os.environ["COUNTFILE"], "w").write(str(len(checks)))
+sys.exit(1 if [c for c in checks if not c[1]] else 0)
+PY
+rc=$?
+if [ "$rc" -eq 0 ]; then PASS=$((PASS + $(cat "$TMP/count-offer"))); else FAIL=$((FAIL + 1)); fi
+
 echo "=== renovate.json5 reads every SHA-pinned pre-commit hook (#88) ==="
 # The native pre-commit manager reads the SHA in `rev: <sha>  # vX` as a tag and
 # can never bump it (hosted job log 2026-10-03: "Tag <sha> not found", five times),

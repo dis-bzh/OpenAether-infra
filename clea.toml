@@ -19,6 +19,12 @@ label = "clea"
 watch_bot = "renovate[bot]"
 silent_after_days = 8
 
+# A bump is offered (report action list, probe matrix) only once its release is
+# this many days old. renovate.json5's minimumReleaseAge must carry the same
+# number: test-clea.sh fails when the two differ. 0 switches the rule off.
+[policy]
+min_release_age_days = 7
+
 # Inventories cross-checked against Cléa's own scan. An anchor Cléa can read and
 # an inventory here cannot see is a pin nothing is watching — `clea coverage`
 # fails on it.
