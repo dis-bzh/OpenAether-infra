@@ -26,7 +26,8 @@ if ! has 'module.talos.talos_machine_secrets.' \
 ✗ the state holds Talos resources but no talos_machine_secrets (`task infra-down-plan` untracks
   them, and so does `tofu state rm`). The nodes still trust the PKI they held; an apply from this state
   would mint a new one they reject ("certificate signed by unknown authority"). Nothing was applied.
-  Do not run cluster-up or infra-apply. Restore a state that still holds the secrets, or rebuild them from a node
+  Do not run cluster-up or infra-apply. Restore a state that still holds the secrets (a replica generation:
+  scripts/ops/backup-state.sh --list), or rebuild them from a node
   (infrastructure/opentofu/cluster/README.md, "Lost the Talos secrets"; #66), or finish the teardown.
 MSG
   exit 1

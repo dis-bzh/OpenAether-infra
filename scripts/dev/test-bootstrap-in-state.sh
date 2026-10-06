@@ -42,7 +42,8 @@ echo "=== the bootstrap is there and the secrets are not ==="
 STUB_OUT="$LOST" run
 [ "$RC" -ne 0 ] && [ -z "$OUT" ] && grep -q 'talos_machine_secrets' <<<"$ERR" && grep -q 'infra-down-plan' <<<"$ERR" \
   && grep -q 'Lost the Talos secrets' <<<"$ERR" && grep -q 'Do not run cluster-up or infra-apply' <<<"$ERR" \
-  && ok "refused with nothing on stdout, naming the secrets, the likely cause and where the recovery is" \
+  && grep -q 'backup-state.sh --list' <<<"$ERR" \
+  && ok "refused with nothing on stdout, naming the secrets, the likely cause, where the recovery is and how to list the replica generations" \
   || bad "a state without its secrets was answered (rc=$RC out=[$OUT] err=[$ERR])"
 # The trigger is any resource that only exists because the secrets did, not the bootstrap alone: a destroy
 # interrupted after the bootstrap went leaves a machine config behind (decision, #66).
