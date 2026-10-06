@@ -51,7 +51,7 @@ KUBECTL_VERSION="1.37.1"
 # renovate: datasource=github-tags depName=aws/aws-cli
 AWSCLI_VERSION="2.37.9"
 # renovate: datasource=pypi depName=checkov
-CHECKOV_VERSION="3.3.22"
+CHECKOV_VERSION="3.3.24"
 # renovate: datasource=pypi depName=yamllint
 YAMLLINT_VERSION="1.38.0"
 # renovate: datasource=pypi depName=pre-commit
