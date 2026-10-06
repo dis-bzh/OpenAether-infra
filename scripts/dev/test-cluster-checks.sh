@@ -1168,6 +1168,16 @@ echo "=== no script pipes aws into grep -q: under pipefail the SIGPIPE reads as 
 PIPED="$(grep -rnE '^[^#]*aws[^|#]*\|[[:space:]]*grep[[:space:]]+-q' "$ROOT/scripts" --include='*.sh' | grep -v '/dev/test-' || true)"
 [ -z "$PIPED" ] && ok "no aws call is piped into grep -q" || bad "aws piped into grep -q (capture the output first): ${PIPED:0:240}"
 
+echo "=== Scaleway: a network built before the subnet pin keeps its subnet (the pin must not replace it) ==="
+# Planning the pin over a 0.1.0 network replaced it and every node's private NIC; a mocked plan cannot show it (an
+# override cannot set the block field), so the two lines that prevent it are pinned here, and a real climb shows the rest.
+SCWNET="$(awk '/resource "scaleway_vpc_private_network" "this"/,/^}/' "$ROOT/infrastructure/opentofu/modules/providers/scw/network.tf")"
+grep -qE 'ignore_changes[[:space:]]*=[[:space:]]*\[ipv4_subnet\]' <<<"$SCWNET" \
+  && ok "the private network ignores changes to ipv4_subnet" || bad "the Scaleway private network no longer ignores ipv4_subnet: an existing cluster's network would be replaced"
+grep -q 'from = local.scw_subnet_in_use' "$ROOT/infrastructure/opentofu/modules/providers/scw/security.tf" \
+  && ! grep -q 'local.scw_cluster_subnet' "$ROOT/infrastructure/opentofu/modules/providers/scw/security.tf" \
+  && ok "the node security rules follow the subnet in use, not the pinned constant" || bad "a Scaleway security rule uses the pinned constant: an adopted network's mesh would be cut"
+
 [ "$FAIL" -eq 0 ] || RC=1
   # Zero failures is also what a harness that never asserted reports.
   [ "$PASS" -gt 0 ] || { printf 'NOT green: no assertion ran at all.\n'; RC=1; }

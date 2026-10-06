@@ -37,7 +37,7 @@ locals {
   # Carrier range 100.64.0.0/10: origin unconfirmed, so it keeps the LB backend
   # ports until a real deploy shows it unused.
   node_inbound_rules = merge(
-    { for k, r in merge(local.node_inbound_ports, local.gateway_ports) : k => merge(r, { from = local.scw_cluster_subnet }) },
+    { for k, r in merge(local.node_inbound_ports, local.gateway_ports) : k => merge(r, { from = local.scw_subnet_in_use }) },
     { for k, r in local.lb_backend_ports : "carrier-${k}" => merge(r, { from = "100.64.0.0/10" }) },
   )
 }
