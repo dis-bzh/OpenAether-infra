@@ -38,8 +38,8 @@ run() { checkov -d infrastructure/opentofu --external-checks-dir "$CHECKS_DIR" -
 echo "=== the real, unmodified tree passes both custom checks ==="
 
 out="$(run)"
-echo "$out" | grep -qE 'Passed checks: 16, Failed checks: 0' && ok "16 passed, 0 failed (8 node resources + 4 bastions x2 checks, 4 security groups x1 check)" ||
-  bad "unexpected result on the real tree: $(echo "$out" | grep -E 'Passed checks|Failed checks')"
+grep -qE 'Passed checks: 16, Failed checks: 0' <<<"$out" && ok "16 passed, 0 failed (8 node resources + 4 bastions x2 checks, 4 security groups x1 check)" ||
+  bad "unexpected result on the real tree: $(grep -E 'Passed checks|Failed checks' <<<"$out")"
 
 echo
 echo "=== CKV_OA_1: removing a control_plane's ignore_changes is caught ==="
@@ -78,10 +78,10 @@ open(path, "w").write(text.replace(needle, replacement, 1))
 PY
 
 out="$(run)"
-echo "$out" | grep -q 'CKV_OA_1' && echo "$out" | grep -q 'FAILED for resource: module.scw.scaleway_instance_server.control_plane' &&
+grep -q 'CKV_OA_1' <<<"$out" && grep -q 'FAILED for resource: module.scw.scaleway_instance_server.control_plane' <<<"$out" &&
   ok "the mutated control_plane is named FAILED under CKV_OA_1" ||
-  bad "the missing lifecycle block was not caught: $(echo "$out" | grep -E 'Passed checks|Failed checks')"
-echo "$out" | grep -q 'FAILED for resource: module.scw.scaleway_instance_server.worker' &&
+  bad "the missing lifecycle block was not caught: $(grep -E 'Passed checks|Failed checks' <<<"$out")"
+grep -q 'FAILED for resource: module.scw.scaleway_instance_server.worker' <<<"$out" &&
   bad "the untouched worker was flagged too — false positive" ||
   ok "the untouched worker (same file, same resource type) is not flagged"
 
@@ -92,9 +92,9 @@ echo "=== CKV_OA_2: flipping the security group's default policy is caught ==="
 
 sed -i 's/inbound_default_policy = "drop"/inbound_default_policy = "accept"/' "$SCW_SECURITY"
 out="$(run)"
-echo "$out" | grep -q 'CKV_OA_2' && echo "$out" | grep -q 'FAILED for resource: module.scw.scaleway_instance_security_group.this' &&
+grep -q 'CKV_OA_2' <<<"$out" && grep -q 'FAILED for resource: module.scw.scaleway_instance_security_group.this' <<<"$out" &&
   ok "the flipped security group is named FAILED under CKV_OA_2" ||
-  bad "the flipped default policy was not caught: $(echo "$out" | grep -E 'Passed checks|Failed checks')"
+  bad "the flipped default policy was not caught: $(grep -E 'Passed checks|Failed checks' <<<"$out")"
 
 cp "$TMP/scw-security.tf.orig" "$SCW_SECURITY"
 
@@ -102,15 +102,15 @@ echo
 echo "=== the tree is clean again after both mutations ==="
 
 out="$(run)"
-echo "$out" | grep -qE 'Passed checks: 16, Failed checks: 0' && ok "back to 16 passed, 0 failed" ||
-  bad "restore left the tree dirty: $(echo "$out" | grep -E 'Passed checks|Failed checks')"
+grep -qE 'Passed checks: 16, Failed checks: 0' <<<"$out" && ok "back to 16 passed, 0 failed" ||
+  bad "restore left the tree dirty: $(grep -E 'Passed checks|Failed checks' <<<"$out")"
 
 echo
 echo "=== missing __init__.py is the documented false-green trap, guarded by its presence ==="
 
 mv "$CHECKS_DIR/__init__.py" "$TMP/init.py.bak"
 out="$(run)"
-echo "$out" | grep -q 'CKV_OA_1\|CKV_OA_2' &&
+grep -q 'CKV_OA_1\|CKV_OA_2' <<<"$out" &&
   bad "a directory with no __init__.py still registered a check — the guard comment is now wrong" ||
   ok "with no __init__.py, checkov finds neither check (registers nothing) — exactly why the file must stay"
 mv "$TMP/init.py.bak" "$CHECKS_DIR/__init__.py"

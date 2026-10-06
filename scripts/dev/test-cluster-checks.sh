@@ -1101,7 +1101,7 @@ conv v0.0.1 v0.0.1 v0.0.2 v0.0.2
 # The defect stage 3 found, one level up: the roll reporting success is the
 # CLIENT talking. Ask the fleet again, and refuse to claim what it does not say.
 conv v0.0.1 v0.0.1 v0.0.1 v0.0.1
-{ [ "$CONV_RC" -ne 0 ] && printf '%s' "$CONV_OUT" | grep -q 'after the roll'; } \
+{ [ "$CONV_RC" -ne 0 ] && grep -q 'after the roll' <<<"$CONV_OUT"; } \
   && ok "a roll that did not move the fleet fails instead of announcing success" \
   || bad "a roll that changed nothing was reported as converged (rc=$CONV_RC)"
 
@@ -1109,17 +1109,17 @@ conv v0.0.1 v0.0.1 v0.0.1 v0.0.1
 # catches it and the Kubernetes one can be deleted with every assertion still
 # green — measured, it survived the mutation. These two isolate each branch.
 conv v0.0.1 v0.0.1 v0.0.2 v0.0.1
-{ [ "$CONV_RC" -ne 0 ] && printf '%s' "$CONV_OUT" | grep -q 'Kubernetes v0.0.1'; } \
+{ [ "$CONV_RC" -ne 0 ] && grep -q 'Kubernetes v0.0.1' <<<"$CONV_OUT"; } \
   && ok "…and a Kubernetes-only lag is caught on its own" \
   || bad "a Kubernetes-only lag survived the post-roll re-read (rc=$CONV_RC): $CONV_OUT"
 
 conv v0.0.1 v0.0.1 v0.0.1 v0.0.2
-{ [ "$CONV_RC" -ne 0 ] && printf '%s' "$CONV_OUT" | grep -q 'Talos v0.0.1'; } \
+{ [ "$CONV_RC" -ne 0 ] && grep -q 'Talos v0.0.1' <<<"$CONV_OUT"; } \
   && ok "…and a Talos-only lag is caught on its own" \
   || bad "a Talos-only lag survived the post-roll re-read (rc=$CONV_RC): $CONV_OUT"
 
 conv v0.0.1 v0.0.1 v0.0.2 v0.0.2 --check
-{ [ "$CONV_RC" -eq 0 ] && ! rolled . && printf '%s' "$CONV_OUT" | grep -q 'does not match'; } \
+{ [ "$CONV_RC" -eq 0 ] && ! rolled . && grep -q 'does not match' <<<"$CONV_OUT"; } \
   && ok "--check reports the drift before the approval and rolls nothing" \
   || bad "--check rolled something or said nothing (rc=$CONV_RC): $CONV_OUT"
 
@@ -1148,7 +1148,7 @@ conv v0.0.1 v0.0.2 v0.0.2 v0.0.2
 # A fleet nobody could read is not a converged fleet. Before the apply that is
 # normal and silent; after it, claiming anything would be the original defect.
 conv "" ""
-{ [ "$CONV_RC" -ne 0 ] && printf '%s' "$CONV_OUT" | grep -q 'UNKNOWN'; } \
+{ [ "$CONV_RC" -ne 0 ] && grep -q 'UNKNOWN' <<<"$CONV_OUT"; } \
   && ok "an unreadable fleet is refused, not called converged" \
   || bad "an unreadable fleet did not stop the run (rc=$CONV_RC): $CONV_OUT"
 
@@ -1167,6 +1167,10 @@ echo "=== no script pipes aws into grep -q: under pipefail the SIGPIPE reads as 
 # infra-verify did, against a replica holding several objects, and failed 2 runs in 6 with the replica present.
 PIPED="$(grep -rnE '^[^#]*aws[^|#]*\|[[:space:]]*grep[[:space:]]+-q' "$ROOT/scripts" --include='*.sh' | grep -v '/dev/test-' || true)"
 [ -z "$PIPED" ] && ok "no aws call is piped into grep -q" || bad "aws piped into grep -q (capture the output first): ${PIPED:0:240}"
+# The same race inside the harnesses: `printf "$out" | grep -q` loses when grep exits on the first chunk and printf takes the
+# SIGPIPE, which pipefail reads as "not found" — one test-clea assertion failed that way with the needle on its first line.
+PIPED2="$(grep -nE '(printf|echo)[^|#]*\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*q' "$ROOT"/scripts/dev/test-*.sh "$ROOT"/scripts/clea/*.sh | grep -v 'test-cluster-checks.sh' || true)"
+[ -z "$PIPED2" ] && ok "no harness pipes a captured output into grep -q (a here-string has no pipe to break)" || bad "captured output piped into grep -q: ${PIPED2:0:240}"
 
 echo "=== Scaleway: a network built before the subnet pin keeps its subnet (the pin must not replace it) ==="
 # Planning the pin over a 0.1.0 network replaced it and every node's private NIC; a mocked plan cannot show it (an
