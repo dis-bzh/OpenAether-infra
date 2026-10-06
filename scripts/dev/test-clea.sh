@@ -37,7 +37,7 @@ says() {
   local label="$1" needle="$2"; shift 3
   local out
   out="$("$@" 2>&1)"
-  if printf '%s' "$out" | grep -qF -- "$needle"; then ok "$label"; else
+  if grep -qF -- "$needle" <<<"$out"; then ok "$label"; else
     bad "$label — no '$needle' in the output"
     printf '%s\n' "$out" | sed 's/^/      /' | tail -8
   fi
@@ -581,12 +581,12 @@ EOF
 expect 1 "naming only action-sha still leaves precommit-rev, and the plain seven, unwatched" \
   -- python3 "$CLEA" --root "$TMP/native" coverage
 OUT="$(python3 "$CLEA" --root "$TMP/native" coverage 2>&1)"
-if printf '%s' "$OUT" | grep -q 'acme/action ='; then
+if grep -q 'acme/action =' <<<"$OUT"; then
   bad "the covered anchor (acme/action) still shows up as missing"
 else
   ok "the covered anchor (acme/action) is not listed as missing"
 fi
-if printf '%s' "$OUT" | grep -q 'acme/hook ='; then
+if grep -q 'acme/hook =' <<<"$OUT"; then
   ok "the uncovered anchor (acme/hook) is still listed as missing"
 else
   bad "acme/hook should still be reported unwatched"
