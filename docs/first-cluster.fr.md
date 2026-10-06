@@ -355,6 +355,12 @@ récupérée atterrit à côté, en `kubeconfig.restored`.
 Rien ne les récupère sans `TF_VAR_encryption_passphrase`. Il n'y a pas de
 seconde clé, ni de réinitialisation.
 
+Les secrets Talos vivent dans l'état, et le réplica garde une génération datée par sauvegarde (les cinq dernières) pour
+un état qui les contient (`task backup-state PROVIDER=<p> -- --list`). Sans l'une d'elles ni talosconfig que les nœuds
+acceptent encore, aucun chemin de retour n'a été mesuré et la décision est de reconstruire le cluster, car une nouvelle
+PKI est un nouveau cluster. Les recettes, ce qui n'a pas été essayé et ce que la reconstruction perd :
+[le README du cluster](../infrastructure/opentofu/cluster/README.md), « Lost the Talos secrets ».
+
 ## Ce qui n'est pas prouvé
 
 Honnête au moment de la 0.1.0 — la première version de ce projet qui livre

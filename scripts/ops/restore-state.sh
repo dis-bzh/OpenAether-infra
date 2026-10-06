@@ -9,6 +9,7 @@
 #
 # Run from the cluster dir with B's backend initialised (`task restore-state` does both). Needs
 # TF_VAR_encryption_passphrase, the S3 keys of the cloud holding the replica, and B's own.
+# STATE_GENERATION=<timestamp> reads an older replica generation (backup-state.sh --list) instead of the current object.
 # Usage: restore-state.sh <A.tfvars> <B.tfvars>
 # ==============================================================================
 set -euo pipefail
@@ -37,6 +38,11 @@ CN_B="$(tfv "$B" cluster_name)"; DST_EP="$(tfv "$B" s3_primary_endpoint)"; DST_R
 [ -n "$CN_B" ] && [ -n "$DST_EP" ] && [ -n "$DST_REGION" ] || die "$B needs cluster_name, s3_primary_endpoint and s3_primary_region"
 SRC="$(oa_state_bucket "$(oa_project "$CN_A" "$(tfv "$A" bucket_suffix)")" "$PA" "$(tfv "$A" environment)")-backup"
 SRC_KEY="${CN_A}.tfstate"
+# The current object can be a state written after a teardown (no PKI): an older generation may still hold it.
+if [ -n "${STATE_GENERATION:-}" ]; then
+  [[ "$STATE_GENERATION" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || die "STATE_GENERATION must look like 20261006T120000Z, as backup-state.sh --list prints it"
+  SRC_KEY="${SRC_KEY}.${STATE_GENERATION}"
+fi
 DST="$(oa_state_bucket "$(oa_project "$CN_B" "$(tfv "$B" bucket_suffix)")" "$PB" "$(tfv "$B" environment)")"
 DST_KEY="${CN_B}.tfstate"
 # The undo below deletes the target: were it the replica itself, a failed run would delete the only PKI.
@@ -85,7 +91,7 @@ AWS_ACCESS_KEY_ID="$DST_AK" AWS_SECRET_ACCESS_KEY="$DST_SK" \
 
 LIST="$(tofu state list -no-color 2>&1)" || die "the copied state could not be read (wrong TF_VAR_encryption_passphrase?): $(tail -n 2 <<<"$LIST")"
 grep -qxF "$PKI" <<<"$LIST" ||
-  die "this state holds no Talos PKI (a replica written after the teardown has none): nothing here is worth restoring, a fresh task cluster-up is the answer"
+  die "this state holds no Talos PKI (a replica written after the teardown has none): try an older generation (STATE_GENERATION=<timestamp>, listed by backup-state.sh --list), else a fresh task cluster-up is the answer"
 
 # prevent_destroy refuses a plan that replaces the secrets, and a talos_version below the recorded one plans exactly that (#66).
 REC="$(tofu state pull | jq -r '[.resources[] | select(.module == "module.talos" and .type == "talos_machine_secrets") | .instances[0].attributes.talos_version][0] // empty')"

@@ -345,6 +345,12 @@ without it, the recovered copy lands beside the existing one as
 Nothing recovers these without `TF_VAR_encryption_passphrase`. There is no
 second key and no reset.
 
+The Talos secrets live in the state, and the replica keeps a dated generation per backup run (the last five) for a
+state that holds them (`task backup-state PROVIDER=<p> -- --list`). With neither one of those nor a talosconfig the
+nodes still trust, no way back was measured and the decision is to rebuild the cluster, since a new PKI is a new
+cluster. The recipes, what was not tried, and what the rebuild loses:
+[the cluster README](../infrastructure/opentofu/cluster/README.md), "Lost the Talos secrets".
+
 ## What is not proven
 
 Honest as of 0.1.0 — the first release of this project that ships anything

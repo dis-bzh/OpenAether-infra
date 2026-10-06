@@ -16,6 +16,24 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
+- **The replica of the state keeps dated generations, so a state without the Talos secrets, or holding ones the nodes do
+  not trust, is no longer the only copy (refs #267).** `backup-state.sh` already refused a state that holds Talos
+  resources but not `talos_machine_secrets`, yet the replica was one object and two kinds of state pass that guard and
+  replaced it: one with no Talos resource at all, and one holding secrets the nodes do not trust (an apply that got past
+  the guard minted them). Beside the current object it now writes `<key>.<UTC timestamp>` as separate objects (bucket
+  versioning differs between Outscale's and OVH's S3), one per run and only for a state that holds secrets, before the
+  current object is replaced, and keeps the newest `STATE_GENERATIONS` (5, set at the top of the script; five unchanged
+  re-runs push older states out); only keys of that exact form are ever removed, never the one just written.
+  `backup-state.sh --list` (`task backup-state PROVIDER=<p> -- --list`) prints them, most recently written first and
+  without needing the secrets, and fails with the tofu-free command when the targets cannot be read; `task
+  restore-state` takes one with `STATE_GENERATION=<timestamp>`. Both variables are forwarded by their tasks: a Task CLI
+  variable is not in the script's environment. The cluster README says that no way back from a lost PKI with no
+  generation was measured, what was not tried, and that the decision is to rebuild. Rung: mocked (`test-state-backups.sh`
+  runs the real script against a fake object store, and the Task layer for a refused retention; 30 deliberate breaks
+  were caught on the first version, 26 more on the fixes to the store, listing, order and tasks). Not run: a real store,
+  so `list-objects-v2 --prefix`, the delete of the oldest generation and the key names are unproven on Scaleway, OVH and
+  Outscale.
+
 - **`node_nameservers`: DNS-over-TLS or -HTTPS for the nodes' own resolver (refs #173).** A list of `{address,
   protocol, tls_server_name}` rendered as one Talos `ResolverConfig` and appended to every node's config, plus a
   `TimeSyncConfig` `bootTimeout` when a server is encrypted (`node_dns_boot_timeout`, default `90s`, `""` keeps
