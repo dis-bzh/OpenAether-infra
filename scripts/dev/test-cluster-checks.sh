@@ -160,6 +160,8 @@ ln -s "$ROOT/scripts/dev/cluster-upgrade.sh" "$FAKE/scripts/dev/cluster-upgrade.
 ln -s "$ROOT/scripts/dev/infra-verify.sh" "$FAKE/scripts/dev/infra-verify.sh"
 # Sourced by infra-verify, converge-versions and talos-image.sh.
 ln -s "$ROOT/scripts/lib/common.sh" "$FAKE/scripts/lib/common.sh"
+# Read by converge-versions' pair guard, which refuses when it cannot (#278).
+ln -s "$ROOT/infrastructure/opentofu/cluster/version-support.json" "$CLUSTER/version-support.json"
 UPGRADE="$FAKE/scripts/dev/cluster-upgrade.sh"
 KEYFILE="$STUB_DIR/ssh-key-fixture"; : >"$KEYFILE"
 
@@ -1020,7 +1022,28 @@ _eat="$(walk_path v1.12.7 v1.30.0 7 <<<"$CLIMB7" | grep -cE '^(k8s|talos) ' || t
   && ok "a step that reads stdin cannot swallow the rest of the climb" \
   || bad "a stdin-reading step truncated the climb to ${_eat}/7 dispatches"
 
-unset -f upgrade_k8s_to upgrade_talos_to walk_path
+# An axis that does not move is pinned where it runs (#279). The stubs read the pin AT CALL TIME: an unset
+# pin is the shipped default (Kubernetes v1.37.1), which Talos 1.13.9 refuses.
+PINS="$STUB_DIR/pins"
+tfvar_get() {
+  local v; v="$(sed -nE "s/^$1=//p" "$PINS" 2>/dev/null)"
+  if [ -n "$v" ]; then echo "$v"; elif [ "$1" = kubernetes_version ]; then echo v1.37.1; else echo v1.14.2; fi
+}
+tfvar_set() { { grep -v "^$1=" "$PINS" 2>/dev/null; echo "$1=$2"; } >"$PINS.n"; mv "$PINS.n" "$PINS"; }
+upgrade_k8s_to()   { echo "k8s $1 talos-pin=$(tfvar_get talos_version)"; }
+upgrade_talos_to() { echo "talos $1 k8s-pin=$(tfvar_get kubernetes_version)"; }
+: >"$PINS"
+_pin="$(walk_path v1.13.9 v1.36.3 2 <<<$'v1.14.2 v1.36.3\nv1.14.2 v1.37.1' | grep -E '^(k8s|talos) ' | tr '\n' '|')"
+[ "$_pin" = 'talos v1.14.2 k8s-pin=v1.36.3|k8s v1.37.1 talos-pin=v1.14.2|' ] \
+  && ok "an unpinned Kubernetes is pinned to what runs while Talos moves, and Talos stays put while Kubernetes moves" \
+  || bad "the non-moving axis was left at the default: $_pin"
+printf 'kubernetes_version=v1.36.3\n' >"$PINS"
+walk_path v1.13.9 v1.36.3 1 <<<'v1.14.2 v1.36.3' >/dev/null
+[ "$(grep -c '^kubernetes_version=' "$PINS")" = 1 ] && [ "$(tfvar_get kubernetes_version)" = v1.36.3 ] \
+  && ok "a pin that already says what runs is left alone" \
+  || bad "an existing pin was rewritten or duplicated"
+
+unset -f upgrade_k8s_to upgrade_talos_to walk_path tfvar_get tfvar_set
 echo "=== converge-versions: the half of cluster-up that OpenTofu cannot do ==="
 
 # Its own stub, because both reads ask the SAME question — `custom-columns` on the

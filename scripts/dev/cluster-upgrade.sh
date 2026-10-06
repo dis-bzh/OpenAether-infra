@@ -583,6 +583,10 @@ walk_path() { # <talos-from> <k8s-from> <total>   — reads "talos k8s" lines on
       echo
       echo "════ step ${step}/${total} — Talos ${st}, Kubernetes ${sk}"
     fi
+    # An axis that does not move is pinned where it runs: unset, it follows the shipped default and the apply
+    # hands the end pair to nodes still on the old one (Kubernetes 1.37.1 refused by Talos 1.13.9, #279).
+    [ "$sk" != "$prev_k" ] || [ "$(tfvar_get kubernetes_version)" = "$prev_k" ] || tfvar_set kubernetes_version "$prev_k"
+    [ "$st" != "$prev_t" ] || [ "$(tfvar_get talos_version)" = "$prev_t" ] || tfvar_set talos_version "$prev_t"
     [ "$sk" = "$prev_k" ] || upgrade_k8s_to "$sk"
     [ "$st" = "$prev_t" ] || upgrade_talos_to "$st"
     prev_t="$st"; prev_k="$sk"
