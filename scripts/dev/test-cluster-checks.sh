@@ -1183,7 +1183,12 @@ echo "=== the bastion cloud-init renders, with SSH-CA off, the bytes 0.1.0 shipp
 # killed the Talos tunnels with it and failed phase 2 (measured on OVH, 2026-10-06). The hash is 0.1.0's render.
 if command -v tofu >/dev/null 2>&1; then
   BASTION_TPL="$ROOT/infrastructure/opentofu/modules/providers/_shared/bastion-cloud-init.yaml.tftpl"
-  BASTION_SHA="$(echo "sha256(templatefile(\"$BASTION_TPL\", {ssh_keys=[\"k\"], bastion_user=\"bastion\", private_cidr=\"10.0.0.0/24\", extra_packages=[], extra_write_files=[], extra_runcmd=[], ssh_ca_public_key=\"\", ssh_ca_principals=\"\"}))" | tofu console 2>/dev/null | tr -d '"')"
+  # No stdin and a timeout: CI's tofu is wrapped, and `tofu console` waited on a stdin the wrapper never closes (15 min).
+  mkdir -p "$STUB_DIR/bastion-render"
+  cat >"$STUB_DIR/bastion-render/main.tf" <<TF
+output "sha" { value = sha256(templatefile("$BASTION_TPL", {ssh_keys = ["k"], bastion_user = "bastion", private_cidr = "10.0.0.0/24", extra_packages = [], extra_write_files = [], extra_runcmd = [], ssh_ca_public_key = "", ssh_ca_principals = ""})) }
+TF
+  BASTION_SHA="$(cd "$STUB_DIR/bastion-render" && timeout 120 tofu apply -auto-approve -input=false -no-color </dev/null >/dev/null 2>&1 && tofu output -raw sha </dev/null 2>/dev/null)"
   [ "$BASTION_SHA" = 1f09a8566681c3e4f3e6c5dde34060a3c1509aa6e0b4db0ad7dc295479637c47 ] \
     && ok "the default render is 0.1.0's, byte for byte" \
     || bad "the default bastion render changed (${BASTION_SHA:-no answer}): every OVH/Outscale bastion is replaced on upgrade — keep the default bytes, or update this hash AND the CHANGELOG upgrade notes"
