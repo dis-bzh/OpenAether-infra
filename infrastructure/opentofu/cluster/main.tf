@@ -361,7 +361,7 @@ locals {
   # SSH user for the bastion tunnels, by provider:
   #   scaleway, ovh, outscale — a dedicated unprivileged "bastion" user via cloud-init
   #   proxmox  — the module's own answer: host_ssh_user (default root) for
-  #              host-as-bastion, "ubuntu" for the VM bastion it creates. Read
+  #              host-as-bastion, "bastion" for the VM bastion it creates. Read
   #              from the module, never re-derived here (they drifted apart).
   bastion_user = lookup({
     scaleway = "bastion"

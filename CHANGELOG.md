@@ -433,6 +433,12 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **The Proxmox VM bastion no longer uses the image's default user (refs #201).** It was created as `ubuntu`, the
+  default user of the Ubuntu cloud image: cloud-init ignores the second definition of a user it already has, so the user
+  never joined `bastion-admins` and sshd refused the key (measured on OVH, 0/6 tunnels). The user is now `bastion`, as on
+  the three measured clouds, from one local shared by the VM and the output. Rung: mocked (`tofu test`, the assertion
+  now reads `bastion`); never applied on a real Proxmox host, so the issue stays open for that one observation.
+
 - **Upgrading a 0.1.0 cluster to this release, found by running it on real clouds (refs #79, #81, #278, #279).** Four
   defects stood between `git pull` and a working upgrade, each now closed:
   a Scaleway network built under 0.1.0 had its subnet replaced by the new pin, and every private NIC behind it
