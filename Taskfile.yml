@@ -1448,8 +1448,9 @@ tasks:
 
   backup-state:
     desc: >-
-      Replicate the (encrypted) tfstate to the -backup store (post-apply). Set BACKUP_AWS_* for a cross-provider
-      replica. Usage: task backup-state [PROVIDER=scaleway|ovh|outscale|proxmox]
+      Replicate the (encrypted) tfstate to the -backup store (post-apply), with dated generations beside it. Set
+      BACKUP_AWS_* for a cross-provider replica. Usage: task backup-state PROVIDER=<p> [-- --list] (--list prints
+      the replica's generations, read-only)
     # `dir:` is NOT cosmetic here: the *provider-env anchor resolves the S3
     # credentials with `../../../scripts/...`, a path that is only correct from
     # infrastructure/opentofu/cluster. Without it every use of this target exits
@@ -1467,7 +1468,7 @@ tasks:
       ROLE: '{{.ROLE | default "management"}}'
     env: *provider-env
     cmds:
-      - ../../../scripts/ops/backup-state.sh .
+      - ../../../scripts/ops/backup-state.sh {{.CLI_ARGS}} .
 
   edge-down:
     desc: >-

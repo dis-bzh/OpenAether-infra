@@ -120,6 +120,21 @@ printf '%s\n' "$KEPT" >"$TMP/allkept"; run "$TMP/allkept"
 # A failed run after the copy: the aws calls are the read, the write and ONE delete of B's key, nothing of the replica's.
 undone() { [ "$RC" -ne 0 ] && [ ! -f "$TMP/up" ] && log_is "$READ" "$WRITE" "$RM"; }
 
+echo "=== STATE_GENERATION reads an older generation of the replica, and only a well-formed one ==="
+GEN=20261006T120000Z
+run "$TMP/full" STATE_GENERATION="$GEN"
+READ_GEN="replica-cloud|s3 cp s3://${SRC}/${KEY_A}.${GEN} <state> --endpoint-url ${A_EP} --region ${A_REGION}"
+[ "$RC" = 0 ] && log_is "$READ_GEN" "$WRITE" &&
+  ok "the object read is <key>.<timestamp> with the replica cloud's key, and the write is B's own key as before" || bad "generation read: rc=$RC $(grep -v '^rm-called$' "$TMP/log" | tr '\n' ';')"
+for g in 20261006 latest 2026-10-06T12:00:00Z '../x' "${GEN}.bak"; do
+  run "$TMP/full" STATE_GENERATION="$g"
+  [ "$RC" -ne 0 ] && [ "$(calls 's3 ')" = 0 ] && grep -q 'STATE_GENERATION' <<<"$OUT" &&
+    ok "STATE_GENERATION=${g}: refused before any S3 call, naming the variable" || bad "STATE_GENERATION=${g}: rc=$RC calls=$(calls 's3 ') out=$OUT"
+done
+run "$TMP/nosecrets"
+grep -q 'STATE_GENERATION' <<<"$OUT" && grep -q 'backup-state.sh --list' <<<"$OUT" &&
+  ok "a replica with no PKI points at the older generations" || bad "no pointer to the generations: $OUT"
+
 echo "=== it refuses, and leaves nothing behind ==="
 run "$TMP/full" OA_STUB_TARGET_LIST=module.scw[0].something
 [ "$RC" -ne 0 ] && [ "$(calls 's3 cp')" = 0 ] && ok "a target that already holds resources is refused before any copy" || bad "live target: rc=$RC cp=$(calls 's3 cp')"

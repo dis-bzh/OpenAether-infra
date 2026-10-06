@@ -9,24 +9,34 @@
 # Run AFTER each apply (the backend only flushes state on apply exit). The
 # bucket/endpoint/key/provider come from the `backup_targets` tofu output.
 #
+# Next to the current object it keeps dated GENERATIONS, <key>.<UTC timestamp>, the newest
+# STATE_GENERATIONS of them (the one place the retention is set). Each is a state that holds the
+# Talos secrets, written before the current object is touched, so a state without them is never
+# the only copy (#267). `--list` prints them, newest first, and works with the secrets gone.
+#
 # Creds:
 #   primary : the ambient AWS_* (the Taskfile sets it to the cluster provider's keys)
 #   replica : <PU>_BACKUP_AWS_* -> BACKUP_AWS_* -> primary    (../lib/common.sh::s3_cred)
 #
-# Usage: ./scripts/ops/backup-state.sh [tofu_dir]   (default: infrastructure/opentofu/cluster)
+# Usage: ./scripts/ops/backup-state.sh [--list] [tofu_dir]   (default: infrastructure/opentofu/cluster)
 # ==============================================================================
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
 
+LIST=0; [ "${1:-}" != --list ] || { LIST=1; shift; }
 TOFU_DIR="${1:-infrastructure/opentofu/cluster}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# A retention that keeps nothing (0, a typo) is refused, not guessed.
+GENERATIONS="${STATE_GENERATIONS:-5}"
+[[ "$GENERATIONS" =~ ^[1-9][0-9]*$ ]] || { echo "✗ STATE_GENERATIONS must be a whole number, 1 or more (got '$GENERATIONS'): nothing was replicated." >&2; exit 1; }
 command -v aws >/dev/null 2>&1 || { echo "✗ aws CLI required"; exit 1; }
 command -v jq  >/dev/null 2>&1 || { echo "✗ jq required"; exit 1; }
 oa_aws_compat
 
 cd "$TOFU_DIR"
 # The replica is the undo of infra-down-plan's untracking (#66): a state without its secrets must not replace it.
-"$HERE/../internal/bootstrap-in-state.sh" >/dev/null \
+# Not for --list: that is read-only, and wanted most when the secrets are gone.
+[ "$LIST" = 1 ] || "$HERE/../internal/bootstrap-in-state.sh" >/dev/null \
   || { echo "✗ nothing was replicated: the replica may hold the only copy of the secrets, leave it as it is." >&2; exit 1; }
 # "There is nothing to replicate yet" and "I could not ask" are different
 # answers, and this used to give the first for both: any failure of `tofu output`
@@ -61,17 +71,58 @@ PROVIDER="$(jq -r '.provider // empty' <<<"$T")"
 BACKUP_AK="$(s3_cred "$PROVIDER" backup ak "$REPLICA_EP")"
 BACKUP_SK="$(s3_cred "$PROVIDER" backup sk "$REPLICA_EP")"
 
+replica() { AWS_ACCESS_KEY_ID="$BACKUP_AK" AWS_SECRET_ACCESS_KEY="$BACKUP_SK" aws "$@" --endpoint-url "$REPLICA_EP" --region "$REPLICA_REGION"; }
+# Everything under the state key as [key, modified, size] rows ("null" when empty). A generation is <key>.<timestamp>
+# and nothing else: retention never touches a key it did not name itself.
+rows() { replica s3api list-objects-v2 --bucket "$REPLICA_BUCKET" --prefix "$KEY" --query 'Contents[].[Key,LastModified,Size]' --output json; }
+JQ_GEN='def gen: .[0] | startswith($k + ".") and (ltrimstr($k + ".") | test("^[0-9]{8}T[0-9]{6}Z$"));'
+
+if [ "$LIST" = 1 ]; then
+  echo "s3://$REPLICA_BUCKET/ on ${REPLICA_EP}, newest first. Restore one by copying it over the state key (README, \"Lost the Talos secrets\")."
+  rows | jq -r --arg k "$KEY" "$JQ_GEN"' (. // []) | ([.[] | select(.[0] == $k)] + ([.[] | select(gen)] | sort_by(.[0]) | reverse))
+    | if length == 0 then "  (no state object under \($k))" else .[] | ["  " + (if .[0] == $k then "current   " else "generation" end), .[1], .[2], .[0]] | @tsv end'
+  exit 0
+fi
+
+# A generation is only ever a state that holds the secrets; the cluster-wide guard above passes a state with no
+# Talos resources at all, which is worth replicating but not worth a generation. An unreadable state moves nothing.
+STATE_LIST="$(tofu state list -no-color 2>&1)" \
+  || { echo "✗ cannot read the state, so nothing was replicated:" >&2; sed 's/^/    /' <<<"$STATE_LIST" >&2; exit 1; }
+SECRETS=0; ! grep -qF 'module.talos.talos_machine_secrets.' <<<"$STATE_LIST" || SECRETS=1
+
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 
 # Download the ciphertext from primary (ambient AWS_*), re-upload to replica (+SSE).
 aws s3 cp "s3://$PRIMARY_BUCKET/$KEY" "$WORK/state" \
   --endpoint-url "$PRIMARY_EP" --region "$PRIMARY_REGION" >/dev/null
-AWS_ACCESS_KEY_ID="$BACKUP_AK" AWS_SECRET_ACCESS_KEY="$BACKUP_SK" \
-  aws s3 cp "$WORK/state" "s3://$REPLICA_BUCKET/$KEY" \
-    --endpoint-url "$REPLICA_EP" --region "$REPLICA_REGION" --sse AES256 >/dev/null
+# The dated copy first: the current object is only replaced once the same bytes sit beside it under a name that stays.
+GEN=""
+if [ "$SECRETS" = 1 ]; then
+  GEN="$KEY.$(date -u +%Y%m%dT%H%M%SZ)"
+  replica s3 cp "$WORK/state" "s3://$REPLICA_BUCKET/$GEN" --sse AES256 >/dev/null \
+    || { echo "✗ could not write s3://$REPLICA_BUCKET/$GEN: the current replica was left as it is." >&2; exit 1; }
+fi
+replica s3 cp "$WORK/state" "s3://$REPLICA_BUCKET/$KEY" --sse AES256 >/dev/null \
+  || { echo "✗ could not write s3://$REPLICA_BUCKET/$KEY${GEN:+ (the generation $GEN was written)}." >&2; exit 1; }
 
 if [ "$REPLICA_EP" = "$PRIMARY_EP" ]; then
   echo "✓ tfstate replicated (still client-encrypted) to s3://$REPLICA_BUCKET/$KEY — SAME provider"
 else
   echo "✓ tfstate replicated (still client-encrypted) to s3://$REPLICA_BUCKET/$KEY — on ${REPLICA_EP}"
 fi
+[ -n "$GEN" ] || { echo "  no generation written: this state holds no Talos secrets, so the older generations that do are left alone."; exit 0; }
+
+# Retention: names sort chronologically. The key just written is never a victim whatever its clock says: a
+# machine whose clock is behind would otherwise prune the newest copy at once. A failure here costs space, not data.
+PRUNED=0
+if OLD="$(rows | jq -r --arg k "$KEY" --arg new "$GEN" --argjson keep "$GENERATIONS" "$JQ_GEN"' (. // []) | map(select(gen) | .[0]) | sort
+      | . as $all | ($all - [$new])[0:([($all | length) - $keep, 0] | max)] | .[]')"; then
+  while IFS= read -r old; do
+    [ -n "$old" ] || continue
+    if replica s3 rm "s3://$REPLICA_BUCKET/$old" >/dev/null; then PRUNED=$((PRUNED + 1))
+    else echo "⚠ could not remove the old generation s3://$REPLICA_BUCKET/$old (retention retries next run)" >&2; fi
+  done <<<"$OLD"
+else
+  echo "⚠ could not list the generations in s3://$REPLICA_BUCKET: none was pruned (retention retries next run)" >&2
+fi
+echo "  generation $GEN kept (newest $GENERATIONS), $PRUNED older removed. List: backup-state.sh --list"
