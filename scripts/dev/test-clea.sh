@@ -12,7 +12,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CLEA="${CLEA:-$ROOT/scripts/clea/clea.py}"
+CLEA="$(realpath -- "${CLEA:-$ROOT/scripts/clea/clea.py}")"  # absolute: some groups cd into a temp dir
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -460,18 +460,19 @@ def fake(path, token):
     if path.endswith("/git/ref/tags/v1%232"): return {"ref": "refs/tags/v1#2", "object": {"type": "commit", "sha": C1}}
     raise clea.CleaError("unexpected " + path)
 clea._gh_json = fake
+def resolve_commit(dep, tag, token): return clea.tag_facts(dep, tag, token)["commit"]
 # OSV must never be reached from here: every scan asks it, and this harness stays offline.
 osv_posts = []
 clea.http_post_json = lambda url, payload: osv_posts.append(payload) or b"{}"
 
 def refuses(tag):
-    try: clea.resolve_commit("acme/action", tag, None); return False
+    try: resolve_commit("acme/action", tag, None); return False
     except clea.CleaError: return True
-checks = [("a lightweight tag resolves to its commit", clea.resolve_commit("acme/action", "v1.1.0", "tk") == C1)]
+checks = [("a lightweight tag resolves to its commit", resolve_commit("acme/action", "v1.1.0", "tk") == C1)]
 checks.append(("…by asking the dependency's own repository, with the token it was given",
                calls[-1] == ("/repos/acme/action/git/ref/tags/v1.1.0", "tk")))
 calls.clear()
-checks.append(("an annotated tag is peeled to the commit it names", clea.resolve_commit("acme/action", "v2.0.0", "tk") == C1))
+checks.append(("an annotated tag is peeled to the commit it names", resolve_commit("acme/action", "v2.0.0", "tk") == C1))
 checks.append(("…in the same repository, with the same token",
                calls == [("/repos/acme/action/git/ref/tags/v2.0.0", "tk"), ("/repos/acme/action/git/tags/" + C2, "tk")]))
 checks += [
@@ -480,7 +481,7 @@ checks += [
     ("an answer with no object is refused", refuses("empty")),
     ("an answer for another ref than the one asked is refused", refuses("mismatch")),
 ]
-calls.clear(); got = clea.resolve_commit("acme/action", "v1#2", None)
+calls.clear(); got = resolve_commit("acme/action", "v1#2", None)
 checks.append(("a tag with a '#' is percent-encoded in the path, never cut at the fragment",
                got == C1 and calls[0][0].endswith("/git/ref/tags/v1%232")))
 try:
@@ -518,11 +519,11 @@ checks += [
     ("one lookup of the bump's tag per action pin, not one per anchor, with the scan's own token",
      [c for c in looked if c[0].endswith("/repos/acme/action/git/ref/tags/v1.1.0")]
      == [("/repos/acme/action/git/ref/tags/v1.1.0", "tok-scan")]),
-    # The pinned tag IS looked up now (OSV is asked by commit), but it is no commit to bump with.
-    ("an action pin that is not behind has no commit to bump with, and only its own tag is looked up",
-     all("sha" not in d for d in by["acme/current"])
-     and [c[0] for c in calls if "/repos/acme/current/" in c[0]] == ["/repos/acme/current/git/ref/tags/v1.1.0"]),
-    ("OSV is asked by the commit the scan resolved, and never reached for real", {"commit": C1} in osv_posts),
+    # The commit an action pin holds is on its own line, so a pin costs no GitHub call.
+    ("an action pin that is not behind has no commit to bump with, and nothing is looked up for it",
+     all("sha" not in d for d in by["acme/current"]) and [c[0] for c in calls if "/repos/acme/current/" in c[0]] == []),
+    ("OSV is asked by the commit the scan resolved, and by the one on the pin's own line; never reached for real",
+     {"commit": C1} in osv_posts and {"commit": "4" * 40} in osv_posts),
     ("an action pin on a datasource that is not GitHub is never looked up",
      not any("acme-notgh" in c[0] for c in calls) and "sha" not in by["acme-notgh"][0]),
     ("a failed lookup is an error in the report…", any("boom: lookup failed" in e for e in state["errors"])),
@@ -1029,9 +1030,10 @@ echo "=== a bump is offered only if old enough, not withdrawn, not retagged, not
 # does not put one in the action list or the probe matrix until it has aged and
 # OSV has had a look. Offline: PyPI and OSV are a local server that the real HTTP
 # code talks to, and GitHub is a patched `_gh_json`.
-RENOVATE_CFG="${RENOVATE_CFG:-$ROOT/renovate.json5}" CLEA_TOML="${CLEA_TOML:-$ROOT/clea.toml}" COUNTFILE="$TMP/count-offer" python3 - "$CLEA" <<'PY'
-import contextlib, http.server, importlib.util, io, json, os, re, socket, sys, tempfile, threading
+RENOVATE_CFG="${RENOVATE_CFG:-$ROOT/renovate.json5}" CLEA_TOML="${CLEA_TOML:-$ROOT/clea.toml}" ROOT_DIR="$ROOT" COUNTFILE="$TMP/count-offer" python3 - "$CLEA" <<'PY'
+import contextlib, http.server, importlib.util, io, json, os, re, shlex, socket, sys, tempfile, threading
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 spec = importlib.util.spec_from_file_location("clea", sys.argv[1])
 clea = importlib.util.module_from_spec(spec); spec.loader.exec_module(clea)
@@ -1052,12 +1054,18 @@ three = NOW - timedelta(days=3)
 check("a release 3 days old is held, with the date it becomes eligible",
       holds(row(released_at=three.isoformat())) == [f"too young, eligible on {(three + timedelta(days=7)).date()}"])
 check("its age is reported in whole days", clea.assess(row(released_at=ago(days=3)), NOW, 7)["age"] == 3)
+check("a stamp in the future has an age of 0, never a negative one",
+      clea.assess(row(released_at=ago(days=-2)), NOW, 7)["age"] == 0 and clea._age_text(0) == "0 days")
+check("one day is singular, two are plural", clea._age_text(1) == "1 day" and clea._age_text(2) == "2 days")
 clock = datetime(2026, 1, 15, tzinfo=timezone.utc)
 check("a release exactly N days old is eligible, on the clock's own tick",
       holds(row(released_at="2026-01-08T00:00:00Z"), now=clock) == []
       and len(holds(row(released_at="2026-01-08T00:00:01Z"), now=clock)) == 1)
 check("one second short of N days is still held",
       len(holds(row(released_at=(NOW - timedelta(days=7) + timedelta(seconds=2)).isoformat()))) == 1)
+check("a stamp with an offset is read as the UTC instant it is (the eligible date is UTC's)",
+      holds(row(released_at="2026-01-01T01:00:00+02:00"), now=datetime(2026, 1, 2, tzinfo=timezone.utc))
+      == ["too young, eligible on 2026-01-07"])
 check("an old release with nothing against it is not held", holds(row()) == [])
 for label, value in (("missing", None), ("unreadable", "last tuesday")):
     check(f"a {label} date is `age unknown`, never eligible",
@@ -1068,6 +1076,8 @@ check("a helm date with nine fractional digits is read", holds(row(released_at="
 check("0 days switches the age rule off: young and undated are offered",
       holds(row(released_at=ago(days=0)), days=0) == [] and holds(row(released_at=None), days=0) == [])
 check("…and still holds a yanked one", holds(row(withdrawn="yanked on PyPI"), days=0) == ["yanked on PyPI"])
+check("the largest policy is a real policy, not an overflow",
+      holds(row(), days=clea.MAX_MIN_AGE_DAYS) == [f"too young, eligible on {(datetime.fromisoformat(ago(days=30).replace('Z', '+00:00')) + timedelta(days=clea.MAX_MIN_AGE_DAYS)).date()}"])
 check("a withdrawn release is held, with the reason it carries",
       holds(row(withdrawn="yanked on PyPI: broken wheel")) == ["yanked on PyPI: broken wheel"])
 check("a tag that moved is held, naming both commits",
@@ -1076,6 +1086,12 @@ check("an advisory against the candidate holds it, ids listed",
       holds(row(osv={"candidate": {"ids": ["GHSA-1", "GHSA-2"]}})) == ["advisory GHSA-1, GHSA-2 against v2"])
 check("an advisory against the CURRENT pin does not hold the candidate",
       holds(row(osv={"current": {"ids": ["GHSA-1"]}, "candidate": {"ids": []}})) == [])
+check("an advisory the pin we run already carries does not hold a later bump (no fix would block it for ever)",
+      holds(row(osv={"current": {"ids": ["GHSA-1"]}, "candidate": {"ids": ["GHSA-1"]}})) == [])
+check("only the advisories NEW in the candidate are named",
+      holds(row(osv={"current": {"ids": ["GHSA-1"]}, "candidate": {"ids": ["GHSA-1", "GHSA-2"]}})) == ["advisory GHSA-2 against v2"])
+check("with the pin's own advisories unknown, every candidate advisory holds",
+      holds(row(osv={"current": {"unknown": "x"}, "candidate": {"ids": ["GHSA-1"]}})) == ["advisory GHSA-1 against v2"])
 check("`advisories unknown` does not hold it either, and is never printed as none",
       holds(row(osv={"candidate": {"unknown": "OSV did not answer"}})) == []
       and clea.advisory_text({"unknown": "x"}) == "advisories unknown"
@@ -1084,10 +1100,35 @@ check("`advisories unknown` does not hold it either, and is never printed as non
 check("every cause is listed, not only the first",
       len(holds(row(released_at=ago(days=1), withdrawn="w", tag_moved={"from": "a", "to": "b"},
                     osv={"candidate": {"ids": ["G"]}}))) == 4)
+ids30 = [f"GHSA-{i:02d}" for i in range(30)]
+check("a long list of advisories is a few ids and a count",
+      clea.short_ids(ids30) == "GHSA-00, GHSA-01, GHSA-02, GHSA-03 and 26 more"
+      and clea.short_ids(ids30[:4]) == ", ".join(ids30[:4]) and clea.short_ids(ids30[:5]).endswith("and 1 more"))
+check("…in the hold and in the advisories column too",
+      holds(row(osv={"candidate": {"ids": ids30}})) == ["advisory GHSA-00, GHSA-01, GHSA-02, GHSA-03 and 26 more against v2"]
+      and clea.advisory_text({"ids": ids30}).endswith("and 26 more"))
+fix_osv = {"current": {"ids": ["GHSA-1"]}, "candidate": {"ids": []}}
+young = row(released_at=ago(days=1), osv=fix_osv)
+check("a candidate that clears an advisory of the pin we run skips the age rule, as Renovate's security updates do",
+      holds(young) == [] and clea.assess(young, NOW, 7)["fixes"] == ["GHSA-1"] and not clea.assess(young, NOW, 7)["young"])
+check("…an undated one included", holds(row(released_at=None, osv=fix_osv)) == [])
+check("…but a yanked one is still held", holds(dict(young, withdrawn="yanked on PyPI")) == ["yanked on PyPI"])
+check("…and one that adds an advisory of its own",
+      holds(dict(young, osv={"current": {"ids": ["GHSA-1"]}, "candidate": {"ids": ["GHSA-2"]}})) == ["advisory GHSA-2 against v2"])
+check("a commit query cannot clear anything, so it never skips the age rule",
+      len(holds(dict(young, osv={"current": {"ids": ["GHSA-1"], "by": "commit"}, "candidate": {"ids": []}}))) == 1
+      and len(holds(dict(young, osv={"current": {"ids": ["GHSA-1"]}, "candidate": {"ids": ["GHSA-9"], "by": "commit"}}))) == 2)
+check("a candidate OSV could not answer for does not skip it either",
+      len(holds(dict(young, osv={"current": {"ids": ["GHSA-1"]}, "candidate": {"unknown": "x"}}))) == 1)
 check("a state without a policy is judged by the default, not waved through",
       clea.policy_of({"generated_at": ago(days=0)})[1] == 7
       and clea.policy_of({"policy": {"min_release_age_days": True}})[1] == 7
       and clea.policy_of({"policy": {"min_release_age_days": 3}})[1] == 3)
+check("a policy of 0 is a policy, not a missing one; one beyond the cap is refused",
+      clea.policy_of({"policy": {"min_release_age_days": 0}})[1] == 0
+      and clea.policy_of({"policy": {"min_release_age_days": clea.MAX_MIN_AGE_DAYS}})[1] == clea.MAX_MIN_AGE_DAYS
+      and clea.policy_of({"policy": {"min_release_age_days": clea.MAX_MIN_AGE_DAYS + 1}})[1] == 7
+      and clea.policy_of({"policy": {"min_release_age_days": -1}})[1] == 7)
 
 # --- the report and the matrix, on a hand-made state -------------------------
 def state(*deps, **extra):
@@ -1095,35 +1136,135 @@ def state(*deps, **extra):
 def dep(name, **kw):
     d = row(dep=name, file="f", line=1, shape_ok=True, notes_url=None, watched=True); d.update(kw); return d
 def offered_part(report): return report.split("## Behind upstream")[1].split("## ")[0]
+def held_part(report): return report.split("## Held back")[1].split("## ")[0]
+def probed_in(st):
+    p = os.path.join(tempfile.mkdtemp(), "m.json"); json.dump(st, open(p, "w"))
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf): clea.main(["matrix", "--state", p])
+    return {e["dep"] for e in json.loads(buf.getvalue())}
+def cells(line): return re.split(r"(?<!\\)\|", line)[1:-1]
+def words(line):
+    try: return shlex.split(line)
+    except ValueError: return None  # unbalanced quotes: the line is not one command
 
 only_young = state(dep("a/young", released_at=ago(days=2)))
 check("when every dependency behind is held, the report says nothing is offered",
       "Nothing is offered" in clea.render_report(only_young) and "## Held back" in clea.render_report(only_young))
 check("…and `Nothing is behind` is kept for the case where nothing is",
       "Nothing is behind" in clea.render_report(state()))
+check("the held table gives every reason, not only the first",
+      all(t in held_part(clea.render_report(state(dep("a/two", released_at=ago(days=2), withdrawn="yanked on PyPI"))))
+          for t in ("too young, eligible on", "yanked on PyPI")))
+zero = dict(state(dep("a/young", released_at=ago(days=0)), dep("a/undated", released_at=None)), policy={"min_release_age_days": 0})
+check("a state scanned under 0 days offers the young and the undated one: report…",
+      "`a/young`" in offered_part(clea.render_report(zero)) and "`a/undated`" in offered_part(clea.render_report(zero))
+      and "## Held back" not in clea.render_report(zero))
+check("…and probe matrix", probed_in(zero) == {"a/young", "a/undated"})
+check("the same two under the default are held, and not probed",
+      probed_in(dict(zero, policy={"min_release_age_days": 7})) == set())
 beat = lambda days, *deps: clea.render_report(state(*deps, bot={"bot": "renovate[bot]", "number": 1, "at": "x", "days": days,
                                                                 "scanned": 9, "silent_after_days": 8}))
 check("a release too young for Renovate does not make its silence a fault",
       "and it has proposed nothing" not in beat(30, dep("a/young", released_at=ago(days=2))))
+check("…and the report does not say nothing is behind when something is, only that it is too young",
+      "Nothing it watches is behind and old enough for it to propose" in beat(30, dep("a/young", released_at=ago(days=2))))
 check("an old one still does", "and it has proposed nothing" in beat(30, dep("a/old")))
 check("so does one held for a reason Renovate cannot know (yanked)",
       "and it has proposed nothing" in beat(30, dep("a/yanked", withdrawn="yanked on PyPI")))
-check("an undated one is not blamed on the bot either",
-      "and it has proposed nothing" not in beat(30, dep("a/undated", released_at=None)))
+check("an undated one still counts: Renovate may know a date Cléa could not read",
+      "and it has proposed nothing" in beat(30, dep("a/undated", released_at=None)))
+check("one that clears an advisory is not too young for the bot either",
+      "and it has proposed nothing" in beat(30, dep("a/fix", released_at=ago(days=1), osv=fix_osv)))
 
-hit = dep("a/pin", osv={"current": {"ids": ["GHSA-pin"]}, "candidate": {"ids": []}}, latest="2")
+hit = dep("a/pin", osv=dict(fix_osv, current={"ids": ["GHSA-pin"]}), latest="2")
 rep = clea.render_report(state(hit, dep("b/clean", osv={"current": {"ids": []}, "candidate": {"ids": []}}),
                                dep("c/helm", behind=False, osv={"current": {"unknown": "no OSV mapping for datasource helm"}})))
 check("an advisory against the current pin is its own line, with the argument to bump",
       re.search(r"`a/pin` `1` — GHSA-pin\. `2` is offered above: an argument for bumping sooner", rep) is not None)
+fixrep = clea.render_report(state(dep("a/fix", released_at=ago(days=1), osv=fix_osv)))
+check("…the offered row of a young fix names what it clears, and why it is offered",
+      "none; clears GHSA-1, so the age rule is skipped" in offered_part(fixrep))
 check("a pin OSV could not be asked about is named as unknown, with why",
       "advisories unknown for `c/helm`: no OSV mapping for datasource helm" in rep)
 check("a clean pin gets no advisory line", "`b/clean` `1` —" not in rep)
+check("the advisory line says when the bump carries the same advisory",
+      "offered above, but it carries them too" in clea.render_report(state(dep("a/same", osv={"current": {"ids": ["G"]}, "candidate": {"ids": ["G"]}}))))
+check("…and when OSV could not say",
+      "OSV could not say whether it clears them" in clea.render_report(state(dep("a/dunno", osv={"current": {"ids": ["G"]}, "candidate": {"unknown": "x"}}))))
 check("when the fix is held back, the line says why",
-      "is held back (too young" in clea.render_report(state(dep("a/pin", released_at=ago(days=1),
+      "is held back (yanked on PyPI" in clea.render_report(state(dep("a/pin", withdrawn="yanked on PyPI",
           osv={"current": {"ids": ["GHSA-pin"]}, "candidate": {"ids": []}}))))
 check("with no OSV answer at all the report does not claim there is none",
       "None against" not in clea.render_report(state(dep("a/x", osv={"current": {"unknown": "OSV did not answer"}}))))
+check("`none` is only claimed for pins OSV answered for by version",
+      "None against the 1 pin(s) OSV answered for by version" in clea.render_report(state(dep("a/x", osv={"current": {"ids": []}})))
+      and "None against" not in clea.render_report(state(dep("a/x", osv={"current": {"unknown": "no [[osv]] row"}}))))
+
+# upstream text, in the table and in the embedded state
+ugly = "broken | build\nnow `x` --> } <!-- end"
+rep = clea.render_report(state(dep("a/ugly", withdrawn="yanked on PyPI: " + ugly)))
+line = next(l for l in rep.splitlines() if l.startswith("| `a/ugly`"))
+check("a pipe or newline in upstream text neither adds a column nor splits the row",
+      len(cells(line)) == 7 and "\\|" in line and rep.count("| `a/ugly`") == 1)
+check("`-->` or `<!--` in upstream text can neither close the comment that carries the state nor open one in the table",
+      rep.count("-->") == 1 and rep.count("<!--") == 1)
+tmp_rep = os.path.join(tempfile.mkdtemp(), "report.md"); open(tmp_rep, "w").write(rep)
+check("…and the state reads back whole, upstream text included",
+      clea._load_previous(tmp_rep)["deps"][0]["withdrawn"] == "yanked on PyPI: " + ugly)
+
+# the size of the issue body: 38 rows, every one behind, a long list of advisories on each side
+big = state(*[dep(f"a/d{i}", tags={"v2": {"commit": "c" * 40}}, tag_commit="c" * 40,
+                  osv={"current": {"ids": [f"GHSA-{n:03d}-{i:02d}" for n in range(60)]},
+                       "candidate": {"ids": [f"GHSA-{n:03d}-{i:02d}" for n in range(60)]}}) for i in range(38)])
+body = clea.render_report(big)
+check("a report with thousands of advisory ids stays under GitHub's issue-body cap", len(body) < 65536)
+check("…the table shows a few ids and a count, and no id past them anywhere", "and 56 more" in offered_part(body) and "GHSA-059-" not in body)
+tmp_rep = os.path.join(tempfile.mkdtemp(), "big.md"); open(tmp_rep, "w").write(body)
+check("…and the state it carries still has what the next scan reads back (`tags`)",
+      clea._load_previous(tmp_rep)["deps"][0].get("tags") == {"v2": {"commit": "c" * 40}})
+
+# --- the weekly cluster lane bumps what the report offers, and says what it holds --
+lane = clea.lane_bumps(state(dep("siderolabs/talos", latest="1.2.3"), dep("kubernetes/kubernetes", latest="1.9.9", released_at=ago(days=1)),
+                             dep("other/tool"), dep("siderolabs/talos", file="g", latest="1.2.3", behind=False)),
+                       ("siderolabs/talos", "kubernetes/kubernetes"))
+check("the cluster lane bumps an offered dependency",
+      lane[0] == "python3 scripts/clea/clea.py bump siderolabs/talos 1.2.3")
+check("…names one held back instead of bumping it, and touches nothing else",
+      len(lane) == 2 and (words(lane[1]) or [""])[0] == "echo" and "kubernetes/kubernetes 1.9.9" in lane[1]
+      and "too young" in lane[1] and "other/tool" not in "".join(lane))
+evil = "x'; rm -rf / #"
+lane = clea.lane_bumps(state(dep("siderolabs/talos", latest="1.2.3", withdrawn=evil)), ("siderolabs/talos",))
+check("upstream text in that line is one quoted word, never shell",
+      words(lane[0]) == ["echo", f"held back, not bumped: siderolabs/talos 1.2.3 ({evil})"])
+lane = clea.lane_bumps(state(dep("siderolabs/talos", latest=evil)), ("siderolabs/talos",))
+check("…and so is the version of a bump", words(lane[0]) == ["python3", "scripts/clea/clea.py", "bump", "siderolabs/talos", evil])
+
+wf = (Path(os.environ["ROOT_DIR"]) / ".github/workflows/clea.yml").read_text()
+check("the weekly cluster lane takes its bumps from `lane_bumps`, with no loop of its own to drift from the report",
+      "clea.lane_bumps(" in wf and 'for dep in state["deps"]' not in wf)
+
+# --- the tag memory: trimmed to the newest tags ------------------------------
+mem = {}
+for i in range(clea.TAG_MEMORY + 1):
+    clea.mark_movement({"dep": "m/n", "file": "f", "tag": f"t{i}", "tag_commit": str(i) * 40}, {}, mem)
+check("a dependency remembers the newest tags and no more",
+      list(mem.get("m/n", {})) == [f"t{i}" for i in range(1, clea.TAG_MEMORY + 1)])
+mem = {}
+for i in range(clea.TAG_MEMORY):
+    clea.mark_movement({"dep": "m/n", "file": "f", "tag": f"t{i}", "tag_commit": str(i) * 40}, {}, mem)
+check("…and keeps every one up to that many", len(mem.get("m/n", {})) == clea.TAG_MEMORY)
+mem = {}
+for t in ("t0", "t1", "t2", "t0", "t3"):
+    clea.mark_movement({"dep": "m/n", "file": "f", "tag": t, "tag_commit": "1" * 40}, {}, mem)
+check("…a tag seen again counts as the newest, so the one not seen for longest is the one forgotten",
+      list(mem.get("m/n", {})) == ["t2", "t0", "t3"])
+
+# the memory of a dependency is merged across its rows: the row that saw the tag move wins, whatever the order
+tw = {"from": "a" * 40, "to": "b" * 40}
+prev = {"deps": [{"dep": "m/n", "tags": {"v1": {"commit": "a" * 40}}}, {"dep": "m/n", "tags": {"v1": {"commit": "b" * 40, "moved": tw}}},
+                 {"dep": "m/n", "tags": {"v1": {"commit": "b" * 40}}}]}
+check("the memory merged across the rows of a dependency keeps the move, wherever its row sits",
+      clea.tag_memory(prev)["m/n"]["v1"] == {"commit": "b" * 40, "moved": tw})
 
 # --- the network layer: a local server speaking PyPI's and OSV's shapes ------
 SERVER = {"pypi": lambda name: (404, b""), "osv": lambda body: (200, b"{}")}
@@ -1169,6 +1310,10 @@ pypi(pypi_doc("2.0.0", [pypi_file("2026-01-13T07:47:51Z", True), pypi_file("2026
 check("PyPI: every file yanked is yanked, even when `info` says nothing", latest()["withdrawn"] == "yanked on PyPI: bad")
 pypi(pypi_doc("2.0.0", [pypi_file("2026-01-13T07:47:51Z", True), pypi_file("2026-01-13T07:47:52Z")]))
 check("PyPI: one file yanked out of two is not a yanked release", latest()["withdrawn"] is None)
+pypi(pypi_doc("2.0.0", [pypi_file("2026-01-13T07:47:51Z")], yanked=True, reason="broken\nbuild `x`\t" + "y" * 200))
+reason = latest()["withdrawn"].removeprefix("yanked on PyPI: ")
+check("PyPI: a yank reason is one line, bounded, with no backtick — it is upstream's text, written into a table",
+      "\n" not in reason and "`" not in reason and len(reason) == 80 and reason.endswith("…") and reason.startswith("broken build 'x' y"))
 SERVER["pypi"] = lambda name: (200, b"<html>maintenance</html>")
 try: latest(); check("PyPI: an answer that is not JSON is a Cléa error", False)
 except clea.CleaError: check("PyPI: an answer that is not JSON is a Cléa error", True)
@@ -1237,10 +1382,19 @@ osv(lambda body: jbody({"vulns": [{"id": "P2" if body.get("page_token") else "P1
                         **({} if body.get("page_token") else {"next_page_token": "tok2"})}))
 check("OSV: a second page is fetched with its token and merged",
       clea.osv_ids(Q) == ["P1", "P2"] and POSTS[1][2] == dict(Q, page_token="tok2"))
-osv(lambda body: jbody({"vulns": [{"id": "X"}], "next_page_token": "again"}))
+def pages(last):  # page n holds P<n>; the answer for page `last` is the final one
+    def serve(body):
+        n = int(body.get("page_token", 1))
+        return jbody({"vulns": [{"id": f"P{n:02d}"}], **({"next_page_token": str(n + 1)} if n < last else {})})
+    return serve
 def fails(fn):
     try: fn(); return False
     except clea.CleaError: return True
+osv(pages(10))
+check("OSV: ten pages are read to the end", clea.osv_ids(Q) == [f"P{n:02d}" for n in range(1, 11)])
+osv(pages(11))
+check("OSV: an eleventh page is an error, not a truncated answer that reads as complete", fails(lambda: clea.osv_ids(Q)))
+osv(lambda body: jbody({"vulns": [{"id": "X"}], "next_page_token": "again"}))
 check("OSV: pagination that never ends is an error, not an endless loop", fails(lambda: clea.osv_ids(Q)))
 for label, answer in (("HTTP 500", (500, b"oops")), ("HTTP 429", (429, b"slow down")), ("a 200 that is not JSON", (200, b"<html>")),
                       ("a JSON list", jbody([])), ("vulns that is not a list", jbody({"vulns": "x"})),
@@ -1255,16 +1409,32 @@ check("OSV: an unreachable server is a Cléa error, never an empty list", fails(
 clea.OSV_QUERY_URL = BASE + "/osv/v1/query"
 
 # Osv.ask: what each datasource is asked, and what unknown looks like
-errs = []; session = clea.Osv(errs); POSTS.clear(); osv(lambda body: jbody({"vulns": [{"id": "GHSA-x"}]}))
+GOROW = {"a/b": ("Go", "example.invalid/a/b"), "cilium": ("Go", "example.invalid/cilium")}
+errs = []; session = clea.Osv(errs, GOROW); POSTS.clear(); osv(lambda body: jbody({"vulns": [{"id": "GHSA-x"}]}))
 check("OSV: a PyPI package is asked by name, ecosystem and exact version",
       session.ask("pypi", "acme-py", "1.0.0", None) == {"ids": ["GHSA-x"]} and POSTS[-1][2] == Q)
-check("OSV: a GitHub-hosted release is asked by commit",
-      session.ask("github-releases", "a/b", "v1", C1) == {"ids": ["GHSA-x"]} and POSTS[-1][2] == {"commit": C1})
+check("OSV: a GitHub-hosted tool with an [[osv]] row is asked by its package, version without the `v`",
+      session.ask("github-releases", "a/b", "v1.2.3", C1) == {"ids": ["GHSA-x"]}
+      and POSTS[-1][2] == {"package": {"name": "example.invalid/a/b", "ecosystem": "Go"}, "version": "1.2.3"})
+check("OSV: a helm chart with a row is asked by package too",
+      session.ask("helm", "cilium", "1.20.2", None) == {"ids": ["GHSA-x"]}
+      and POSTS[-1][2]["package"]["name"] == "example.invalid/cilium")
+check("OSV: a version that merely starts with a v-word keeps it",
+      session.ask("github-releases", "a/b", "vnext", None) == {"ids": ["GHSA-x"]} and POSTS[-1][2]["version"] == "vnext")
+osv(lambda body: jbody({}))
+check("OSV: an answer by package that is empty is `none`", session.ask("github-releases", "a/b", "v9.9.9", None) == {"ids": []})
+osv(lambda body: jbody({"vulns": [{"id": "GHSA-x"}]}))
+check("OSV: a GitHub release with no row is asked by commit, and an advisory it finds is marked as such",
+      session.ask("github-releases", "c/d", "v1", C1) == {"ids": ["GHSA-x"], "by": "commit"} and POSTS[-1][2] == {"commit": C1})
+osv(lambda body: jbody({}))
+unknown = session.ask("github-releases", "c/d", "v2", C2)
+check("OSV: …but an empty answer by commit clears nothing: unknown, never `none`",
+      "ids" not in unknown and "clears nothing" in unknown["unknown"] and POSTS[-1][2] == {"commit": C2})
 n = len(POSTS)
-check("OSV: a GitHub release whose commit is unknown is unknown, and nothing is sent",
-      session.ask("github-tags", "a/b", "v1", None) == {"unknown": "commit of v1 unknown"} and len(POSTS) == n)
+check("OSV: a GitHub release with no row and no commit is unknown, and nothing is sent",
+      "no commit to ask by" in session.ask("github-tags", "c/d", "v1", None)["unknown"] and len(POSTS) == n)
 check("OSV: a datasource with no mapping is unknown, and nothing is sent",
-      session.ask("helm", "cilium", "1.0.0", None) == {"unknown": "no OSV mapping for datasource helm"} and len(POSTS) == n)
+      session.ask("helm", "other", "1.0.0", None) == {"unknown": "no OSV mapping for datasource helm"} and len(POSTS) == n)
 session.ask("pypi", "acme-py", "1.0.0", None)
 check("OSV: the same query is not sent twice", len(POSTS) == n)
 errs = []; session = clea.Osv(errs); POSTS.clear(); osv(lambda body: (500, b"down"))
@@ -1276,31 +1446,53 @@ script = iter([(500, b""), (500, b""), jbody({}), (500, b""), (500, b""), jbody(
 osv(lambda body: next(script))
 for i in range(6): session.ask("pypi", f"p{i}", "1", None)
 check("OSV: an answer resets the count of failures", len(POSTS) == 6)
+good = {"dep": "a/b", "ecosystem": "Go", "package": "x"}
+check("[[osv]]: a row names its dep, ecosystem and package, and is read as such",
+      clea.osv_rows({"osv": [good]}) == {"a/b": ("Go", "x")})
+for label, rows in (("a row with no package", [{"dep": "a/b", "ecosystem": "Go"}]), ("an empty ecosystem", [dict(good, ecosystem="")]),
+                    ("a row that is not a table", ["a/b"]), ("two rows for one dependency", [good, good])):
+    check(f"[[osv]]: {label} stops the run", fails(lambda rows=rows: clea.osv_rows({"osv": rows})))
 
 # --- a whole scan, offline: GitHub patched, PyPI and OSV on the local server --
 C = {c: c * 40 for c in "abcdef98"}
-DEPS = {  # dep: (published, candidate commit, current commit)
-    "acme/ok": (ago(days=30), C["a"], C["b"]), "acme/mid": (ago(days=6), C["a"], C["b"]),
-    "acme/young": (ago(days=2), C["a"], C["b"]), "acme/retagged": (ago(days=30), C["c"], C["b"]),
-    "acme/advised": (ago(days=30), C["d"], C["b"]), "acme/pinadv": (ago(days=30), C["a"], C["e"]),
-    "acme/undated": (None, C["a"], C["b"]), "acme/tagged": (None, C["f"], C["b"]),
-    "acme/novee": (ago(days=30), C["a"], C["8"]),  # tags 1.0.0 / 1.1.0, no leading v
+DEPS = {  # dep: (published, the commit its latest tag points at)
+    "acme/ok": (ago(days=30), C["a"]), "acme/mid": (ago(days=6), C["a"]), "acme/young": (ago(days=2), C["a"]),
+    "acme/retagged": (ago(days=30), C["c"]),
+    "acme/advised": (ago(days=30), C["d"]),   # no [[osv]] row: OSV finds it by commit
+    "acme/pkgadv": (ago(days=30), C["a"]),    # advisory against the candidate, by package
+    "acme/pinadv": (ago(days=30), C["a"]),    # advisory on the pin we run, the candidate is clean
+    "acme/fixer": (ago(days=1), C["a"]),      # one day old, but clears the pin's advisory
+    "acme/samead": (ago(days=30), C["a"]),    # the same advisory on the pin and on the candidate
+    "acme/addnew": (ago(days=30), C["a"]),    # the candidate adds an advisory to the one the pin has
+    "acme/undated": (None, C["a"]),
+    "acme/tagged": (None, C["f"]), "acme/tagged2": (None, C["f"]),  # two repositories, one commit id
+    "acme/baddate": (None, C["9"]),           # the commit's date cannot be read
+    "acme/norow": (ago(days=30), C["a"]),     # no [[osv]] row, and by commit OSV finds nothing
 }
-TAGS = {"acme/novee": ("1.1.0", "1.0.0")}
-STATE = {"retag": C["c"], "retag_tag": "v1.1.0"}
+TAGSRC = {"acme/tagged", "acme/tagged2", "acme/baddate"}
+UNMAPPED = {"acme/advised", "acme/norow"}
+ACTIONPIN = {"acme/advised"}  # pinned as `uses: owner/repo@<sha>`, not as a version string
+STATE = {"retag": C["c"], "retag_tag": "v1.1.0", "ref_down": False, "upstream_down": False}
+GH = []
 def gh(path, token):
-    m = re.match(r"/repos/(acme/[a-z]+)/(.*)", path)
+    GH.append(path)
+    m = re.match(r"/repos/(acme/[a-z0-9]+)/(.*)", path)
     if not m or m.group(1) not in DEPS: raise clea.CleaError("unexpected " + path)
-    name, rest = m.groups(); published, cand, cur = DEPS[name]
-    tag, pinned = TAGS.get(name, ("v1.1.0", "v1.0.0"))
+    name, rest = m.groups(); published, cand = DEPS[name]
+    tag = "v1.1.0"
     if name == "acme/retagged": tag, cand = STATE["retag_tag"], STATE["retag"]
     if rest == "releases/latest":
+        if name == "acme/retagged" and STATE["upstream_down"]: raise clea.CleaError(f"{path} -> upstream is down")
         return {"tag_name": tag, "published_at": published, "html_url": "u", "draft": False, "prerelease": False}
     if rest == "tags?per_page=100": return [{"name": tag}]
     m = re.match(r"git/ref/tags/(.*)", rest)
-    if m and m.group(1) in (tag, pinned):  # any other spelling of a tag is a 404, as on GitHub
-        return {"ref": "refs/tags/" + m.group(1), "object": {"type": "commit", "sha": cand if m.group(1) == tag else cur}}
-    if rest.startswith("git/commits/") and name == "acme/tagged": return {"committer": {"date": ago(days=40)}}
+    if m and m.group(1) == tag:  # any other tag, the pin we run included, is a 404 as on GitHub
+        if name == "acme/retagged" and STATE["ref_down"]: raise clea.CleaError(f"{path} -> the tag lookup failed")
+        return {"ref": "refs/tags/" + tag, "object": {"type": "commit", "sha": cand}}
+    if rest.startswith("git/commits/"):
+        if name == "acme/tagged": return {"committer": {"date": ago(days=40)}}
+        if name == "acme/tagged2": return {"committer": {"date": ago(days=20)}}
+        if name == "acme/baddate": raise clea.CleaError(f"{path} -> commit date lookup failed for acme/baddate")
     raise clea.CleaError(f"{path}: no such thing in this fixture")
 clea._gh_json = gh
 PYDEPS = {"acme-py-ok": (ago(days=30), False), "acme-py-yanked": (ago(days=30), True), "acme-py-adv": (ago(days=30), False)}
@@ -1309,108 +1501,232 @@ def pypi_by_name(name):
     at, yanked = PYDEPS[name]
     return 200, pypi_doc("1.1.0", [pypi_file(at, yanked, "broken build" if yanked else None)], yanked, "broken build" if yanked else None)
 SERVER["pypi"] = pypi_by_name
-ADVISED = {C["d"]: ["GHSA-aaaa-bbbb-cccc"], C["e"]: ["GHSA-pppp-pppp-pppp"], C["8"]: ["GHSA-novee"]}
+PKG = "example.invalid/"
+PKG_ADV = {(PKG + "acme/pkgadv", "1.1.0"): ["PKG-NEW"], (PKG + "acme/pinadv", "1.0.0"): ["PKG-PIN"],
+           (PKG + "acme/fixer", "1.0.0"): ["PKG-FIX"],
+           (PKG + "acme/samead", "1.0.0"): ["PKG-SAME"], (PKG + "acme/samead", "1.1.0"): ["PKG-SAME"],
+           (PKG + "acme/addnew", "1.0.0"): ["PKG-OLD"], (PKG + "acme/addnew", "1.1.0"): ["PKG-OLD", "PKG-ADD"],
+           ("acme-py-adv", "1.1.0"): ["PYSEC-2099-1"]}
+COMMIT_ADV = {C["d"]: ["GHSA-aaaa-bbbb-cccc"], "2" * 40: ["GHSA-onthepin"]}
 def osv_by(body):
-    if "commit" in body: ids = ADVISED.get(body["commit"], [])
-    else: ids = ["PYSEC-2099-1"] if body["package"]["name"] == "acme-py-adv" and body["version"] == "1.1.0" else []
+    if "commit" in body: ids = COMMIT_ADV.get(body["commit"], [])
+    else: ids = PKG_ADV.get((body["package"]["name"], body["version"]), [])
     return jbody({"vulns": [{"id": i} for i in ids]} if ids else {})
 osv(osv_by)
 
 work = tempfile.mkdtemp()
 os.makedirs(work + "/.github/workflows")
-sh = "".join(f'# clea-test: datasource={"github-tags" if n == "acme/tagged" else "github-releases"} depName={n} '
-             f'extractVersion=^v(?<version>.*)$\n{n.split("/")[1].upper()}_V="1.0.0"\n' for n in DEPS)
+sh = "".join(f'# clea-test: datasource={"github-tags" if n in TAGSRC else "github-releases"} depName={n} '
+             f'extractVersion=^v(?<version>.*)$\n{n.split("/")[1].upper()}_V="1.0.0"\n' for n in DEPS if n not in ACTIONPIN)
 open(work + "/install.sh", "w").write(sh)
 open(work + "/.github/workflows/ci.yml", "w").write("jobs:\n  a:\n    steps:\n" + "".join(
-    f"      # clea-test: datasource=pypi depName={n}\n      - run: pip install {n}==1.0.0\n" for n in PYDEPS))
-open(work + "/clea.toml", "w").write('[scan]\nmarker = "# clea-test:"\n[policy]\nmin_release_age_days = 5\n')
+    f"      # clea-test: datasource=pypi depName={n}\n      - run: pip install {n}==1.0.0\n" for n in PYDEPS)
+    + "      # clea-test: datasource=github-releases depName=acme/advised\n      - uses: acme/advised@" + "2" * 40 + "  # v1.0.0\n")
+def write_toml(days):
+    open(work + "/clea.toml", "w").write('[scan]\nmarker = "# clea-test:"\n[policy]\n'
+        f"min_release_age_days = {days}\n" + "".join(
+        f'[[osv]]\ndep = "{n}"\necosystem = "Go"\npackage = "{PKG}{n}"\n' for n in DEPS if n not in UNMAPPED))
+write_toml(5)
 os.environ["GITHUB_TOKEN"] = "t"
 
-def scan(previous=None):
-    path = work + "/state.json"
-    argv = ["--root", work, "scan", "--state", path] + (["--previous", previous] if previous else [])
-    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+def scan(previous=None, root=None, strict=False):
+    root = root or work
+    path = root + "/state.json"
+    argv = ["--root", root, "scan", "--state", path] + (["--previous", previous] if previous else []) + (["--strict"] if strict else [])
+    said = io.StringIO()
+    with contextlib.redirect_stdout(said), contextlib.redirect_stderr(io.StringIO()):
         rc = clea.main(argv)
     out = io.StringIO()
-    with contextlib.redirect_stdout(out): clea.main(["--root", work, "matrix", "--state", path])
-    st = json.load(open(path)); snap = work + f"/state{len(os.listdir(work))}.json"
+    with contextlib.redirect_stdout(out): clea.main(["--root", root, "matrix", "--state", path])
+    st = json.load(open(path)); snap = tempfile.mkdtemp() + "/snap.json"
     json.dump(st, open(snap, "w"))
-    return rc, st, clea.render_report(st), {e["dep"] for e in json.loads(out.getvalue())}, snap
+    return rc, st, clea.render_report(st), {e["dep"] for e in json.loads(out.getvalue())}, snap, said.getvalue()
 def by(st, name): return next(d for d in st["deps"] if d["dep"] == name)
 
-rc, st1, rep1, probed1, snap1 = scan()
-OFFERED = {"acme/ok", "acme/mid", "acme/pinadv", "acme/retagged", "acme/tagged", "acme/novee", "acme-py-ok"}
+rc, st1, rep1, probed1, snap1, said1 = scan()
+OFFERED = {"acme/ok", "acme/mid", "acme/pinadv", "acme/retagged", "acme/tagged", "acme/tagged2", "acme/fixer",
+           "acme/samead", "acme/norow", "acme-py-ok"}
+HELD = {"acme/young", "acme/undated", "acme/baddate", "acme-py-yanked", "acme/advised", "acme/pkgadv", "acme/addnew", "acme-py-adv"}
 check("scan: the policy is recorded in the state, from clea.toml (5, not the default 7)", st1["policy"] == {"min_release_age_days": 5})
 check("scan: a 6-day-old release is offered under a 5-day policy, a 2-day-old one is not",
       "`acme/mid`" in offered_part(rep1) and "`acme/young`" not in offered_part(rep1))
-held = rep1.split("## Held back")[1].split("## ")[0]
-HELD = {"acme/young", "acme/undated", "acme-py-yanked", "acme/advised", "acme-py-adv"}
+held = held_part(rep1)
 check("scan: the held-back table has exactly the young, undated, yanked and advised ones",
       {d["dep"] for d in st1["deps"] if f"`{d['dep']}`" in held} == HELD)
+check("scan: the offered table has exactly the rest", {d["dep"] for d in st1["deps"] if f"`{d['dep']}`" in offered_part(rep1)} == OFFERED)
 check("scan: a young release reads `too young, eligible on <date>`",
       f"too young, eligible on {(datetime.fromisoformat(DEPS['acme/young'][0].replace('Z', '+00:00')) + timedelta(days=5)).date()}" in held)
 check("scan: an undated release reads `age unknown`", "age unknown" in held and by(st1, "acme/undated")["released_at"] is None)
 check("scan: a yanked PyPI release is held with PyPI's reason", "yanked on PyPI: broken build" in held)
-check("scan: an advisory against a candidate holds it and names the id",
-      "advisory GHSA-aaaa-bbbb-cccc against v1.1.0" in held and "advisory PYSEC-2099-1 against 1.1.0" in held)
+check("scan: an advisory against a candidate holds it and names the id (by package, by commit, on PyPI)",
+      "advisory PKG-NEW against v1.1.0" in held and "advisory GHSA-aaaa-bbbb-cccc against v1.1.0" in held
+      and "advisory PYSEC-2099-1 against 1.1.0" in held)
+check("scan: a candidate that adds an advisory to the pin's is held for the new one only",
+      "advisory PKG-ADD against v1.1.0" in held and "PKG-OLD against" not in held)
+check("scan: one that carries only the advisory the pin already has is offered", "acme/samead" in probed1)
+check("scan: a one-day-old release that clears the pin's advisory is offered and probed, with the reason",
+      "acme/fixer" in probed1 and "clears PKG-FIX, so the age rule is skipped" in offered_part(rep1))
 check("scan: a tag's date is read when upstream gives none (github-tags -> its commit's date)",
       by(st1, "acme/tagged")["released_at"] is not None and "`acme/tagged`" in offered_part(rep1))
+check("scan: the date is kept per repository, even when two share a commit id",
+      by(st1, "acme/tagged")["released_at"] != by(st1, "acme/tagged2")["released_at"]
+      and 19 <= (NOW - clea.parse_when(by(st1, "acme/tagged2")["released_at"])).days <= 21)
+check("scan: a commit whose date cannot be read is an error, and the row is held `age unknown`",
+      any("commit date lookup failed for acme/baddate" in e for e in st1["errors"])
+      and by(st1, "acme/baddate")["released_at"] is None and "age unknown" in held)
 check("scan: the age column shows the age", re.search(r"`acme/ok` \| `1\.0\.0` \| `1\.1\.0` \| 30 days \| none \|", rep1) is not None)
 check("scan: the current pin's advisory is its own line, and the fix is offered",
-      "`acme/pinadv` `1.0.0` — GHSA-pppp-pppp-pppp. `1.1.0` is offered above" in rep1)
-check("scan: the pinned tag is found whether upstream's tags carry a v (v1.0.0) or not (1.0.0)",
-      "`acme/novee` `1.0.0` — GHSA-novee" in rep1 and "`acme/pinadv` `1.0.0` — GHSA-pppp-pppp-pppp" in rep1)
+      "`acme/pinadv` `1.0.0` — PKG-PIN. `1.1.0` is offered above: an argument for bumping sooner" in rep1)
+check("scan: …one the bump carries too says so, and one the candidate adds to is held",
+      "`acme/samead` `1.0.0` — PKG-SAME. `1.1.0` is offered above, but it carries them too" in rep1
+      and "`acme/addnew` `1.0.0` — PKG-OLD. `1.1.0` is held back (advisory PKG-ADD" in rep1)
+check("scan: a pin that holds its commit on its own line is asked about by THAT commit",
+      "`acme/advised` `v1.0.0` — GHSA-onthepin" in rep1 and any(p == {"commit": "2" * 40} for _, _, p in POSTS))
+check("scan: the pinned tag is never looked up — a pin costs no GitHub call",
+      not any(re.search(r"git/ref/tags/v?1\.0\.0$", c) for c in GH))
+check("scan: a release no [[osv]] row covers is `advisories unknown`, and says why, not `none`",
+      "advisories unknown for `acme/norow`: no [[osv]] row for it" in rep1
+      and re.search(r"`acme/norow` \| `1\.0\.0` \| `1\.1\.0` \| 30 days \| advisories unknown \|", rep1) is not None)
+check("scan: the summary line counts what is held back",
+      "18 dependencies, 18 behind (8 held back)" in said1)
 check("scan: the probe matrix carries the offered ones only", probed1 == OFFERED)
 check("scan: every pinned row records what OSV said for its pin",
       len([d for d in st1["deps"] if "current" in d.get("osv", {})]) == len(DEPS) + len(PYDEPS))
+check("scan: a row remembers the commit of its tag", by(st1, "acme/retagged").get("tags") == {"v1.1.0": {"commit": C["c"]}})
 
 STATE["retag"] = C["9"]  # the same tag, another commit
-rc, st2, rep2, probed2, snap2 = scan(snap1)
+rc, st2, rep2, probed2, snap2, _ = scan(snap1)
 moved = by(st2, "acme/retagged")
-check("scan: a tag that now points elsewhere is flagged, with both commits", moved["tag_moved"] == {"from": C["c"], "to": C["9"]})
+check("scan: a tag that now points elsewhere is flagged, with both commits", moved.get("tag_moved") == {"from": C["c"], "to": C["9"]})
 check("scan: `moved_since_last_scan` alone does NOT see it (the version string is the same)", moved["moved_since_last_scan"] is False)
 check("scan: the retagged release is held back and not probed",
       "moved since last scan (ccccccc → 9999999)" in rep2 and "acme/retagged" not in probed2 and probed2 == OFFERED - {"acme/retagged"})
-rc, st3, rep3, probed3, snap3 = scan(snap2)
+rc, st3, rep3, probed3, snap3, _ = scan(snap2)
 check("scan: the hold survives the next scan, where the commit no longer changes",
-      by(st3, "acme/retagged")["tag_moved"] == {"from": C["c"], "to": C["9"]} and "acme/retagged" not in probed3)
+      by(st3, "acme/retagged").get("tag_moved") == {"from": C["c"], "to": C["9"]} and "acme/retagged" not in probed3)
 STATE["retag_tag"], STATE["retag"] = "v1.2.0", C["f"]
-rc, st4, rep4, probed4, snap4 = scan(snap3)
+rc, st4, rep4, probed4, snap4, _ = scan(snap3)
 check("scan: a new tag is a new release: the hold is gone", "tag_moved" not in by(st4, "acme/retagged") and "acme/retagged" in probed4)
-old_state = json.load(open(snap1)); old_state["deps"] = [{k: v for k, v in d.items() if k != "tag_commit"} for d in old_state["deps"]]
+old_state = json.load(open(snap1)); old_state["deps"] = [{k: v for k, v in d.items() if k != "tags"} for d in old_state["deps"]]
 json.dump(old_state, open(work + "/legacy.json", "w"))
 STATE["retag_tag"], STATE["retag"] = "v1.1.0", C["9"]
-rc, st5, rep5, probed5, _ = scan(work + "/legacy.json")
+rc, st5, rep5, probed5, _, _ = scan(work + "/legacy.json")
 check("scan: a previous state with no recorded commit flags nothing (it cannot know)", "tag_moved" not in by(st5, "acme/retagged"))
 
+# a scan that could not look the tag up, or saw another `latest`, must not erase what the last one knew
+STATE.update(retag_tag="v1.1.0", retag=C["c"])
+rc, _, _, _, snapA, _ = scan()
+STATE.update(ref_down=True)
+rc, stB, _, _, snapB, _ = scan(snapA)
+STATE.update(ref_down=False, retag=C["9"])
+rc, stC, repC, probedC, snapC, _ = scan(snapB)
+check("scan: a failed tag lookup keeps the baseline: scan 1 ok, scan 2 fails, scan 3 retagged -> held",
+      "tag_commit" not in by(stB, "acme/retagged") and by(stB, "acme/retagged").get("tags") == {"v1.1.0": {"commit": C["c"]}}
+      and by(stC, "acme/retagged").get("tag_moved") == {"from": C["c"], "to": C["9"]} and "acme/retagged" not in probedC)
+STATE.update(ref_down=True)
+rc, stD, _, probedD, _, _ = scan(snapC)
+STATE.update(ref_down=False)
+check("scan: …and a hold already set survives a scan whose lookup fails",
+      by(stD, "acme/retagged").get("tag_moved") == {"from": C["c"], "to": C["9"]} and "acme/retagged" not in probedD)
+STATE.update(retag_tag="v1.1.0", retag=C["c"])
+rc, _, _, _, snapA, _ = scan()
+STATE.update(retag_tag="v1.2.0", retag=C["f"])
+rc, _, _, _, snapB, _ = scan(snapA)
+STATE.update(retag_tag="v1.1.0", retag=C["9"])
+rc, stC, _, probedC, _, _ = scan(snapB)
+check("scan: a scan where `latest` is another tag keeps this tag's baseline: v1.1.0, v1.2.0, v1.1.0 retagged -> held",
+      by(stC, "acme/retagged").get("tag_moved") == {"from": C["c"], "to": C["9"]} and "acme/retagged" not in probedC)
+STATE.update(retag_tag="v1.1.0", retag=C["c"])
+rc, _, _, _, snapA, _ = scan()
+STATE.update(upstream_down=True)
+rc, stB, _, _, snapB, _ = scan(snapA)
+STATE.update(upstream_down=False, retag=C["9"])
+rc, stC, _, probedC, _, _ = scan(snapB)
+check("scan: a dependency whose upstream failed one scan keeps its baseline too",
+      "error" in by(stB, "acme/retagged") and by(stB, "acme/retagged").get("tags") == {"v1.1.0": {"commit": C["c"]}}
+      and by(stC, "acme/retagged").get("tag_moved") == {"from": C["c"], "to": C["9"]} and "acme/retagged" not in probedC)
+STATE.update(retag_tag="v1.1.0", retag=C["c"])
+
+# one dependency, two files: a file added since the last scan has no baseline of its own, and must not be offered
+work2 = tempfile.mkdtemp()
+open(work2 + "/clea.toml", "w").write('[scan]\nmarker = "# clea-test:"\n[policy]\nmin_release_age_days = 5\n')
+pin = lambda v: f'# clea-test: datasource=github-releases depName=acme/retagged extractVersion=^v(?<version>.*)$\nV="{v}"\n'
+open(work2 + "/a.sh", "w").write(pin("1.0.0"))
+rc, _, _, _, snap2a, _ = scan(root=work2)
+open(work2 + "/b.sh", "w").write(pin("1.0.0"))
+STATE["retag"] = C["9"]
+rc, st2b, rep2b, probed2b, _, _ = scan(snap2a, root=work2)
+check("scan: the retagged tag is held on EVERY file that pins the dependency, the new one included",
+      len([d for d in st2b["deps"] if "tag_moved" in d]) == 2 and probed2b == set())
+check("scan: …and the report lists it as held, once per row, never as offered",
+      "acme/retagged" not in offered_part(rep2b) and held_part(rep2b).count("`acme/retagged`") == 2)
+STATE["retag"] = C["c"]
+
+STATE.update(retag_tag="v1.1.0", retag=C["c"])
 clea.OSV_QUERY_URL = dead
-rc, st6, rep6, probed6, _ = scan()
+rc, st6, rep6, probed6, _, _ = scan()
 check("scan, OSV unreachable: every row says its advisories are unknown",
-      all(d["osv"]["current"] == {"unknown": "OSV did not answer"} for d in st6["deps"])
-      and all(d["osv"]["candidate"] == {"unknown": "OSV did not answer"} for d in st6["deps"] if d.get("behind")))
+      all("ids" not in d["osv"]["current"] for d in st6["deps"])
+      and all("ids" not in d["osv"]["candidate"] for d in st6["deps"] if d.get("behind")))
 check("scan, OSV unreachable: the report reads `advisories unknown` and never `none` for a candidate",
       "advisories unknown |" in offered_part(rep6) and "| none |" not in offered_part(rep6) and "None against" not in rep6)
 check("scan, OSV unreachable: the failure is in the errors, so --strict fails", any(clea.OSV_QUERY_URL in e for e in st6["errors"]))
-check("scan, OSV unreachable: unknown holds nothing back (the two advised ones are probed, as OSV cannot say)",
-      probed6 == OFFERED | {"acme/advised", "acme-py-adv"})
+check("scan, OSV unreachable: unknown holds nothing back (the advised ones are probed, as OSV cannot say)",
+      probed6 == (OFFERED - {"acme/fixer"}) | {"acme/advised", "acme/pkgadv", "acme/addnew", "acme-py-adv"})
 clea.OSV_QUERY_URL = BASE + "/osv/v1/query"
 
-for bad in ("-1", '"7"', "true", "7.5"):
-    open(work + "/clea.toml", "w").write(f'[scan]\nmarker = "# clea-test:"\n[policy]\nmin_release_age_days = {bad}\n')
+# the policy in clea.toml: 0 switches the age rule off, the cap stops a typo
+write_toml(0)
+rc, st0, rep0, probed0, _, said0 = scan()
+check("scan under 0 days: the policy is recorded as 0, not replaced by the default", rc == 0 and st0["policy"] == {"min_release_age_days": 0})
+check("scan under 0 days: a 2-day-old and an undated release are offered and probed, report and matrix",
+      {"acme/young", "acme/undated"} <= probed0 and "`acme/young`" in offered_part(rep0) and "`acme/undated`" in offered_part(rep0))
+check("scan under 0 days: a yanked one and an advised one are still held",
+      "acme-py-yanked" not in probed0 and "acme/advised" not in probed0)
+write_toml(clea.MAX_MIN_AGE_DAYS)
+rc, stmax, *_ = scan()
+check("scan: the largest policy is accepted", rc == 0 and stmax["policy"] == {"min_release_age_days": clea.MAX_MIN_AGE_DAYS})
+for bad in ("-1", '"7"', "true", "7.5", str(clea.MAX_MIN_AGE_DAYS + 1), "3000000"):
+    write_toml(bad)
     err = io.StringIO()
     with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
         rc = clea.main(["--root", work, "scan", "--state", work + "/x.json"])
     check(f"scan: min_release_age_days = {bad} is refused, naming the key", rc == 1 and "min_release_age_days" in err.getvalue())
+write_toml(5)
 
 # --- Renovate and Cléa read one number ---------------------------------------
-from pathlib import Path
-cfg = clea.load_json5(Path(os.environ["RENOVATE_CFG"]))
 import tomllib  # the file itself, not load_config: a deleted knob must not hide behind the default
+def renovate_days(cfg):
+    """minimumReleaseAge in days as Renovate would apply it everywhere, or None when it is not one number."""
+    def nested(o, top):
+        if isinstance(o, dict): return sum((k == "minimumReleaseAge" and not top) + nested(v, False) for k, v in o.items())
+        if isinstance(o, list): return sum(nested(v, False) for v in o)
+        return 0
+    if nested(cfg, True): return None  # a package rule that sets its own is a second number
+    if "minimumReleaseAge" not in cfg: return 0
+    m = re.fullmatch(r"(\d+) days?", str(cfg["minimumReleaseAge"]))
+    return int(m.group(1)) if m else None
+def agree(days, cfg): return renovate_days(cfg) == days
+rule = {"packageRules": [{"matchPackageNames": ["x"], "minimumReleaseAge": "0 days"}]}
+check("the agreement test: the same number agrees", agree(7, {"minimumReleaseAge": "7 days"}) and agree(1, {"minimumReleaseAge": "1 day"}))
+check("…a different number does not", not agree(7, {"minimumReleaseAge": "3 days"}) and not agree(7, {}))
+check("…0 agrees with no minimumReleaseAge at all, or with \"0 days\", so the knob can be used as documented",
+      agree(0, {}) and agree(0, {"minimumReleaseAge": "0 days"}) and not agree(0, {"minimumReleaseAge": "7 days"}))
+check("…a package rule with its own minimumReleaseAge breaks it, whatever its value",
+      not agree(7, dict(rule, minimumReleaseAge="7 days")) and not agree(0, rule)
+      and not agree(7, {"minimumReleaseAge": "7 days", "packageRules": [{"x": [{"minimumReleaseAge": "7 days"}]}]}))
+check("…an unreadable value agrees with nothing", not agree(7, {"minimumReleaseAge": "a week"}))
+cfg = clea.load_json5(Path(os.environ["RENOVATE_CFG"]))
 days_set = tomllib.loads(Path(os.environ["CLEA_TOML"]).read_text()).get("policy", {}).get("min_release_age_days")
-m = re.fullmatch(r"(\d+) days?", str(cfg.get("minimumReleaseAge", "")))
-check("renovate.json5 sets minimumReleaseAge, in days", m is not None)
-check("…to the same number clea.toml sets, so the two agree",
-      m is not None and days_set is not None and int(m.group(1)) == days_set and days_set > 0)
+check("clea.toml sets min_release_age_days", isinstance(days_set, int))
+check("renovate.json5 carries the same number everywhere, so the two agree", renovate_days(cfg) is not None and agree(days_set, cfg))
+check("the default Cléa falls back to is that same number, not a third copy (unless the rule is switched off)",
+      clea.DEFAULT_MIN_AGE_DAYS == days_set or days_set == 0)
+root = Path(os.environ["ROOT_DIR"])
+real_cfg = clea.load_config(Path(os.environ["CLEA_TOML"]))
+anchored = {a.dep for a in clea.scan_anchors(root, real_cfg["scan"]["marker"], real_cfg["scan"]["exclude"], real_cfg["scan"]["include"])[0]}
+rows = clea.osv_rows(real_cfg)
+check("every [[osv]] row of clea.toml is well-formed and names a dependency the tree anchors", set(rows) <= anchored)
 
 httpd.shutdown()
 for name, ok in checks:

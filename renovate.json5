@@ -29,9 +29,9 @@
   extends: ["config:recommended", "helpers:pinGitHubActionDigests"],
   automerge: false,
   platformAutomerge: false,
-  // A release must be this old before it is proposed, the same rule Cléa applies to its own report: a
-  // fresh release can be yanked, retagged or found vulnerable within days. Keep equal to clea.toml's
-  // [policy] min_release_age_days (test-clea.sh checks).
+  // A release must be this old before it is proposed: a fresh one can be yanked, retagged or found
+  // vulnerable within days. The same number as Cléa's [policy] min_release_age_days (test-clea.sh
+  // checks), and no packageRules entry may set its own.
   minimumReleaseAge: "7 days",
   // Daily, not weekly. "before 6am on monday" is a six-hour window once a week
   // — the narrowest useful schedule there is — and it was chosen to batch the

@@ -20,8 +20,9 @@ Commands
   pick-issue which open, labelled issue is Cléa's OWN report — not just the newest.
   prune      name the probe branches whose pin already landed on the base branch.
 
-A bump is OFFERED (report action list, probe matrix) only when its release is old
-enough, not withdrawn, its tag has not moved and OSV holds no advisory against it.
+A bump is OFFERED (the report's "Behind upstream" table, the probe matrix) only when
+its release is old enough, not withdrawn, its tag has not moved and OSV holds no
+advisory new in it. The rules are in README.md, "What is offered".
 
 The two rules this file will not bend
 -------------------------------------
@@ -40,6 +41,7 @@ import fnmatch
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import urllib.error
@@ -58,7 +60,9 @@ USER_AGENT = "clea/1 (+https://github.com/dis-bzh/OpenAether-infra)"
 # Module attributes, not literals at the call site, so a test can point them at a local server.
 PYPI_API = "https://pypi.org/pypi"
 OSV_QUERY_URL = "https://api.osv.dev/v1/query"
-DEFAULT_MIN_AGE_DAYS = 7
+DEFAULT_MIN_AGE_DAYS = 7  # test-clea.sh keeps it equal to clea.toml
+MAX_MIN_AGE_DAYS = 3650  # beyond this the date arithmetic overflows: a typo, not a policy
+TAG_MEMORY = 3  # tags remembered per dependency, so one scan where `latest` flips forgets none
 SKIP_DIRS = {".git", "node_modules", ".terraform", ".terraform-validate", "vendor"}
 
 
@@ -504,6 +508,12 @@ def parse_when(value) -> datetime | None:
     return (at if at.tzinfo else at.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
 
 
+def _clean(text, limit: int = 80) -> str:
+    """Upstream free text, bounded and on one line, with nothing that opens a code span."""
+    one = " ".join(str(text).split()).replace("`", "'")
+    return one if len(one) <= limit else one[:limit - 1] + "…"
+
+
 # ---------------------------------------------------------------------------
 # Datasources
 # ---------------------------------------------------------------------------
@@ -567,10 +577,6 @@ def tag_facts(dep: str, tag: str, token: str | None) -> dict:
     return {"commit": obj["sha"], "date": when}
 
 
-def resolve_commit(dep: str, tag: str, token: str | None) -> str:
-    return tag_facts(dep, tag, token)["commit"]
-
-
 def commit_date(dep: str, sha: str, token: str | None) -> str | None:
     commit = _gh_json(f"/repos/{dep}/git/commits/{sha}", token) or {}
     return (commit.get("committer") or {}).get("date")
@@ -618,8 +624,8 @@ def latest_pypi(dep: str, _token: str | None, **_) -> dict:
               for f in files]
     stamps = [(at, raw) for at, raw in stamps if at]
     yanked = info.get("yanked") or (bool(files) and all(f.get("yanked") for f in files))
-    reason = info.get("yanked_reason") or next(
-        (f["yanked_reason"] for f in files if f.get("yanked_reason")), None)
+    reason = _clean(info.get("yanked_reason") or next(
+        (f["yanked_reason"] for f in files if f.get("yanked_reason")), None) or "")
     return {"tag": version, "released_at": min(stamps)[1] if stamps else None,
             "notes_url": f"https://pypi.org/project/{dep}/{version}/",
             "withdrawn": ("yanked on PyPI" + (f": {reason}" if reason else "")) if yanked else None}
@@ -764,18 +770,20 @@ DATASOURCES = {
 # ---------------------------------------------------------------------------
 # Advisories (OSV)
 # ---------------------------------------------------------------------------
-# An answer is `{"ids": [...]}` (OSV answered; empty = none) or `{"unknown": why}`.
-# "none" may only ever mean OSV said none: a failed, unreachable or malformed
-# answer, or a dependency OSV cannot be asked about, is unknown.
+# An answer is `{"ids": [...]}` or `{"unknown": why}`; empty ids mean OSV said none for
+# that exact package and version. A commit query matches git ranges only, which most
+# advisories do not carry: it can find (`"by": "commit"`), never clear.
 
 GITHUB_SOURCES = ("github-releases", "github-tags")
+OSV_NOT_CLEARED = "no [[osv]] row for it, and by commit OSV found nothing, which clears nothing"
+OSV_MAX_PAGES = 10
 
 
 def osv_ids(query: dict) -> list[str]:
     """Advisory ids OSV holds for one query; CleaError unless the answer is well-formed."""
     ids: list[str] = []
     page = None
-    for _ in range(10):
+    for _ in range(OSV_MAX_PAGES):
         body = dict(query, page_token=page) if page else query
         try:
             data = json.loads(http_post_json(OSV_QUERY_URL, body))
@@ -789,7 +797,21 @@ def osv_ids(query: dict) -> list[str]:
         page = data.get("next_page_token")
         if not page:
             return sorted(set(ids))
-    raise CleaError(f"{OSV_QUERY_URL} -> more than 10 pages of advisories")
+    raise CleaError(f"{OSV_QUERY_URL} -> more than {OSV_MAX_PAGES} pages of advisories")
+
+
+def osv_rows(cfg: dict) -> dict[str, tuple[str, str]]:
+    """clea.toml's `[[osv]]` rows as {dep: (ecosystem, package)}; a malformed row stops the run."""
+    rows: dict[str, tuple[str, str]] = {}
+    for row in cfg.get("osv", []):
+        got = [row.get(k) if isinstance(row, dict) else None for k in ("dep", "ecosystem", "package")]
+        if not all(isinstance(v, str) and v for v in got):
+            raise CleaError(f"clea.toml: an [[osv]] row needs dep, ecosystem and package as "
+                            f"non-empty strings (got {row!r})")
+        if got[0] in rows:
+            raise CleaError(f"clea.toml: two [[osv]] rows for {got[0]}")
+        rows[got[0]] = (got[1], got[2])
+    return rows
 
 
 class Osv:
@@ -797,59 +819,72 @@ class Osv:
     three failures in a row, so a blackholed network costs three timeouts rather
     than one per dependency. Failures land in `errors` too, so --strict sees them."""
 
-    def __init__(self, errors: list[str]) -> None:
-        self.errors, self.cache, self.failures = errors, {}, 0
+    def __init__(self, errors: list[str], rows: dict[str, tuple[str, str]] | None = None) -> None:
+        self.errors, self.cache, self.failures, self.rows = errors, {}, 0, rows or {}
 
     def ask(self, datasource: str, dep: str, version: str, commit: str | None) -> dict:
-        """The exact dep+version: by package for PyPI, by commit for a GitHub-hosted release."""
-        if datasource == "pypi":
-            query = {"package": {"name": dep, "ecosystem": "PyPI"}, "version": version}
+        """The exact dep+version where OSV can be asked by package (PyPI, or an `[[osv]]`
+        row); else by commit for a GitHub-hosted release, which can only find."""
+        package = self.rows.get(dep) or (("PyPI", dep) if datasource == "pypi" else None)
+        by_commit = False
+        if package:
+            plain = re.sub(r"^v(?=\d)", "", version)  # OSV versions carry no `v`
+            query = {"package": {"name": package[1], "ecosystem": package[0]}, "version": plain}
         elif datasource in GITHUB_SOURCES:
             if not commit:
-                return {"unknown": f"commit of {version} unknown"}
-            query = {"commit": commit}
+                return {"unknown": "no [[osv]] row for it, and no commit to ask by"}
+            query, by_commit = {"commit": commit}, True
         else:
             return {"unknown": f"no OSV mapping for datasource {datasource}"}
         key = json.dumps(query, sort_keys=True)
-        if key in self.cache:
-            return self.cache[key]
-        if self.failures >= 3:
-            return {"unknown": "OSV did not answer"}
-        try:
-            self.cache[key] = {"ids": osv_ids(query)}
+        if key not in self.cache:
+            if self.failures >= 3:
+                return {"unknown": "OSV did not answer"}
+            try:
+                ids = osv_ids(query)
+            except CleaError as exc:
+                self.errors.append(str(exc))
+                self.failures += 1
+                return {"unknown": "OSV did not answer"}
             self.failures = 0
-        except CleaError as exc:
-            self.errors.append(str(exc))
-            self.failures += 1
-            return {"unknown": "OSV did not answer"}
+            if not by_commit:
+                self.cache[key] = {"ids": ids}
+            else:
+                self.cache[key] = {"ids": ids, "by": "commit"} if ids else {"unknown": OSV_NOT_CLEARED}
         return self.cache[key]
 
 
-def pinned_commit(dep: str, current: str, tag: str, token: str | None,
-                  cache: dict) -> str | None:
-    """The commit the CURRENT pin points at. The anchor holds a stripped version,
-    so the tag is guessed in the shape upstream's own tag has (`v` or not)."""
-    plain = current.lstrip("v")
-    guesses = [f"v{plain}", plain] if tag.startswith("v") else [plain, f"v{plain}"]
-    for guess in guesses:
-        if (dep, guess) not in cache:
-            try:
-                cache[(dep, guess)] = resolve_commit(dep, guess, token)
-            except CleaError:
-                cache[(dep, guess)] = None
-        if cache[(dep, guess)]:
-            return cache[(dep, guess)]
-    return None
+def pinned_sha(root: Path, anchor: "Anchor") -> str | None:
+    """The commit an `action-sha` or `precommit-rev` pin holds, read off its own line."""
+    if anchor.form not in UNSAFE_BUMP_FORMS or not anchor.value_line:
+        return None
+    try:
+        lines = (root / anchor.path).read_text(encoding="utf-8").splitlines()
+        found = SHA40.search(lines[anchor.value_line - 1])
+    except (OSError, IndexError):
+        return None
+    return found.group(0) if found else None
 
 
 def advisory_ids(result) -> list[str]:
     return result.get("ids", []) if isinstance(result, dict) else []
 
 
+def by_version(result) -> bool:
+    """OSV answered for the exact version, so what it did not list is not there."""
+    return isinstance(result, dict) and "ids" in result and result.get("by") != "commit"
+
+
+def short_ids(ids: list[str], shown: int = 4) -> str:
+    """A few ids and a count: one kernel-sized dependency must not fill the issue body."""
+    more = f" and {len(ids) - shown} more" if len(ids) > shown else ""
+    return ", ".join(ids[:shown]) + more
+
+
 def advisory_text(result) -> str:
     if not isinstance(result, dict) or "ids" not in result:
         return "advisories unknown"
-    return ", ".join(result["ids"]) or "none"
+    return short_ids(result["ids"]) or "none"
 
 
 # ---------------------------------------------------------------------------
@@ -861,6 +896,7 @@ DEFAULT_CONFIG = {
     "report": {"title": "Cléa — dependency report", "label": "clea",
               "bot_login": "github-actions[bot]"},
     "policy": {"min_release_age_days": DEFAULT_MIN_AGE_DAYS},
+    "osv": [],
     "inventory": [],
     "tool": [],
     "unpinned": [],
@@ -966,53 +1002,88 @@ def _load_previous(path: str | None) -> dict:
         return {}
 
 
-def mark_movement(entry: dict, previous: dict[str, dict]) -> dict:
-    """Did upstream move since the last scan? Keyed on dependency AND file, so
-    the same tool pinned in two places is two rows, which is how a drift between
-    them shows up at all."""
+def tag_memory(previous: dict) -> dict[str, dict]:
+    """{dep: {tag: {"commit", "moved"?}}} from a previous state, merged across the rows of
+    a dependency: a commit belongs to (dep, tag), not to the file that pins it, so a row
+    added since the last scan inherits what the others saw."""
+    out: dict[str, dict] = {}
+    for d in previous.get("deps", []):
+        for tag, rec in (d.get("tags") or {}).items():
+            if not isinstance(rec, dict):
+                continue
+            have = out.setdefault(d.get("dep", "?"), {}).setdefault(tag, {})
+            if rec.get("moved") or not have:  # a row that saw the tag move wins
+                have.clear()
+                have.update(rec)
+    return out
+
+
+def mark_movement(entry: dict, previous: dict[str, dict], memory: dict[str, dict]) -> dict:
+    """Did upstream move since the last scan? `moved_since_last_scan` is keyed on
+    dependency AND file, so the same tool pinned in two places is two rows, which is
+    how a drift between them shows up at all."""
     was = previous.get(entry["dep"] + "@" + entry["file"], {})
     entry["moved_since_last_scan"] = bool(
         was.get("latest") and entry.get("latest") and was["latest"] != entry["latest"])
-    # `latest` is a version string, so a tag re-pointed at another commit leaves
-    # it unchanged: only the commit shows that. Kept until the tag itself changes,
-    # or the flag would clear on the next scan and the bump be offered after all.
-    if was.get("tag") and was["tag"] == entry.get("tag"):
-        old, new = was.get("tag_commit"), entry.get("tag_commit")
-        if old and new and old != new:
-            entry["tag_moved"] = {"from": old, "to": new}
-        elif was.get("tag_moved"):
-            entry["tag_moved"] = was["tag_moved"]
+    # A retagged release keeps its version string: only the commit shows it. Remembered per
+    # tag and carried through a scan that could not look it up, or one failed request would
+    # erase the baseline and the retagged bump be offered after all.
+    mem = memory.setdefault(entry["dep"], {})
+    tag, commit = entry.get("tag"), entry.get("tag_commit")
+    if tag and commit:
+        rec = mem.pop(tag, {})  # re-added last: the most recent tag
+        if rec.get("commit") and rec["commit"] != commit:
+            rec["moved"] = {"from": rec["commit"], "to": commit}
+        rec["commit"] = commit
+        mem[tag] = rec
+        while len(mem) > TAG_MEMORY:
+            del mem[next(iter(mem))]
+    if mem:
+        entry["tags"] = mem
+    if tag and mem.get(tag, {}).get("moved"):
+        entry["tag_moved"] = mem[tag]["moved"]
     return entry
 
 
 def assess(d: dict, now: datetime, min_days: int) -> dict:
     """Why a behind dependency is, or is not, offered. `holds` empty = offered.
 
-    `age_ok` is the age rule alone: Renovate applies that one too, so it is the
-    only hold that also explains the bot's silence. 0 days switches the age rule off.
+    `young` is a KNOWN date that is too recent: Renovate's minimumReleaseAge holds
+    that one too (same number, assumed rather than measured), so it alone explains the
+    bot's silence. A candidate that clears an advisory of the pin we run (`fixes`)
+    skips the age rule, as Renovate's security updates do. 0 days switches the age rule off.
     """
     holds: list[str] = []
     at = parse_when(d.get("released_at"))
     age = max(0, (now - at).days) if at else None
-    age_ok = True
-    if min_days > 0:
+    osv = d.get("osv") or {}
+    cand, cur = osv.get("candidate"), osv.get("current")
+    fixes = ([i for i in advisory_ids(cur) if i not in advisory_ids(cand)]
+             if by_version(cand) and by_version(cur) else [])
+    young = False
+    if min_days > 0 and not fixes:
         if at is None:
             holds.append("age unknown")
-            age_ok = False
         elif now < at + timedelta(days=min_days):
             on = (at + timedelta(days=min_days)).date()
             holds.append(f"too young, eligible on {on}")
-            age_ok = False
+            young = True
     if d.get("withdrawn"):
         holds.append(str(d["withdrawn"]))
     moved = d.get("tag_moved")
     if isinstance(moved, dict):
         holds.append(f"tag {d.get('tag', '?')} moved since last scan "
                      f"({str(moved.get('from'))[:7]} → {str(moved.get('to'))[:7]})")
-    ids = advisory_ids((d.get("osv") or {}).get("candidate"))
-    if ids:
-        holds.append(f"advisory {', '.join(ids)} against {d.get('tag') or d.get('latest')}")
-    return {"age": age, "age_ok": age_ok, "holds": holds}
+    # Only what the pin we run does not already carry: an advisory with no fix would
+    # otherwise hold every later bump of that dependency, and a bump cannot make it worse.
+    new = [i for i in advisory_ids(cand) if i not in advisory_ids(cur)]
+    if new:
+        holds.append(f"advisory {short_ids(new)} against {d.get('tag') or d.get('latest')}")
+    return {"age": age, "young": young, "holds": holds, "fixes": fixes}
+
+
+def valid_days(days) -> bool:
+    return isinstance(days, int) and not isinstance(days, bool) and 0 <= days <= MAX_MIN_AGE_DAYS
 
 
 def policy_of(state: dict) -> tuple[datetime, int]:
@@ -1020,7 +1091,7 @@ def policy_of(state: dict) -> tuple[datetime, int]:
     carries no policy is judged by the default, never waved through."""
     now = parse_when(state.get("generated_at")) or datetime.now(timezone.utc)
     days = (state.get("policy") or {}).get("min_release_age_days", DEFAULT_MIN_AGE_DAYS)
-    ok = isinstance(days, int) and not isinstance(days, bool) and days >= 0
+    ok = valid_days(days)
     return now, days if ok else DEFAULT_MIN_AGE_DAYS
 
 
@@ -1030,9 +1101,11 @@ def cmd_scan(args) -> int:
     scan = cfg["scan"]
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     min_days = cfg["policy"].get("min_release_age_days")
-    if not isinstance(min_days, int) or isinstance(min_days, bool) or min_days < 0:
+    if not valid_days(min_days):
         raise CleaError("clea.toml: [policy] min_release_age_days must be a whole number "
-                        f"of days, 0 or more (got {min_days!r})")
+                        f"of days, 0 to {MAX_MIN_AGE_DAYS} (got {min_days!r})")
+    errors: list[str] = []
+    osv = Osv(errors, osv_rows(cfg))
     anchors, novalue = scan_anchors(root, scan["marker"], scan["exclude"], scan["include"])
     if not anchors:
         print("✗ no readable anchor — nothing to scan", file=sys.stderr)
@@ -1043,15 +1116,14 @@ def cmd_scan(args) -> int:
 
     previous = _load_previous(args.previous)
     prev_by_key = {d["dep"] + "@" + d["file"]: d for d in previous.get("deps", [])}
+    memory = tag_memory(previous)
 
     # One upstream call per (datasource, dep), not per anchor: helm is pinned in
     # two files here and the API does not need asking twice.
     cache: dict[tuple[str, str], dict | str] = {}
     facts_cache: dict[tuple[str, str], dict | CleaError] = {}
     dates: dict[tuple[str, str], str | None] = {}
-    deps, errors = [], []
-    osv = Osv(errors)
-    pin_commits: dict[tuple[str, str], str | None] = {}
+    deps = []
 
     def resolve(datasource: str, name: str, **kwargs) -> dict:
         key = (datasource, name)
@@ -1121,10 +1193,8 @@ def cmd_scan(args) -> int:
                             entry["released_at"] = dates[(anchor.dep, got["commit"])]
                         except CleaError as exc:
                             errors.append(str(exc))
-            current_commit = (pinned_commit(anchor.dep, anchor.value, upstream["tag"], token, pin_commits)
-                              if github else None)
             entry["osv"] = {"current": osv.ask(anchor.datasource, anchor.dep, anchor.value,
-                                               current_commit)}
+                                               pinned_sha(root, anchor))}
             if entry["behind"]:
                 entry["osv"]["candidate"] = osv.ask(anchor.datasource, anchor.dep,
                                                     upstream["tag"], entry.get("tag_commit"))
@@ -1134,7 +1204,7 @@ def cmd_scan(args) -> int:
         tool = next((t for t in cfg["tool"] if t["name"] == anchor.dep), None)
         if tool:
             entry["tool"] = tool
-        deps.append(mark_movement(entry, prev_by_key))
+        deps.append(mark_movement(entry, prev_by_key, memory))
 
     for item in cfg["unpinned"]:
         entry = {"dep": item["name"], "datasource": item["datasource"],
@@ -1149,7 +1219,7 @@ def cmd_scan(args) -> int:
         except CleaError as exc:
             entry.update(latest=None, error=str(exc), behind=False)
             errors.append(str(exc))
-        deps.append(mark_movement(entry, prev_by_key))
+        deps.append(mark_movement(entry, prev_by_key, memory))
 
     state = {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -1291,14 +1361,41 @@ def cmd_matrix(args) -> int:
     return 0
 
 
+def lane_bumps(state: dict, wanted: tuple[str, ...]) -> list[str]:
+    """Shell lines for a lane that bumps some dependencies itself (the weekly cluster
+    lane: Talos and Kubernetes): a `bump` for each that is offered, an `echo` naming each
+    that is held back. Same `assess` as the matrix, or the lane would run a version the
+    report says is held back."""
+    now, days = policy_of(state)
+    out = []
+    for d in state.get("deps", []):
+        if d.get("dep") not in wanted or not (d.get("behind") and d.get("pinned")):
+            continue
+        holds = assess(d, now, days)["holds"]
+        if holds:
+            out.append("echo " + shlex.quote(
+                f"held back, not bumped: {d['dep']} {d['latest']} ({'; '.join(holds)})"))
+        else:
+            out.append(f"python3 scripts/clea/clea.py bump {shlex.quote(d['dep'])} {shlex.quote(d['latest'])}")
+    return out
+
+
 # ---------------------------------------------------------------------------
 # report
 # ---------------------------------------------------------------------------
 
+def _cell(text) -> str:
+    """One table cell. Upstream text (a yank reason, an advisory id) reaches the cells:
+    a bare `|` or newline would add a column or split the row, and a `<!--` would hide
+    the rest of the page."""
+    return (" ".join(str(text).split()).replace("|", "\\|")
+            .replace("<", "&lt;").replace(">", "&gt;"))
+
+
 def _table(rows: list[list[str]], head: list[str]) -> str:
     out = ["| " + " | ".join(head) + " |",
            "|" + "|".join(["---"] * len(head)) + "|"]
-    out += ["| " + " | ".join(r) + " |" for r in rows]
+    out += ["| " + " | ".join(_cell(c) for c in r) + " |" for r in rows]
     return "\n".join(out)
 
 
@@ -1393,9 +1490,11 @@ def render_report(state: dict) -> str:
                     else "❌ probe failed"
             notes = f"[notes]({d['notes_url']})" if d.get("notes_url") else "—"
             shape = "" if d.get("shape_ok", True) else " ⚠️ prefix differs"
+            fixes = verdict_of[id(d)]["fixes"]
+            clears = f"; clears {short_ids(fixes)}, so the age rule is skipped" if fixes else ""
             rows.append([f"`{d['dep']}`", f"`{d['current']}`", f"`{d['latest']}`{shape}",
                          _age_text(verdict_of[id(d)]["age"]),
-                         advisory_text((d.get("osv") or {}).get("candidate")),
+                         advisory_text((d.get("osv") or {}).get("candidate")) + clears,
                          f"`{d['file']}:{d['line']}`", verdict, notes])
         lines += [_table(rows, ["dependency", "pinned", "upstream", "age", "advisories",
                                 "where", "probe", "release"]), ""]
@@ -1413,7 +1512,7 @@ def render_report(state: dict) -> str:
                          "; ".join(verdict_of[id(d)]["holds"]),
                          f"`{d['file']}:{d['line']}`", notes])
         lines += ["## Held back", "",
-                  "Behind upstream, and not offered: not probed, not in the action list. "
+                  "Behind upstream, and not offered: not probed, not in the table above. "
                   "A hold ends with its cause; a moved tag stays held until upstream "
                   "tags another version.", "",
                   _table(rows, ["dependency", "pinned", "upstream", "age", "held because",
@@ -1432,17 +1531,22 @@ def render_report(state: dict) -> str:
                 hits.setdefault((d["dep"], d["current"]), (got["ids"], d))
         lines += ["## Advisories on what is pinned now", ""]
         for (dep, current), (ids, d) in hits.items():
-            if id(d) not in verdict_of:
+            verdict = verdict_of.get(id(d))
+            if verdict is None:
                 fix = "no newer upstream version."
-            elif verdict_of[id(d)]["holds"]:
-                fix = f"`{d['latest']}` is held back ({'; '.join(verdict_of[id(d)]['holds'])})."
-            else:
+            elif verdict["holds"]:
+                fix = f"`{d['latest']}` is held back ({'; '.join(verdict['holds'])})."
+            elif verdict["fixes"]:
                 fix = f"`{d['latest']}` is offered above: an argument for bumping sooner."
-            lines += [f"- ⚠️ `{dep}` `{current}` — {', '.join(ids)}. {fix}"]
+            elif by_version((d.get("osv") or {}).get("candidate")):
+                fix = f"`{d['latest']}` is offered above, but it carries them too."
+            else:
+                fix = f"`{d['latest']}` is offered above, but OSV could not say whether it clears them."
+            lines += [f"- ⚠️ `{dep}` `{current}` — {short_ids(ids)}. {fix}"]
         answered = len({(d["dep"], d["current"]) for d in deps
-                        if "ids" in ((d.get("osv") or {}).get("current") or {})})
+                        if by_version((d.get("osv") or {}).get("current"))})
         if answered and not hits:
-            lines += [f"None against the {answered} pin(s) OSV answered for."]
+            lines += [f"None against the {answered} pin(s) OSV answered for by version."]
         for reason, names in unknown.items():
             lines += [f"- advisories unknown for {_names(names)}: {reason}"]
         lines += [""]
@@ -1475,9 +1579,10 @@ def render_report(state: dict) -> str:
 
     bot = state.get("bot")
     if bot:
-        # Not what is too young: Renovate holds those back itself (minimumReleaseAge).
+        # Not what is KNOWN to be too young: Renovate's minimumReleaseAge (same number) is
+        # assumed to hold it. An undated row stays counted: Renovate may know a date Cléa could not.
         actionable = [d for d in behind
-                      if d.get("pinned") and d.get("watched") and verdict_of[id(d)]["age_ok"]]
+                      if d.get("pinned") and d.get("watched") and not verdict_of[id(d)]["young"]]
         limit = bot.get("silent_after_days", 8)
         days = bot.get("days")
         lines += [f"## {bot['bot']}", ""]
@@ -1502,8 +1607,8 @@ def render_report(state: dict) -> str:
             lines += [f"{len(actionable)} behind and within its window — nothing "
                       "to conclude yet.", ""]
         else:
-            lines += ["Nothing it watches is behind, so its silence proves "
-                      "nothing either way.", ""]
+            lines += ["Nothing it watches is behind and old enough for it to propose, so its "
+                      "silence proves nothing either way.", ""]
 
     failed = [p for p in state.get("probes", []) if not p["green"]]
     if failed:
@@ -1546,8 +1651,9 @@ def render_report(state: dict) -> str:
         lines += [""]
 
     lines += ["## What this did not test", "",
-              "- **\"none\" under advisories means OSV answered with nothing** — it knows what "
-              "was reported, no more — and an age is the date upstream gave: no date, never offered.",
+              "- **\"none\" under advisories means OSV answered with nothing** for that exact "
+              "version — it knows what was reported, no more — and an age is the date upstream "
+              "gave: with no date the bump is held while the age rule is on.",
               "- **No real cloud, ever.** This lane carries no provider credential and "
               "must fail if it ever needs one. A deploy on Scaleway, OVH or Outscale is "
               "run by hand, by someone watching — see `CONTRIBUTING.md`.",
@@ -1567,15 +1673,20 @@ def render_report(state: dict) -> str:
     else:
         lines += ["- The weekly local cluster lane has not reported yet."]
 
-    # A GitHub issue body caps at 65536 characters. The probe logs are already
-    # rendered above, so they are the first thing to drop from the copy carried
-    # forward — a state that makes the write fail loses the state entirely.
+    # An issue body caps at 65536 characters and an over-long write loses the state. Drop what
+    # the page already shows from the carried copy: probe logs first, then advisory answers.
+    budget = 60000 - sum(len(line) + 1 for line in lines)
     embedded = json.dumps(state, separators=(",", ":"))
-    if len(embedded) > 40000:
+    if len(embedded) > budget:
         trimmed = dict(state)
         trimmed["probes"] = [{k: v for k, v in p.items() if k != "log"}
                              for p in state.get("probes", [])]
         embedded = json.dumps(trimmed, separators=(",", ":"))
+    if len(embedded) > budget:
+        trimmed["deps"] = [{k: v for k, v in d.items() if k != "osv"} for d in deps]
+        embedded = json.dumps(trimmed, separators=(",", ":"))
+    # Upstream text can hold `-->`; as JSON escapes it still reads back identically.
+    embedded = embedded.replace("<", "\\u003c").replace(">", "\\u003e")
     lines += ["", "<!-- clea-state " + embedded + " -->"]
     return "\n".join(lines) + "\n"
 
