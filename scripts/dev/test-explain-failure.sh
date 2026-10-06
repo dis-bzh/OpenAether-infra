@@ -234,6 +234,32 @@ grep -q 'worker_data\[w0-d0\]' <<<"$OUT" \
   || ok "the unquoted form is gone"
 
 
+echo "--- the bastion changed under the tunnels: say the change landed, and to re-run ---"
+# Needs both lines of the transcript; a refused port alone, or a bastion change alone, is not this shape.
+printf '{"resources":[]}\n' >"$SB/state.json"; stub
+REFUSED="$(box 'Error applying configuration' 'module.talos.talos_machine_configuration_apply.worker[1]'; printf '│ Error while dialing: dial tcp 127.0.0.1:51101: connect: connection refused\n')"
+{ printf 'module.outscale[0].outscale_vm.bastion: Modifying... [id=i-1]\n'; printf '%s\n' "$REFUSED"; } >"$LOG"
+OUT="$(run)"
+grep -q 'the bastion changed under the tunnels' <<<"$OUT" && grep -q 'LANDED' <<<"$OUT" && grep -q 'Re-run the same' <<<"$OUT" \
+  && ok "a modified bastion followed by refused tunnel ports is explained, with the re-run" \
+  || bad "the bastion shape was not printed for its own transcript"
+{ printf 'module.ovh[0].openstack_compute_instance_v2.bastion: Destroying... [id=x]\n'; printf '%s\n' "$REFUSED"; } >"$LOG"
+OUT="$(run)"
+grep -q 'the bastion changed under the tunnels' <<<"$OUT" \
+  && ok "…and so is a replaced one" || bad "a replaced bastion was not explained"
+printf '%s\n' "$REFUSED" >"$LOG"
+OUT="$(run)"
+grep -q 'the bastion changed under the tunnels' <<<"$OUT" \
+  && bad "a refused port with no bastion change was blamed on the bastion" \
+  || ok "a refused port with no bastion change stays quiet"
+printf 'module.outscale[0].outscale_vm.bastion: Modifying... [id=i-1]\nApply complete! Resources: 0 added, 1 changed, 0 destroyed.\n' >"$LOG"
+OUT="$(run)"
+grep -q 'the bastion changed under the tunnels' <<<"$OUT" \
+  && bad "a bastion change that broke nothing was reported as a failure" \
+  || ok "a bastion change with no refused port stays quiet"
+: >"$LOG"
+
+
 # --- the wiring itself -------------------------------------------------------
 # Everything above only inspects tasks that ALREADY defer to the explainer, so
 # deleting the wiring made the script invisible and left this suite green: 107
