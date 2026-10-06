@@ -1140,6 +1140,11 @@ printf '%s passed, %s failed, %s hung, %s skipped, %s known defect(s) in the scr
 { [ "$KNOWN" -eq 0 ] || [ "${STRICT_DEFECTS:-0}" = 1 ]; } ||
   printf 'known defects are reported, not fixed: this file owns the tests. STRICT_DEFECTS=1 makes them fatal.\n'
 RC=0
+echo "=== no script pipes aws into grep -q: under pipefail the SIGPIPE reads as 'not found' ==="
+# infra-verify did, against a replica holding several objects, and failed 2 runs in 6 with the replica present.
+PIPED="$(grep -rnE '^[^#]*aws[^|#]*\|[[:space:]]*grep[[:space:]]+-q' "$ROOT/scripts" --include='*.sh' | grep -v '/dev/test-' || true)"
+[ -z "$PIPED" ] && ok "no aws call is piped into grep -q" || bad "aws piped into grep -q (capture the output first): ${PIPED:0:240}"
+
 [ "$FAIL" -eq 0 ] || RC=1
   # Zero failures is also what a harness that never asserted reports.
   [ "$PASS" -gt 0 ] || { printf 'NOT green: no assertion ran at all.\n'; RC=1; }
