@@ -17,6 +17,9 @@
 # ==============================================================================
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
+# go-task reads the caller's environment as variables: Cléa's probe lane exports VERSION=<the version under probe>, and
+# the Taskfile then handed that to the script (#286). The harness defines its own environment instead of inheriting it.
+unset VERSION RETAIN ENSURE LIST PRUNE
 
 PASS=0; FAIL=0
 ok()  { printf '  \033[32m✓\033[0m %s\n' "$*"; PASS=$((PASS + 1)); }
@@ -889,6 +892,14 @@ echo "--- floors: the stubs really ran (all of the above is vacuous otherwise) -
 OUT="$(run 2 --ensure)"
 [ "$(calls init)" -ge 1 ] && ok "tofu was invoked through the stub ($(wc -l <"$LOG") calls recorded)" \
                           || bad "ZERO tofu calls recorded — the script died before planning, and every assertion above measured nothing"
+
+echo "--- a caller's VERSION and RETAIN in the environment change nothing this harness asserts (#286) ---"
+if [ -z "${OA_TALOS_IMAGE_TEST_INNER:-}" ]; then
+  INNER="$(VERSION=3.3.24 RETAIN=1 OA_TALOS_IMAGE_TEST_INNER=1 bash "${BASH_SOURCE[0]}" 2>&1 | sed -E 's/\x1b\[[0-9;]*m//g' | grep -E '^[0-9]+ passed, [0-9]+ failed' | tail -1)"
+  grep -qE '^[0-9]+ passed, 0 failed' <<<"$INNER" \
+    && ok "the whole harness passes with VERSION=3.3.24 RETAIN=1 exported (${INNER})" \
+    || bad "an exported VERSION or RETAIN leaks into the harness: ${INNER:-no summary line}"
+fi
 
 echo
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
