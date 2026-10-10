@@ -26,15 +26,16 @@ real-cloud rows and no bare metal does — say on what.
 ## 1. Clean-machine bootstrap (the first five minutes)
 
 Not your working tree: it has files a clone does not, which is how the CNI defect
-survived, and your workstation is no clean machine either. Build the archive from
-the **release commit** and run it in a bare container, as a newcomer would — this
-is also §9:
+survived, and your workstation is no clean machine either. Clone the **release
+commit** into a bare container, as a newcomer would — this is also §9. A clone and
+not an unpacked `git archive`: `task lint` lists files with `git ls-files`, so a
+tree with no `.git` cannot run `task preflight`.
 
 ```bash
-git archive --format=tar <release commit> > /tmp/repo.tar
-docker run --rm -v /tmp/repo.tar:/tmp/repo.tar:ro ubuntu:24.04 bash -c '
-  apt-get update -qq && apt-get install -y -qq curl ca-certificates >/dev/null
-  mkdir /oa && tar -xf /tmp/repo.tar -C /oa && cd /oa && ./scripts/setup.sh'
+docker run --rm ubuntu:24.04 bash -c '
+  apt-get update -qq && apt-get install -y -qq curl ca-certificates git >/dev/null
+  git clone -q https://github.com/dis-bzh/OpenAether-infra.git /oa && cd /oa &&
+  git checkout -q <release commit> && ./scripts/setup.sh'
 ```
 
 - [ ] `setup.sh` completes and installs **helm**. Record the versions it prints:
@@ -60,9 +61,11 @@ docker run --rm -v /tmp/repo.tar:/tmp/repo.tar:ro ubuntu:24.04 bash -c '
 
 ## 2. Local Docker — the credential-free rung
 
-On a Docker host, from the same archive unpacked, no `.env.sh`: `task local-up`,
-`local-status`, `local-test`, `local-down`. A host that cannot boot Talos in
-Docker is refused in about a second (PR #138): record a skip, not a pass.
+On a Docker host, from the same clone, no `.env.sh`: `task local-up`,
+`local-status`, `local-test`, `local-down`. A host that fails the guards cannot
+boot Talos in Docker and is refused in about a second (PR #138): record a skip,
+not a pass. One that passes them can still fail later (#291, ten minutes in):
+record what happened, not a pass.
 
 - [ ] `local-up` renders `cilium-local.yaml` itself when the manifest is absent,
       and a second `local-up` does not re-render it (same mtime, size, inode).
@@ -76,8 +79,8 @@ Docker is refused in about a second (PR #138): record a skip, not a pass.
 - [ ] at the shipped pin: `docs/status.md` records the Docker lane only at Talos
       1.13.9 / Kubernetes 1.36.3 (2026-08-24), the commit that moved the pin says it
       did not run the lane at the new pair on the host that made it, and `task
-      local-up` at 1.14.2 did not start on the one host tried (kernel 6.12): record
-      what your host does.
+      local-up` at 1.14.2 does not start on the two hosts tried (kernel 6.12, #291):
+      record what your host does.
 
 ## 3. Emulated cloud — no account, real provider binaries
 
@@ -453,9 +456,10 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
 ## 9. Before communicating
 
 - [ ] clone the repo **as a stranger would** — no local state, no `.env.sh` — and
-      do §1 and §2 one more time, from `git archive <release commit>` in a bare
+      do §1 and §2 one more time, from a clone of the release commit in a bare
       container, **before the tag**. It holds the licence, the changelog and no
-      real `*.tfvars`, only the `.example` files.
+      real `*.tfvars`, only the `.example` files (`git ls-files | grep -E
+      'envs/[^/]*\.tfvars$|\.env\.sh$'` prints nothing).
 - [ ] read `README.md` top to bottom as someone who has never seen it: the
       disclaimers (Proxmox never applied on hardware, the undeletable Outscale
       Net, the emulator proving nothing about a real deploy, no applications above
