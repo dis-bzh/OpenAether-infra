@@ -292,6 +292,23 @@ install_precommit() {
     pip_install_pinned pre-commit "$PRECOMMIT_VERSION"
 }
 
+# PyYAML for the system python3. check-cilium-effective-config.py, check-cilium-parity.py
+# and check-alert-metrics.py import it and `task preflight` runs them: a CI runner image
+# ships it, a clean machine does not. apt/brew and not pipx, whose venv those scripts'
+# python3 cannot import.
+ensure_pyyaml() {
+    python3 -c 'import yaml' 2>/dev/null && return 0
+    if command -v apt-get &> /dev/null; then
+        echo "Installing PyYAML..."
+        $SUDO apt-get update && $SUDO apt-get install -y python3-yaml
+    elif command -v brew &> /dev/null; then
+        brew install pyyaml
+    else
+        echo -e "${RED}⚠ PyYAML is missing — 'task preflight' imports it (check-cilium-*.py).${NC}"
+        echo "   Install python3-yaml (the PyYAML package of your distribution), then re-run ./scripts/setup.sh"
+    fi
+}
+
 # 1. Check OpenTofu
 if ! check_cmd tofu "$TOFU_VERSION"; then
     install_tofu
@@ -408,6 +425,9 @@ if ! check_cmd nc; then
         echo "   Install netcat-openbsd (or equivalent), then re-run ./scripts/setup.sh"
     fi
 fi
+
+# 9b. Check PyYAML — `task preflight` runs scripts that import it.
+ensure_pyyaml
 
 # 10. Check pre-commit (optional but recommended)
 if ! check_cmd pre-commit "$PRECOMMIT_VERSION"; then

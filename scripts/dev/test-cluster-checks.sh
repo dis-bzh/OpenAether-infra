@@ -972,6 +972,15 @@ eval "$(sed -n "${_wa},${_wb}p" "$ROOT/scripts/dev/cluster-upgrade.sh")"
 declare -f walk_path >/dev/null \
   && ok "walk_path was extracted and is callable" \
   || bad "could not extract walk_path — the assertions below would be vacuous"
+# walk_path reads and writes the pins through tfvar_get/tfvar_set, so they must exist before
+# its first call. They used to be defined further down: every call above that point printed
+# "command not found" (42 lines a run) and the pin writes it makes were silently skipped.
+PINS="$STUB_DIR/pins"
+tfvar_get() {
+  local v; v="$(sed -nE "s/^$1=//p" "$PINS" 2>/dev/null)"
+  if [ -n "$v" ]; then echo "$v"; elif [ "$1" = kubernetes_version ]; then echo v1.37.1; else echo v1.14.2; fi
+}
+tfvar_set() { { grep -v "^$1=" "$PINS" 2>/dev/null; echo "$1=$2"; } >"$PINS.n"; mv "$PINS.n" "$PINS"; }
 
 CLIMB7="$(version_path v1.12.7 v1.30.0 v1.13.9 v1.36.3 2>/dev/null)"
 upgrade_k8s_to()   { echo "k8s $1"; }
@@ -1024,12 +1033,6 @@ _eat="$(walk_path v1.12.7 v1.30.0 7 <<<"$CLIMB7" | grep -cE '^(k8s|talos) ' || t
 
 # An axis that does not move is pinned where it runs (#279). The stubs read the pin AT CALL TIME: an unset
 # pin is the shipped default (Kubernetes v1.37.1), which Talos 1.13.9 refuses.
-PINS="$STUB_DIR/pins"
-tfvar_get() {
-  local v; v="$(sed -nE "s/^$1=//p" "$PINS" 2>/dev/null)"
-  if [ -n "$v" ]; then echo "$v"; elif [ "$1" = kubernetes_version ]; then echo v1.37.1; else echo v1.14.2; fi
-}
-tfvar_set() { { grep -v "^$1=" "$PINS" 2>/dev/null; echo "$1=$2"; } >"$PINS.n"; mv "$PINS.n" "$PINS"; }
 upgrade_k8s_to()   { echo "k8s $1 talos-pin=$(tfvar_get talos_version)"; }
 upgrade_talos_to() { echo "talos $1 k8s-pin=$(tfvar_get kubernetes_version)"; }
 : >"$PINS"

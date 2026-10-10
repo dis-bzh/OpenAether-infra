@@ -200,6 +200,51 @@ grep -q 'python3 -m pip install --user yamllint==1.38.0' "$TMP/calls" \
 rm -f "$TMP/bin/pipx" "$TMP/bin/python3"
 
 echo
+echo "=== PyYAML is installed where the system python3 can import it ==="
+# `task preflight` imports yaml from three scripts. CI's runner image has it and a
+# clean machine does not, so nothing installed it until a bare-container run found it.
+sed -n '/^ensure_pyyaml() {/,/^}/p' "$ROOT/scripts/setup.sh" > "$TMP/yaml.sh"
+grep -q 'python3-yaml' "$TMP/yaml.sh" || {
+  echo "✗ could not extract ensure_pyyaml from setup.sh" >&2; exit 1; }
+yamlstub() { # <name> <rc> — records its arguments in $TMP/calls
+  printf '#!/bin/sh\necho "%s $*" >> "%s/calls"\nexit %s\n' "$1" "$TMP" "$2" > "$TMP/bin/$1"
+  chmod +x "$TMP/bin/$1"
+}
+yamlcall() { # runs the function with only the stubs on PATH, never the real apt or brew
+  : > "$TMP/calls"
+  PATH="$TMP/bin" SUDO="" RED="" NC="" \
+    /bin/bash -c '. "$1"; ensure_pyyaml' _ "$TMP/yaml.sh" > "$TMP/yaml.out" 2>&1
+}
+rm -f "$TMP/bin/apt-get" "$TMP/bin/brew"
+yamlstub python3 0
+yamlstub apt-get 0
+yamlcall
+[ ! -s "$TMP/calls" ] || ! grep -q 'apt-get' "$TMP/calls" \
+  && ok "yaml already importable: nothing is installed" \
+  || bad "installed although python3 could import yaml: $(cat "$TMP/calls")"
+yamlstub python3 1
+yamlcall
+grep -qx 'apt-get install -y python3-yaml' "$TMP/calls" \
+  && ok "yaml not importable and apt present: python3-yaml is installed" \
+  || bad "apt was not asked for python3-yaml: $(cat "$TMP/calls")"
+rm -f "$TMP/bin/apt-get"; yamlstub brew 0
+yamlcall
+grep -qx 'brew install pyyaml' "$TMP/calls" \
+  && ok "no apt but brew: pyyaml is installed through it" \
+  || bad "brew was not asked for pyyaml: $(cat "$TMP/calls")"
+rm -f "$TMP/bin/brew"
+yamlcall; rc=$?
+{ [ "$rc" -eq 0 ] && grep -q 'python3-yaml' "$TMP/yaml.out"; } \
+  && ok "neither apt nor brew: the install command is named, and the script is not aborted" \
+  || bad "no instruction when nothing can install it (rc=$rc): $(cat "$TMP/yaml.out")"
+rm -f "$TMP/bin/python3"
+# The function is worth nothing if the bootstrap never calls it, and removing the
+# call would bring the defect back while every case above still passed.
+grep -qx 'ensure_pyyaml' "$ROOT/scripts/setup.sh" \
+  && ok "and the bootstrap calls it, not only defines it" \
+  || bad "ensure_pyyaml is defined in setup.sh but never called"
+
+echo
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 # A floor, not just a verdict: `FAIL -eq 0` is also true when the harness died
 # before asserting anything, which is the shape this repository keeps meeting.
