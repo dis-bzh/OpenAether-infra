@@ -33,6 +33,7 @@ declare -A ALLOW=(
   [gnupg]="generic OS utility (backup encryption, Zabbly key verification)"
   [jq]="generic OS utility (backup-state.sh)"
   [netcat-openbsd]="generic OS utility (port probes)"
+  [python3-yaml]="the distribution's PyYAML for the system python3 the check-*.py scripts run under; apt cannot name a version and pipx installs into a venv those scripts cannot import"
   [openssh-server]="generic OS utility (ssh-ca-check.sh's throwaway Docker sshd, torn down every run)"
   [openssh-client]="generic OS utility (ssh-ca-check.sh's throwaway Docker sshd, torn down every run)"
   [pipx]="a package manager, not a tracked tool"
