@@ -13,8 +13,7 @@ Deux profils différents arrivent ici, et ils ne cherchent pas la même page.
 
 **Vous voulez un cluster.** Celui qui ne demande ni compte ni credentials est
 `task local-up`, un cluster Talos de six nœuds dans Docker ; au Talos 1.14.2 livré,
-il n'a pas démarré sur les deux hôtes essayés (noyau 6.12, #291), bien qu'il ait démarré sur un runner hébergé avec un
-control plane et un worker, lisez d'abord cette issue.
+il demande un noyau d'hôte 6.15 ou plus récent (#291), et `task local-up` refuse en une seconde un hôte en dessous.
 Puis [Démarrage rapide](#démarrage-rapide) pour un cloud, ou
 [`docs/first-cluster.fr.md`](docs/first-cluster.fr.md) pour la version pas à pas,
 de la machine nue à un cluster qu'on rejoint, met à jour et détruit.
@@ -145,7 +144,7 @@ Talos/cluster est provider-agnostique. Détail : `docs/deployment-test-matrix.fr
 | **OVH** | ✅ les mêmes cinq, le même jour, et la montée en 1.14 le 2026-10-03 sur trois zones | EU-WEST-PAR (OpenStack) | LB Octavia, floating IPs, routeur SNAT, réseau privé. Un control plane peut rester `ACTIVE` alors qu'il est mort, dès son premier boot (#49 : vu les 2026-10-06 et 2026-10-10, cause inconnue, un hard reboot Nova le relève) |
 | **Outscale / Numspot** | ✅ les mêmes cinq, mesurés le 2026-08-20, et la montée en 1.14 le 2026-10-03 sur trois subregions | eu-west-2 | Redéployé sur un **Net neuf** après un timeout interne du service LBU en amont, qui en avait laissé un coincé en `provisioning` (demande 399530, close). Deux cicatrices : un Net créé avant ce correctif refuse toujours la suppression et seul le provider peut le lever (#43 ; tant qu'il existe, `purge-orphans` ne peut pas finir propre ici), et son object store ignore `If-None-Match`, donc le verrou d'état `use_lockfile` est délibérément désactivé ici |
 | **Proxmox (on-prem)** | 🧪 code-complet, testé unitairement — **jamais appliqué en réel** | PVE mono/multi-hôte | VIP Talos (pas de LB managé), NAT/DNAT nftables, prérequis manuels |
-| **Local (Docker)** | ⚠️ validé le 2026-08-24 à Talos 1.13.9 ; au 1.14.2 livré, `task local-up` n'a pas démarré sur les deux hôtes essayés (#291) et a démarré sur un runner hébergé à 1 CP + 1 worker (2026-10-11) | WSL2 / Docker | 3 CP + 3 workers, quorum etcd, Cilium — preuve sans credentials de `modules/talos` |
+| **Local (Docker)** | ⚠️ validé le 2026-08-24 à Talos 1.13.9 ; au 1.14.2 livré, il demande un noyau d'hôte 6.15 ou plus récent (#291) : il n'a pas démarré sur les deux hôtes en noyau 6.12 essayés et a démarré sur un runner hébergé (noyau 6.17) à 1 CP + 1 worker (2026-10-11) | WSL2 / Docker | 3 CP + 3 workers, quorum etcd, Cilium — preuve sans credentials de `modules/talos` |
 
 ## Structure du dépôt
 
@@ -191,8 +190,8 @@ y compris un teardown, qui peut alors sembler réussi sans rien détruire.
 
 Monte un vrai cluster Talos **3 control planes + 3 workers** dans Docker, sur le
 **même `modules/talos/` qu'en production**. Dernier passage réussi à 3 + 3 : Talos 1.13.9,
-2026-08-24 ; au 1.14.2 livré, il n'a pas démarré sur les deux hôtes essayés (#291) et a démarré sur un runner hébergé à 1 control
-plane + 1 worker (2026-10-11).
+2026-08-24 ; au 1.14.2 livré, il demande un noyau d'hôte 6.15 ou plus récent (#291) : il n'a pas démarré sur les deux hôtes en noyau
+6.12 essayés et a démarré sur un runner hébergé (noyau 6.17) à 1 control plane + 1 worker (2026-10-11).
 
 ```bash
 task local-up        # déploiement complet

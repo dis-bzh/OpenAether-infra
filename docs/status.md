@@ -182,9 +182,9 @@ Since then, under 0.12.0 and real cloud by hand: `cluster-upgrade` 1.13.9 to 1.1
 in one run once the defects their first attempts found were fixed, Outscale in a second run that ended red on the
 single-subregion verdict (figures in the CHANGELOG). A fresh 1.14.2 cluster of that shape ran on each on 2026-10-10 and 11
 (table above). **Not proven**: a run without
-`replace_triggered_by`; `task local-up` at 1.14.2, which did not start on either of the two hosts tried (kernel 6.12,
-[#291](https://github.com/dis-bzh/OpenAether-infra/issues/291)) and booted once on a hosted runner (Cléa's weekly lane, 1 control plane
-+ 1 worker, 2026-10-11), so the
+`replace_triggered_by`; `task local-up` at 1.14.2, which needs a host kernel of 6.15 or newer
+([#291](https://github.com/dis-bzh/OpenAether-infra/issues/291): it did not start on either of the two kernel 6.12 hosts tried, and
+booted once on a hosted runner at kernel 6.17, Cléa's weekly lane, 1 control plane + 1 worker, 2026-10-11), so the
 container-mode install image change (v1.13.0 to v1.14.0) is unmeasured at the default 3 + 3; `talos_machine`
 ([#44](https://github.com/dis-bzh/OpenAether-infra/issues/44)) is not adopted.
 

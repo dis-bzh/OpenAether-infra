@@ -48,6 +48,18 @@ in git. 0.1.0 is the first entry describing something proven.
   a restore after the Kubernetes bump, other clouds, a patch-level control plane rollback. `cluster-upgrade` still takes
   no snapshot and #270 stays open for the tooling and the decisions it lists.
 
+### Fixed
+
+- **`task local-up` refuses, in a second, a host whose kernel cannot build Talos 1.14's `/etc` overlay (#291).** Talos 1.14
+  passes the overlay's layers as O_PATH file descriptors (`fsconfig` `FSCONFIG_SET_FD`, `lowerdir+`), which Linux accepts
+  from 6.15 (6.13 added layers by descriptor, 6.15 the O_PATH ones). On 6.12.107 the call answers `EBADF`, every node died at
+  boot and the bootstrap waited ten minutes. `scripts/dev/check-host-overlay-fd.sh` reads the Docker daemon's kernel; below
+  6.15 and on this machine's own kernel it asks that kernel with the same call, in a user namespace, and refuses only on a
+  refusal. A daemon it cannot ask (a Docker Desktop VM, a WSL2 kernel) gets a warning. Rung: mocked (a stubbed daemon, kernel
+  and probe, every branch removed once to see its test go red); the real probe refused on the kernel 6.12.107 host that found
+  the defect. Not run: the guard on a kernel 6.15 or newer, where it passes by version, and the lane at Talos 1.13.x on
+  6.12.
+
 ---
 
 ## [0.2.0] — 2026-10-12

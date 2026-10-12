@@ -130,6 +130,7 @@ docker ps >/dev/null 2>&1 || { error "Docker is not running (start Docker Deskto
 # Fail in ~10ms on a host that can never bootstrap Talos-in-Docker, instead of
 # a silent 90s hang in Step 3 below ending on an unrelated-looking timeout.
 "${SCRIPT_DIR}/check-docker-talos-capability.sh" || exit 1
+"${SCRIPT_DIR}/check-host-overlay-fd.sh" || exit 1
 export TF_VAR_encryption_passphrase="${TF_VAR_encryption_passphrase:-local-test-passphrase-32chars-minimum}"
 
 # Flux reconciles from GitHub — the current branch must be pushed so the GitRepository can clone it.

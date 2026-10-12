@@ -514,6 +514,7 @@ tasks:
       # then died on an unrelated-looking timeout (#54). Against a stubbed
       # capsh, and also against this host's real one where reachable.
       - ./scripts/dev/test-docker-talos-capability.sh
+      - ./scripts/dev/test-host-overlay-fd.sh
       # A --set typo reaches the cluster silently past every other gate;
       # this proves the effective-config reader (and check-cilium-parity.py's
       # missing-key guard) actually catch it, offline.
@@ -2011,6 +2012,9 @@ tasks:
       # Same shape, a different 90s hang: a host missing CAP_SYS_RESOURCE looks
       # healthy right up to the etcd-quorum wait. See infrastructure/opentofu-local/README.md.
       - ./scripts/dev/check-docker-talos-capability.sh
+      # And a third: a kernel under 6.15 refuses the O_PATH overlay layers Talos 1.14 builds
+      # its /etc from, so every node dies at boot and the bootstrap waits ten minutes (#291).
+      - ./scripts/dev/check-host-overlay-fd.sh
       # cilium-local.yaml is gitignored, so a fresh clone has none — render it
       # rather than boot a cluster with no CNI. Mirrors what `up` does for the
       # cloud manifest.
