@@ -23,12 +23,32 @@
 # OA_OVERLAY_PROBE overrides the command that asks the kernel; it must print ACCEPTED or
 # REFUSED, anything else is "cannot tell" (the harness uses it, nothing else should).
 #
+# ONLY TALOS 1.14 AND LATER ASKS FOR IT. The lane's Talos is TF_VAR_talos_version when set,
+# else the default of infrastructure/opentofu-local/variables.tf; below 1.14 the guard is
+# silent. Measured on the kernel 6.12.107 host: Talos 1.13.9 / Kubernetes 1.36.3 boots and
+# verifies there at 1 control plane + 1 worker (3 + 3 ran that 3.8 GB host out of memory),
+# Talos 1.14.2 does not.
+#
 # Usage: check-host-overlay-fd.sh
 set -uo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 WANT_MAJOR=6
 WANT_MINOR=15
 
+lane_talos() { # the Talos version the Docker lane will run
+  local v="${TF_VAR_talos_version:-}"
+  [ -n "$v" ] || v="$(awk '/^variable "talos_version"/{f=1} f&&/default *=/{gsub(/[" ]/,"",$3); print $3; exit}' \
+    "$ROOT/infrastructure/opentofu-local/variables.tf" 2>/dev/null)"
+  printf '%s' "$v"
+}
+talos_needs_fd_layers() { # <version> — true from 1.14, and when it cannot be read (be safe)
+  local v="${1#v}" major minor
+  major="${v%%.*}"; minor="${v#*.}"; minor="${minor%%[!0-9]*}"
+  [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || return 0
+  [ "$major" -gt 1 ] || { [ "$major" -eq 1 ] && [ "$minor" -ge 14 ]; }
+}
 kernel_of_docker() { docker info --format '{{.KernelVersion}}' 2>/dev/null; }
 older_than_want() { # <kernel release string> — true when it parses and is below 6.15
   local maj min
@@ -65,6 +85,7 @@ ask_kernel() { # 0 accepted, 1 refused, 2 cannot tell
   case "$said" in ACCEPTED) return 0;; REFUSED) return 1;; *) return 2;; esac
 }
 
+talos_needs_fd_layers "$(lane_talos)" || exit 0     # Talos 1.13 and earlier build /etc another way
 KERNEL="$(kernel_of_docker)"
 [ -n "$KERNEL" ] || exit 0                         # no Docker answer: the lane fails on its own, loudly, in seconds
 older_than_want "$KERNEL" || exit 0                # 6.15 or newer, or unparsable: nothing to say
@@ -90,7 +111,11 @@ case $answer in
 
   Use a host whose kernel is 6.15 or newer (a GitHub-hosted ubuntu-24.04 runner is on
   6.17). A Docker Desktop or WSL2 kernel counts: check \`docker info --format
-  '{{.KernelVersion}}'\`.
+  '{{.KernelVersion}}'\`. Or run the lane on the Talos that predates the call: measured on
+  a kernel 6.12 host, \`TF_VAR_talos_version=v1.13.9 TF_VAR_kubernetes_version=v1.36.3
+  task local-up\` boots and verifies (add TF_VAR_control_plane_count=1
+  TF_VAR_worker_count=1 on a small host: 3 + 3 ran out of memory on 3.8 GB;
+  \`local-verify\` then reports the pin as not landed, as it compares the shipped pin).
 EOT
     exit 1 ;;
   *)

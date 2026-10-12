@@ -70,6 +70,14 @@ ships: look it up rather than assume. `task local-up` asks the kernel the same q
 machine's own kernel that says no; a daemon it cannot ask only gets a warning.
 Check by hand: `docker info --format '{{.KernelVersion}}'`.
 
+The guard only applies to Talos 1.14 and later (`TF_VAR_talos_version`, else this
+module's default). The older Talos does not make that call: on the same kernel 6.12.107
+host, `TF_VAR_talos_version=v1.13.9 TF_VAR_kubernetes_version=v1.36.3 task local-up`
+booted and `task local-verify` passed apart from the pin comparison (it compares the
+shipped pin). Add `TF_VAR_control_plane_count=1 TF_VAR_worker_count=1` on a small host:
+3 + 3 ran that 3.8 GB machine out of memory (the API stopped answering) with no overlay
+error in any node.
+
 ## Quick start
 
 ```bash

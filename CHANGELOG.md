@@ -57,8 +57,9 @@ in git. 0.1.0 is the first entry describing something proven.
   6.15 and on this machine's own kernel it asks that kernel with the same call, in a user namespace, and refuses only on a
   refusal. A daemon it cannot ask (a Docker Desktop VM, a WSL2 kernel) gets a warning. Rung: mocked (a stubbed daemon, kernel
   and probe, every branch removed once to see its test go red); the real probe refused on the kernel 6.12.107 host that found
-  the defect. Not run: the guard on a kernel 6.15 or newer, where it passes by version, and the lane at Talos 1.13.x on
-  6.12.
+  the defect. The guard asks only for Talos 1.14 and later: Talos 1.13.9 / Kubernetes 1.36.3 booted on that host and
+  `local-verify` passed (1 control plane + 1 worker, apart from the pin comparison; 3 + 3 ran the 3.8 GB host out of
+  memory). Not run: the guard on a kernel 6.15 or newer, where it passes by version.
 
 ---
 

@@ -25,6 +25,7 @@ stub_docker() { # <KernelVersion the daemon reports, or "-" for a daemon that do
 stub_uname() { printf '#!/usr/bin/env bash\n[ "$1" = -r ] && { echo "%s"; exit 0; }\nexec /usr/bin/uname "$@"\n' "$1" >"$STUB_DIR/uname"; chmod +x "$STUB_DIR/uname"; }
 stub_probe() { printf '#!/usr/bin/env bash\necho "%s"\n' "$1" >"$STUB_DIR/probe"; chmod +x "$STUB_DIR/probe"; }
 run() { PATH="$STUB_DIR:$PATH" OA_OVERLAY_PROBE="$STUB_DIR/probe" "$CHECK" 2>&1; }
+run_talos() { TF_VAR_talos_version="$1" run; } # the lane's Talos, as the operator sets it
 
 echo "=== a kernel at or above 6.15: silent, exit 0, the kernel is not even asked ==="
 stub_docker "6.17.0-1022-azure"; stub_uname "6.17.0-1022-azure"; stub_probe REFUSED
@@ -48,6 +49,18 @@ for k in 5.15.0-1 6.14.11 6.8.0-45-generic; do
   [ "$rc" -eq 1 ] && ok "$k: below 6.15 and refusing — refused (a lower major, and 6.14 just under the line)" || bad "$k: rc=$rc, want 1"
 done
 stub_docker "6.12.107+deb13-cloud-amd64"; stub_uname "6.12.107+deb13-cloud-amd64"
+
+echo "=== only Talos 1.14 and later asks for it: the version the lane runs decides ==="
+stub_docker "6.12.107+deb13-cloud-amd64"; stub_uname "6.12.107+deb13-cloud-amd64"; stub_probe REFUSED
+out="$(run_talos v1.13.9)"; rc=$?
+[ "$rc" -eq 0 ] && [ -z "$out" ] && ok "v1.13.9 on a refusing kernel: silent, exit 0 (it boots there, measured)" || bad "v1.13.9: rc=$rc out=$out"
+for v in v1.14.0 v1.14.2 v1.15.1 v2.0.0 latest; do
+  out="$(run_talos "$v")"; rc=$?
+  [ "$rc" -eq 1 ] && ok "$v on a refusing kernel: refused (a version it cannot read counts as new)" || bad "$v: rc=$rc, want 1"
+done
+out="$(PATH="$STUB_DIR:$PATH" OA_OVERLAY_PROBE="$STUB_DIR/probe" "$CHECK" 2>&1)"; rc=$?
+[ "$rc" -eq 1 ] && ok "no TF_VAR_talos_version: the default of opentofu-local/variables.tf is read, and it is 1.14 or later" || bad "default: rc=$rc"
+grep -q "TF_VAR_talos_version=v1.13.9" <<<"$out" && ok "the refusal names the measured remedy" || bad "no remedy in: $out"
 
 echo "=== an older version string whose kernel accepts the call (a backport): not refused ==="
 stub_probe ACCEPTED; out="$(run)"; rc=$?
