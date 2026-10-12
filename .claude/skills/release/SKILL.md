@@ -17,10 +17,10 @@ were meant to certify — and every one of them, releases included, was deleted.
 0.1.0 is the first number this project puts on something it measured. Decide what
 the number asserts, prove exactly that, then tag.
 
-**Say which rung each claim reached.** Mocked, emulated, real cloud once by hand,
-or unattended and repeated. "Proven at the real-cloud rung on Scaleway, OVH and
-Outscale, never applied on real Proxmox hardware" is a release note. "Proven" is
-a hope.
+**Say which rung each claim reached.** Mocked, emulated, local Docker, real cloud
+once by hand, or unattended and repeated. "Proven at the real-cloud rung on
+Scaleway, OVH and Outscale, never applied on real Proxmox hardware" is a release
+note. "Proven" is a hope.
 
 ## The two repositories are independent
 
@@ -33,11 +33,15 @@ constraint belongs back in this file the same day.
 ## Order, and why
 
 1. Everything in `§1`–`§7` of the checklist, on real clouds, **torn down**, with
-   `scripts/ops/purge-orphans/` clean on each. Nothing left billing.
-2. A GitHub release, with notes that name the limits.
-3. Re-clone the published tag into a scratch directory and read it as a stranger:
-   licence, changelog, examples, **no real tfvars in the archive** — and check
-   that the quick start's commands exist and its values are accepted.
+   `scripts/ops/purge-orphans/` clean on each — except Outscale while the pre-fix
+   Net of OpenAether-infra#43 exists: it cannot end clean, so read it as §6 says
+   and never tick it clean. Nothing left billing.
+2. Re-clone the **release commit**, before it is tagged, into a scratch directory
+   and read it as a stranger: licence, changelog, examples, **no real tfvars in
+   the archive** — and check that the quick start's commands exist and its values
+   are accepted. Infra's `tags` ruleset blocks moving or deleting a tag, so a
+   defect found after tagging cannot be re-cut away.
+3. Tag it, then a GitHub release, with notes that name the limits.
 
 ## The notes must admit what is not fixed
 

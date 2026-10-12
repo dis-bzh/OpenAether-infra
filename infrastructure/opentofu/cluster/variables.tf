@@ -377,7 +377,7 @@ variable "deploy_app_lb" {
 
 variable "deploy_flux" {
   description = <<-EOT
-    Install Flux on the cluster. FALSE by default: 0.1.0 is infrastructure only —
+    Install Flux on the cluster. FALSE by default: this release is infrastructure only —
     Talos plus Cilium, which is what makes a cluster healthy, up and ready. Flux
     and everything it reconciles live in OpenAether-apps and come back as a
     user choice in a later release.

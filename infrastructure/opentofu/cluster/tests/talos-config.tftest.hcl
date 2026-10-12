@@ -359,9 +359,9 @@ run "auto_tunnels_disabled_by_default" {
 # ==============================================================================
 # Test 14: deploy_flux governs BOTH manifests, in both directions
 #
-# 1.0.0 ships infrastructure only, so the default must leave Flux out. An
+# This release ships infrastructure only, so the default must leave Flux out. An
 # off-switch whose only tested position is "off" is not a switch — it is a
-# deletion nobody wrote down, and Flux comes back as a user choice in 1.1.0.
+# deletion nobody wrote down, and Flux comes back as a user choice later.
 # Asserted on the rendered control-plane config, which is where inlineManifests
 # actually land, rather than on the local that builds them.
 # ==============================================================================

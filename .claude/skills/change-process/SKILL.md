@@ -87,13 +87,15 @@ failed samples. "Idempotent" is `tofu plan` reporting no changes, quoted.
   matrix that says a provider was never exercised, a changelog that says a script
   is fixed, an example pinning a tag that no longer exists. A stale claim misleads
   more than a missing one.
-- **Close the issues you finished, and open one for what you found.** The
-  backlog holds open items only; a finished entry belongs to git history. Re-read
-  it at the end of the session, not only at the start.
+- **Close the issues you finished, and open one for what you found.** The open
+  issues are the only list of open work; a finished item is closed and its history
+  is in git. Re-read the list at the end of the session, not only at the start.
 - **CHANGELOG entry** written for a reader who was not there: what broke, how it
   showed itself, what it now does, and the evidence.
 - Real-cloud work is not finished until teardown and `scripts/ops/purge-orphans/`
-  both report clean. Nothing left billing.
+  both report clean — except Outscale while the pre-fix Net of OpenAether-infra#43
+  exists: it cannot end clean, so read it as §6 of OpenAether-infra's release
+  checklist says. Nothing left billing.
 
 - **Three files can pin the same tool and only one be enforced.** helm was pinned
   in CI and in the renderer but not in `setup.sh`, invisible to everyone who
@@ -106,7 +108,7 @@ failed samples. "Idempotent" is `tofu plan` reporting no changes, quoted.
 - Real data in either repository — they are public. IPs, account ids, bucket
   names, image ids. `envs/*.tfvars` is gitignored and derived copies must be too.
 - `Co-Authored-By` or `Signed-off-by` for a model. The trailer is
-  `Assisted-by: Claude Code (<model>)`, and the model identifier never appears in
+  `Assisted-by: Claude Code`, and the model identifier never appears in
   a commit message, a PR, or a code comment.
 - Credentials on an untrusted branch: no `pull_request_target` in a credentialed
   workflow, and no agent carrying credentials on a fork branch. `CLAUDE.md`,

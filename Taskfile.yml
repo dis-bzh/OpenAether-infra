@@ -1435,9 +1435,9 @@ tasks:
       ROLES: '{{.ROLES | default "os:reader"}}'
       TTL: '{{.TTL | default "8h"}}'
     env: *provider-env
-    # ⚠️ Proven on the Docker lane only (task local-rbac). On a cloud lane the
-    # Talos API is reached through the bastion, so the tunnels must be open —
-    # `task tunnels-up PROVIDER=…` first. That path has never been run.
+    # ⚠️ Proven on the Docker lane (task local-rbac) and on real cloud once, OVH; not
+    # recorded on Scaleway or Outscale. On a cloud lane the Talos API is reached through
+    # the bastion, so the tunnels must be open — `task tunnels-up PROVIDER=…` first.
     cmds:
       # The admin talosconfig is one file for every cluster in this checkout, and
       # the script signs from it: re-fetch THIS cluster's, as cluster-verify does.

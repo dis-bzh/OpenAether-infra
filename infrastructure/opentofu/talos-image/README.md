@@ -65,8 +65,10 @@ task image-build PROVIDER=ovh RETAIN=1                # keep the cluster's versi
 - **A node on an older image**: build that version, then set
   `node_distribution.<provider>.image_name = "talos-<provider>-amd64-<older>"` (OVH and
   Outscale also take `image_id`) and add the node. Nodes ignore later changes of that
-  attribute. Not measured (#69): whether such a node stays on the older Talos or installs
-  the pinned one at its first config; `talosctl version` on it answers. `PRUNE=1` and `RETAIN=1`
+  attribute. Measured on Scaleway and Outscale (#69, 2026-10-05, real cloud by hand): such a node
+  boots the older image, joins Ready on the older Talos and stays there after its config is
+  applied, and `cluster-verify` reads the fleet `MIXED` until `cluster-up` rolls it. Not run on
+  OVH. `PRUNE=1` and `RETAIN=1`
   keep the version that override names, so drop it before pruning that version.
 - **The pre-#69 single state** (`talos-image.tfstate`) is read, never guessed: the first
   build of the version it holds copies it to that version's key and renames the old object

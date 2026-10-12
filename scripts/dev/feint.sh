@@ -270,7 +270,7 @@ EOT
 # cluster root (Phase 1: talos_bootstrap=false, already the setting in both
 # envs/feint-<provider>.tfvars.example) — plan_root only plans it, and
 # apply_fixture below drives the same cycle on the separate reduced fixture,
-# not this root. Closes issue #76's first criterion: feint-record proved the
+# not this root. Meets issue #76's first criterion: feint-record proved the
 # provider module alone applies end to end (transcript, zero unserved calls);
 # this proves the whole root — VMs, networking, LBs — does too.
 apply_root() {

@@ -8,7 +8,7 @@
 # state backed up.
 #
 # It also asserts what must be ABSENT. "No Flux" and "no application load
-# balancer" are the product decision for 1.0.0, and a decision nothing checks is
+# balancer" are the product decision for this release, and a decision nothing checks is
 # a decision that quietly reverts — this repository has watched that happen.
 #
 # Every check FAILS the run. A verify that warns and ends green is the defect
@@ -181,7 +181,7 @@ else
   bad "after ${DNS_TIMEOUT}s CoreDNS has no ready replica — the CNI is up but the network is not"
 fi
 
-info "The floor is the floor — what 1.0.0 says is NOT there"
+info "The floor is the floor — what this release says is NOT there"
 
 # Not cosmetic. deploy_flux defaults to false; if something re-enables it the
 # cluster silently stops being the thing this release validated.
