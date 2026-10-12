@@ -11,8 +11,10 @@
 
 Two different people land here, and they want different pages.
 
-**You want a cluster.** Start with the one that needs no account and no
-credentials — `task local-up` brings a six-node Talos cluster up in Docker. Then
+**You want a cluster.** The one that needs no account and no credentials is
+`task local-up`, a six-node Talos cluster in Docker; at the shipped Talos 1.14.2
+it did not start on the two hosts tried (kernel 6.12, #291), though it booted on a hosted
+runner with one control plane and one worker, so read that issue first. Then
 [Quick start](#quick-start) for a cloud, or
 [`docs/first-cluster.md`](docs/first-cluster.md) for the walked-through version,
 bare machine to a cluster you can reach, upgrade and destroy.
@@ -25,6 +27,20 @@ needs: `task test` and `mocked` are the ones you can close without a cloud
 account.
 
 ## Version
+
+**0.2.0** — the same scope as 0.1.0 and nothing above it: Talos and Cilium, Flux
+off, no CAPI, no applications. It adds what comes after the deploy: Talos v1.14.2
+and Kubernetes v1.37.1 as the default pin, in-place upgrades to them, nodes added
+to and removed from a live cluster, a check of where the control planes sit, and a
+cluster rebuilt on a second cloud from its replica. Evidence, all real cloud, by
+hand, and none of it unattended: the upgrades, the node growth and the node
+removal between 2026-10-02 and 2026-10-04, and the rebuild on 2026-10-05. On
+2026-10-10 and 2026-10-11 each of Scaleway, OVH and Outscale was deployed from an
+empty state at the release code, `cluster-verify` passed, a second `cluster-up`
+changed nothing, and the teardown was checked against the provider's own API (on
+Outscale the stuck Net of #43 still stands). OVH's second deploy first stopped on
+a control plane frozen at first boot (#49); a Nova hard reboot of that node and
+the same command brought the deploy to green.
 
 **0.1.0** — published 2026-08-20 as a pre-release. Infrastructure only. Five
 things and nothing else:
@@ -42,13 +58,25 @@ for 72 resources, `cluster-verify` 11/11, idempotency 3/3, Kubernetes v1.36.2
 → v1.36.3 then Talos v1.13.7 → v1.13.8, confirmed on 6/6 nodes by each node's
 own Talos API. OVH the same day, Outscale on 2026-08-20. An upgrade is not
 seamless: the longest apiserver outage was 5 s on Scaleway, 7 s on OVH and 8 s
-on Outscale. The next release's ground, read on 2026-10-03 and not part of 0.1.0:
+on Outscale. The climb 0.2.0 adds was read on 2026-10-03, not part of 0.1.0:
 all three clouds climbed to Talos v1.14.2 and Kubernetes v1.37.1, `cluster-verify`
-13/13 with the control planes spread over three zones (the failure-domain check,
-#38, passes on OVH and Outscale; Scaleway's two zones are a 2+1 split, green with
-a warning), the Talos step costing 1 to 2 s of API and the Kubernetes step 9 to
-10 s. Figures and dates: [`docs/status.md`](docs/status.md). Proxmox has **never
-been applied on real hardware**. Open items:
+13/13, under the Talos provider 0.11 and not the 0.12.0 that 0.2.0 pins (the climb from a 0.1.0 cluster was repeated under
+0.12.0 on all three clouds on 2026-10-06, `CHANGELOG.md`, Validated), with the
+control planes spread over three zones on OVH and Outscale (the failure-domain
+check, #38; Scaleway's 2+1 warning over two zones was only ever read in a mocked
+test), the longest API gap 1 to 3 s on the Talos step and 2 to 10 s on the
+Kubernetes step, longer on an Outscale cluster built by 0.1.0 (`CHANGELOG.md`,
+Known limits). Figures and dates: [`docs/status.md`](docs/status.md). Proxmox has
+**never been applied on real hardware**.
+
+**Not proven, and not claimed:** an unattended run of any lane; a control-plane
+roll with zero failed probes (#42); rolling an upgrade back (#270); the `workload`
+role on any cloud; worker growth, and Longhorn and CNPG under node removal, on OVH
+and Outscale; the failover on any pair but OVH to Scaleway, which was a rebuild at
+one control plane and one worker with no etcd contents; `deploy_flux = true` on a
+real cluster. Each with its rung: [`CHANGELOG.md`](CHANGELOG.md), Known limits.
+
+Open items:
 [the open issues](https://github.com/dis-bzh/OpenAether-infra/issues).
 
 ## Architecture
@@ -76,9 +104,9 @@ own Flux.
 | **OpenTofu** (default) | Every ordinary case | The whole substrate: network, router, security groups, LB, bastion, volumes, S3 buckets — then Talos |
 | **CAPI** (optional) | You want the management described like any other cluster, plus CAPI's day-2 tooling | A throwaway cluster creates the management, which then becomes self-managed (`clusterctl move`) |
 
-The CAPI path **does not replace** OpenTofu: on OVH, OpenTofu creates ~44
-resources of which only 3 are compute instances. It is an optional overlay and
-**0.1.0 deploys no CAPI** — the procedure is kept for the release that does:
+The CAPI path **does not replace** OpenTofu: on OVH, most of what OpenTofu
+creates is not a compute instance. It is an optional overlay and **this release
+deploys no CAPI** — the procedure is kept for the release that does:
 **[docs/capi-bootstrap.md](docs/capi-bootstrap.md)**.
 
 ## Layer status
@@ -87,8 +115,8 @@ resources of which only 3 are compute instances. It is an optional overlay and
 |-------|------------|--------|
 | **IaC** | OpenTofu 1.13.x | ✅ |
 | **OS** | Talos Linux v1.14.x (immutable) | ✅ |
-| **CNI** | Cilium 1.20.2 (WireGuard) | ✅ shipped, inline manifest — the whole of 0.1.0's platform |
-| **GitOps** | Flux v2.9.3 | ⬜ code present, `deploy_flux = false` — returns as a choice in a later release |
+| **CNI** | Cilium 1.20.2 (WireGuard) | ✅ shipped, inline manifest — the whole of this release's platform |
+| **GitOps** | Flux v2.9.6 | ⬜ code present, `deploy_flux = false` — returns as a choice in a later release |
 
 Everything else — secrets, PKI, mesh, database, storage, identity, observability,
 policy, Cluster API — lives in
@@ -104,11 +132,11 @@ Talos/cluster stack is provider-agnostic. Details:
 
 | Provider | Status | Region / target | Notes |
 |----------|--------|-----------------|-------|
-| **Scaleway** | ✅ five pillars measured 2026-08-19, the 1.14 climb 2026-10-03 | fr-par | Reference implementation; deploy, verify, idempotency and both upgrades. Measured over 2 zones; the 3-zone shape is not |
-| **OVH** | ✅ the same five, the same day, and the 1.14 climb 2026-10-03 over three zones | EU-WEST-PAR (OpenStack) | Octavia LB, floating IPs, SNAT router, private network |
-| **Outscale / Numspot** | ✅ the same five, measured 2026-08-20, and the 1.14 climb 2026-10-03 over three subregions | eu-west-2 | Redeployed on a **fresh Net** after an internal LBU timeout upstream left one stuck in `provisioning` (request 399530, closed). Two scars: a Net created before that fix still refuses deletion and only the provider can clear it, and the object store ignores `If-None-Match`, so the `use_lockfile` state lock is deliberately off here |
+| **Scaleway** | ✅ five pillars measured 2026-08-19, the 1.14 climb 2026-10-03 | fr-par | Reference implementation; deploy, verify, idempotency and both upgrades. Measured over 2 zones, and over 3 (2026-10-10, from an empty state) |
+| **OVH** | ✅ the same five, the same day, and the 1.14 climb 2026-10-03 over three zones | EU-WEST-PAR (OpenStack) | Octavia LB, floating IPs, SNAT router, private network. A control plane can stay `ACTIVE` while dead at first boot (#49: seen 2026-10-06 and 2026-10-10, cause unknown, a Nova hard reboot clears it) |
+| **Outscale / Numspot** | ✅ the same five, measured 2026-08-20, and the 1.14 climb 2026-10-03 over three subregions | eu-west-2 | Redeployed on a **fresh Net** after an internal LBU timeout upstream left one stuck in `provisioning` (request 399530, closed). Two scars: a Net created before that fix still refuses deletion and only the provider can clear it (#43; until then `purge-orphans` cannot end clean there), and the object store ignores `If-None-Match`, so the `use_lockfile` state lock is deliberately off here |
 | **Proxmox (on-prem)** | 🧪 code-complete, unit-tested — **never applied for real** | PVE single/multi-host | Talos VIP (no managed LB), host nftables NAT/DNAT, manual prerequisites |
-| **Local (Docker)** | ✅ validated (`task local-up`) | WSL2 / Docker | 3 CP + 3 workers, etcd quorum, Cilium — credential-free proof of `modules/talos` |
+| **Local (Docker)** | ⚠️ validated 2026-08-24 at Talos 1.13.9; at the shipped 1.14.2 `task local-up` did not start on the two hosts tried (#291) and booted on a hosted runner at 1 CP + 1 worker (2026-10-11) | WSL2 / Docker | 3 CP + 3 workers, etcd quorum, Cilium — credential-free proof of `modules/talos` |
 
 ## Repository structure
 
@@ -154,7 +182,9 @@ nothing.
 ### Local cluster (Docker — no cloud, no credentials)
 
 Brings up a real **3 control plane + 3 worker** Talos cluster in Docker, on the
-**same `modules/talos/` used in production**. Best first step.
+**same `modules/talos/` used in production**. Last passing 3 + 3 run: Talos 1.13.9,
+2026-08-24; at the shipped 1.14.2 it did not start on the two hosts tried (#291) and booted on a hosted runner at 1 control
+plane + 1 worker (2026-10-11).
 
 ```bash
 task local-up        # full deploy
@@ -258,7 +288,7 @@ inventory, no load balancer and no quotas. See
 task lint                # tofu fmt, YAML
 task validate            # tofu validate
 task test                # tofu test, mocked
-task apps-validate       # Flux DAG integrity + pick.py profiles up to date
+task apps-validate       # Flux DAG integrity + pick.py profiles up to date (needs ../OpenAether-apps beside this checkout)
 task security            # hardening checks
 ```
 
@@ -274,7 +304,7 @@ task security            # hardening checks
 | [docs/clea.md](docs/clea.md) | What the dependency report pins, and what a green report may claim |
 | [docs/emulated-cloud.md](docs/emulated-cloud.md) | Testing Scaleway/Outscale against a local emulator — and the limits of that |
 | [docs/upgrade.md](docs/upgrade.md) | Moving Kubernetes and Talos on a cluster that has to stay up |
-| [docs/release-checklist.md](docs/release-checklist.md) | What to run before tagging a release, in the order that fails cheapest |
+| [docs/release-checklist.md](docs/release-checklist.md) | What to run before tagging a release, in the order that fails cheapest (English only) |
 | [docs/status.md](docs/status.md) | **Source of truth**: what runs, what is measured on a real account and since when (English only — living working document; open work is in the issues) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | **Read before a first pull request**: what counts as proof, the four rungs, commit trailers, AI-assisted contributions |
 
@@ -290,16 +320,17 @@ task security            # hardening checks
 | Kubernetes API access | LB ACL restricted to `admin_ip` |
 | Talos API access | SSH tunnel only (port 50000, never on the LB) |
 | Inter-node encryption | Cilium WireGuard |
+| Limits | `bastion-harden-check.sh` has no recorded run on a real bastion; the admin kubeconfig (`system:masters`) cannot be revoked, and `task talosconfig-new`, which issues a read-only talosconfig that expires, has run on one real cloud only, OVH ([docs/admin-access.md](docs/admin-access.md)) |
 
 ## Roadmap
 
 | Release | Deliverable | Status |
 |---------|-------------|--------|
 | **0.1.0** | One Talos cluster + Cilium on Scaleway, OVH or Outscale, encrypted state and artifacts, in-place upgrades | ✅ published 2026-08-20 (pre-release) |
-| 0.2.0 | Talos v1.14 and Kubernetes v1.37 on all three clouds, adding and removing nodes on a live cluster, the failure-domain check | ⏳ in progress, see the `[Unreleased]` section of [`CHANGELOG.md`](CHANGELOG.md) |
+| 0.2.0 | Talos v1.14 and Kubernetes v1.37 on all three clouds, adding and removing nodes on a live cluster, the failure-domain check | ✅ see the `[0.2.0]` section of [`CHANGELOG.md`](CHANGELOG.md), which also lists what it does not claim |
 | after | Flux back as a user choice, then the modular pick from `OpenAether-apps` | ⏳ planned |
 | later | CAPI overlay: a management cluster driving children | ⏳ planned |
-| open | Proxmox on real hardware, the full cross-provider failover, the Outscale Net only the provider can delete | ⏳ |
+| open | Proxmox on real hardware, the full cross-provider failover, rolling an upgrade back (#270), the Outscale Net only the provider can delete | ⏳ |
 
 ## License
 

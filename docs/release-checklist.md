@@ -53,9 +53,10 @@ docker run --rm ubuntu:24.04 bash -c '
       `../OpenAether-apps`) or `task check-flux-digests` (network, outside lint
       and CI): a skip is not a pass.
 - [ ] no bucket is orphaned by a rename in this release. The old
-      `…-talos-staging` buckets still hold QCOW2s and only the owner empties them
-      (#73): name them in the notes, with the buckets of the failover drill (§7)
-      and of the image lane, which stay on the accounts they ran on. No script
+      `…-talos-staging` buckets were emptied and deleted on 2026-10-06 (#73,
+      closed): name in the notes, by kind and never by suffix, the buckets that
+      stand now, those of the failover drill (§7), of the image lane and of each
+      validation run, which stay on the accounts they ran on. No script
       enumerates buckets (`verify-provider-clean.py`'s `UNCHECKED` list says what
       each check does not), so check each cloud's by hand.
 
@@ -135,7 +136,8 @@ for each old image the retention destroys (§7, image lane).
       namespaced by the cloud that holds the bucket).
 - [ ] `task etcd-snapshot PROVIDER=scaleway` writes to both buckets. It ran inside
       the three real control-plane removals of 2026-10-04 (§7, each rc 0);
-      **no stand-alone run is recorded**, and its retention once deleted almost
+      a stand-alone run is recorded on all three clouds (2026-10-10 and
+      2026-10-11, to both buckets), and its retention once deleted almost
       everything (PR #167, found by a mocked harness).
 - [ ] **teardown**, two commands and then the provider's own answer:
       ```bash
@@ -205,8 +207,6 @@ exit 3. Read instead, and write down:
       exit 2: a refused call is not an all-clear.
 
 Anything outside the stuck Net and those kept images is yours.
-`.claude/skills/release/SKILL.md` still says "purge-orphans clean on each": amend
-it (shared with `OpenAether-apps`, so the parity check applies).
 
 **One rule stays here.** This object store accepts a second conditional write, so
 `use_lockfile` is on for Scaleway and OVH and deliberately **off** here, where it
@@ -282,8 +282,9 @@ What to run, what `docs/status.md` records (rung and date), and what it does
       `status.md` also says Scaleway over 2 zones is 2+1, green with a warning, but
       that commit says Scaleway was not deployed for the check: read the warning as
       mocked.
-      **Not recorded:** a 3-zone Scaleway run (`SCW-mgmt-ha` is untested though
-      the example now names three zones); OVH red on one zone (read from the
+      Scaleway over three zones read green on 2026-10-10 (three failure domains,
+      real cloud by hand). **Not recorded:** the `SCW-mgmt-ha` matrix row, still
+      ⬜; OVH red on one zone (read from the
       config); Proxmox (mocked only). Outscale clusters built before #58 end red:
       an upgrade note.
 - [ ] **A real roll with Flux and CNPG** — a roll on a cluster running both, ending
@@ -315,7 +316,8 @@ What to run, what `docs/status.md` records (rung and date), and what it does
       bucket, and out of the replica with `FROM=replica`.
       *Recorded:* byte-identical from the primary and from a replica on another
       cloud's store, an OVH and a Scaleway cluster, 2026-10-05 (`status.md`; the
-      failover row below). **Not recorded:** an Outscale cluster's own artifacts.
+      failover row below), and from both stores of an Outscale cluster on its own endpoint (2026-10-03, issue #57).
+      **Not recorded:** an Outscale cluster's artifacts from a replica on another cloud's store.
       #271 fixed defects of the replica path; the drill itself found
       `image-build` ignoring `ROLE=` (#57, Fixed).
 - [ ] **Reader talosconfig** — `task talosconfig-new`, then `TALOSCONFIG=<it> task
@@ -473,7 +475,7 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       newest row predates the pin, is older than its limit (45 days) or records a
       failure. It dates the table and reads no verdict but a ❌ or ⚠: a row that
       re-ran only the upgrade counts, and a typed row looks measured. The newest
-      rows are dated 2026-10-03, so it is red from the 46th day unless a newer row
+      rows are dated 2026-10-10 and 11, so it is red from 2026-11-25 (the 46th day) unless a newer row
       at the pin is added.
 
 ---

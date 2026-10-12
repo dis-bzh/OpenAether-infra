@@ -213,7 +213,7 @@ Six buckets existent ensuite : l'état et les artefacts, chacun avec son jumeau
 
 Relancer reprend où ça s'est arrêté. Ajouter un worker aussi : `task cluster-up` crée la
 machine, ouvre les tunnels, puis configure seulement le nouveau nœud
-(`scripts/bootstrap/grow-nodes.sh`), mesuré sur Scaleway en passant de 3 à 5 workers.
+(`scripts/bootstrap/grow-nodes.sh`), mesuré sur Scaleway en passant de 3 à 6 workers.
 Ajouter un control plane passe par la même étape, mesuré de 1 à 3 sur Scaleway, OVH et
 Outscale. Baisser un compte est refusé : `cluster-up` s'arrête avant d'appliquer un plan qui
 supprime un nœud d'un cluster déjà amorcé, car OpenTofu détruirait la machine d'indice le plus
@@ -283,8 +283,8 @@ que personne n'a pu poser, et c'est en général des identifiants S3 manquants.
 
 La répartition des control planes est demandée à l'état (`control_plane_zones`) :
 tous dans une même zone ou sur un même hôte, c'est `✗` ; un 2+1 sur deux zones,
-c'est `~`. Sur OVH, avec la zone `nova` unique de l'exemple, c'est `✗` : la note
-d'honnêteté ci-dessous donne la suite. Outscale répartit les nœuds sur
+c'est `~`. Sur OVH, les exemples nomment trois zones, et une seule zone est `✗` (lu dans
+la configuration, jamais vu sur un vrai compte). Outscale répartit les nœuds sur
 `availability_zones` (#58) et n'est `✗` que si cette liste n'a qu'une entrée.
 
 ## 7. Mettre à jour
@@ -383,11 +383,13 @@ quelque chose de prouvé, et c'est la raison d'être de ce document.
 
 Ce qui **est** mesuré, avec les dates (`docs/status.md`) :
 
-- `task cluster-verify` donne **11/11 sur Scaleway, sur OVH et sur Outscale** —
-  les deux premiers le 2026-08-19, Outscale le 2026-08-20. C'est antérieur au
-  contrôle des domaines de panne (#38) : OVH (une zone) et Outscale sont
-  désormais rouges, Scaleway (2 zones) reste à 11/11 avec un avertissement — voir
-  `docs/status.md`.
+- `task cluster-verify` donnait **11/11 sur Scaleway, sur OVH et sur Outscale** —
+  les deux premiers le 2026-08-19, Outscale le 2026-08-20 — avant le contrôle des
+  domaines de panne (#38) et les contrôles ajoutés depuis. Au pin livré, il passe avec
+  trois control planes dans trois zones sur les trois clouds (2026-10-10 et 11, cloud
+  réel, une fois à la main) ; une seule zone est rouge sur Outscale (vu) et sur OVH (lu
+  dans la configuration seulement) ; un 2+1 sur deux zones Scaleway avertit (mocké
+  seulement) — voir `docs/status.md`.
 - **L'idempotence, ce sont trois assertions**, et les trois ont tenu 3/3 sur les
   trois clouds : un plan vide, les *mêmes* nœuds (nom et `creationTimestamp`), et
   un kubeconfig qui joint encore l'apiserver. Deux des trois peuvent passer alors
@@ -407,21 +409,21 @@ Ce qui reste ouvert :
   correctif du load balancer refuse encore la suppression et seul le fournisseur
   peut la lever — voir l'étape 4.
 - **Le chemin Scaleway a été parcouru de bout en bout le 2026-08-17**, mais
-  depuis une machine qui avait déjà la chaîne d'outils — l'étape 1 sur un hôte nu
-  n'a jamais été suivie. OVH a été piloté par son opérateur, pas en suivant cette
+  depuis une machine qui avait déjà la chaîne d'outils — l'étape 1 a depuis été
+  suivie jusqu'au bout dans un conteneur `ubuntu:24.04` nu (2026-10-10, sans cloud),
+  pas sur un hôte nu. OVH a été piloté par son opérateur, pas en suivant cette
   page.
 - **Le failover complet.** Le fournisseur A traité comme perdu, l'état et les
   artefacts récupérés depuis B seul, le cluster reconstruit chez B.
   Joué une fois, OVH vers Scaleway (2026-10-05, `docs/status.md`) ; toute autre
   paire de fournisseurs n'a pas tourné.
-- **Le kubeconfig et le talosconfig n'ont jamais été récupérés depuis un vrai
-  bucket.** L'aller-retour est prouvé hors ligne, `enc()` contre `dec()` octet
-  pour octet (`scripts/dev/test-restore.sh`), et le transport du tfstate est
-  prouvé — et `task restore-artifacts` a été relu octet pour octet sur un vrai
-  bucket chez un provider (`docs/status.md`), pas chez chacun des trois.
-- **Un `bucket_suffix` non vide n'a été déployé que sur Scaleway** (depuis un projet
-  vide, 2026-10-02, #68) : le backend, la construction d'image et le vérificateur
-  s'y sont accordés. OVH et Outscale n'en ont aucune trace.
+- **`task restore-artifacts` est prouvé sur de vrais buckets, mais pas sur chaque
+  paire.** Le kubeconfig et le talosconfig sont revenus octet pour octet depuis le
+  primaire et depuis un réplica dans le magasin d'un autre cloud sur OVH et Scaleway
+  (le drill de failover, 2026-10-05), et depuis les deux magasins d'un cluster
+  Outscale sur son propre endpoint (2026-10-03) ; ceux d'un cluster Outscale depuis
+  un réplica chez un autre cloud n'ont pas été relus. L'aller-retour est aussi prouvé
+  hors ligne, `enc()` contre `dec()` octet pour octet (`scripts/dev/test-restore.sh`).
 - **Un control plane repartait sur la version précédente après un upgrade, sur
   OVH.** La cause était la nôtre : `siderolabs/qemu-guest-agent` dans le
   schematic ne démarre jamais sur une image sans `hw_qemu_guest_agent`, si bien

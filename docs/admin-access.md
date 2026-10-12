@@ -3,7 +3,7 @@
 🇫🇷 [Version française](admin-access.fr.md)
 
 The manual post-deployment steps for a cluster carrying the **application
-platform**, in order. **0.1.0 deploys none of it** — an infrastructure-only
+platform**, in order. **0.2.0 deploys none of it** — an infrastructure-only
 cluster was already verified by `task cluster-up`, and nothing below applies.
 Validated on Scaleway, 2026-07-25.
 Convention: `KC=infrastructure/opentofu/cluster/kubeconfig`.

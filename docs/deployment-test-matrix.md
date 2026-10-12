@@ -9,12 +9,15 @@
 >
 > ✅ apply-tested · 🎭 emulated (Feint: real provider, real HTTP, no account) ·
 > ⛔ blocked upstream · 🧪 unit-tested only (mocked) · ⬜ untested.
-> Reviewed 2026-10-03.
+> Reviewed 2026-10-11.
 >
-> A ✅ is a record of a run on its date, not a claim 0.1.0 makes. What this
-> release rests on is the Scaleway and OVH management HA measured 2026-08-19 and
-> the Outscale one measured 2026-08-20 — `docs/status.md`. Rows
-> dated before those, `CAPI-*` included, predate the re-scope.
+> A ✅ is a record of a run on its date, not a claim 0.2.0 makes. What this
+> release rests on is the management HA of the three clouds at the shipped pin,
+> each deployed from an empty state, real cloud once by hand, 2026-10-10 and 11,
+> no climb; and the upgrades, growth and removal of 2026-10-02 to 04, real cloud
+> by hand, on earlier commits. 0.1.0 rested on the Scaleway and OVH runs of
+> 2026-08-19 and the Outscale one of 2026-08-20 — `docs/status.md`. Rows dated
+> before 2026-08-19, `CAPI-*` included, predate the re-scope.
 
 ## Mental model
 
@@ -78,7 +81,7 @@ Two orthogonal layers of knobs:
 
 | ID | CP/W | Uniquely exercises | Status |
 |---|---|---|---|
-| `L-ha` | 3+3 | Real 3-node etcd quorum, dedicated schedulable workers, Cilium, `userdata` delivery — primary credential-free proof of `modules/talos`. | ✅ (`task local-up`, re-run 2026-08-20: manifest rendered when absent, Cilium 6/6, etcd 3 members, `local-test` green) |
+| `L-ha` | 3+3 | Real 3-node etcd quorum, dedicated schedulable workers, Cilium, `userdata` delivery — primary credential-free proof of `modules/talos`. | ✅ (`task local-up`, re-run 2026-08-20: manifest rendered when absent, Cilium 6/6, etcd 3 members, `local-test` green); at the 1.14.2 pin `task local-up` does not boot Talos on kernel 6.12 with Docker 29 (2026-10-10, #291, the second host): a failure, not a skip |
 | `L-smoke` | 1+0 | Fast single-node smoke; untainted-CP scheduling fallback. | ⬜ |
 
 ### Scaleway (reference provider)
@@ -86,7 +89,7 @@ Two orthogonal layers of knobs:
 | ID | Role | CP/W | k8s_lb_mode | Zones | Storage | Uniquely exercises | Status |
 |---|---|---|---|---|---|---|---|
 | `SCW-mgmt-nonha` | mgmt | 1+1 | managed | single | none | Cheapest cloud path; non-HA CP taint; managed LB ACL. | ✅ |
-| `SCW-mgmt-ha` | mgmt | 3+2 | managed | 3-AZ | none | etcd across 3 zones; multi-AZ distribution. | ⬜ — see the row below: what runs is **2 zones**, because the third has no instance type this project uses |
+| `SCW-mgmt-ha` | mgmt | 3+2 | managed | 3-AZ | none | etcd across 3 zones; multi-AZ distribution. | ✅ 2026-10-10 *(3+2 with encrypted worker data disks, three control planes across three zones, `cluster-verify` 14/14, real cloud once by hand; the row below is the 2-zone shape 0.1.0 measured)* |
 | `SCW-mgmt-ha-2az` | mgmt | 3+3 | managed | 2-AZ | **disks+volumes** | What 0.1.0 actually rests on. etcd across 2 zones, round-robinned. | ✅ 2026-08-19, again 2026-08-20 — 3 control planes over 2 zones is a 2+1 split, which `cluster-verify` (#38) now warns about |
 | `SCW-vip` | mgmt | 3+1 | **vip** | multi-AZ | none | Drops the LB; Talos Layer2 VIP; private API via tunnel; anti-spoofing. | ✅ *(2026-07-15)* |
 | `SCW-work-ha` | workload | 3+3 | managed | 3-AZ | none | Workload-role Flux bootstrap path. | ⬜ |
@@ -96,7 +99,7 @@ Two orthogonal layers of knobs:
 
 | ID | Role | CP/W | k8s_lb_mode | Uniquely exercises | Status |
 |---|---|---|---|---|---|
-| `OVH-mgmt-ha` | mgmt | 3+3 | managed | Octavia LB + floating IP; OpenStack ports; Ubuntu bastion; SNAT router egress. | ✅ *(2026-07-27/28, several cycles)* — before the failure-domain check (#38); ✅ 2026-10-03: 3+3 across `eu-west-par-a/b/c` with encrypted worker data disks, `cluster-verify` 13/13. A single zone fails the check |
+| `OVH-mgmt-ha` | mgmt | 3+3 | managed | Octavia LB + floating IP; OpenStack ports; Ubuntu bastion; SNAT router egress. | ✅ *(2026-07-27/28, several cycles)* — before the failure-domain check (#38); ✅ 2026-10-03: 3+3 across `eu-west-par-a/b/c` with encrypted worker data disks, `cluster-verify` 13/13; ✅ 2026-10-10: 3+2 across the same three zones, `cluster-verify` 14/14, deployed and torn down twice in one project (the first attempt of the second deploy was red on a control plane frozen at first boot, #49: a hypervisor reset by hand, then the same command resumed green). A single zone fails the check |
 | `OVH-vip` | mgmt | 3+2 | **vip** | `allowed_address_pairs` on CP ports for Neutron anti-spoof (distinct from Scaleway). | 🧪 |
 | `OVH-work-ha` | workload | 3+3 | managed | Workload role on OVH. | ⬜ |
 | `OVH-storage` | workload | 3+3 | managed | Cinder volume attach. | ⬜ |
@@ -105,7 +108,7 @@ Two orthogonal layers of knobs:
 
 | ID | Role | CP/W | k8s_lb_mode | Uniquely exercises | Status |
 |---|---|---|---|---|---|
-| `OSC-mgmt-ha` | mgmt | 3+1 | managed | LB returns a **DNS name**, not an IP; outscale SSH user. 3+3 does not fit the 40 GB RAM quota, so HA here means the control plane only — the three control planes sit in three subregions (`availability_zones`, #58). | ✅ *(2026-10-03: three control planes in `eu-west-2a/b/c` plus two workers, grown from one control plane by a single `cluster-up`; `cluster-verify` 13/13, the load balancer `UP` on all three. The 2026-08-20 ✅ was the old one-subregion layout, on a **fresh** Net — LB `active` with 3 backends. The hang that blocked it was a timeout inside Outscale's own LBU service, request 399530 closed; the Net that predates the fix still refuses deletion. The 2026-08-13 ✅ does not stand: its Talos upgrade reverted on the next reboot, see the open issues)* |
+| `OSC-mgmt-ha` | mgmt | 3+1 | managed | LB returns a **DNS name**, not an IP; outscale SSH user. 3+3 does not fit the 40 GB RAM quota, so HA here means the control plane only — the three control planes sit in three subregions (`availability_zones`, #58). | ✅ *(2026-10-11: a fresh Net, three control planes in three subregions plus two workers, from an empty state, `cluster-verify` 14/14; `purge-orphans` still cannot end clean while the Net of #43 stands. 2026-10-03: three control planes in `eu-west-2a/b/c` plus two workers, grown from one control plane by a single `cluster-up`; `cluster-verify` 13/13, the load balancer `UP` on all three. The 2026-08-20 ✅ was the old one-subregion layout, on a **fresh** Net — LB `active` with 3 backends. The hang that blocked it was a timeout inside Outscale's own LBU service, request 399530 closed; the Net that predates the fix still refuses deletion. The 2026-08-13 ✅ does not stand: its Talos upgrade reverted on the next reboot, see the open issues)* |
 | `OSC-work-ha` | workload | 3+3 | managed | Workload role; BSU volumes if paired with storage. | ⬜ |
 | `OSC-vip-reject` | — | any | vip | Negative test: validation must reject `vip`. | 🧪 |
 
@@ -167,8 +170,9 @@ What this lane still cannot carry: see "Known gaps" in
 ## C) Priority (highest-value untested, real apply)
 
 1. **Proxmox real apply** (`PMX-*`) — never run on a real host.
-2. **Cloud HA multi-AZ** (`SCW-mgmt-ha`) — 3-CP etcd across zones never applied
-   at this exact shape. `OSC-mgmt-ha` ran with its spread layout on 2026-10-03.
+2. **The failure-domain verdict's other branches** — three zones read green on all
+   three clouds (2026-10-10 and 11); the one-zone red on OVH and Scaleway and
+   Scaleway's 2+1 warning are read from the code and a mocked harness only.
 3. **`OVH-vip`** — vip mode never applied on OVH (distinct Neutron
    `allowed_address_pairs` mechanism).
 4. **Workload role real apply** (`*-work-*`) — only management exercised.

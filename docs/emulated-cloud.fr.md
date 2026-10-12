@@ -60,7 +60,7 @@ destroy en deux temps que documente le
 [README du root](../infrastructure/opentofu/cluster/README.md#teardown-destroy)
 (les machine secrets portent `prevent_destroy`, donc `tofu state rm
 module.talos.talos_machine_secrets.this[0]` d'abord, puis `destroy -var
-talos_bootstrap=false`). Ferme le premier critère de l'issue #76 : 27
+talos_bootstrap=false`). Satisfait le premier critère de l'issue #76 : 27
 ressources sur Scaleway, 41 sur Outscale, second plan vide, destroy propre —
 les deux providers, mesuré le 2026-08-31. `feint-record` ci-dessous avait
 prouvé que le module provider seul s'applique de bout en bout ; ceci est le

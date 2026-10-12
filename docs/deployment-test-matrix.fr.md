@@ -9,13 +9,16 @@
 >
 > ✅ testé par apply réel · 🎭 émulé (Feint : vrai provider, vrai HTTP, sans
 > compte) · ⛔ bloqué en amont · 🧪 testé unitairement (mocké) · ⬜ non testé.
-> Revue 2026-10-03.
+> Revue 2026-10-11.
 >
 > Un ✅ est le compte rendu d'un run à sa date, pas une revendication de la
-> 0.1.0. Ce sur quoi cette version repose, c'est le management HA Scaleway et OVH
-> mesuré le 2026-08-19 et celui d'Outscale mesuré le 2026-08-20 — `docs/status.md`
-> § « Where we stand ». Les lignes datées d'avant, `CAPI-*` comprises, précèdent
-> le recentrage.
+> 0.2.0. Ce sur quoi cette version repose, c'est le management HA des trois clouds
+> au pin livré, chacun déployé depuis un état vide, cloud réel, une fois à la main,
+> les 2026-10-10 et 11, sans montée de version ; et les upgrades, la croissance et le
+> retrait de nœuds du 2026-10-02 au 04, cloud réel à la main, sur des commits
+> antérieurs. La 0.1.0 reposait sur les runs Scaleway et OVH du 2026-08-19 et celui
+> d'Outscale du 2026-08-20 — `docs/status.md` § « Where we stand ». Les lignes
+> datées d'avant le 2026-08-19, `CAPI-*` comprises, précèdent le recentrage.
 
 ## Modèle mental
 
@@ -79,7 +82,7 @@ Deux couches de réglages orthogonales :
 
 | ID | CP/W | Ce qu'il exerce en propre | Statut |
 |---|---|---|---|
-| `L-ha` | 3+3 | Vrai quorum etcd à 3 nœuds, workers dédiés ordonnançables, Cilium, livraison par `userdata` — preuve principale de `modules/talos` sans credentials. | ✅ (`task local-up`, rejoué le 2026-08-20 : manifeste rendu quand absent, Cilium 6/6, 3 membres etcd, `local-test` vert) |
+| `L-ha` | 3+3 | Vrai quorum etcd à 3 nœuds, workers dédiés ordonnançables, Cilium, livraison par `userdata` — preuve principale de `modules/talos` sans credentials. | ✅ (`task local-up`, rejoué le 2026-08-20 : manifeste rendu quand absent, Cilium 6/6, 3 membres etcd, `local-test` vert) ; au pin 1.14.2, `task local-up` ne démarre pas Talos sur un noyau 6.12 avec Docker 29 (2026-10-10, #291, deuxième hôte) : un échec, pas un saut |
 | `L-smoke` | 1+0 | Smoke test mono-nœud ; repli d'ordonnancement sur CP non taché. | ⬜ |
 
 ### Scaleway (provider de référence)
@@ -87,7 +90,7 @@ Deux couches de réglages orthogonales :
 | ID | Rôle | CP/W | k8s_lb_mode | Zones | Stockage | Ce qu'il exerce en propre | Statut |
 |---|---|---|---|---|---|---|---|
 | `SCW-mgmt-nonha` | mgmt | 1+1 | managed | mono | aucun | Chemin cloud le moins cher ; taint CP non-HA ; ACL du LB managé. | ✅ |
-| `SCW-mgmt-ha` | mgmt | 3+2 | managed | 3 AZ | aucun | etcd sur 3 zones ; distribution multi-AZ. | ⬜ — voir la ligne suivante : ce qui tourne est sur **2 zones**, la troisième n'ayant aucun type d'instance utilisé par ce projet |
+| `SCW-mgmt-ha` | mgmt | 3+2 | managed | 3 AZ | aucun | etcd sur 3 zones ; distribution multi-AZ. | ✅ 2026-10-10 *(3+2 avec disques de données workers chiffrés, trois control planes sur trois zones, `cluster-verify` 14/14, cloud réel, une fois à la main ; la ligne suivante est la forme à 2 zones mesurée par la 0.1.0)* |
 | `SCW-mgmt-ha-2az` | mgmt | 3+3 | managed | 2 AZ | **disques+volumes** | Ce sur quoi repose réellement la 0.1.0. etcd sur 2 zones, en round-robin. | ✅ 2026-08-19, puis 2026-08-20 — 3 control planes sur 2 zones font un 2+1, dont `cluster-verify` (#38) avertit désormais |
 | `SCW-vip` | mgmt | 3+1 | **vip** | multi-AZ | aucun | Supprime le LB ; VIP Talos Layer2 ; API privée via tunnel ; anti-spoofing. | ✅ *(2026-07-15)* |
 | `SCW-work-ha` | workload | 3+3 | managed | 3 AZ | aucun | Chemin d'amorçage Flux du rôle workload. | ⬜ |
@@ -97,7 +100,7 @@ Deux couches de réglages orthogonales :
 
 | ID | Rôle | CP/W | k8s_lb_mode | Ce qu'il exerce en propre | Statut |
 |---|---|---|---|---|---|
-| `OVH-mgmt-ha` | mgmt | 3+3 | managed | LB Octavia + floating IP ; ports OpenStack ; bastion Ubuntu ; egress routeur SNAT. | ✅ *(2026-07-27/28, plusieurs cycles)* — avant le contrôle des domaines de panne (#38) ; ✅ 2026-10-03 : 3+3 sur `eu-west-par-a/b/c` avec des disques de données workers chiffrés, `cluster-verify` 13/13. Une zone unique échoue le contrôle |
+| `OVH-mgmt-ha` | mgmt | 3+3 | managed | LB Octavia + floating IP ; ports OpenStack ; bastion Ubuntu ; egress routeur SNAT. | ✅ *(2026-07-27/28, plusieurs cycles)* — avant le contrôle des domaines de panne (#38) ; ✅ 2026-10-03 : 3+3 sur `eu-west-par-a/b/c` avec des disques de données workers chiffrés, `cluster-verify` 13/13 ; ✅ 2026-10-10 : 3+2 sur les trois mêmes zones, `cluster-verify` 14/14, déployé et détruit deux fois dans un même projet (la première tentative du second déploiement a échoué sur un control plane figé à son premier démarrage, #49 : reset hyperviseur à la main, puis la même commande a repris au vert). Une zone unique échoue le contrôle |
 | `OVH-vip` | mgmt | 3+2 | **vip** | `allowed_address_pairs` sur les ports CP pour l'anti-spoof Neutron (mécanisme distinct de Scaleway). | 🧪 |
 | `OVH-work-ha` | workload | 3+3 | managed | Rôle workload sur OVH. | ⬜ |
 | `OVH-storage` | workload | 3+3 | managed | Attachement de volumes Cinder. | ⬜ |
@@ -106,7 +109,7 @@ Deux couches de réglages orthogonales :
 
 | ID | Rôle | CP/W | k8s_lb_mode | Ce qu'il exerce en propre | Statut |
 |---|---|---|---|---|---|
-| `OSC-mgmt-ha` | mgmt | 3+1 | managed | Le LB renvoie un **nom DNS**, pas une IP ; utilisateur SSH outscale. 3+3 ne tient pas dans le quota de 40 Go de RAM, donc HA ici ne concerne que le control plane — les trois control planes sont dans trois subregions (`availability_zones`, #58). | ✅ *(2026-10-03 : trois control planes en `eu-west-2a/b/c` plus deux workers, obtenus depuis un seul control plane par un `cluster-up` ; `cluster-verify` 13/13, le load balancer `UP` sur les trois. Le ✅ du 2026-08-20 était l'ancienne disposition à une seule subregion, sur un Net **neuf** — LB `active` avec 3 backends. Le blocage venait d'un timeout interne au service LBU d'Outscale, demande 399530 close ; le Net antérieur au correctif refuse toujours d'être supprimé. Le ✅ du 2026-08-13 ne tient pas : son upgrade Talos est revenu en arrière au redémarrage suivant, cf. les issues ouvertes)* |
+| `OSC-mgmt-ha` | mgmt | 3+1 | managed | Le LB renvoie un **nom DNS**, pas une IP ; utilisateur SSH outscale. 3+3 ne tient pas dans le quota de 40 Go de RAM, donc HA ici ne concerne que le control plane — les trois control planes sont dans trois subregions (`availability_zones`, #58). | ✅ *(2026-10-11 : un Net neuf, trois control planes dans trois subregions plus deux workers, depuis un état vide, `cluster-verify` 14/14 ; `purge-orphans` ne peut toujours pas finir propre tant que le Net de #43 existe. 2026-10-03 : trois control planes en `eu-west-2a/b/c` plus deux workers, obtenus depuis un seul control plane par un `cluster-up` ; `cluster-verify` 13/13, le load balancer `UP` sur les trois. Le ✅ du 2026-08-20 était l'ancienne disposition à une seule subregion, sur un Net **neuf** — LB `active` avec 3 backends. Le blocage venait d'un timeout interne au service LBU d'Outscale, demande 399530 close ; le Net antérieur au correctif refuse toujours d'être supprimé. Le ✅ du 2026-08-13 ne tient pas : son upgrade Talos est revenu en arrière au redémarrage suivant, cf. les issues ouvertes)* |
 | `OSC-work-ha` | workload | 3+3 | managed | Rôle workload ; volumes BSU si couplé au stockage. | ⬜ |
 | `OSC-vip-reject` | — | tout | vip | Test négatif : la validation doit rejeter `vip`. | 🧪 |
 
@@ -169,9 +172,10 @@ Ce que cette voie ne sait pas encore porter : voir « Manques connus » dans
 ## C) Priorités (plus forte valeur, non testé, apply réel)
 
 1. **Apply réel Proxmox** (`PMX-*`) — jamais exécuté sur un hôte réel.
-2. **HA multi-AZ en cloud** (`SCW-mgmt-ha`) — etcd 3 CP réparti sur plusieurs
-   zones jamais appliqué sous cette forme exacte. `OSC-mgmt-ha` a tourné avec sa
-   disposition répartie le 2026-10-03.
+2. **Les autres branches du verdict de domaine de panne** — trois zones lisent vert
+   sur les trois clouds (2026-10-10 et 11) ; le rouge d'une seule zone sur OVH et
+   Scaleway et l'avertissement 2+1 de Scaleway sont lus dans le code et un harnais
+   mocké seulement.
 3. **`OVH-vip`** — le mode vip n'a jamais été appliqué sur OVH (mécanisme
    Neutron `allowed_address_pairs`, distinct de Scaleway).
 4. **Apply réel du rôle workload** (`*-work-*`) — seul le management est exercé.
