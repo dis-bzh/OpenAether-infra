@@ -22,10 +22,11 @@ in git. 0.1.0 is the first entry describing something proven.
 a second cloud from its replica (OVH to Scaleway, one control plane and one worker), with Cilium still the only
 platform above Talos.** The climb, node growth and node removal ran by hand on real accounts between 2026-10-02 and
 2026-10-04, on Scaleway (two climbs), OVH and Outscale (one each); on 2026-10-05 the failover, the image lane, the
-nodes' resolver and the Talos provider 0.12.0 pin ran at one control plane and one worker. The climbs ran under provider
-0.11, which 0.2.0 no longer ships: no 1.13 to 1.14 climb has run under 0.12.0. Nothing is unattended. A bullet's rung is
-its evidence: what does not say real cloud is mocked, emulated or local Docker. Read Known limits and Upgrade notes
-before pulling this onto a cluster that matters.
+nodes' resolver and the Talos provider 0.12.0 pin ran at one control plane and one worker. The climbs of 2026-10-02 and
+2026-10-03 ran under provider 0.11, which 0.2.0 no longer ships. The climbs from a 0.1.0 cluster (2026-10-06) and a
+deploy from empty at the shipped pin (2026-10-10 and 2026-10-11) ran under 0.12.0 on all three clouds (Validated).
+Nothing is unattended. A bullet's rung is its evidence: what does not say real cloud is mocked, emulated or local
+Docker. Read Known limits and Upgrade notes before pulling this onto a cluster that matters.
 
 ### Added
 
@@ -33,17 +34,23 @@ before pulling this onto a cluster that matters.
   `CONFIRM=<id>`), destroys, then runs `purge-orphans` as a dry run and `verify-provider-clean`. It refuses anything that is
   not exactly `environment = "dev"` in the tfvars, with no flag to lift a refusal; `PROVIDER=all` guards every target before
   destroying any; `OA_NO_TEARDOWN_ALL` or a `.no-teardown-all` file locks it for a shell or a checkout. It never runs
-  `purge-orphans --apply` and never deletes buckets, images or keypairs. Rung: mocked (260 assertions, each guard removed
-  once to see its test go red); real cloud on Scaleway: a 3 control plane + 2 worker dev cluster to a provider-side zero in
-  under three minutes, and a `prod`-labelled tfvars refused. `task cluster-down` stays two commands for everything else.
+  `purge-orphans --apply` and never deletes buckets, images or keypairs. The guard trusts the declared `environment`:
+  a production cluster deployed as `dev` is not protected by it. Rung: mocked (each guard removed once to see its test
+  go red); real cloud on Scaleway, from the pull request's branch before main was merged into it: a 3 control plane +
+  2 worker dev cluster to a provider-side zero in under three minutes, and a `prod`-labelled tfvars refused. Not run:
+  OVH, Outscale, `PROVIDER=all`, and the typed id on a real cloud. `task cluster-down` stays two commands for
+  everything else.
 - **The replica of the state keeps dated generations (#267).** `<key>.<UTC stamp>` objects beside the current one, the
   newest five kept, written only for a state that holds the Talos secrets; `backup-state.sh --list` lists them and
-  `STATE_GENERATION=` restores one. Read on two real stores during the validation: the current object plus five keys, the
-  newest byte-identical to the current object. Not run: a restore from a generation, Outscale's store as a replica.
+  `task restore-state` reads one for a failover (`STATE_GENERATION=`). Rung: mocked (a fake object store); real stores,
+  Scaleway's and OVH's S3 as replicas, listed and copied down 2026-10-06: the current object plus five keys, the newest
+  byte-identical to the current object. Not run: a restore from a generation, Outscale's store as a replica.
 - **Cléa offers a bump only once it is old enough (#263).** A release younger than `min_release_age_days` (7) is "too young,
   eligible on <date>", a yanked, draft, retagged or advised-against release is held with its reason, an age that cannot be
-  read is never eligible, and Renovate carries the same `minimumReleaseAge`. Rung: mocked (331 assertions); PyPI and OSV were
-  called once for real, the GitHub tag lookups were not.
+  read is never eligible, and Renovate carries the same `minimumReleaseAge`. Rung: mocked; then seen on a hosted runner
+  in the scheduled scan of 2026-10-11 (`893a395`), which resolved upstream for real (PyPI, GitHub releases and tags,
+  OSV) and held every bump behind upstream back as "too young, eligible on <date>", offering none. Not seen: a bump
+  offered after its cooling-off, or a hold for any other reason (yanked, draft, retagged, advised against).
 - **`cluster-verify` asks where the control planes sit, and whether the workers' data volumes exist (#38, #62).** Each
   provider module outputs `control_plane_zones` (a required contract row), read from each server resource in the state.
   Three control planes in one failure domain end red and the red line names the knob; a 2+1 split (Scaleway over two
@@ -52,9 +59,10 @@ before pulling this onto a cluster that matters.
   (`ready`, `luks2`); that needs `task tunnels-up`, and without a tunnel the volume and schematic checks warn instead of
   passing. Rung: mocked; real cloud 2026-10-03: the verdict read on Outscale (red in one subregion, green across three)
   and OVH (green across three zones), matching the provider's own listing; 13/13 on all three clouds with encrypted
-  worker disks, the read-back named only for Scaleway, green and red (red: a volume the workers lack). Mocked only: OVH's
-  one-zone red (read from the config; whether OVH reads its zone back or echoes the config is unknown) and Scaleway's
-  2+1 warning (not deployed when the check landed).
+  worker disks, the read-back named only for Scaleway, green and red (red: a volume the workers lack). Again at 893a395
+  on all three clouds, 2026-10-10 and 11: three failure domains read as HA (Scaleway's over three zones) and every
+  worker's volumes read back, `cluster-verify` 14/14. Mocked only: OVH's one-zone red (read from the config; whether OVH
+  reads its zone back or echoes the config is unknown) and Scaleway's 2+1 warning (not deployed when the check landed).
 - **`task cluster-up` grows a live cluster (#59).** The apply that created a node also waited on its Talos port, reachable
   only through a tunnel that cannot exist before the node. `scripts/bootstrap/grow-nodes.sh` now runs first: it creates
   the machines, opens the tunnels and configures only the nodes the state has no configuration for; a no-op on a fresh
@@ -79,30 +87,30 @@ before pulling this onto a cluster that matters.
 - **`task cluster-upgrade` also measures a Service (#41).** A 2-replica workload behind a Service (with a PDB when two
   nodes can take it) is polled through the apiserver proxy for the whole roll; failed samples and longest outage are
   reported beside the apiserver's, and samples taken while the apiserver is down count apart as BLIND. Reported, not
-  gated. Rung: mocked; real cloud 2026-10-03 on Scaleway, OVH (the `upgrade-k8s` step and the Flux/CNPG roll,
-  `docs/upgrade.md`) and Outscale.
+  gated. Rung: mocked; real cloud 2026-10-03 on Scaleway, OVH (the `upgrade-k8s` step in `docs/upgrade.md`, the
+  Flux/CNPG roll in Validated) and Outscale.
 - **`task cluster-shrink-plan` then `task cluster-shrink` remove nodes from a live cluster (#249).** Two commands, like
   destroy: `PLAN=` is required and `APPROVE=auto` does not collapse them; the scope comes from the saved plan and is
   derived again at apply. A worker run may take several nodes, highest index first; a control-plane run takes exactly
   one, never in the same run as a worker; the cluster keeps at least one of each, and below three control planes it needs
-  `-- --allow-below-ha` on both commands. Per node: Longhorn eviction, drain, `talosctl shutdown`, delete the Node, a
-  targeted destroy of exactly that node's resources; a control plane also takes an etcd snapshot, hands leadership off
-  and runs `etcd leave`; the run ends with `_backup-state` and `cluster-verify`. Refusals, mechanism and figures:
+  `-- --allow-below-ha` on both commands. Per node: Longhorn eviction (workers only), drain, `talosctl shutdown`, delete the
+  Node, a targeted destroy of exactly that node's resources; a control plane also takes an etcd snapshot, hands leadership
+  off and runs `etcd leave`; the run ends with `_backup-state` and `cluster-verify`. Refusals, mechanism and figures:
   `docs/upgrade.md`, Removing nodes. The closing step applies every pending machine-config update, so make a config edit
   separately. A lowered count through `cluster-up` is now refused (Fixed). Rung: mocked, the only rung of every refusal
   but Longhorn's two-replica one (a real cluster refused that too); real cloud 2026-10-04 (Validated).
-- **`task restore-state` rebuilds a cluster on another provider from the replica the first one left (#57).** When
-  provider A is gone its tfstate survives as the `-backup` replica on B's store, the only carrier of the Talos PKI and
-  the etcd secretbox key. `task restore-state PROVIDER=<b> ROLE=failover FROM=<A's env name>` (the file under `envs/`
-  without `.tfvars`, e.g. `management-<a>`) copies the replica to B's state key and untracks everything but the three state-only Talos resources, so `task cluster-up` builds a cluster that
-  A's saved kubeconfig and talosconfig still open. It is a rebuild, not a restore: etcd contents and application data
-  are not in the replica. It refuses a target that holds resources or whose state cannot be read, a replica that is its
-  own target, a plaintext replica, a state with no PKI and a `talos_version` below the one the PKI was made for; from
-  the upload on, any failure removes the copy again (a `kill -9` leaves it, and the next run refuses, naming the
-  object). The replica is only ever read. A's env file is gitignored and in no store, so after losing the workstation it
-  is rebuilt by hand (runbook: `infrastructure/opentofu/cluster/README.md`, "Cross-provider failover"). Rung: mocked;
-  real cloud once, OVH to Scaleway, 2026-10-05 (Validated). Not run: any other provider pair, three control planes,
-  Talos discovery with a live A.
+- **`task restore-state` rebuilds a cluster on another provider from the replica the first one left (#57).** When provider
+  A is gone its tfstate survives as the `-backup` replica on B's store, the only carrier of the Talos PKI and the etcd
+  secretbox key. `task restore-state PROVIDER=<b> ROLE=failover FROM=<A's env name>` (the file under `envs/` without
+  `.tfvars`, e.g. `management-<a>`) copies the replica to B's state key and untracks everything but the three state-only
+  Talos resources, so `task cluster-up` builds a cluster that A's saved kubeconfig and talosconfig still open. It is a
+  rebuild, not a restore: etcd contents and application data are not in the replica. It refuses a target that holds
+  resources or whose state cannot be read, a replica that is its own target, a plaintext replica, a state with no PKI and
+  a `talos_version` below the one the PKI was made for; from the upload on, any failure removes the copy again (a `kill
+  -9` leaves it, and the next run refuses, naming the object). The replica is only ever read. A's env file is gitignored
+  and in no store, so after losing the workstation it is rebuilt by hand (runbook:
+  `infrastructure/opentofu/cluster/README.md`, "Cross-provider failover"). Rung: mocked; real cloud once, OVH to Scaleway,
+  2026-10-05 (Validated). Not run: any other provider pair, three control planes, Talos discovery with a live A.
 - **`node_nameservers`: DNS-over-TLS or -HTTPS for the nodes' own resolver (#173).** Opt-in. A list of `{address,
   protocol, tls_server_name}` is rendered as one Talos `ResolverConfig` appended to every node, plus a `TimeSyncConfig`
   `bootTimeout` (`node_dns_boot_timeout`, default `90s`) when a server is encrypted; unset, every node's config is
@@ -118,23 +126,25 @@ before pulling this onto a cluster that matters.
   `LogLevel=VERBOSE` output to `.talos-tunnel-<port>.log` beside the pidfile (gitignored: it names the bastion, so
   redact it before pasting it anywhere public); `open` and `open-direct` quote the log of each port that did not come
   up, and `ensure` quotes each tunnel that does not answer and says whether its ssh still runs. A log says how an ssh
-  ended, not who asked it to; the cause of the earlier deaths is still unknown. Rung: mocked; seen once on a real
-  Scaleway bastion with 2 tunnels (after a TERM, `ensure` quoted the client's closing lines and rebuilt 2/2). Not seen:
-  a drop by the bastion, a KILL, `open-direct`.
+  ended, not who asked it to; the cause of the 2026-08-18 deaths is still unknown (the issue is closed as not reproduced).
+  Rung: mocked; seen once on a real Scaleway bastion with 2 tunnels, on the first version of this change (after a TERM,
+  `ensure` quoted the client's closing lines and rebuilt 2/2). Not seen: a drop by the bastion, a KILL, `open-direct`.
 - **A manual real-cloud deploy, verify and teardown workflow, dormant until its secrets exist (PR #257).**
   `.github/workflows/real-cloud-regression.yml` (`workflow_dispatch` only, one provider or all three, a "these are
-  sandbox accounts" box, the teardown and an account-clean proof under `if: always()`). Its first step names whichever
-  secret is missing, and none of them exists in the repository. Secrets reach a step only through `env:`, `kubectl` is the
-  cluster's own pin and checksum-verified, and Outscale is judged on its VMs and public IPs because of #43. Rung: mocked
-  (each shell step lifted out of the YAML and run with fake secrets); **never run against an account**.
+  sandbox accounts" box, the teardown and an account-clean proof under `if: always()`). Its prerequisites step names
+  whichever secret is missing, and none of them exists in the repository. Secrets reach a step only through `env:`,
+  `kubectl` is the cluster's own pin and checksum-verified, and Outscale is judged on its VMs and public IPs because of
+  #43. Rung: mocked (each shell step lifted out of the YAML and run with fake secrets); **never run against an account**.
 - **`task state`, `task purge-orphans`, `task talosconfig-new`, `task local-rbac`.** `state PROVIDER=… [ADDR=…]` lists what
   a cluster's state holds and tells an absent state from an empty one, read-only; `purge-orphans PROVIDER=… [APPLY=1]`
   is the command the release checklist already named and the repository did not have. `talosconfig-new` issues a
   role-scoped talosconfig with a TTL (`os:reader`, 8 h by default) from the admin one, which the deploy hands out as
   `os:admin` valid a year; it refuses to report success if the node grants other roles. `local-rbac` asks the Docker
   cluster whether Talos enforces those roles. Rungs: `state` mocked (no real listing recorded); `purge-orphans` mocked
-  and emulated, real read-only for Outscale's image listing only (Fixed, teardown); `talosconfig-new` Docker lane, then
-  real cloud once, OVH 2026-10-03; `local-rbac` Docker only (2026-08-24, Talos v1.13.3).
+  and emulated; real cloud, read-only dry runs after the teardowns of 2026-10-10 and 11 on all three clouds (Scaleway
+  and OVH: nothing to purge; Outscale: only the stuck Net of #43 is targeted, exit 1 as expected; Fixed, teardown);
+  `talosconfig-new` Docker lane, then real cloud once, OVH 2026-10-03; `local-rbac` Docker only (2026-08-24, Talos
+  v1.13.3; not run at the shipped pin, #291).
 - **`task cluster-up` refuses, before it spends, a never-applied `prod` cluster whose replica is on the primary's cloud
   (#57).** Only the verifier said so, after the apply; it is now also red on a prod replica in another region of the same
   cloud. A self-hosted S3 only has to be another endpoint; a cluster name that already has a state object is only warned
@@ -144,13 +154,16 @@ before pulling this onto a cluster that matters.
   `scripts/internal/tunnel-guard.sh`; its failure names `OA_SKIP_TUNNEL_GUARD=1`, and `docs/admin-access.md` has the
   procedure. Rung: mocked; real cloud once, Scaleway 2026-10-04 (Validated).
 - **`docs/capacity.md`: what a cluster needs, per provider (#72).** The sizing floor and its evidence, what each module
-  creates, the totals and `preflight-quotas` flags of every shipped example; derived figures marked apart from measured.
+  creates, the totals and `preflight-quotas` flags of every shipped example
+  but the two emulated-lane ones; derived figures marked apart from measured.
 
 ### Changed
 
-- **Talos v1.14.2 and Kubernetes v1.37.1 are the default pin (#181).** Both roots move together; 0.1.0's was v1.13.9 and
-  v1.36.3. Rung: real cloud on all three clouds, 2026-10-03, under provider 0.11 (next bullet). The Docker lane follows
-  the pin; its recorded run (2026-08-24) is at v1.13.9 and v1.36.3.
+- **Talos v1.14.2 and Kubernetes v1.37.1 are the default pin (#181).** Both roots move together; 0.1.0's cluster root
+  was v1.13.9 and v1.36.3, its Docker root v1.13.3 and v1.35.3. Rung: real cloud on all three clouds, 2026-10-03, under
+  provider 0.11 (next bullet). The Docker lane follows the pin, and did not boot at it on the two hosts tried (kernel
+  6.12, #291). It booted once, with 1 control plane + 1 worker, on a hosted runner (Cléa's weekly lane, 2026-10-11); its
+  recorded 3 + 3 run (2026-08-24) is at v1.13.9 and v1.36.3.
 - **The Talos provider is pinned at 0.12.0, and the module renders a 1.14 node under the v1.13 config contract (#241,
   #44).** Provider 0.12 reads `talos_version` on the machine-configuration data source as the config contract, not as
   the node's Talos, and for a 1.14 contract renders Talos's multi-document config, which the module's v1alpha1 patches
@@ -160,13 +173,15 @@ before pulling this onto a cluster that matters.
   local lane pin `0.12.0` exactly (no lock file is committed, so a range could change the rendered text unseen) and the
   module's ceiling is `< 0.13.0`. `replace_triggered_by` (upstream `siderolabs/terraform-provider-talos#352`, fixed in
   0.12.0) stays: no run without it has happened (#83). **Existing checkouts must run `tofu init -backend=false -upgrade` in
-  `infrastructure/opentofu/cluster`** (Upgrade notes). Rung: mocked; real cloud once, Scaleway, 2026-10-05, 1 control
-  plane + 1 worker (Validated; Known limits has what was not measured).
+  `infrastructure/opentofu/cluster`** (Upgrade notes). Rung: mocked; real cloud, Scaleway, 2026-10-05, 1 control plane +
+  1 worker, then 3 control planes + 2 workers on all three clouds, `cluster-verify` 14/14, and a 0.1.0 cluster climbed
+  by `cluster-upgrade` on each, 2026-10-06, the fresh builds repeated at the shipped pin on 2026-10-10 (Scaleway, OVH)
+  and 2026-10-11 (Outscale) (Validated; Known limits has what was not measured).
 - **The image lane keeps one state per Talos version (#69).** Each version has its own state
   (`talos-image-<provider>-<version>.tfstate`), so a build touches only its own version: building v1.14.2 no longer
-  replaces v1.14.1, and the refusal #93 needed (no build while another tfvars pins another version) is gone with its
-  cause. `task image-build PROVIDER=<p>` takes `LIST=1` (the versions held), `PRUNE=1 VERSION=<v>` (destroy one, refused
-  while a tfvars pins it) and `RETAIN=1` (next bullet). Images only: there is one cluster state, and a node built from
+  replaces v1.14.1 (0.1.0 replaced it, silently, #93). `task image-build PROVIDER=<p>` takes `LIST=1` (the versions
+  held), `PRUNE=1 VERSION=<v>` (destroy one, refused while a
+  tfvars pins it) and `RETAIN=1` (next bullet). Images only: there is one cluster state, and a node built from
   an older image joins the same cluster. The image state takes no lock: one operator per lane, one run at a time per
   checkout. Rules and recoveries: `infrastructure/opentofu/talos-image/README.md`; the first-build migration and its
   refusals are in Upgrade notes. Rung: mocked; real cloud, 2026-10-05, Scaleway and Outscale (Validated; Known limits
@@ -182,16 +197,16 @@ before pulling this onto a cluster that matters.
   `APPROVE=auto` it never prunes** (it prints the command), and `cluster-upgrade` does not run it, so run it by hand
   once a climb is verified. Rung: mocked; real cloud, 2026-10-05, Scaleway and Outscale (Validated).
 - **`task cluster-up` ends with `cluster-verify` and fails when it does (#84).** It used to print "complete" without
-  asking the cluster, and always exited 0; `cluster-idempotency` and `cluster-upgrade` now end non-zero wherever the
-  verifier is red. Rung: mocked; seen red on a real Scaleway cluster, 2026-10-02.
+  asking the cluster, so a red cluster exited 0; `cluster-idempotency`, which runs `cluster-up`, now ends non-zero on a
+  red verifier (`cluster-upgrade` already did in 0.1.0). Rung: mocked; seen red on a real Scaleway cluster, 2026-10-02.
 - **Outscale spreads its nodes over the subregions listed in `availability_zones` (#58).** It read only the first entry,
   so three control planes shared one subregion. It now builds a private subnet per entry and places control planes and
   workers by index, a worker's data volumes in its node's subregion; the public subnet, bastion, NAT and load balancers
   stay in the first subregion (a load balancer takes one subnet, measured) and reach every node. A node's subnet is
   ignored after creation: **a cluster built before this keeps its layout and ends red, and no setting clears it**; so
   does a one-entry list. Rung: real cloud 2026-10-03 for the new layout (three control planes in three subregions,
-  13/13, the load balancer UP on all three); the red was seen on the old module (12 passed, 1 failed), the kept layout is
-  the mocked plan's reading, and the new module has not been applied live over an old cluster.
+  13/13, the load balancer UP on all three); the red was seen on the old module, 2026-10-03 (12 passed, 1 failed), the
+  kept layout is the mocked plan's reading, and the new module has not been applied live over an old cluster.
 - **OVH examples and defaults name availability zones OVH accepts (#72).** They said `["nova"]`, which Nova tolerates and
   Cinder rejects on EU-WEST-PAR, so the first apply died creating the workers' data volumes. Now `eu-west-par-a/b/c` in
   the examples, the cluster default and the module default. Rung: mocked for those; the three zone names deployed and
@@ -200,75 +215,122 @@ before pulling this onto a cluster that matters.
   workload one, `DEV1-M`, absent from `fr-par-3`), and stop pinning an image the lane no longer holds. Outscale stays at
   `tinav5.c2r4p1`, below the floor on purpose (the floor on five nodes plus the bastion is 22 vCPU against a default
   quota of 20): a bare cluster only, deployed and verified 2026-10-03 (`docs/capacity.md`). The examples that hard-pinned
-  Talos v1.13.3 and Kubernetes v1.35.3, a pair never measured on a cloud, now inherit the default pin.
-- **The Docker lane is not a provider, and says so.** `cluster-*` tasks refuse `PROVIDER=local` and name the family that
-  applies; `task local-verify` exists because that refusal names it. `K8S_API_PORT` moves the host port 6443 (a WSL2
-  reserved range made `local-up` unrunnable); `local-up` refuses in about a second on a host without `CAP_SYS_RESOURCE`
-  instead of hanging 90 s; `local-down` runs on a clone with only this repository; `opentofu-local` pins what the cloud
-  root pins; `task local-test` now fails when workers never become schedulable or Flux never comes up, where it printed
-  "validated end-to-end" regardless (no run of either failure is recorded). Rung: local Docker 2026-08-24, default 3+3:
-  six nodes Ready, Cilium 6/6, `local-verify` 6/6.
-- **Provider contract, for module authors.** `control_plane_zones` is a required output. The contract's tables are
+  Talos v1.13.3 and Kubernetes v1.35.3, a pair no recorded cloud run used, now inherit the default pin.
+- **The Docker lane is not a provider, and says so.** The cloud tasks (`cluster-*`, `infra-*`, `image-build`, `tunnels-up`
+  and the rest) refuse `PROVIDER=local`: `cluster-up`, `cluster-down`, `cluster-upgrade`, `cluster-idempotency`,
+  `image-build` and `teardown-all` with a message naming the family that applies, the others on the credential resolver's
+  `unknown provider 'local'`; `task local-verify` exists because `cluster-verify PROVIDER=local` is refused.
+  `K8S_API_PORT` moves the host port 6443 (a WSL2 reserved range made `local-up` unrunnable); `local-up` refuses in about
+  a second on a host where `capsh` shows no `CAP_SYS_RESOURCE` (silent without `capsh`) instead of hanging 90 s;
+  `local-down` runs on a clone with only this repository; `opentofu-local` pins what the cloud root pins; `task
+  local-test` now fails when workers never become schedulable or Flux never comes up, where it printed "validated
+  end-to-end" regardless (no run of either failure is recorded). Rung: local Docker 2026-08-24, default 3+3: six nodes
+  Ready, Cilium 6/6, `local-verify` 6/6; the `PROVIDER=local` refusals: mocked (`task --dry`).
+- **Provider contract, for module authors.** `control_plane_zones` is a required output, and a new rule 5 (scale-in)
+  says how a node's resources must be indexed and named for `shrink-nodes.sh`. The contract's tables are
   executed by `check-provider-contract.sh`, by name and type (it required a `bastion_ssh_key` string no module declares;
   all four declare `bastion_ssh_keys`), and `tofu validate` now fails on a missing contract output where it answered
   `Success!` (`try()` could not tell an inactive provider from a missing attribute). Rung: mocked.
 - **Decisions written down (#82, #56, #70, #80, #172), and `flux_namespace` validated.** The bastion stays, hardened in
-  place; revisit with two or more operators, or a stateful service whose restore has been run. Outscale has no state
-  lock by design: one operator at a time. `talosctl upgrade-k8s` measured no gentler than the config-driven Kubernetes
-  step, which stays. `flux_namespace` must be `flux-system`, the only namespace the vendored Flux install creates.
-  Steering traffic between two live clusters is health-checked DNS from a zone that shares no fate with either, not BGP
-  or anycast across providers: none of the three documents a customer BGP peer or prefix for a VM (vendor pages read
-  2026-10-04). Not evaluated: a customer-operated router reaching each cloud over InterLink or DirectLink. DNS failover
-  time (check interval times threshold, plus the TTL) is not measured.
+  place; revisit with two or more operators, or a stateful service whose restore has been run. Outscale has no state lock
+  by design: one operator at a time. `talosctl upgrade-k8s` measured no gentler than the config-driven Kubernetes step,
+  which stays. For read-only work, mint one `os:reader` talosconfig by hand and reuse it until it expires rather than one
+  per run (#80); the tasks still default to the admin one. `flux_namespace` must be `flux-system`, the only namespace the
+  vendored Flux install creates. Steering traffic between two live clusters is health-checked DNS from a zone that shares
+  no fate with either, not BGP or anycast across providers: none of the three documents a customer BGP peer or prefix for
+  a VM (vendor pages read 2026-10-04). Not evaluated: a customer-operated router reaching each cloud over InterLink or
+  DirectLink. DNS failover time (check interval times threshold, plus the TTL) is not measured.
 - **Dependencies, final values (pins):** OpenTofu 1.13.1, Talos provider 0.12.0 (above), Cilium 1.20.2 (0.1.0 shipped
-  1.20.0; the manifest is re-rendered, no cloud run of its own is recorded), flux2 2.9.6 (the vendored
-  install and its controller digests refreshed; it reaches only a `deploy_flux=true` cluster, which no lab sets), helm 4.3.0, flux-schema 0.15.0, go-task 3.54.0, `kubectl-cnpg` 1.30.1, gitleaks 8.30.1, plumber
-  0.5.20, commitizen 4.19.1, yamllint 1.38.0, Feint 0.13.0, and in `setup.sh` kubectl 1.37.1, aws-cli 2.37.9, checkov
-  3.3.22 and pre-commit 4.6.2; the pre-commit hooks lag (commitizen v4.9.1, yamllint v1.35.1). A workstation's
+  1.20.0; the manifest is re-rendered; the cloud legs of 2026-10-10 and 2026-10-11 deployed it (`cluster-verify` counts
+  Cilium running on every node), none of them isolates the bump), flux2 2.9.6 (the vendored install refreshed and its
+  controller digests recorded for the first time (`task check-flux-digests`); it reaches only a `deploy_flux=true`
+  cluster, which no lab sets), helm 4.3.0, flux-schema 0.15.0, go-task 3.54.0, `kubectl-cnpg` 1.30.1, gitleaks 8.30.1,
+  plumber 0.5.20, commitizen 4.19.1, yamllint 1.38.0, Feint 0.13.0, and in `setup.sh` kubectl 1.37.1, aws-cli 2.37.9,
+  checkov 3.3.22 and pre-commit 4.6.2; the pre-commit hooks lag (commitizen v4.9.1, yamllint v1.35.1). A workstation's
   `talosctl` is pinned, checksum-verified and taken from the cluster's own `talos_version`. Rung: mocked; the pinned
   binaries were installed and run, with no cloud, and `setup.sh` ran to the end in a bare `ubuntu:24.04` container with
   all five of its newest pins.
 - **Maintainer tooling; mostly nothing an operator types.** `task evidence-check` goes red when a provider's newest
-  `docs/status.md` row is not at the pin, is older than 45 days (`OA_EVIDENCE_MAX_AGE_DAYS`) or carries a ❌ or ⚠; it is
-  in neither `task lint` nor `task test`, and `task preflight`, which an operator does type, runs it with `--warn` (a
-  stale row warns, an unreadable table fails). Gates that were green on something they had stopped checking now fail:
+  `docs/status.md` row is not at the pin, is older than 45 days (`OA_EVIDENCE_MAX_AGE_DAYS`) or carries a ❌ or ⚠; it is in
+  neither `task lint` nor `task test`, and `task preflight`, which an operator does type, runs it with `--warn` (a stale
+  row warns, an unreadable table fails). Gates that were green on something they had stopped checking now fail:
   `render-check` offline (`RENDER_CHECK_ALLOW_OFFLINE=1` is the deliberate way around, and `preflight` then says
   INCOMPLETE), `tflint` skipping most directories, a typo in a Cilium `--set` flag (#112). Cléa (`docs/clea.md`) probes
-  each pinned bump from cold in a bare container and never reaches a cloud; its push-token and `action-sha` fixes are
-  not yet seen on a runner (#91). For contributors: rung receipts let CI check a pull request's declared rung (`task
+  each pinned bump from cold in a bare container and never reaches a cloud; its push-token and `action-sha` fixes are not
+  yet seen on a runner (#91). Cléa's lane exports `VERSION`, which made `test-talos-image.sh` fail in every probe until
+  the harness defined its own environment (#286; mocked, no Cléa run has shown a verdict since, and whether the lane
+  should stop exporting it is open). For contributors: rung receipts let CI check a pull request's declared rung (`task
   receipts`), the hand-kept backlog file is gone (tasks are GitHub issues, "where we stand" is `docs/status.md`) and
-  `Assisted-by:` is a tool-only trailer with no model version. The rest is in `task --list-all`. Rung: mocked, each
-  gate reproduced in both directions.
+  `Assisted-by:` is a tool-only trailer with no model version. The rest is in `task --list-all`. Rung: mocked, each gate
+  reproduced in both directions.
 
 ### Validated
 
-Measured by hand on real accounts. Dates and figures come from `docs/status.md` and `docs/upgrade.md`; control-plane
+Measured by hand on real accounts. Dates and figures come from `docs/status.md` and `docs/upgrade.md`, and, for the
+passes of 2026-10-06 to 2026-10-11, from the maintainer's step records, kept outside the repository; control-plane
 growth and the plan-only refusal from `docs/deployment-test-matrix.md` (growth also `docs/first-cluster.md`); the
-changed `admin_ip` from `docs/admin-access.md`; the lock refusals from `docs/release-checklist.md`; the failover and
-the provider pin from
+changed `admin_ip` from `docs/admin-access.md`; the lock refusals from `docs/release-checklist.md`; the failover and the provider pin from
 `docs/status.md`; the node resolver from the matrix and PR #268; the image lane's runs from the message of PRs #269 and
 #272 only. Versions were read from the kubelets and each node's own Talos API, never from the tool that performed the
 upgrade. A longest outage is the longest run of consecutive failed one-second probes.
 
-- **The release candidate on all three clouds, 2026-10-06, each from an empty project, 3 control planes + 2 workers.**
-  `cluster-up`, `cluster-verify` 14/14, `cluster-idempotency` with no control plane rebooted, a health suite of 14 checks
-  (every node Ready, every pod healthy, a 3-replica Service reachable from every node, DNS, egress, a NetworkPolicy that
-  allows and denies, Cilium), an etcd snapshot, the state replica with its dated generations, an empty strict plan, the
-  schematic on every control plane, then teardown proven by the provider's own answer (Scaleway 52 resources, OVH 62,
-  Outscale 64). Not first time: OVH's first `cluster-up` ended at a node that stayed `ACTIVE` and dead (#49), and
-  Outscale's needed four runs (transient API errors, and the same-name image gate in a fresh namespace).
-- **0.1.0 to this release, 2026-10-06, `task cluster-upgrade`, versions unset in the tfvars.** Talos 1.13.9 to 1.14.2 and
-  Kubernetes 1.36.3 to 1.37.1 on 5/5 nodes, read from the nodes. **Scaleway and OVH in one uninterrupted run** (1064 s and
-  962 s): `cluster-verify` 14/14, no control plane rebooted by the `cluster-idempotency` after it, the health suite 14/14,
-  an empty strict plan, teardown proven clean. Through the load balancer, probed at 1 Hz: Scaleway `/readyz` 18 failed of
-  1056, longest run 3 s; OVH 6 of 956, longest 3 s. **Outscale was not one run:** the first apply modified the bastion in
-  place and the run stopped on its dead tunnels (Upgrade notes); the same command resumed and converged, `cluster-verify`
-  read 13 of 14 (the red line is the single-subregion verdict, Upgrade notes), the health suite 14/14, the strict plan
-  empty, teardown clean. Its interruption is the worst measured (Known limits). Before the four fixes under Fixed, none of
-  these climbs completed: the first Scaleway attempt replaced the private network (16 to destroy, the API unreachable
-  on every backend for 68 s), OVH's lost its tunnels with a replaced bastion, and a plain `cluster-up` was refused by
-  the nodes four minutes into the apply. Not one clean pass on the final commit of Outscale, and the idempotency re-run
-  was not asserted there (its verify is red by design).
+- **The release code (`893a395`) on all three clouds, 2026-10-10 and 2026-10-11, each from an empty state under a fresh
+  `bucket_suffix`, 3 control planes + 2 workers, at the shipped pin (Talos 1.14.2, Kubernetes 1.37.1, provider 0.12.0).**
+  Scaleway over the example's three zones, OVH over `eu-west-par-a/b/c`, Outscale into a fresh Net over three subregions.
+  On each: `cluster-up` (Scaleway 650 s, OVH 545 s on its first deploy, Outscale 1661 s, about 15 minutes of it the image
+  build); `cluster-verify` 14 passed, 0 failed, 0 could not be checked, with the control planes read in three failure
+  domains and every worker's encrypted data volume read back from its node; `cluster-idempotency` with the same nodes and
+  no control plane rebooted; the lab's health suite (every node Ready, every pod healthy, a Service reachable from every
+  node, DNS, egress, a NetworkPolicy that allows and denies, Cilium) 14 ok, 0 failed; a stand-alone `task etcd-snapshot`,
+  encrypted, written to both buckets; `backup-state`, the encrypted state replicated to another cloud's store (Scaleway's
+  to OVH's, OVH's and Outscale's to Scaleway's); an empty strict plan; the pinned schematic on every control plane; then
+  the two commands of `task cluster-down` (52 resources in the plan on Scaleway, 62 on OVH, 64 on Outscale) and the
+  provider's own answer. Scaleway: `purge-orphans` clean and `verify-provider-clean` rc 0. OVH: `purge-orphans` clean on
+  its first pass; the `openstack` mode of `verify-provider-clean` was not run. Outscale never reads clean (#43):
+  `verify-provider-clean` rc 0 (no VM, no unassociated public IP), the `purge-orphans` dry run exit 1 with only the stuck
+  Net and what hangs on it, the run's own Net gone. Rung: real cloud, once per cloud (OVH twice), the repository's tasks
+  and scripts called stage by stage by a maintainer's lab script that stops at the first red; the script and the health
+  suite are outside the repository. Not run: OVH's one-zone red, read from the config only. An earlier pass on
+  2026-10-06, on older commits, is superseded by this one.
+- **OVH, 2026-10-10: two deploys and two teardowns in a row in one project; the second met #49 at first boot.** The first
+  ran as above. The second stopped at its first `cluster-up`: phase 2 waited 900 s for control plane 2's Talos API and
+  ended 201 after 1349 s, the other two answering. Nova said all three servers `ACTIVE`, power state 1, and the console
+  showed no kernel message; the node stayed silent from the first seconds of its first boot for about twenty minutes. This
+  is the situation of #49, again: the first OVH deploy of 2026-10-06 (`21c4a73`) ended the same way, at control plane 1. A
+  Nova hard reboot of that one server, the hypervisor reset #49 prescribes, brought its Talos API up 5 s later; the same
+  command resumed (326 s on the partial state) and every stage above then passed, `cluster-idempotency` with no control
+  plane rebooted since the reset. No defect of the repository is shown and no cause: #49 stays open, blocked on the
+  provider, with one more occurrence. Both teardowns ended `purge-orphans` clean on the first pass: the second teardown
+  the release checklist asks for.
+- **Outscale, 2026-10-11, into a fresh Net.** The first attempt, the evening before, stopped after 37 s at the image
+  build, before an image, a snapshot or a machine existed: the account held an image of the pin's name that no state
+  tracks (made 2026-10-03, untagged), and the plan would have created the same name, which Outscale refuses after the
+  snapshot import. The same-name gate refused it. On the account owner's go, that one image and its one snapshot were
+  deleted (checked by id, name and mapping first), the account's other images untouched; the second attempt rebuilt the
+  image and ran as above in one `cluster-up`, `cluster-verify` 14 of 14 with three control planes in three subregions (a
+  cluster built before #58 ends 13 of 14, by design). The pass of 2026-10-06 had needed several runs (transient API
+  errors, and the same gate). Left standing, on purpose: the stuck Net of #43 and the three Talos images the lane keeps
+  (v1.13.8, v1.14.1 and the rebuilt v1.14.2).
+- **0.1.0 to this release, 2026-10-06, on `2f8bd02`, `task cluster-upgrade` through the same lab script, versions unset
+  in the tfvars.** Each started from a cluster built by the 0.1.0 tag (3 control planes + 2 workers, under Talos
+  provider 0.11); the climb ran under 0.12.0. Talos 1.13.9 to 1.14.2 and Kubernetes 1.36.3 to 1.37.1 on 5/5 nodes, read
+  from the nodes. **Scaleway and OVH in one uninterrupted run** (1064 s and 962 s): `cluster-verify` 14/14, no control
+  plane rebooted by the `cluster-idempotency` after it, the health suite 14/14, an empty strict plan, then teardown
+  (Scaleway: `purge-orphans` clean and `verify-provider-clean` rc 0; OVH: `purge-orphans` clean). Through the load
+  balancer, probed at 1 Hz: Scaleway `/readyz` 18 failed of 1056, longest run 3 s; OVH 6 of 956, longest 3 s. **Outscale
+  was not one run:** the first apply modified the bastion in place and the run stopped on its dead tunnels (Upgrade
+  notes); the same command resumed and converged, `cluster-verify` read 13 of 14 (the red line is the single-subregion
+  verdict, Upgrade notes), the health suite 14/14, the strict plan empty, then teardown (`verify-provider-clean` rc 0; the
+  `purge-orphans` dry run listing as many targets as the stuck Net of #43 holds, their ids not kept). Its interruption is
+  the worst measured (Known limits). Before the four fixes under Fixed, none of these climbs completed: the first
+  Scaleway attempt replaced the private network (16 to destroy, the API unreachable on every backend for 68 s), OVH's
+  lost its tunnels with a replaced bastion, and a plain `cluster-up` was refused by the nodes four minutes into the
+  apply. Outscale's climb on `2f8bd02` was not one clean run, and the idempotency re-run was not asserted there (its
+  verify is red by design). **No climb was re-run on `893a395`.** Its apply path is `2f8bd02`'s, read in the diff and not
+  re-run: no module of Scaleway, OVH, Outscale or Talos, no `.tf` of the cluster root beyond a comment and an output
+  description, and the scripts that `cluster-up`, `cluster-upgrade` and `infra-apply` run changed only by a diagnostic
+  paragraph added to `explain-failure.sh`, a helper added to `scripts/lib/common.sh` and a task name added to the receipt
+  writer. The diff also adds `task teardown-all`, the Proxmox VM bastion's user and PyYAML in `setup.sh`.
 - **Scaleway, 2026-10-02 and 2026-10-03, each from an empty project under a fresh `bucket_suffix` (#68).** The first:
   `cluster-up`, `cluster-verify` 12/12, two `cluster-idempotency` passes; the Talos step rolled six nodes with the
   apiserver failing 6 times in 474 probes, longest 1 s; the Kubernetes step stopped on a defect of ours (PR #223, Fixed),
@@ -284,12 +346,13 @@ upgrade. A longest outage is the longest run of consecutive failed one-second pr
 - **OVH, 2026-10-03.** 3+3 across `eu-west-par-a/b/c`, encrypted worker disks, `cluster-verify` 13/13. Kubernetes 1.36.3 to
   1.37.1 through `talosctl upgrade-k8s` (#70), 10 s (11 failed in 430), then the pin; plan empty after the climb and
   after the pin. Its Talos step, 1.13.9 to 1.14.2 on 6/6 nodes, was the roll with Flux and CNPG below.
-- **A roll with Flux and CNPG, OVH, 2026-10-03 (#64).** A lab, not a `deploy_flux` cluster: the vendored Flux controllers,
-  the CNPG operator 1.23.1 and local-path storage installed by hand, a three-instance CNPG cluster owned by a Flux
-  Kustomization. `cluster-upgrade` took Talos 1.13.9 to 1.14.2: before every node the roll suspended the Kustomization
-  and the CNPG budget, and at the end of each of its two rolls it checked both were restored (longest outage 1 s, 3
-  failed in 583; the Service 3 failed and 3 blind in 621). The surrounding `cluster-upgrade` exited 201, because its
-  closing `cluster-verify` found `flux-system`; `cluster-verify` read 13/13 only after the lab was removed.
+- **A roll with Flux and CNPG, OVH, 2026-10-03 (#64).** A lab, not a `deploy_flux` cluster: the vendored Flux controllers
+  (v2.9.3, the vendored install until 2026-10-05), the CNPG operator 1.23.1 and local-path storage installed by hand, a
+  three-instance CNPG cluster owned by a Flux Kustomization. `cluster-upgrade` took Talos 1.13.9 to 1.14.2: before every
+  node the roll suspended the Kustomization and the CNPG budget, and at the end of each of its two rolls it checked both
+  were restored (longest outage 1 s, 3 failed in 583; the Service 3 failed and 3 blind in 621). The surrounding
+  `cluster-upgrade` exited 201, because its closing `cluster-verify` found `flux-system`; `cluster-verify` read 13/13 only
+  after the lab was removed.
 - **Outscale, 2026-10-03.** 3+3 `tinav5.c2r4p1`, encrypted worker disks, `cluster-verify` 13/13, 6/6 nodes to Talos 1.14.2
   and Kubernetes 1.37.1, `No changes.` three times, one after the climb. Longest outage 9 s (68 failed in 1535: 3 s on
   the Talos step, 9 s on Kubernetes); the Service probe failed 40 times with 20 blind samples in 1490, longest 3 s.
@@ -332,7 +395,7 @@ upgrade. A longest outage is the longest run of consecutive failed one-second pr
   `restore-state` put A's PKI in B's state key, and B's `cluster-up` ended on `cluster-verify` 13/13 with an empty
   strict plan. A's saved kubeconfig listed B's nodes Ready and A's talosconfig answered on B's control plane; A's stores
   were unchanged afterwards. Both purges were clean. The drill found `image-build` ignoring `ROLE=` (Fixed) and left its
-  buckets on the three accounts for their owner (#73).
+  buckets on the three accounts for their owner.
 - **The image lane, Scaleway and Outscale, 2026-10-05 (#69),** at 1 control plane + 1 worker, Talos 1.14.2. The legacy
   state was copied to its version's key (`No changes`, nothing rebuilt) and a second version built beside it. A worker
   created with an `image_name` override naming v1.14.1 booted that image, joined Ready on v1.14.1 and stayed on it;
@@ -348,7 +411,8 @@ upgrade. A longest outage is the longest run of consecutive failed one-second pr
   under 0.11 planned empty under the pin and `cluster-up` changed nothing (`cluster-verify` 12/12); rebuilt from an
   empty state under 0.12.0, it ended on `cluster-verify` 12/12 with `cluster-idempotency` green. Inside the 1.13
   contract 0.12.0 had already run on OVH and Outscale (a fresh deploy and a bump 1.13.9 to 1.13.11, 13/13, plan empty
-  after).
+  after). At the shipped pin it has since run with three control planes: the climb from a 0.1.0 cluster on all three
+  clouds (2026-10-06) and a deploy from empty on all three (2026-10-10 and 2026-10-11), both above.
 - **The node resolver, OVH, 2026-10-05 (#173).** 1 control plane + 1 worker, Talos 1.14.2. Unset planned empty; setting
   the list replaced both `talos_machine_configuration_apply` with no "inconsistent final plan" (upstream #352),
   `cluster-up` applied it with no reboot and the strict plan was empty after. Both nodes resolved over DoT (a capture
@@ -359,28 +423,36 @@ upgrade. A longest outage is the longest run of consecutive failed one-second pr
 
 ### Fixed
 
-- **The Proxmox VM bastion's user is `bastion`, not the image's `ubuntu` (#201).** cloud-init ignores a second definition of a
-  user the image already has, so `ubuntu` would never join `bastion-admins` and sshd would refuse the key (measured on OVH).
-  One local feeds the VM and the output. Rung: mocked; never applied on a real Proxmox host.
+- **The Proxmox VM bastion's user is `bastion`, not the image's `ubuntu` (PR #285).** cloud-init ignores a second
+  definition of a user the image already has, so `ubuntu` would never join `bastion-admins` and sshd would refuse the key
+  (measured on OVH). One local feeds the VM and the output. Rung: mocked; never applied on a real Proxmox host.
 - **A bastion change under the Talos tunnels is explained (#65).** When an apply modifies, replaces or stops the bastion and
   the config applies then fail on refused tunnel ports, `explain-failure` says the change landed and that re-running is the
-  fix. Rung: mocked, the pattern checked against the real Outscale transcript.
-- **Upgrading a 0.1.0 cluster to this release, found by running it on real clouds (#79, #81, #278, #279).** Four defects stood
-  between `git pull` and a working upgrade. A Scaleway network built under 0.1.0 had its subnet replaced by the new pin, and
-  every private NIC behind it. The shared bastion cloud-init had four comment lines edited, which replaced the bastion on
-  OVH mid-apply and killed the Talos tunnels (the default render is 0.1.0's bytes again, and a test pins its hash).
-  `task cluster-up` pushed a Kubernetes pin the running Talos refuses, four minutes into the apply (`converge-versions.sh`
-  now stops before the plan and names `task cluster-upgrade`). `cluster-upgrade` left the axis that does not move at the
-  shipped default, so its first step did the same (it pins that axis where it runs). **To upgrade: `task cluster-upgrade`.**
-  Rung: mocked for each guard, each removed once to see its test go red; real cloud: Scaleway and OVH climbs (Validated).
-- **Two more regressions the validation hit, both in tests or checks of ours.** The replica check of `cluster-verify` read
-  `aws s3 ls | grep -q` as "not found" when `grep` exited first under `pipefail` (#275), and the Image Factory request of
-  the image lane had no retry and failed on one 5xx (#276, four attempts now). A test that captured output into
-  `grep -q` through a pipe failed once the same way; the harnesses use here-strings now.
+  fix. The apply still kills the tunnels (Upgrade notes; #288). Rung: mocked, the pattern checked against the real Outscale
+  transcript; no real run is recorded where `explain-failure` said it.
+- **Upgrading a 0.1.0 cluster to this release, found by running it on real clouds (PR #280, refs #79, #81, #278, #279).**
+  Four defects stood between `git pull` and a working upgrade. A Scaleway network built under 0.1.0 had its subnet
+  replaced by the new pin, and every private NIC behind it. The shared bastion cloud-init had four comment lines edited,
+  which replaced the bastion on OVH mid-apply and killed the Talos tunnels (the default render is 0.1.0's bytes again, and
+  a test pins its hash). `task cluster-up` pushed a Kubernetes pin the running Talos refuses, four minutes into the apply
+  (`converge-versions.sh` now stops before the plan and names `task cluster-upgrade`). `cluster-upgrade` left the axis
+  that does not move at the shipped default, so its first step did the same (it pins that axis where it runs). **To
+  upgrade: `task cluster-upgrade`.** Rung: mocked for each guard (the Scaleway one pins two lines of HCL; no mocked plan
+  shows a replacement), each removed once to see its test go red; real cloud: Scaleway and OVH climbs (Validated), the
+  bastion fix observed on OVH only (Upgrade notes for Outscale).
+- **Two more defects the validation hit, both in our own code: a check and the image lane.**
+  The replica check of `cluster-verify` read
+  `aws s3 ls | grep -q` as "not found" when `grep` exited first under `pipefail` (PR #275), and the Image Factory request of
+  the image lane had no retry and failed the plan on one failed request (PR #276, up to four retries now). A test that
+  captured output into
+  `grep -q` through a pipe failed once the same way (PR #284); the harnesses use here-strings now. Rung: mocked; PR #275's
+  fix was also run six times each way on a real replica (2 of 6 failed piped, 0 of 6 once captured). Not shown: that
+  PR #276's retry rescues a real failed request (the failure was not reproduced on demand).
 - **Lowering `control_planes` or `workers` destroyed the highest-index machine and its data volumes, with no drain, no
   etcd leave and no Node delete, and nothing said so.** `cluster-up`, `infra-apply` and `grow-nodes.sh` now stop on a plan
   that deletes a node of a bootstrapped cluster (`grow-nodes.sh` allows creates only), and `node_distribution` is
-  validated against the counts. Removal has its own commands (Added). Rung: mocked; two real Scaleway plans refused.
+  refused when an entry has workers and no control plane (PR #246). Removal has its own commands (Added). Rung: mocked;
+  two real Scaleway plans refused, plan only.
 - **The roll deadlocked on Longhorn when it had as many replicas as workers (PR #229).** It waited for Longhorn to be
   healthy before uncordoning the node it had just rebuilt, but Longhorn puts no replica on a cordoned node, so the 600 s
   gate ran out. The node is uncordoned first. Rung: mocked; real cloud once, Scaleway 2026-10-03: found there (healthy 63 s
@@ -418,8 +490,10 @@ upgrade. A longest outage is the longest run of consecutive failed one-second pr
   replica stays the undo; `infra-down-plan` replicates first and never blocks a teardown. The cluster README's "Lost the
   Talos secrets" gives two recoveries. Rung: mocked; real cloud, Scaleway and OVH, 1 control plane + 1 worker,
   2026-10-04 and 2026-10-05: the symptom, the refusals and the recoveries (both on Scaleway; recovery 2 on OVH, the
-  provider of the original incident). Nothing real ran at the merged head: the reworked untrack printing and the
-  `backup-state.sh` and `cluster-roll` guards are mocked only (Known limits has what was not seen).
+  provider of the original incident). At the merged head the happy path ran for real in the teardowns of 2026-10-10 and
+  2026-10-11 on all three clouds (the state replicated to another cloud's store, the secrets untracked, the undo
+  printed); the refusals by `backup-state.sh` and the `cluster-roll` guard are mocked only (Known limits has what was not
+  seen).
 - **`restore-artifacts` read the wrong replica, and `image-build` ignored `ROLE=` (#57).** A replica on another cloud
   was opened with the cluster's own key, or not at all: the replica's keys were looked up without its endpoint, the
   bucket was named from `--role` (which picks the file) instead of the file's `cluster_role`, the last quoted string of
@@ -427,19 +501,21 @@ upgrade. A longest outage is the longest run of consecutive failed one-second pr
   found". The `image-build` task never told the script which role it served, so on a machine holding only a failover
   file the lane looked for `management-<provider>.tfvars` and fell back to the shared `openaether` bucket namespace, a
   name another customer may own; the failover cluster could not be created. Rung: mocked; the `image-build` defect was
-  found by the real failover drill (Validated).
+  found by the real failover drill (Validated), which also ran the fixed `restore-artifacts` on real stores (PR #271).
 - **The roll applied a plan other than the one it counted (#55), and missed a worker's data disk (PR #247).** Each per-node
   apply now plans to a file, counts deletes from it and applies it. `node_targets` matched `worker_data[<n>]` where OVH's
   attach and Outscale's link resources are keyed `"w<worker>-d<disk>"`, so a replaced worker lost its data disk until the
   next full apply (inferred from the graph, not run). Rung: mocked for both. #55's change merged 2026-09-26 and the
-  receipts of the real rolls of 2026-10-03 on Scaleway and OVH are from heads that contain it; PR #247's replace path has
-  never run on a real cloud (those climbs were in-place `--upgrade` rolls, which keep the node's disk).
+  receipts of the real rolls of 2026-10-03 on Scaleway and OVH are from heads that contain it, and #55 closed on a real
+  Scaleway roll of 2026-10-02 (three workers replaced one at a time, each plan saved and counted before its apply, rc 0).
+  PR #247's OVH and Outscale attach and link targets have never run on a real cloud (the 2026-10-03 climbs were in-place
+  `--upgrade` rolls, which keep the node's disk).
 - **`task cluster-upgrade` could not upgrade Talos, and could read another cluster's fleet (#181, PR #200).** It built
   the image before moving `talos_version`, and the image lane then refused to build while any tfvars pinned another
   version. It now moves the pin first (a failed build leaves it at the target and the previous image untouched, and the
   message says how to put the pin back) and fetches its own kubeconfig, not whichever cluster wrote the shared one last.
   Rung: mocked; the 2026-10-03 climbs on all three clouds ran in this order, on the single-image lane #69 replaced.
-- **`cluster-roll` rolled the management state whatever `ROLE=` said.** `cluster-upgrade ROLE=workload` applied the
+- **`cluster-roll` rolled the management state whatever `ROLE=` said (PR #37).** `cluster-upgrade ROLE=workload` applied the
   workload tfvars and then rolled the management cluster; both now follow `ROLE=`. Rung: mocked; the workload role has no
   real-cloud run.
 - **`task upgrade PROVIDER=x DRY_RUN=1` started a real upgrade (PR #218), `UPGRADE_TALOS_TO` and `UPGRADE_K8S_TO` on the
@@ -447,12 +523,15 @@ upgrade. A longest outage is the longest run of consecutive failed one-second pr
   advertised a `VERSION=` it ignored.** A Task variable is not an environment variable, so the script never saw them; the
   target now passes all three on; the passphrase check runs first; the tfvars pin decides the version. A dry run also
   leaves no rung receipt. Rung: mocked.
-- **`etcd-snapshot.sh` retention deleted almost everything while a cluster had the fewest snapshots.** The prune slice went
+- **`etcd-snapshot.sh` retention deleted almost everything while a cluster had the fewest snapshots (PR #167).**
+  The prune slice went
   negative below `KEEP` objects and jq counts a negative end from the end: at `KEEP=30`, 29 snapshots became 1, every
   run. Two siblings fell out: an optional tfvars key silently killed the scripts that read it, and `s3_cred` with kind and
   type swapped printed the secret where an access-key id belongs. Rung: mocked. The script also ran inside the three real
-  control-plane removals of 2026-10-04 (snapshot, encryption, upload to both buckets, retention; each run rc 0); no
-  stand-alone `task etcd-snapshot` run is recorded.
+  control-plane removals of 2026-10-04 (snapshot, encryption, upload to both buckets, retention; each run rc 0), and
+  stand-alone as `task etcd-snapshot` on each cloud (2026-10-10 on Scaleway and OVH, 2026-10-11 on Outscale, and once
+  before on 2026-10-06 on an older commit; real cloud, by hand): the object encrypted and in both buckets, rc 0.
+  Retention was not read, and none of those snapshots was restored.
 - **Building a Talos image for one cluster could delete the image another cluster's tfvars still pinned (#93), and a
   Factory answer without a schematic id went to "image already up to date" one step from a billable publish.** The lane
   held one image per provider and nothing failed until the other cluster's next plan; with one state per version a
@@ -467,9 +546,9 @@ upgrade. A longest outage is the longest run of consecutive failed one-second pr
   same rule, so an earlier fix changed nothing. The group now lists the ports this repository's layers serve over the
   private network, from the module's own subnet, pinned to the private network's own /22; `100.64.0.0/10` keeps only the
   load balancer backend ports, and the rules sourced from the load balancers' public IPs, the dead bastion-public-IP rule
-  and the `10.0.0.0/8` rule are gone. Rung: mocked, and emulated (apply, empty re-plan, destroy of the whole root). No run
-  is recorded as confirming the load balancers' health checks under the new group, or as applying it to an existing
-  cluster (Upgrade notes).
+  and the `10.0.0.0/8` rule are gone. Rung: mocked, and emulated (apply, empty re-plan, destroy of the whole root); real
+  cloud on Scaleway, 2026-10-02, where the load balancer read 3 backends `running` and its last health check `passed`.
+  Applying it to an existing cluster is in Upgrade notes.
 - **The teardown proofs read "could not ask" as "clean".** Scaleway had no check in `verify-provider-clean.py` (exit 2); it
   now lists the cluster's servers, load balancers, gateways, security groups and networks plus every detached IP and
   volume. The Scaleway purge (`task purge-orphans PROVIDER=scaleway APPLY=1`) now also lists and deletes what it never
@@ -479,8 +558,8 @@ upgrade. A longest outage is the longest run of consecutive failed one-second pr
   "leftovers" or a clean 0; `--apply` no longer ends on "The project is clean" and asks for a re-run; `ovh.py` counts
   refused calls (#63); `edge-down.sh` no longer sends a Scaleway or Outscale operator to the OpenStack-only deleter;
   Outscale lists leftover snapshots (#71, PR #108) and this account's images, never deleting either (#107). Rung: mocked
-  and emulated; real cloud for Outscale's image read (read-only). The Scaleway checker has no recorded real-cloud run
-  (`docs/status.md` says only that the 2026-10-02 project was proven clean that night). Buckets are not listed.
+  and emulated; real cloud, read-only: Outscale's image read, and the Scaleway checker (rc 0) and purge dry run (nothing
+  to purge) after the teardowns of 2026-10-06 and 2026-10-10. Buckets are not listed.
 - **The bastion's SSH-CA hooks shipped inert (#81).** `TrustedUserCAKeys` and `AuthorizedPrincipalsFile` were hardcoded
   to an empty file; `bastion_ssh_ca_public_key` and `bastion_ssh_ca_principals` are now variables of all four provider
   modules, default `""`, identical rendered bytes when unset. **The cluster root does not forward them, so no tfvars
@@ -491,7 +570,8 @@ upgrade. A longest outage is the longest run of consecutive failed one-second pr
   layers it does not own. It now refuses a pin semver-lower than what the fleet runs, naming both. Rung: mocked.
 - **Statements about a deploy that were wrong.** The Taskfile said `cluster-up` asks once; it asks twice (the phase-1
   plan and `bootstrap-phase2`'s). `cluster-upgrade` said its applies ask; they run with `APPROVE=auto`. On Proxmox with
-  `enable_bastion` the root now reports the VM's user, `ubuntu` (PR #209; Known limits). 0.1.0's docs said the first
+  `enable_bastion` the root now reports the VM's user, `bastion` (PRs #209 and #285; Known limits).
+  0.1.0's docs said the first
   apply after a `talos_version` bump fails once on OVH and Outscale and must be re-run (upstream
   `siderolabs/terraform-provider-talos#352`); the module already carried the workaround (`replace_triggered_by`) in the
   0.1.0 tag, and the 2026-10-03 climbs applied the bump in one apply on all three clouds, through `cluster-upgrade`,
@@ -501,11 +581,19 @@ upgrade. A longest outage is the longest run of consecutive failed one-second pr
   down) and no longer goes through snap or brew, which cannot install a named version; the pinned ShellCheck installer
   installs `xz-utils` when missing (its absence also made Cléa blame flux2, #174); `check_cmd` compares versions, so an
   upgrade is no longer skipped; `sudo` is asked whether it can be used, not whether it exists; checkov goes in a venv so
-  `task security` can finish on Ubuntu 24.04; it now also installs actionlint, gitleaks, plumber and the flux-schema
+  `task security`'s checkov step can finish on Ubuntu 24.04 (its trivy step needs a trivy `setup.sh` does not install); it
+  now also installs actionlint, gitleaks, plumber and the flux-schema
   plugin; kubectl (checksum-verified), aws-cli, checkov, yamllint and pre-commit, installed at whatever upstream served
   that day, are pinned, so Cléa's probes compare a version instead of watching one move. Rung: mocked; run from cold on
   one machine the repository had never been set up on; a bare `ubuntu:24.04` is recorded for the OpenTofu 403, the
   missing `xz` and the five new pins (run to the end, all five at their pin).
+- **`task preflight` died on a clean machine while `setup.sh` said the environment was ready (#289, #290).** `render-check`
+  now reads Cilium's effective config with PyYAML (`import yaml`; 0.1.0's did not) and nothing installed it; CI hid it, its
+  runner image ships it. `setup.sh` now installs `python3-yaml` (apt) or `pyyaml` (brew), or names the package and carries
+  on. The same clean-machine clone found `test-cluster-checks.sh` printing `command not found` on every run (its stubs were
+  defined after their first call). Rung: mocked; local Docker: a bare `ubuntu:24.04` clone of the fix's merge commit ran
+  `setup.sh` and then `task preflight` to the end, 2026-10-10. Not run: macOS (the brew branch is stub-only), another
+  distribution.
 - **A real `envs/*.tfvars` turned `task lint` red and was rewritten or deleted by the tooling (#191).** `task fmt` and the
   pre-commit hook rewrote the ignored files, the hook while saying Passed, and several harnesses wrote and deleted their
   fixtures in `envs/`. Both leave the real directory alone. Rung: mocked, with synthetic tfvars planted in `envs/`.
@@ -531,8 +619,8 @@ Read these before deploying something that matters. Open items:
 [the open issues](https://github.com/dis-bzh/OpenAether-infra/issues).
 
 - **Proxmox has never been applied on real hardware (#48).** The module is code and mocked tests; no tunnel has gone
-  through a Proxmox VM bastion. Its user is `bastion` like on the other clouds (it was the image's `ubuntu`, which cloud-init
-  cannot add to `bastion-admins`), mocked only (#201).
+  through a Proxmox VM bastion. Its user is `bastion` like on the other clouds (it was the image's `ubuntu`, which
+  cloud-init cannot add to `bastion-admins`), mocked only (#201).
 - **The real-cloud workflow has never run.** Its secrets, a dedicated SSH key, the tfvars of sandbox accounts and a
   decision on `admin_ip` (a hosted runner has no small stable IP) are the owner's to create; the first dispatch is where
   a real account gets to disagree with it.
@@ -540,16 +628,16 @@ Read these before deploying something that matters. Open items:
   CNPG (a replica, and a primary) ran on Scaleway only. A node that holds a node-local volume is refused, not migrated.
   The load balancer keeps sending one request in three to the departed control plane for 40 to 76 s (measured on all
   three clouds); taking the member out first is not built, and its effect was not measured.
-- **A control-plane roll with zero failed probes has not happened on any cloud (#42).** Longest outage observed, Talos step: 1-2 s on
-  Scaleway, 1 s on OVH, 3 s on Outscale; Kubernetes step: 2 s on Scaleway, 9 s on Outscale (OVH: 10 s through
-  `upgrade-k8s`). **Outscale on a cluster built by 0.1.0 (2026-10-06): about 22 s with all three apiservers down at once and
-  48 consecutive failed samples through the load balancer in the Kubernetes step** (`cluster-upgrade`'s own probe read 8 s
-  for the same run; the two disagree and it is not explained). Plan for a gap, and for a longer one on Outscale.
+- **A control-plane roll with zero failed probes has not happened on any cloud (#42).** Longest outage in the runs of
+  2026-10-02 and 2026-10-03, Talos step: 1-2 s on Scaleway, 1 s on OVH, 3 s on Outscale; Kubernetes step: 2 s on Scaleway,
+  9 s on Outscale (OVH: 10 s through `upgrade-k8s`). **Outscale on a cluster built by 0.1.0 (2026-10-06): about 22 s with
+  all three apiservers down at once and 48 consecutive failed `/livez` samples through the load balancer (25 on `/readyz`)
+  in the Kubernetes step** (`cluster-upgrade`'s own probe read 8 s for the same run; the two disagree and it is not
+  explained). Plan for a gap, and for a longer one on Outscale.
 - **The failover ran for one provider pair, and only as a rebuild (#57).** OVH to Scaleway, 1 control plane + 1 worker
   each, 2026-10-05 (Validated). Not run: any other pair, three control planes, Talos discovery with a live A (its
   records can outlive A by up to 30 minutes: read `talosctl get members` on B). Etcd contents and application data are
-  not in the two stores. A's gitignored env file is in no store, and backing it up is undecided. The drill's buckets
-  stand on the three accounts until their owner deletes them, as for #73.
+  not in the two stores. A's gitignored env file is in no store, and backing it up is undecided.
 - **Flux is off by default, and `cluster-verify` fails a cluster that has a `flux-system` namespace.** The one roll with
   Flux and CNPG was a hand-installed lab on OVH (Validated). Flux's own controllers no longer record
   `gotk_reconcile_condition` (by about Flux 2.5, inferred from flux2's `go.mod`, not measured), so no per-object Ready
@@ -561,16 +649,16 @@ Read these before deploying something that matters. Open items:
   Outscale's instruction is to create no further load balancer in that Net and use a fresh one. After `fleet-down`
   completes, the account lists a load balancer and a Net as `deleting` for about three minutes: read it again before
   calling it dirty. There is no state lock: one operator at a time.
-- **Scaleway over three zones has no run on record**, though the shipped example names three; over two it is a 2+1 split
-  and a warning. The Outscale examples sit below the sizing floor on purpose (bare cluster only).
-- **Runs not repeated:** a non-empty `bucket_suffix` has been deployed on Scaleway (#68) and on OVH (the failover
-  drill, 2026-10-05; Outscale only held a replica bucket named by it), and on no Outscale cluster of its own; the OVH
-  teardown has no tracked record of a second run, where the release checklist asks for two (0.1.0's limit, still open).
-- **The Talos provider is 0.12.0, and the 1.14 climb has not run under it (#241).** The climbs of 2026-10-02 and
-  2026-10-03 ran under 0.11. Under 0.12.0 a 1.14 cluster was built and verified on Scaleway at 1 control plane + 1
-  worker; inside the 1.13 contract it ran on OVH and Outscale (a fresh deploy and a bump 1.13.9 to 1.13.11, 13/13) with
-  `replace_triggered_by` still in. Not measured: three control planes, `cluster-upgrade` 1.13.9 to 1.14.2, a 1.14
-  cluster on OVH or Outscale, a run without `replace_triggered_by` (#83). `talos_machine` (#44) is not adopted.
+- **Scaleway over two zones is a 2+1 split and a warning that has only run mocked.** Over the shipped example's three
+  zones `cluster-verify` read three failure domains on a real account (2026-10-10, by hand). The Outscale
+  examples sit below the sizing floor on purpose (bare cluster only).
+- **The Talos provider is 0.12.0, and the climbs of 2026-10-02 and 2026-10-03 ran under 0.11 (#241).** Under 0.12.0, real
+  cloud by hand, `cluster-upgrade` took clusters built by 0.1.0 (3 control planes + 2 workers) from 1.13.9 to 1.14.2 on
+  all three clouds on 2026-10-06 (Outscale after one resume), and a fresh 1.14.2 cluster of that shape was built and
+  verified on all three (2026-10-06, then the release code on 2026-10-10 and 2026-10-11); at 1 control plane + 1 worker a
+  1.14 cluster was built and verified on Scaleway (2026-10-05); inside the 1.13 contract it ran on OVH and Outscale (a
+  fresh deploy and a bump 1.13.9 to 1.13.11, 13/13), with `replace_triggered_by` still in. Not measured: a run without
+  `replace_triggered_by` (#83). `talos_machine` (#44) is not adopted.
 - **A state that lost the Talos secrets is refused, and comes back only from a replica copy or a talosconfig the nodes
   still trust (#66).** With neither there is no way back from here. The cause of the 2026-08-15 mismatch is not
   established; the version flip is refused by `prevent_destroy` and the interrupted-apply path was not broken. Not seen
@@ -580,77 +668,101 @@ Read these before deploying something that matters. Open items:
   below what the fleet runs, `talosctl rollback` is wrapped by no script and described by no runbook, and no run is
   recorded that took a rolled node back. A node created on the previous image joined Ready on it and stayed there; the
   fleet read red, `MIXED`, until `cluster-up` rolled it forward.
-- **The image lane ran on Scaleway and Outscale only (#69), and its retention needs a person.** Not run: OVH's lane,
-  Proxmox, the retention hook inside `cluster-up` under a real terminal and tofu, the destroy of a held set through it,
-  a legacy state holding the oldest version on a real backend, `--import-snapshot` (stand-ins only), a node one minor
-  behind, a control plane on an older image. Retention never prunes under `APPROVE=auto` and `cluster-upgrade` does not
-  run it, so an unattended run keeps every image; it reads this checkout's tfvars only, so a cluster whose tfvars is
-  elsewhere is not asked.
-- **The old `-talos-staging` buckets still hold every QCOW2 they were given (#73)**, one per cloud built from
-  (`docs/status.md` counts two); only a human can empty them, and no script enumerates buckets.
+- **The image lane's extra paths ran on Scaleway and Outscale only (#69, 2026-10-05), and its retention needs a person.**
+  The extra paths are the legacy-state copy, a second version beside, `PRUNE`, `RETAIN` and a node on the previous image;
+  its plain build ran inside the release deploys of 2026-10-10 and 2026-10-11 on all three clouds. Not run: those extra
+  paths on OVH, Proxmox, the retention hook inside `cluster-up` under a real terminal and tofu, the destroy of a held set
+  through it, a legacy state holding the oldest version on a real backend, `--import-snapshot` (stand-ins only), a node
+  one minor behind, a control plane on an older image. Retention never prunes under `APPROVE=auto` and `cluster-upgrade`
+  does not run it, so an unattended run keeps every image; it reads this checkout's tfvars only, so a cluster whose tfvars
+  is elsewhere is not asked.
+- **Buckets stand on the three accounts, and only a person empties them.** Each of the final validation runs (2026-10-10
+  and 2026-10-11) left its state, its etcd snapshots and a replica of the state on another cloud. The old `-talos-staging`
+  buckets were emptied and deleted by hand on 2026-10-06 (#73, closed). The image lane's `-talos-import` and
+  `-talos-image` buckets stand too, those of the final runs included, on Scaleway and Outscale. No script enumerates
+  buckets, and `purge-orphans` matches resources, not buckets.
 - **Destroying a cluster whose pinned image is gone is unproven (#269).** On Outscale `infra-plan` fails on the missing
   image and `infra-down-plan` takes its `-refresh=false` fallback; that fallback's plan was never applied (an equal plan,
   made after the override was removed, was), and Scaleway did not reproduce the failure.
-- **The Docker lane at 1.14.2 is unmeasured.** `task local-up` at 1.14.2 did not start on the one host tried (kernel
-  6.12); the recorded Docker run is at v1.13.9 and v1.36.3.
+- **The Docker lane at 1.14.2 did not boot on either host tried by hand, both kernel 6.12 (#291).** On the second (Docker
+  29, containerd image store) the guards passed, six containers started and every node log read ended in the same fatal
+  error while the node set up its `/etc` overlay (`FSCONFIG_SET_FD`); the bootstrap then waited until interrupted, at ten
+  minutes, and nothing refuses such a host. The recorded 3 control plane + 3 worker run is at v1.13.9 and v1.36.3
+  (2026-08-24). At 1.14.2 and 1.37.1 the lane booted once, on a hosted runner (kernel 6.17, Cléa's weekly lane, 1 control
+  plane + 1 worker, `local-verify` 8 passed, 2026-10-11). Rung: local Docker. Not run: the default 3 + 3 at this pin.
 - **The purged address is still served by GitHub, by its SHA and in the original pull request's diff (#61).** Only GitHub
   can remove it; a published value is published.
 - **The emulated lane is weaker than the cloud:** the lanes that destroy run the Scaleway provider below 2.83.0 while real
-  clusters run newer, the fix waiting on a Feint release (#179); `feint shapes` has no real-cloud recording (#76);
-  `talos-image` is outside the lane (#47).
+  clusters run newer, the fix waiting on a Feint release (#179); `module.scw` was recorded twice on a real Scaleway
+  account (2026-10-05, 2026-10-08; one control plane and one worker) and replayed against the emulator, where the replay
+  diverges and the first divergence of each chain is not isolated; Outscale was never recorded, and `feint shapes
+  --check`, which compares a fixed read list, was dropped as the bar (#76, closed); `talos-image` is outside the lane
+  (#47).
+- **`task security` was not run for this release** (the validating host had no `trivy`): skipped, not passed. CI's IaC
+  Security Scan was green on `main` at the release code, `893a395`.
 - **Never recorded against real infrastructure:** `bastion-harden-check.sh` on a real bastion, `k8s_lb_mode = "vip"` on
-  OVH, a stand-alone `task etcd-snapshot`, the `workload` role.
+  OVH, the `workload` role.
 - **The tag ruleset blocks moving or deleting any tag, 0.1.0 included**, so a release tag cannot be re-cut. That the ruleset
   has no bypass actors is checked only by an admin's run of `check-required-checks.sh` (CI's token cannot read them), and
-  no such run is recorded.
-- **Also open:** why the tunnels died on Outscale (#65; transcripts are now kept, one induced TERM was quoted correctly
-  and no unprompted death is recorded), and an OVH node that can stay `ACTIVE` while dead (#49, blocked on the
-  provider).
+  the admin run of 2026-10-10 found none.
+- **Also open:** an apply that changes the bastion kills the Talos tunnels mid-run, and nothing refuses or splits that
+  plan (#288); why the tunnels died on Outscale in August (#65, closed as not reproduced on 2026-10-08; transcripts are
+  now kept, one induced TERM was quoted correctly and no unprompted death is recorded), and an OVH node that can stay
+  `ACTIVE` while dead (#49, blocked on the provider): seen on a real account at the first boot of a fresh deploy on
+  2026-10-06 and again on 2026-10-10 (one deploy of two that day), recovered each time by a Nova hard reboot of that node
+  alone and the same `cluster-up` resumed; the cause is not known and no frequency is claimed.
 
 ### Upgrade notes
 
 For an operator on 0.1.0. Read the plan before you approve it, and the roll `cluster-up` prints.
 
-- **A tfvars that leaves `talos_version` and `kubernetes_version` unset now inherits v1.14.2 and v1.37.1, and
-  `cluster-up` is built to converge the fleet onto them.** It prints the roll before it asks, but a plain pull then
-  `cluster-up` is a Talos 1.13 to 1.14 and Kubernetes 1.36 to 1.37 upgrade, and `cluster-verify` is red until it lands.
-  **Use `task cluster-upgrade` for a 0.1.0 fleet:** a plain `cluster-up` across a Talos minor and a Kubernetes minor
-  stops before the plan (the running Talos 1.13 cannot host Kubernetes 1.37, #278), and `cluster-upgrade` walks the pair one
-  minor at a time, with each axis pinned where it runs (#279). A plain `cluster-up` has rolled one worker, v1.14.1 to
-  v1.14.2, on two clouds (2026-10-05). Set both explicitly to stay where you are; a
-  downgrade is refused. A tfvars copied from an example that hard-pinned v1.13.3 and v1.35.3 keeps that pair, which was
-  never measured.
+- **A tfvars that leaves `talos_version` and `kubernetes_version` unset now inherits v1.14.2 and v1.37.1, and `cluster-up`
+  is built to converge the fleet onto them.** It prints the roll before it asks, but a plain pull then `cluster-up` is a
+  Talos 1.13 to 1.14 and Kubernetes 1.36 to 1.37 upgrade, and `cluster-verify` is red until it lands. A minor climb
+  through `cluster-up` has only run mocked, and so has its stop before the plan; the measured climbs used
+  `cluster-upgrade`. **Use `task cluster-upgrade` for a 0.1.0 fleet:** a plain `cluster-up` across a Talos minor and a
+  Kubernetes minor stops before the plan (the running Talos 1.13 cannot host Kubernetes 1.37, #278), and `cluster-upgrade`
+  walks the pair one minor at a time, with each axis pinned where it runs (#279). It asks nothing (its applies run with
+  `APPROVE=auto`) and writes each pin it lands into the tfvars; `task cluster-upgrade PROVIDER=<p> DRY_RUN=1` works out
+  the walk on a copy of them and stops. A plain `cluster-up` has rolled one worker, v1.14.1 to v1.14.2, on two clouds
+  (2026-10-05). Set both explicitly to stay where you are; a downgrade is refused. A tfvars copied from an example that
+  hard-pinned v1.13.3 and v1.35.3 keeps that pair, which no recorded cloud run used (Changed).
 - **After pulling, run `tofu init -backend=false -upgrade` in `infrastructure/opentofu/cluster` (or `task validate`,
   which shares the lock).** The Talos provider is pinned at 0.12.0 and the lock file is local and gitignored, so every
   `infra-*` task stops at init on a stale 0.11 lock. `-upgrade` moves every provider within its constraint: read the
   next plan. To move only talos, delete its block from `.terraform.lock.hcl` and run a plain `tofu init`. A cluster
-  built under 0.11 planned empty under the pin (Scaleway, 1 control plane + 1 worker); no three-control-plane cluster,
-  no OVH or Outscale 1.14 cluster and no climb has done so.
+  built under 0.11 planned empty under the pin (Scaleway, 1 control plane + 1 worker; and, after the climb of
+  2026-10-06, the three clusters the 0.1.0 tag built, 3 control planes + 2 workers).
 - **Three control planes in one failure domain now end red:** OVH built on `nova` (read from the config, never seen on a
   live cluster; the verifier's red line names the knob that clears it for a new cluster, and what changing it does to
-  nodes already built is not measured), an Outscale cluster
-  built before the subregion spread (Changed: its layout is kept, no setting clears it), Proxmox on one host. `cluster-up`
-  ends at its verify, so `cluster-up`, `cluster-idempotency` and `cluster-upgrade` end non-zero there. A state older than
-  the `control_plane_zones` output reads UNCHECKED, which is fatal, until one apply.
+  nodes already built is not measured), an Outscale cluster built before the subregion spread (Changed: its layout is
+  kept, no setting clears it), Proxmox on one host. `cluster-up` ends at its verify, so `cluster-up`,
+  `cluster-idempotency` and `cluster-upgrade` end non-zero there. A state older than the `control_plane_zones` output
+  reads UNCHECKED, which is fatal, until one apply.
 - **A lowered count is refused**; use `task cluster-shrink-plan` then `task cluster-shrink`. Do not route a node size
   change through `cluster-roll`: it is an in-place update of every node at once, and `docs/upgrade.md` has the one-node
-  procedure. The new examples' `instance_type` is a size change on a running cluster.
-- **`admin_ip` is validated:** an empty list, an entry with no prefix and any `/0` now fail the plan. Changing it on a
-  bootstrapped cluster needs `OA_SKIP_TUNNEL_GUARD=1 TF_VAR_skip_health_check=true` (`docs/admin-access.md`).
-- **OVH's default `availability_zones` moved from `nova` to the three EU-WEST-PAR zones.** A tfvars that leaves it
-  unset changes zone; whether that replaces a node or a volume was not run, so pin what the cluster was built with and
-  read the plan for replacements. A tfvars copied from 0.1.0's example names `["nova"]` itself: the default does not touch it, and it ends
-  red (the failure-domain note above).
+  procedure. The new Scaleway examples' `instance_type` is a size change on a running cluster.
+- **`admin_ip` and `flux_namespace` are validated:** an empty list, an entry with no prefix and any `/0` now fail the
+  plan, and so does a `flux_namespace` other than `flux-system` (inert unless `deploy_flux`, validated all the same).
+  Changing `admin_ip` on a bootstrapped cluster needs `OA_SKIP_TUNNEL_GUARD=1 TF_VAR_skip_health_check=true`
+  (`docs/admin-access.md`).
+- **OVH's default `availability_zones` moved from `nova` to the three EU-WEST-PAR zones.** A tfvars that leaves it unset
+  changes zone; whether that replaces a node or a volume was not run, so pin what the cluster was built with and read the
+  plan for replacements. A tfvars copied from 0.1.0's example names `["nova"]` itself: the default does not touch it, and
+  the verifier is expected to end red on it (read from the config, never seen on a live OVH cluster; the failure-domain
+  note above).
 - **Scaleway clusters built under 0.1.0:** the private network keeps the subnet it has (`ignore_changes`), the pin only
   decides a new one, and the node security rules follow the subnet in use. Measured on a 0.1.0 cluster (2026-10-06): the
-  first step plans `6 to add, 2 to change, 0 to destroy`. Without it the same climb replaced the network and every private
-  NIC. Read the plan and stop at any network or node replacement all the same.
-- **The bastion carries the Talos tunnels, and a change to it stops them mid-apply.** OVH: the bastion's default cloud-init
-  renders 0.1.0's bytes, so it is not replaced. Outscale: the cloud-init now renders the Net CIDR (#58), so the first apply
-  of the upgrade MODIFIES the bastion in place, the VM restarts (32 s), the tunnels die and the run stops with
-  `connection refused` on the tunnel ports, after which `explain-failure` says the change landed: **re-run the same
-  command**, the tunnels are rebuilt at its start and it converges (one resume on Outscale, 2026-10-06). Nothing yet refuses
-  or splits a plan that changes the bastion under live tunnels (#65).
+  first step plans `7 to add, 8 to change, 7 to destroy` (seven replacements: the five Talos configuration applies,
+  `terraform_data.backup` and the local talosconfig; the in-place updates include the three node security groups; no
+  network, subnet, private NIC or node). Without it the same climb replaced the network and every private NIC. Read the
+  plan and stop at any network or node replacement all the same.
+- **The bastion carries the Talos tunnels, and a change to it stops them mid-apply.** OVH: the bastion's default
+  cloud-init renders 0.1.0's bytes, so it is not replaced. Outscale: the cloud-init now renders the Net CIDR (#58), so the
+  first apply of the upgrade MODIFIES the bastion in place, the VM restarts (32 s), the tunnels die and the run stops with
+  `connection refused` on the tunnel ports: **re-run the same command**, the tunnels are rebuilt at its start and it
+  converges (one resume on Outscale, 2026-10-06). `explain-failure` now says the change landed (mocked only: that run
+  predates the message). Nothing yet refuses or splits a plan that changes the bastion under live tunnels (#288).
 - **An Outscale cluster built under 0.1.0 ends `cluster-verify` red, for good:** its three control planes are in one
   subregion, a node's zone is fixed when it is created, and the verdict is `13 passed, 1 failed` (the failure domain).
   `cluster-up` and `cluster-upgrade` then end non-zero although the versions converged.
@@ -663,6 +775,10 @@ For an operator on 0.1.0. Read the plan before you approve it, and the roll `clu
   (skipped under `APPROVE=auto`; Changed).
 - **Teardown:** the plan step of `task cluster-down` replicates the state before it untracks the Talos secrets, and a
   state without them is refused until restored (#66).
+- **The Docker lane's default pin moves from v1.13.3 / v1.35.3 to v1.14.2 / v1.37.1, and `task local-up` did not start at
+  it on the two kernel 6.12 hosts tried (#291, open; Known limits).** It booted at it on a hosted runner (Cléa's weekly
+  lane, 1 control plane + 1 worker, 2026-10-11). Rung: local Docker; the default 3 control planes + 3 workers has no
+  recorded boot at this pin.
 - **Smaller:** `task cluster-up VERSION=` is not an argument; `cluster-*` tasks refuse `PROVIDER=local`; `cluster-up`
   refuses a never-applied `prod` cluster whose replica shares the primary's cloud, and fails when its verifier does.
 
