@@ -206,7 +206,7 @@ plus the image and its import area.
 
 Re-running resumes. So does an edit that adds a worker: `task cluster-up` creates the
 machine, opens the tunnels, then configures only the new node
-(`scripts/bootstrap/grow-nodes.sh`), measured on Scaleway going from 3 to 5 workers.
+(`scripts/bootstrap/grow-nodes.sh`), measured on Scaleway going from 3 to 6 workers.
 Adding a control plane goes through the same step, measured from 1 to 3 on Scaleway, OVH and
 Outscale. Lowering a count is refused: `cluster-up` stops before applying any plan that deletes a
 node of a bootstrapped cluster, because OpenTofu would destroy the highest-index machine and its
@@ -275,8 +275,8 @@ that is usually missing S3 credentials.
 
 The control-plane spread is asked of the state (`control_plane_zones`): all
 control planes in one zone or host is `✗`, and a 2+1 split over two zones is `~`.
-On OVH, with the example's single `nova` zone, it is `✗`: the honesty note below has
-the rest. Outscale spreads the nodes over `availability_zones` (#58) and is `✗` only
+On OVH the examples name three zones, and one zone is `✗` (read from the config, never
+seen on a real account). Outscale spreads the nodes over `availability_zones` (#58) and is `✗` only
 when that list has one entry.
 
 ## 7. Upgrade
@@ -372,10 +372,13 @@ proven, and the reason this document exists.
 
 What **is** measured, with dates (`docs/status.md`):
 
-- `task cluster-verify` scores **11/11 on Scaleway, on OVH and on Outscale** —
-  the first two on 2026-08-19, Outscale on 2026-08-20. That predates the
-  failure-domain check (#38): OVH (one zone) and Outscale now read red, and
-  Scaleway (2 zones) 11/11 with a warning — see `docs/status.md`.
+- `task cluster-verify` scored **11/11 on Scaleway, on OVH and on Outscale** —
+  the first two on 2026-08-19, Outscale on 2026-08-20 — before the failure-domain
+  check (#38) and the checks added since. At the shipped pin it passes with three
+  control planes in three zones on all three clouds (2026-10-10 and 11, real cloud,
+  once by hand); one zone reads red on Outscale (seen) and on OVH (read from the
+  config only); a 2+1 split over two Scaleway zones warns (mocked only) — see
+  `docs/status.md`.
 - **Idempotency is three assertions**, and all three held 3/3 on all three
   clouds: an empty plan, the *same* nodes (name and `creationTimestamp`), and a
   kubeconfig that still reaches the apiserver. Two of the three can pass while
@@ -395,19 +398,19 @@ What is still open:
   balancer fix still refuses deletion and only the provider can clear it — see
   step 4.
 - **The Scaleway path was walked end to end on 2026-08-17**, but from a machine
-  that already had the toolchain — step 1 on a bare host is unwalked. OVH was
+  that already had the toolchain — step 1 has since run to the end in a bare
+  `ubuntu:24.04` container (2026-10-10, no cloud), not on a bare host. OVH was
   driven by its operator, not by following this page.
 - **The full failover.** Provider A treated as gone, state and artifacts fetched
   from B alone, cluster rebuilt on B. Run once, OVH to Scaleway (2026-10-05,
   `docs/status.md`); every other provider pair is unrun.
-- **The kubeconfig and the talosconfig have never been fetched back out of a
-  real bucket.** The round trip is proven offline, `enc()` against `dec()` byte
-  for byte (`scripts/dev/test-restore.sh`), and the tfstate's transport is proven
-  — and `task restore-artifacts` was read back byte-identical against a real
-  bucket on one provider (`docs/status.md`), not on each of the three.
-- **A non-empty `bucket_suffix` has been deployed on Scaleway only** (from an empty
-  project, 2026-10-02, #68): the backend, the image build and the verifier agreed on
-  it there. OVH and Outscale have no record of one.
+- **`task restore-artifacts` is proven on real buckets, but not on every pair.**
+  The kubeconfig and the talosconfig came back byte-identical from the primary and
+  from a replica on another cloud's store on OVH and Scaleway (the failover drill,
+  2026-10-05), and from both stores of an Outscale cluster on its own endpoint
+  (2026-10-03); an Outscale cluster's from a replica on another cloud's store was
+  not read. The round trip is also proven offline, `enc()` against `dec()` byte for
+  byte (`scripts/dev/test-restore.sh`).
 - **A control plane used to revert after an upgrade on OVH.** The cause was ours
   — `siderolabs/qemu-guest-agent` in the schematic never starts on an image with
   no `hw_qemu_guest_agent`, so Talos never reached `Running` and never disarmed

@@ -162,7 +162,7 @@ left. It did not before, and the cause was singular: `istiod` ran one replica
 under a budget requiring one available, so it could never be evicted. It runs two
 now.
 
-**Applies only once applications are back; 0.1.0 has none.** A pure-infra cluster
+**Applies only once applications are back; 0.2.0 has none.** A pure-infra cluster
 has no PodDisruptionBudget worth the name, and a drain that hangs on one is a
 different bug. The remaining zero-disruption budgets are correct and transient —
 CNPG guards each cluster's primary until a switchover, Longhorn blocks while

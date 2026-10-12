@@ -611,7 +611,7 @@ ok "plan empty after the upgrade"
 
 # One verifier, and it is the release scope: Talos, Cilium, no Flux. The
 # full-platform check that waited for 35 Flux Kustomizations was deleted with the
-# staging lane it served — 0.1.0 disables Flux, so a cluster that has it is
+# staging lane it served — Flux is off by default, so a cluster that has it is
 # outside what this release validates and infra-verify says so rather than
 # quietly verifying something else.
 ok "verifying against the infrastructure floor"

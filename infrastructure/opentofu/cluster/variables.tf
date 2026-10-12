@@ -344,14 +344,16 @@ variable "git_repo_url" {
   default     = "https://github.com/dis-bzh/OpenAether-apps.git"
 }
 
-# The default and the examples both track main: a tag default would make the repo
-# undeployable between releases, since the ref cannot be tested before the tag
-# exists. Pinning a release is the user's choice (refs/tags/<version>); a branch
-# also keeps two managements off the same apps/clusters.
+# The default and the examples pin the OpenAether-apps tag this release was cut with
+# (refs/tags/0.1.0 for infra 0.2.0), which exists before the infra tag that points at
+# it: a commit on a branch would otherwise reach a running cluster within the
+# reconcile interval. Moving the default is part of cutting a release, never of a
+# change in between. Set refs/heads/<branch> to develop against apps; a branch also
+# keeps two managements off the same apps/clusters.
 variable "git_ref" {
   description = "Git ref OpenAether-apps is tracked at, fully qualified: refs/heads/<branch> to develop, refs/tags/<version> to deploy"
   type        = string
-  default     = "refs/heads/main"
+  default     = "refs/tags/0.1.0"
 
   validation {
     condition     = can(regex("^refs/(heads|tags)/.+$", var.git_ref))
@@ -377,7 +379,7 @@ variable "deploy_app_lb" {
 
 variable "deploy_flux" {
   description = <<-EOT
-    Install Flux on the cluster. FALSE by default: 0.1.0 is infrastructure only —
+    Install Flux on the cluster. FALSE by default: this release is infrastructure only —
     Talos plus Cilium, which is what makes a cluster healthy, up and ready. Flux
     and everything it reconciles live in OpenAether-apps and come back as a
     user choice in a later release.

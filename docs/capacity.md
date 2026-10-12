@@ -22,7 +22,7 @@ from a run.
 So the floor for a cluster that will carry the platform is **workers of at
 least 4 vCPU / 8 GB, enough of them to lose one**. Each cloud module takes one
 instance type for control planes and workers alike, so the floor applies to
-both. A bare cluster (Cilium only, the 0.1.0 scope) needs less: a bare 3+3 on Outscale's
+both. A bare cluster (Cilium only, the 0.2.0 scope) needs less: a bare 3+3 on Outscale's
 `tinav5.c2r4p1` (2 vCPU / 4 GB) deployed and verified on 2026-10-03, which is the one point measured.
 
 ## What each provider creates

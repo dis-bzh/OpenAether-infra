@@ -22,7 +22,7 @@ run.
 Le plancher d'un cluster qui portera la plateforme est donc **des workers d'au
 moins 4 vCPU / 8 Go, assez nombreux pour en perdre un**. Chaque module cloud
 prend un seul type d'instance pour control planes et workers : le plancher vaut
-pour les deux. Un cluster nu (Cilium seul, le périmètre de la 0.1.0) demande
+pour les deux. Un cluster nu (Cilium seul, le périmètre de la 0.2.0) demande
 moins : un 3+3 nu sur le `tinav5.c2r4p1` d'Outscale (2 vCPU / 4 Go) a été déployé et vérifié le 2026-10-03, seul point mesuré.
 
 ## Ce que crée chaque provider

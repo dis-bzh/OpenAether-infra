@@ -58,8 +58,8 @@ receipt proves and cannot: [`scripts/dev/rung-receipt.py`](scripts/dev/rung-rece
 
 The credentialed rung has no automatic CI lane: it is run by hand, by someone
 watching. The workflow that was meant to automate it never reached a deploy and
-was deleted for 0.1.0 rather than left cronning red — the history is on the
-`archive/staging-lane` branch. What exists now is a manual-only workflow,
+was deleted for 0.1.0 rather than left cronning red — the history is in git,
+in the commit that deleted `staging.yml` (`fc24092`). What exists now is a manual-only workflow,
 `real-cloud-regression.yml` (`workflow_dispatch`, no schedule), that runs the
 same deploy, verify and teardown on SANDBOX accounts; it is dormant until its
 secrets exist and its first step names the one that is missing. It never runs on

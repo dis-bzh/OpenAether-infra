@@ -56,8 +56,9 @@ jobs:
   # weakened. Those live in the workflow files, and until now only review stood
   # between a pull request and any of them.
   #
-  # 0.1.0 deleted the credentialed lane, so no workflow here touches a cloud
-  # account. That removes the worst blast radius and removes nothing else: these
+  # 0.1.0 deleted the credentialed lane: no workflow that runs on a pull request
+  # touches a cloud account (real-cloud-regression.yml is manual-only, dormant).
+  # That removes the worst blast radius and removes nothing else: these
   # two workflows still run on every pull request, with a token, against a
   # public repository.
   # ---------------------------------------------------------------------------

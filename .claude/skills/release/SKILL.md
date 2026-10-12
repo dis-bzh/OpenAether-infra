@@ -17,27 +17,37 @@ were meant to certify — and every one of them, releases included, was deleted.
 0.1.0 is the first number this project puts on something it measured. Decide what
 the number asserts, prove exactly that, then tag.
 
-**Say which rung each claim reached.** Mocked, emulated, real cloud once by hand,
-or unattended and repeated. "Proven at the real-cloud rung on Scaleway, OVH and
-Outscale, never applied on real Proxmox hardware" is a release note. "Proven" is
-a hope.
+**Say which rung each claim reached.** Mocked, emulated, local Docker, real cloud
+once by hand, or unattended and repeated. "Proven at the real-cloud rung on
+Scaleway, OVH and Outscale, never applied on real Proxmox hardware" is a release
+note. "Proven" is a hope.
 
-## The two repositories are independent
+## The two repositories: infra pins apps
 
-Infra no longer pins an OpenAether-apps tag: the `envs/*.tfvars.example` carry
-`git_ref = "refs/heads/main"`, so there is no ordering constraint between the
-two and no matching-version rule to honour. If a release ever reintroduces a
-pin, the pinned ref has to exist before the thing pointing at it — and that
-constraint belongs back in this file the same day.
+Infra's `envs/*.tfvars.example` pin OpenAether-apps at a tag (`git_ref =
+"refs/tags/0.1.0"` for infra 0.2.0), so a release of infra names the apps it was cut
+with and an apps commit cannot change a cluster that follows the example. **The pinned
+ref has to exist before the thing pointing at it**: tag and release OpenAether-apps
+first, check that `git ls-remote --tags` prints the tag, run `task apps-validate` from
+infra against a checkout of that tag (Cilium parity, skill parity, the Flux DAG), then
+tag infra. Nothing pins the other way: apps does not know the infra version. The `git_ref`
+default in infra is that tag too, so a tfvars that omits it follows the tag; set
+`refs/heads/<branch>` to develop against apps. Flux is off by default and no infra
+validation leg turned it on, so what the pin asserts is that the tag exists and
+`apps-validate` passes against it, not that a cluster has reconciled it.
 
 ## Order, and why
 
 1. Everything in `§1`–`§7` of the checklist, on real clouds, **torn down**, with
-   `scripts/ops/purge-orphans/` clean on each. Nothing left billing.
-2. A GitHub release, with notes that name the limits.
-3. Re-clone the published tag into a scratch directory and read it as a stranger:
-   licence, changelog, examples, **no real tfvars in the archive** — and check
-   that the quick start's commands exist and its values are accepted.
+   `scripts/ops/purge-orphans/` clean on each — except Outscale while the pre-fix
+   Net of OpenAether-infra#43 exists: it cannot end clean, so read it as §6 says
+   and never tick it clean. Nothing left billing.
+2. Re-clone the **release commit**, before it is tagged, into a scratch directory
+   and read it as a stranger: licence, changelog, examples, **no real tfvars in
+   the archive** — and check that the quick start's commands exist and its values
+   are accepted. Infra's `tags` ruleset blocks moving or deleting a tag, so a
+   defect found after tagging cannot be re-cut away.
+3. Tag it, then a GitHub release, with notes that name the limits.
 
 ## The notes must admit what is not fixed
 

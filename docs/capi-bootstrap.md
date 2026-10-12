@@ -2,7 +2,7 @@
 
 🇫🇷 [Version française](capi-bootstrap.fr.md)
 
-Validated end to end on Scaleway, 2026-07-28 — before the re-scope, and **0.1.0
+Validated end to end on Scaleway, 2026-07-28 — before the re-scope, and **0.2.0
 deploys no CAPI**: this is kept for the release that does. An **optional path**, alongside
 OpenTofu — not a replacement: CAPI creates the machines, OpenTofu still creates
 the substrate (on OVH, ~44 resources of which 3 are instances).

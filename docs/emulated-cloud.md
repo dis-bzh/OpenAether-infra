@@ -58,7 +58,7 @@ and tfvars as `feint-plan`, but a full `tofu apply` (Phase 1:
 destroy the [root README](../infrastructure/opentofu/cluster/README.md#teardown-destroy)
 documents (machine secrets carry `prevent_destroy`, so `tofu state rm
 module.talos.talos_machine_secrets.this[0]` first, then `destroy -var
-talos_bootstrap=false`). Closes issue #76's first criterion: 27 resources on
+talos_bootstrap=false`). Meets issue #76's first criterion: 27 resources on
 Scaleway, 41 on Outscale, second plan empty, destroy clean — both providers,
 measured 2026-08-31. `feint-record` below proved the provider module alone
 applies end to end; this is the whole root, not just that module.
