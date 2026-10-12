@@ -30,9 +30,9 @@ with and an apps commit cannot change a cluster that follows the example. **The 
 ref has to exist before the thing pointing at it**: tag and release OpenAether-apps
 first, check that `git ls-remote --tags` prints the tag, run `task apps-validate` from
 infra against a checkout of that tag (Cilium parity, skill parity, the Flux DAG), then
-tag infra. Nothing pins the other way: apps does not know the infra version. The
-`git_ref` default in infra still follows `refs/heads/main`, to develop against apps'
-main, and a tfvars that omits it gets main. Flux is off by default and no infra
+tag infra. Nothing pins the other way: apps does not know the infra version. The `git_ref`
+default in infra is that tag too, so a tfvars that omits it follows the tag; set
+`refs/heads/<branch>` to develop against apps. Flux is off by default and no infra
 validation leg turned it on, so what the pin asserts is that the tag exists and
 `apps-validate` passes against it, not that a cluster has reconciled it.
 

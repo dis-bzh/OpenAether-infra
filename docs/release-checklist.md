@@ -406,7 +406,7 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       out, including what you chose not to fix (`CLAUDE.md`: an audit is not a
       PR). Never write a closing keyword before an issue number in a commit, PR
       or the notes: GitHub reads prose, and an open issue was closed that way.
-- [ ] `CHANGELOG.md`: `[0.2.0] — TBD` takes its date and anything merged since
+- [ ] `CHANGELOG.md`: `[0.2.0]` carries its date (2026-10-12) and anything merged since
       the text was written is folded into it (`[Unreleased]` stays empty), in the
       voice of 0.1.0: what it claims **and** what it does not, each with its rung,
       no hand-typed counts. Upgrade notes: unset pins inherit the new default and
@@ -451,14 +451,18 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       items** list built from the open issue titles that day (`gh issue list
       --state open`): several known limits appear in no tracked file. Link the
       issues, not a backlog file. Not a pre-release (the owner's decision, 2026-10-12).
-- [ ] the examples pin the apps tag, and it exists. OpenAether-apps is tagged and
-      released first (`git ls-remote --tags https://github.com/dis-bzh/OpenAether-apps
-      refs/tags/0.1.0` prints it), `task apps-validate` is run from a checkout of
-      that tag beside this one (Cilium parity, skill parity, the Flux DAG) and its
-      result written down, and
+- [ ] the examples and the default pin the apps tag, and it exists. OpenAether-apps
+      is tagged and released first (`git ls-remote --tags
+      https://github.com/dis-bzh/OpenAether-apps refs/tags/0.1.0` prints it).
+      The check is written down twice, because a tag is a snapshot and the skills
+      are shared byte for byte. Against a checkout of **that tag** (what infra
+      pins): `python3 scripts/ops/check-cilium-parity.py` here, `pick.py --validate`
+      and `--check` there. Against **apps `main`** (the process in force): the whole
+      of `task apps-validate`, skill parity included; run on the tag it is red on
+      the skills whenever they changed after the tag, by design. Then
       `grep -h git_ref infrastructure/opentofu/cluster/envs/*.example | sort -u`
-      prints one line, `refs/tags/0.1.0`. The two `feint-*` examples carry none.
-      The `git_ref` default in `variables.tf` still follows `refs/heads/main`.
+      prints one line, `refs/tags/0.1.0`, and so does the `default` of `git_ref` in
+      `variables.tf`. The two `feint-*` examples carry none.
 
 ## 9. Before communicating
 

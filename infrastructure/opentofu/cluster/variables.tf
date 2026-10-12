@@ -344,15 +344,16 @@ variable "git_repo_url" {
   default     = "https://github.com/dis-bzh/OpenAether-apps.git"
 }
 
-# The examples pin the OpenAether-apps tag this release was cut with (refs/tags/0.1.0
-# for infra 0.2.0), which exists before the tag that points at it. The default still
-# tracks main: a tag default would make a checkout of infra between releases deploy
-# whatever apps tag it last named, and a branch keeps two managements off the same
-# apps/clusters. Set refs/heads/<branch> to develop against apps.
+# The default and the examples pin the OpenAether-apps tag this release was cut with
+# (refs/tags/0.1.0 for infra 0.2.0), which exists before the infra tag that points at
+# it: a commit on a branch would otherwise reach a running cluster within the
+# reconcile interval. Moving the default is part of cutting a release, never of a
+# change in between. Set refs/heads/<branch> to develop against apps; a branch also
+# keeps two managements off the same apps/clusters.
 variable "git_ref" {
   description = "Git ref OpenAether-apps is tracked at, fully qualified: refs/heads/<branch> to develop, refs/tags/<version> to deploy"
   type        = string
-  default     = "refs/heads/main"
+  default     = "refs/tags/0.1.0"
 
   validation {
     condition     = can(regex("^refs/(heads|tags)/.+$", var.git_ref))

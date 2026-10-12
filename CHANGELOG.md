@@ -16,7 +16,7 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ---
 
-## [0.2.0] — TBD
+## [0.2.0] — 2026-10-12
 
 **A Talos cluster that is upgraded to Talos 1.14 and Kubernetes 1.37, grown and shrunk while it runs, and rebuilt once on
 a second cloud from its replica (OVH to Scaleway, one control plane and one worker), with Cilium still the only
@@ -240,14 +240,14 @@ Docker. Read Known limits and Upgrade notes before pulling this onto a cluster t
   no fate with either, not BGP or anycast across providers: none of the three documents a customer BGP peer or prefix for
   a VM (vendor pages read 2026-10-04). Not evaluated: a customer-operated router reaching each cloud over InterLink or
   DirectLink. DNS failover time (check interval times threshold, plus the TTL) is not measured.
-- **The examples pin OpenAether-apps at its tag 0.1.0.** The twelve `envs/*.tfvars.example` that carry a `git_ref` now
-  say `refs/tags/0.1.0` (the two `feint-*` examples carry none), so an apps commit cannot change a cluster that follows an
-  example. The `git_ref` default still follows `refs/heads/main`, and a tfvars copied from 0.1.0's example keeps
-  `refs/heads/main` until you change it. The apps tag asserts only the static gates: its `CHANGELOG.md` says what it does
-  not, and `task apps-validate` (Cilium parity between the foundation here and the CAPI children there, skill parity, the
-  Flux DAG) is the check between the two. Flux is off by default and no validation leg of this release turned it on, so no
-  cluster of this release has followed that tag. Rung: mocked (documentation and example values); `apps-validate` is run
-  against a checkout of the tag before the release is cut.
+- - **The examples and the default pin OpenAether-apps at its tag 0.1.0.** The twelve `envs/*.tfvars.example` that carry a
+  `git_ref` (the two `feint-*` examples carry none) and the `git_ref` default in `variables.tf` now say `refs/tags/0.1.0`,
+  so an apps commit cannot change a cluster that follows them; `refs/heads/<branch>` is how to develop against apps
+  (Upgrade notes). The apps tag asserts only the static gates: its `CHANGELOG.md` says what it does not, and `task
+  apps-validate` (Cilium parity between the foundation here and the CAPI children there, skill parity, the Flux DAG) is
+  the check between the two. Flux is off by default and no validation leg of this release turned it on, so no cluster of
+  this release has followed that tag. Rung: mocked (example values, a variable default and documentation); Cilium parity
+  and the Flux DAG were run against a checkout of the tag.
 - **Dependencies, final values (pins):** OpenTofu 1.13.1, Talos provider 0.12.0 (above), Cilium 1.20.2 (0.1.0 shipped
   1.20.0; the manifest is re-rendered; the cloud legs of 2026-10-10 and 2026-10-11 deployed it (`cluster-verify` counts
   Cilium running on every node), none of them isolates the bump), flux2 2.9.6 (the vendored install refreshed and its
@@ -747,6 +747,10 @@ For an operator on 0.1.0. Read the plan before you approve it, and the roll `clu
   kept, no setting clears it), Proxmox on one host. `cluster-up` ends at its verify, so `cluster-up`,
   `cluster-idempotency` and `cluster-upgrade` end non-zero there. A state older than the `control_plane_zones` output
   reads UNCHECKED, which is fatal, until one apply.
+- **`git_ref` now defaults to `refs/tags/0.1.0`, not `refs/heads/main`.** It only matters with `deploy_flux = true`: a
+  tfvars that omits it re-points Flux's source from the branch to the tag at the next apply, and a tfvars copied from
+  0.1.0's example keeps whatever it names. Say `git_ref = "refs/heads/main"` to stay on the branch. Nothing of this
+  release has followed either ref on a cluster.
 - **A lowered count is refused**; use `task cluster-shrink-plan` then `task cluster-shrink`. Do not route a node size
   change through `cluster-roll`: it is an in-place update of every node at once, and `docs/upgrade.md` has the one-node
   procedure. The new Scaleway examples' `instance_type` is a size change on a running cluster.
