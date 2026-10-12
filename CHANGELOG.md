@@ -240,6 +240,13 @@ Docker. Read Known limits and Upgrade notes before pulling this onto a cluster t
   no fate with either, not BGP or anycast across providers: none of the three documents a customer BGP peer or prefix for
   a VM (vendor pages read 2026-10-04). Not evaluated: a customer-operated router reaching each cloud over InterLink or
   DirectLink. DNS failover time (check interval times threshold, plus the TTL) is not measured.
+- **OpenAether-apps 0.1.0 is this release's companion, and nothing pins it.** The release notes name the apps tag that
+  `task apps-validate` (Cilium parity between the foundation here and the CAPI children there, skill parity, the Flux DAG)
+  is run against; the `envs/*.tfvars.example` and the `git_ref` default still track `refs/heads/main`, for the reason the
+  comment above `variable "git_ref"` gives, so a cluster that must be reproducible sets `git_ref = "refs/tags/0.1.0"` in
+  its own tfvars. Flux is off by default and no validation leg of this release turned it on, so no cluster of this release
+  has followed that ref. What the apps tag asserts, and does not, is in its `CHANGELOG.md`. Rung: none for the pairing
+  (documentation); `apps-validate` is mocked.
 - **Dependencies, final values (pins):** OpenTofu 1.13.1, Talos provider 0.12.0 (above), Cilium 1.20.2 (0.1.0 shipped
   1.20.0; the manifest is re-rendered; the cloud legs of 2026-10-10 and 2026-10-11 deployed it (`cluster-verify` counts
   Cilium running on every node), none of them isolates the bump), flux2 2.9.6 (the vendored install refreshed and its

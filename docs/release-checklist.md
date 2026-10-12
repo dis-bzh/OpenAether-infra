@@ -451,7 +451,12 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       items** list built from the open issue titles that day (`gh issue list
       --state open`): several known limits appear in no tracked file. Link the
       issues, not a backlog file. Pre-release or not is the owner's call.
-- [ ] the examples agree on the apps ref (infra pins no `OpenAether-apps` tag):
+- [ ] the apps companion exists and agrees. OpenAether-apps is tagged and released
+      first (`git ls-remote --tags https://github.com/dis-bzh/OpenAether-apps
+      refs/tags/0.1.0` prints it), `task apps-validate` is run from a checkout of
+      that tag beside this one (Cilium parity, skill parity, the Flux DAG) and its
+      result written down, and the notes name the tag. Nothing pins it: the
+      examples still agree on the apps ref,
       `grep -h git_ref infrastructure/opentofu/cluster/envs/*.example | sort -u`
       prints one line, `refs/heads/main`. The two `feint-*` examples carry none.
 

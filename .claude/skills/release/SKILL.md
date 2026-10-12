@@ -22,13 +22,21 @@ once by hand, or unattended and repeated. "Proven at the real-cloud rung on
 Scaleway, OVH and Outscale, never applied on real Proxmox hardware" is a release
 note. "Proven" is a hope.
 
-## The two repositories are independent
+## The two repositories: a companion, not a pin
 
-Infra no longer pins an OpenAether-apps tag: the `envs/*.tfvars.example` carry
-`git_ref = "refs/heads/main"`, so there is no ordering constraint between the
-two and no matching-version rule to honour. If a release ever reintroduces a
-pin, the pinned ref has to exist before the thing pointing at it — and that
-constraint belongs back in this file the same day.
+Infra's `envs/*.tfvars.example` and the `git_ref` default carry
+`refs/heads/main`, on purpose (the comment above `variable "git_ref"` says why: a
+tag default would make the repository undeployable between releases, and a branch
+keeps two managements off the same `apps/clusters`). So nothing forces an order
+between the two repositories, and the apps tag is not an input of infra's apply.
+What infra does name is its **companion**: the release notes say which
+OpenAether-apps tag `task apps-validate` (Cilium parity, skill parity, the Flux
+DAG) passed against, and that a cluster which must be reproducible sets
+`git_ref = "refs/tags/<that tag>"` in its own tfvars. A note can only name a tag
+that exists, so tag and release OpenAether-apps first, then run `apps-validate`
+from infra against a checkout of that tag, then tag infra. If a release ever makes
+the examples pin it, the pinned ref has to exist before the thing pointing at it,
+and that constraint belongs back in this file the same day.
 
 ## Order, and why
 
