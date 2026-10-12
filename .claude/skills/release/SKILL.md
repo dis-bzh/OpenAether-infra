@@ -22,21 +22,19 @@ once by hand, or unattended and repeated. "Proven at the real-cloud rung on
 Scaleway, OVH and Outscale, never applied on real Proxmox hardware" is a release
 note. "Proven" is a hope.
 
-## The two repositories: a companion, not a pin
+## The two repositories: infra pins apps
 
-Infra's `envs/*.tfvars.example` and the `git_ref` default carry
-`refs/heads/main`, on purpose (the comment above `variable "git_ref"` says why: a
-tag default would make the repository undeployable between releases, and a branch
-keeps two managements off the same `apps/clusters`). So nothing forces an order
-between the two repositories, and the apps tag is not an input of infra's apply.
-What infra does name is its **companion**: the release notes say which
-OpenAether-apps tag `task apps-validate` (Cilium parity, skill parity, the Flux
-DAG) passed against, and that a cluster which must be reproducible sets
-`git_ref = "refs/tags/<that tag>"` in its own tfvars. A note can only name a tag
-that exists, so tag and release OpenAether-apps first, then run `apps-validate`
-from infra against a checkout of that tag, then tag infra. If a release ever makes
-the examples pin it, the pinned ref has to exist before the thing pointing at it,
-and that constraint belongs back in this file the same day.
+Infra's `envs/*.tfvars.example` pin OpenAether-apps at a tag (`git_ref =
+"refs/tags/0.1.0"` for infra 0.2.0), so a release of infra names the apps it was cut
+with and an apps commit cannot change a cluster that follows the example. **The pinned
+ref has to exist before the thing pointing at it**: tag and release OpenAether-apps
+first, check that `git ls-remote --tags` prints the tag, run `task apps-validate` from
+infra against a checkout of that tag (Cilium parity, skill parity, the Flux DAG), then
+tag infra. Nothing pins the other way: apps does not know the infra version. The
+`git_ref` default in infra still follows `refs/heads/main`, to develop against apps'
+main, and a tfvars that omits it gets main. Flux is off by default and no infra
+validation leg turned it on, so what the pin asserts is that the tag exists and
+`apps-validate` passes against it, not that a cluster has reconciled it.
 
 ## Order, and why
 

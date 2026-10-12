@@ -344,10 +344,11 @@ variable "git_repo_url" {
   default     = "https://github.com/dis-bzh/OpenAether-apps.git"
 }
 
-# The default and the examples both track main: a tag default would make the repo
-# undeployable between releases, since the ref cannot be tested before the tag
-# exists. Pinning a release is the user's choice (refs/tags/<version>); a branch
-# also keeps two managements off the same apps/clusters.
+# The examples pin the OpenAether-apps tag this release was cut with (refs/tags/0.1.0
+# for infra 0.2.0), which exists before the tag that points at it. The default still
+# tracks main: a tag default would make a checkout of infra between releases deploy
+# whatever apps tag it last named, and a branch keeps two managements off the same
+# apps/clusters. Set refs/heads/<branch> to develop against apps.
 variable "git_ref" {
   description = "Git ref OpenAether-apps is tracked at, fully qualified: refs/heads/<branch> to develop, refs/tags/<version> to deploy"
   type        = string

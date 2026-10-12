@@ -450,15 +450,15 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
 - [ ] a GitHub Release by hand, whose notes name the limits and end with an **Open
       items** list built from the open issue titles that day (`gh issue list
       --state open`): several known limits appear in no tracked file. Link the
-      issues, not a backlog file. Pre-release or not is the owner's call.
-- [ ] the apps companion exists and agrees. OpenAether-apps is tagged and released
-      first (`git ls-remote --tags https://github.com/dis-bzh/OpenAether-apps
+      issues, not a backlog file. Not a pre-release (the owner's decision, 2026-10-12).
+- [ ] the examples pin the apps tag, and it exists. OpenAether-apps is tagged and
+      released first (`git ls-remote --tags https://github.com/dis-bzh/OpenAether-apps
       refs/tags/0.1.0` prints it), `task apps-validate` is run from a checkout of
       that tag beside this one (Cilium parity, skill parity, the Flux DAG) and its
-      result written down, and the notes name the tag. Nothing pins it: the
-      examples still agree on the apps ref,
+      result written down, and
       `grep -h git_ref infrastructure/opentofu/cluster/envs/*.example | sort -u`
-      prints one line, `refs/heads/main`. The two `feint-*` examples carry none.
+      prints one line, `refs/tags/0.1.0`. The two `feint-*` examples carry none.
+      The `git_ref` default in `variables.tf` still follows `refs/heads/main`.
 
 ## 9. Before communicating
 
