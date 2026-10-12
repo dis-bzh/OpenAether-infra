@@ -14,6 +14,19 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ## [Unreleased]
 
+### Added
+
+- **`docs/upgrade.md`, "Going back": what was measured of rolling an upgrade back (#270).** Real cloud, by hand, Scaleway,
+  2026-10-12, the `0.1.0` and `0.2.0` tags (Talos 1.13.9 and Kubernetes 1.36.3 to 1.14.2 and 1.37.1, 3 control planes + 2
+  workers). A worker comes back with `talosctl rollback` in 21 to 39 s, also with Kubernetes at 1.37.1. A control plane
+  does not, across a minor that moves etcd's storage version: Talos 1.13.9's etcd refuses the data Talos 1.14.2's wrote
+  (`version "3.7.0" is not supported`) and two rolled-back control planes cost the quorum for about 11 minutes. The way back
+  for the control planes is a restore of an etcd snapshot taken before the upgrade: three members 52 s after the
+  `bootstrap`, the API back 4.3 minutes after the first rollback, everything since the snapshot lost. Lowering the pins
+  afterwards makes the plan replace the Talos secrets (the state has to go back too). Not measured: the state copy back,
+  a restore after the Kubernetes bump, other clouds, a patch-level control plane rollback. `cluster-upgrade` still takes
+  no snapshot and #270 stays open for the tooling and the decisions it lists.
+
 ---
 
 ## [0.2.0] — 2026-10-12
