@@ -8,6 +8,8 @@
 # Usage:
 #   ./cluster-security-tests.sh
 #   KUBECONFIG=/path/to/kubeconfig ./cluster-security-tests.sh
+#   OA_ENVIRONMENT=prod ./cluster-security-tests.sh      # the OpenBao bootstrap checks (4.6, 4.7) are strict on prod
+#   OA_ESCROW_ANNOTATION_CHECK=1 ./cluster-security-tests.sh   # also require the seal-key escrow record (4.7)
 # ══════════════════════════════════════════════════════════════════════════════
 
 set -euo pipefail
@@ -160,6 +162,23 @@ elif [ "$NS_WITH_CNP" -ge 3 ]; then
   pass "1.7 Foundation out of mesh: $NS_WITH_CNP/6 namespaces with CNP (partial)"
 else
   fail "1.7 Foundation out of mesh (Cilium)" "Only $NS_WITH_CNP/6 namespaces with CNP"
+fi
+
+# 1.8 Cilium node-to-node encryption (WireGuard) is ON, in the config and in the running agent.
+# It is the compensating control for in-cluster hops that are not mTLS (Alloy to Loki): a cluster
+# whose agent says "Disabled" carries those hops in clear on the node network.
+WG_CFG=$(kubectl -n kube-system get configmap cilium-config -o jsonpath='{.data.enable-wireguard}' 2>/dev/null || echo "")
+if [ "$WG_CFG" != "true" ]; then
+  fail "1.8 Cilium WireGuard encryption" "cilium-config enable-wireguard='$WG_CFG' (expected true)"
+else
+  WG_STATUS=$(kubectl -n kube-system exec ds/cilium -c cilium-agent -- cilium-dbg status 2>/dev/null | grep -i '^Encryption' || true)
+  if [ -z "$WG_STATUS" ]; then
+    skip "1.8 Cilium WireGuard encryption" "enabled in cilium-config, but the agent status could not be read (exec refused?)"
+  elif grep -qi 'wireguard' <<<"$WG_STATUS"; then
+    pass "1.8 Cilium WireGuard encryption active: $(tr -s ' ' <<<"$WG_STATUS" | cut -c1-60)"
+  else
+    fail "1.8 Cilium WireGuard encryption" "enabled in cilium-config but the agent reports: $WG_STATUS"
+  fi
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -447,6 +466,40 @@ if [ "$LEFTOVER" -eq 0 ]; then
   pass "4.5 No Shamir shares or root token in a Secret of foundation-vault"
 else
   fail "4.5 Unseal shares / root token at rest" "$LEFTOVER of openbao-unseal-keys, openbao-recovery still exist (apps 0.1.0 bootstrap: move to apps >= 0.2.0)"
+fi
+
+# 4.6 A production cluster holds no development OpenBao bootstrap. openbao-recovery-dev is the single
+# plaintext recovery share of a cluster created without operator PGP keys; it cannot become a production
+# one. OA_ENVIRONMENT tells the script what it is looking at (unset or dev: reported, not failed).
+OA_ENV="${OA_ENVIRONMENT:-}"
+if kubectl -n foundation-vault get secret openbao-recovery-dev &>/dev/null; then
+  if [ "$OA_ENV" = "prod" ]; then
+    fail "4.6 No development OpenBao bootstrap on prod" "Secret openbao-recovery-dev exists: this cluster's recovery share is in clear; re-initialise it with openbao_recovery_pgp_keys"
+  else
+    skip "4.6 No development OpenBao bootstrap on prod" "development bootstrap (openbao-recovery-dev); strict only with OA_ENVIRONMENT=prod"
+  fi
+elif kubectl -n foundation-vault get secret openbao-recovery-shares &>/dev/null; then
+  pass "4.6 OpenBao recovery shares are the PGP-encrypted ones (no openbao-recovery-dev)"
+else
+  skip "4.6 No development OpenBao bootstrap on prod" "no OpenBao recovery Secret found (not bootstrapped, or apps < 0.2.0)"
+fi
+
+# 4.7 The seal key leaves a record that it was escrowed. Losing it loses every OpenBao secret and nothing
+# else can tell whether the operator did the Day-0 step. The annotation is set by that step (apps DP-02);
+# until it exists in your apps ref the check is opt-in, and it never applies to a dev bootstrap.
+if [ "${OA_ESCROW_ANNOTATION_CHECK:-}" != "1" ]; then
+  skip "4.7 Seal-key escrow recorded" "opt-in (OA_ESCROW_ANNOTATION_CHECK=1) until the escrow step that sets openaether.io/escrowed-at is in your apps ref"
+elif [ "$OA_ENV" != "prod" ]; then
+  skip "4.7 Seal-key escrow recorded" "strict only with OA_ENVIRONMENT=prod"
+elif ! kubectl -n foundation-vault get secret openbao-seal-key &>/dev/null; then
+  skip "4.7 Seal-key escrow recorded" "no openbao-seal-key Secret (static seal not in use)"
+else
+  ESCROWED=$(kubectl -n foundation-vault get secret openbao-seal-key -o jsonpath='{.metadata.annotations.openaether\.io/escrowed-at}' 2>/dev/null || echo "")
+  if [ -n "$ESCROWED" ]; then
+    pass "4.7 Seal-key escrow recorded ($ESCROWED)"
+  else
+    fail "4.7 Seal-key escrow recorded" "openbao-seal-key has no openaether.io/escrowed-at annotation: escrow it (docs/admin-access.md section 1) and record it"
+  fi
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════

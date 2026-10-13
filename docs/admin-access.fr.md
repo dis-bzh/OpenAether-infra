@@ -187,6 +187,16 @@ avec lui, alors que `talosctl get machineconfig` est refusé. En émettre un et 
 réutiliser jusqu'à son expiration plutôt qu'un par exécution : émettre est une
 écriture sur l'API Talos, et une lecture ne devrait pas en demander.
 
+**Revue à chaque changement de personnel.** Quand quelqu'un arrive ou part, lancer `task rbac-review` (un `kubectl` en
+lecture seule, `KUBECONFIG` posé) : il liste chaque binding et ses sujets dans `rbac-review/rbac-review-<date>.tsv` et signale
+un User/Group nommé, un binding anonyme et un `cluster-admin` hors liste d'autorisation (celle de `cluster-security-tests.sh`
+3.7). Aujourd'hui la réponse attendue est « rien de signalé » : l'accès humain est le certificat partagé ci-dessus, donc une
+ligne signalée est une décision à consigner ou un binding à supprimer. Révoquer une personne reste faire tourner la CA ; la
+revue ne fait que trouver ce qui d'autre lui donne accès.
+Côté réseau, `task cluster-exposure PROVIDER=…` sonde les adresses publiques (à lancer une fois depuis une adresse absente de
+`admin_ip` avec `FROM=denied` : 22 et 6443 doivent alors être fermés) et `task cluster-netcheck PROVIDER=…` envoie du trafic que
+les politiques doivent rejeter. `task cluster-security` accepte `ENVIRONMENT=prod` pour échouer sur un Secret `openbao-recovery-dev`.
+
 ## 7. SSO Grafana via Zitadel (OIDC)
 
 Une fois par cluster, côté Zitadel : une application **Web**, méthode **Code** +

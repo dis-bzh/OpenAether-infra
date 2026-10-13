@@ -128,6 +128,9 @@ for each old image the retention destroys (§7, image lane).
 - [ ] **`task cluster-verify`** green. A warning is a finding: it now reads each
       control plane's failure domain and each worker's data volume (the volume read
       needs `task tunnels-up`; without a tunnel it warns instead of passing).
+      It also reads STATE and EPHEMERAL back as LUKS2 and the apiserver's etcd-encryption flag.
+- [ ] **the network, asked of the network**: `task cluster-exposure` (and once with `FROM=denied`
+      from an address outside `admin_ip`), `task cluster-netcheck`, `task cluster-security`, `task rbac-review`.
 - [ ] **idempotency is three assertions, not one**: an empty plan, the *same*
       nodes (name and `creationTimestamp`), and a kubeconfig that still reaches
       the apiserver. Two of the three can pass while the cluster was rebuilt.

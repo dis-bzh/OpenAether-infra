@@ -292,6 +292,14 @@ jobs:
       - name: task cluster-verify
         run: task cluster-verify PROVIDER=${{ matrix.provider }}
 
+      # The network claims, asked of the network: only 22, 6443 and 80+443 answer from this runner (it is on
+      # the admin_ip allowlist, since the lane SSHes to the bastion), and a flow no policy allows times out.
+      - name: task cluster-exposure
+        run: task cluster-exposure PROVIDER=${{ matrix.provider }}
+
+      - name: task cluster-netcheck
+        run: task cluster-netcheck PROVIDER=${{ matrix.provider }}
+
       # Two commands, always, as a human does it (docs/release-checklist.md, the teardown skill): a
       # plan, then exactly that plan. `if: always()` on BOTH: the failed apply nobody looks at is
       # the billing defect this repository has already paid for twice. `|| true` on the plan: an

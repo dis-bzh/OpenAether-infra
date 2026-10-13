@@ -16,6 +16,23 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Security
 
+- **Ops verification tooling: encryption at rest read back, an exposure scan, a behavioural network check, an RBAC review (ANSSI HYG M37/M38 evidence, NT-006 R14; NSA/CISA AUTH-03 and the Cilium encryption control).**
+  `infra-verify.sh` now reads `STATE` and `EPHEMERAL` back from each node's Talos API and fails unless they are `ready` and `luks2`, and
+  fails when the kube-apiserver has no `--encryption-provider-config` (the volume id is taken from Talos' source and has never been read on a
+  node: a node that does not know it is reported as unchecked, not as red). `cluster-security-tests.sh` gains 1.8 (Cilium WireGuard enabled in
+  `cilium-config` and reported by the agent), 4.6 (`openbao-recovery-dev` fails with `OA_ENVIRONMENT=prod`, is only reported otherwise) and
+  4.7 (the seal-key `openaether.io/escrowed-at` annotation; **opt-in** with `OA_ESCROW_ANNOTATION_CHECK=1` until the apps escrow step that sets it
+  exists, prod only). New: `task cluster-exposure` (`scripts/ops/exposure-scan.sh`: TCP probes of the bastion, API and app load balancers,
+  `FROM=denied` from an address outside `admin_ip`), `task cluster-netcheck` (`cluster-netcheck.sh`: a throwaway non-root pod in a temporary
+  namespace must be unable to reach a Service of each platform namespace, with an API-server reachability control; `CILIUM=1` adds
+  `cilium connectivity test`, never run here), `task rbac-review` (`rbac-review.sh` + `rbac-review.jq`, a dated `.tsv` flagging named User/Group
+  subjects, anonymous bindings and `cluster-admin` outside the allowlist) and a "review at staff change" paragraph in `docs/admin-access.md`.
+  The regression workflow runs the exposure scan and the netcheck after `cluster-verify`. Everything is read-only except the netcheck's temporary
+  namespace. Rung: mocked/static (stub `kubectl`/`talosctl`, loopback listener, failure and mutant cases; `shellcheck`), **not run on a cluster**.
+  It does **not** prove that a real node answers the way the stubs do, that the netcheck image can be pulled under the cluster's policies,
+  or that any of the new checks is green on a good cluster; it adds no OIDC and no named-human access (K8S/F13 steps 2-4 are not done), no etcd
+  or barman restore test and no backup-policy document (DP-16's apps and policy part), and no UDP probing.
+
 - **Supply chain: committed provider locks, a checksum lane for the Talos boot images, an SBOM, a protected environment for the cloud workflow, rulesets as code (ANSSI SSDLC CICD-AIP-01c/-03, PROV-REC03, CICD-IAM-03/-05, CIO-REC03, SCM-REC06/-07, SBOM25-1/-2/-3 in part).**
   `.terraform.lock.hcl` of `cluster/` and `talos-image/` is committed (linux and macOS, amd64 and arm64); both roots' `>=` provider
   constraints become `~>`; `task validate`/`test` and CI run `tofu init -lockfile=readonly` (shown to fail on a constraint bumped without

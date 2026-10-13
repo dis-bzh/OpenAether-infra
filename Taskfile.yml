@@ -578,6 +578,9 @@ tasks:
       - ./scripts/dev/test-kube-proxy-disabled.sh
       # infra-verify.sh's worker data-volume check (#62): names from the tfvars, verdicts from the nodes.
       - ./scripts/dev/test-worker-volumes.sh
+      - ./scripts/dev/test-encryption-at-rest.sh
+      # cluster-security-tests.sh: Cilium WireGuard (1.8), development OpenBao bootstrap (4.6), escrow record (4.7).
+      - ./scripts/dev/test-security-tests-checks.sh
       # grow-nodes.sh (#59): machines, then tunnels, then only the new nodes' configuration.
       - ./scripts/dev/test-grow-nodes.sh
       - ./scripts/dev/test-refuse-node-deletes.sh
@@ -632,7 +635,11 @@ tasks:
       - python3 scripts/clea/clea.py report --state clea-state.json
 
   cluster-security:
-    desc: "Run runtime security validation tests on the cluster"
+    desc: >-
+      Run runtime security validation tests on the cluster. ENVIRONMENT=prod makes the OpenBao bootstrap
+      checks strict (no openbao-recovery-dev); OA_ESCROW_ANNOTATION_CHECK=1 adds the seal-key escrow record.
+    env:
+      OA_ENVIRONMENT: '{{.ENVIRONMENT | default ""}}'
     cmds:
       - ./scripts/ops/cluster-security-tests.sh
 
@@ -1890,6 +1897,52 @@ tasks:
       - task: kubeconfig
         vars: {ROLE: '{{.ROLE}}', PROVIDER: '{{.PROVIDER}}'}
       - ../../../scripts/dev/infra-verify.sh {{.PROVIDER}} {{.ROLE}}
+
+  cluster-exposure:
+    desc: >-
+      Probe the bastion, the API load balancer and the app load balancer from HERE over TCP: only 22, 6443
+      and 80+443 may answer, from the right source. Usage: task cluster-exposure PROVIDER=scaleway
+      [ROLE=management] [FROM=denied] — FROM=denied is run from an address NOT in admin_ip and expects 22 and
+      6443 closed too. Read-only. See scripts/ops/exposure-scan.sh.
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+      FROM: '{{.FROM | default "allowed"}}'
+    env: *provider-env
+    cmds:
+      - |
+        BACKEND="$(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)" || exit 1
+        tofu init -reconfigure $BACKEND
+      - ../../../scripts/ops/exposure-scan.sh --from {{.FROM}} {{.PROVIDER}} {{.ROLE}}
+
+  cluster-netcheck:
+    desc: >-
+      Send traffic that must be DENIED (a throwaway pod in an unlisted namespace to a Service of each platform
+      namespace) and fail if it is answered. Writes a temporary namespace, deleted on exit. Usage:
+      task cluster-netcheck PROVIDER=scaleway [ROLE=management] [CILIUM=1 to add `cilium connectivity test`].
+      See scripts/ops/cluster-netcheck.sh.
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+    env: *provider-env
+    cmds:
+      - task: kubeconfig
+        vars: {ROLE: '{{.ROLE}}', PROVIDER: '{{.PROVIDER}}'}
+      - ../../../scripts/ops/cluster-netcheck.sh {{if .CILIUM}}--cilium{{end}}
+
+  rbac-review:
+    desc: >-
+      List every (Cluster)RoleBinding with its subjects into a dated rbac-review/rbac-review-<date>.tsv and
+      flag named User/Group subjects, anonymous bindings and cluster-admin outside the allowlist. Read-only.
+      Run it at every staff change (docs/admin-access.md). Usage: task rbac-review (KUBECONFIG set).
+    cmds:
+      - ./scripts/ops/rbac-review.sh {{.CLI_ARGS}}
 
   # ===========================================================================
   # Emulated cloud (Feint) — no account, no credentials. docs/emulated-cloud.md

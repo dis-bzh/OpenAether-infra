@@ -176,6 +176,15 @@ with it, while `talosctl get machineconfig` is refused. Mint one and reuse it un
 expires rather than one per run: minting is a write against the Talos API, and a read
 should not need one.
 
+**Review at staff change.** Whoever joins or leaves, run `task rbac-review` (a read-only `kubectl`, `KUBECONFIG` set):
+it lists every binding with its subjects in `rbac-review/rbac-review-<date>.tsv` and flags a named User/Group, an anonymous
+binding and a `cluster-admin` outside the allowlist (the one of `cluster-security-tests.sh` 3.7). Today the expected answer is
+"nothing flagged": human access is the shared certificate above, so a flagged line is a decision to record or a binding to
+delete. Revoking a person still means rotating the CA; the review only finds what else grants them access.
+Beyond RBAC, `task cluster-exposure PROVIDER=…` probes the public addresses (run it once from an address that is not in
+`admin_ip` with `FROM=denied`: 22 and 6443 must then be closed) and `task cluster-netcheck PROVIDER=…` sends traffic the
+policies must drop. `task cluster-security` takes `ENVIRONMENT=prod` to fail on an `openbao-recovery-dev` Secret.
+
 ## 7. Grafana SSO through Zitadel (OIDC)
 
 Once per cluster, in Zitadel: a **Web** application, **Code** + PKCE, redirect

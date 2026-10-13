@@ -162,3 +162,6 @@ plumber-report.json
 # Rung receipts (scripts/dev/rung-receipt.py): written by the harness, pasted
 # into a pull request, never committed.
 .receipts/
+
+# Dated RBAC review output (task rbac-review): subject names of one cluster, a working file.
+/rbac-review/
