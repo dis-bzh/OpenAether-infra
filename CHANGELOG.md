@@ -35,6 +35,9 @@ in git. 0.1.0 is the first entry describing something proven.
   `deploy_flux = true` refuses to plan without three keys, and a threshold above the number of keys, below 2, a duplicate key
   or a private key pasted by mistake are refused. Rung: mocked (`tofu test`, 9 runs; the template rendered by OpenTofu
   in both shapes and validated by `check-flux-schema.sh`).
+- **`task cluster-up` checks the OpenBao recovery-share keys before it bills** (`scripts/internal/check-openbao-keys.sh`, tested against real
+  gpg keys): `sys/init` commits the cluster before it encrypts the shares, so a key with no usable encryption subkey (a signing-only or
+  expired key) ends the first run in a re-init. Each key's fingerprint is printed. Found by an independent review of the redesign.
 - `cluster-security-tests.sh` 4.5 now asserts that no Shamir-share or root-token Secret exists in `foundation-vault` (it asserted
   that an unsealer was running).
 

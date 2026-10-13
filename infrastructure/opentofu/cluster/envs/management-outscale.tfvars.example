@@ -88,7 +88,8 @@ git_ref          = "refs/tags/0.1.0"
 
 # OpenBao recovery-share holders (only read when deploy_flux = true). OpenBao unseals itself; what the operators hold are
 # RECOVERY shares, for an emergency root token. Each key is a person's PGP PUBLIC key, `gpg --export <id> | base64 -w0`
-# (it needs an encryption subkey). Empty = a DEVELOPMENT bootstrap (one plaintext share in a labelled Secret).
+# (it needs an encryption subkey; `task cluster-up` checks it and prints the fingerprint). Empty = a DEVELOPMENT bootstrap (one plaintext
+# share in a labelled Secret, which can not become a production one).
 # environment = "prod" with deploy_flux = true refuses to plan without at least 3. Then, once: escrow the seal key
 # (OpenAether-apps foundation/vault/README.md, Day 0).
 # openbao_recovery_pgp_keys = [

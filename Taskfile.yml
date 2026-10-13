@@ -470,6 +470,8 @@ tasks:
       # scripts that died silently on an absent optional key.
       - ./scripts/dev/test-state-backups.sh
       - ./scripts/dev/test-seed-openbao.sh
+      # The recovery-share keys, checked for an encryption subkey before anything bills (sys/init commits, then fails).
+      - ./scripts/dev/test-check-openbao-keys.sh
       # Nothing said "tainted", so re-running destroyed a load balancer the
       # provider was still building. This keeps that sentence on screen.
       - ./scripts/dev/test-explain-failure.sh
@@ -741,6 +743,9 @@ tasks:
         # --preflight adds prod's replica-on-another-cloud rule, for a cluster
         # with no state object yet. Only here: infra-apply, which cluster-upgrade
         # and converge-versions call, must keep working on a deployed cluster.
+        # The OpenBao recovery-share keys: sys/init commits the cluster BEFORE it encrypts the shares, so a key with no
+        # encryption subkey bricks the first run. Free to check here, a re-init after.
+        ./scripts/internal/check-openbao-keys.sh "$TFVARS" || exit 1
         ./scripts/internal/ensure-buckets.sh "$TFVARS" --preflight || exit 1
       # image-build reads the pin from ROLE's tfvars. VERSION is blanked because
       # go-task hands it an exported or typed one, and the tfvars is the decision.

@@ -26,7 +26,7 @@ contre un token OpenBao *dans le pod* (aucun token OpenBao ne traverse ton termi
 bao_admin() {
   kubectl --kubeconfig $KC -n foundation-vault create token openaether-admin --duration=15m \
   | kubectl --kubeconfig $KC -n foundation-vault exec -i openbao-0 -- sh -c \
-      'BAO_TOKEN="$(bao write -field=token auth/kubernetes/login role=openaether-admin jwt="$(cat)")" exec bao "$@"' sh "$@"
+      'BAO_TOKEN="$(bao write -field=token auth/kubernetes/login role=openaether-admin jwt=-)" exec bao "$@"' sh "$@"
 }
 ```
 
@@ -39,12 +39,14 @@ d'OpenBao** : c'est la clé maîtresse de ses données.
 | Quoi | Comment | Pourquoi |
 |---|---|---|
 | Clé de seal | `kubectl -n foundation-vault get secret openbao-seal-key -o jsonpath='{.data.key}' \| base64 -d \| gpg --encrypt -r <toi> -o openbao-seal-key.gpg` | DR d'OpenBao : un snapshot raft est chiffré par elle |
-| Parts de recovery | `kubectl -n foundation-vault get secret openbao-recovery-shares -o yaml > openbao-recovery-shares.yaml` (chiffrées PGP : peuvent être rangées n'importe où) | root token de bris de glace et DR ; le Secret meurt avec le cluster |
+| Parts de recovery | `for i in 1 2 3; do kubectl -n foundation-vault get secret openbao-recovery-shares -o jsonpath="{.data.share-$i}" \| base64 -d > openbao-share-$i.b64; done` (chiffrées PGP : peuvent être rangées n'importe où) | root token de bris de glace et DR ; le Secret meurt avec le cluster |
 | Password restic | `bao_admin kv get -mount=secret -field=password backup/restic` | sans lui, backups indéchiffrables le jour où OpenBao est perdu |
 | `TF_VAR_encryption_passphrase` | déjà dans ton vault | tfstate + artefacts gpg + snapshots etcd |
 
 Un cluster sans `openbao_recovery_pgp_keys` est un bootstrap de **développement** : une
-part en clair dans `openbao-recovery-dev`, étiquetée comme telle. N'y mets rien qui compte.
+part en clair dans `openbao-recovery-dev`, étiquetée comme telle, qui ne peut pas devenir un bootstrap de production (réinitialiser).
+N'y mets rien qui compte. `task cluster-up` vérifie, avant de facturer, que chaque clé a une sous-clé de chiffrement utilisable et affiche
+son empreinte : compare-la à la tienne (`scripts/internal/check-openbao-keys.sh <fichier env>` lance la même vérification seule).
 
 ## 2. Signer l'intermediate PKI (débloque le HTTPS)
 

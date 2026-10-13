@@ -121,7 +121,7 @@ while IFS="$tab" read -r path data; do
   else echo "! $path: $(printf "%s" "$err" | tr "\n" " ")"; fi
 done'
 
-# The token is minted per attempt (10 minutes, one use). The wait is for OpenBao itself to be configured: the first
+# The token is minted per attempt (10 minutes; a TokenRequest JWT can be replayed until it expires, which is why it is short). The wait is for OpenBao itself to be configured: the first
 # login succeeds only once openbao-vault-bootstrap has created the role, so "can log in" is the readiness test.
 OPENBAO_WAIT="${OPENBAO_WAIT:-1200}"
 POLL="${OA_SEED_POLL:-15}"   # seconds between attempts (a test knob)
