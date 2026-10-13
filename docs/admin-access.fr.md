@@ -87,7 +87,7 @@ ceci n'a pas tourné.
 ```text
 secret/backup/s3-primary                      endpoint bucket access_key secret_key
 secret/backup/s3-replica                      endpoint bucket access_key secret_key   (les clés du cloud du réplica)
-secret/observability/loki-s3                  endpoint bucket accessKey secretKey     (sa propre destination : Loki n'écrit jamais dans le bucket des sauvegardes)
+secret/observability/loki-s3                  endpoint bucket accessKey secretKey     (sa propre entrée, pour pouvoir le pointer ailleurs ; le seed lui donne aujourd'hui le bucket et les clés des sauvegardes : #302)
 secret/observability/alertmanager-slack       webhook-url   (sans lui Alertmanager ne démarre pas ; sur un cluster jetable, n'importe quelle valeur convient)
 secret/observability/alertmanager-deadmansswitch   url      (le seul signal qui survit à la mort du cluster ; Slack seul ? retirer la route Watchdog de vm-customresources/vmalert.yaml, délibérément)
 ```

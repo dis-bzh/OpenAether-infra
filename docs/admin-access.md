@@ -83,7 +83,7 @@ within about two minutes after). A deploy is not finished until this has run.
 ```text
 secret/backup/s3-primary                      endpoint bucket access_key secret_key
 secret/backup/s3-replica                      endpoint bucket access_key secret_key   (the replica cloud's keys)
-secret/observability/loki-s3                  endpoint bucket accessKey secretKey     (its own destination: Loki never writes to the backup bucket)
+secret/observability/loki-s3                  endpoint bucket accessKey secretKey     (its own entry, so it can be pointed elsewhere; the seed gives it the backup bucket and keys today: #302)
 secret/observability/alertmanager-slack       webhook-url   (Alertmanager will not start without it; on a throwaway cluster any value works)
 secret/observability/alertmanager-deadmansswitch   url      (the only signal that survives this cluster dying; Slack-only? drop the Watchdog route from vm-customresources/vmalert.yaml, deliberately)
 ```

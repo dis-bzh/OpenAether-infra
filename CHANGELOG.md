@@ -66,6 +66,18 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Validated
 
+- **The Day-1 path of the OpenBao redesign, `deploy_flux = true`, Scaleway, 2026-10-13, on this branch (8d4a036 for the apply and the
+  seeding; later commits touched the upgrade path and documentation only), with OpenAether-apps `claude/security-bootstrap`.**
+  Management role, 3 control planes + 2 workers, replica store on OVH. `cluster-up` applied (53 resources) and ended 201 after 570 s on
+  the `flux-system exists` line, which now names `seed-openbao.sh`. Three PGP public keys in `openbao_recovery_pgp_keys` produced the
+  ConfigMap `openbao-operator-keys` in the Flux bootstrap manifest and OpenBao bootstrapped in production mode (three shares encrypted
+  to the keys, threshold 2). `seed-openbao.sh` ran with a ServiceAccount token (no root token exists): five paths written in 2.6 s, all
+  five left alone on the second run; `backup/s3-replica` carried the replica cloud's endpoint and keys, not the primary's (#296 observed
+  on a real cross-provider setup). `task cluster-security` 30 of 31 passed (one skipped: no MinIO namespace), including the new 4.5. Torn
+  down in the two commands (53 resources), `purge-orphans` and `verify-provider-clean` clean, the lab's seven buckets and its images
+  deleted. **Not run:** `cluster-upgrade` with its new pre-upgrade safeguards on a cloud, a second `cluster-up`, another cloud or role.
+  What the same run found in OpenAether-apps is in that repository's CHANGELOG.
+
 - **`deploy_flux = true`, Scaleway, 2026-10-12, on the 0.2.0 tag commit, once, stage by stage from a maintainer's lab
   script.** Management role, 3 control planes across three zones + 2 workers (`POP2-4C-16G`), `git_ref = refs/tags/0.1.0`
   (OpenAether-apps 0.1.0). `cluster-up` applied and ended 201 after 486 s on `cluster-verify`: 13 passed, 1 failed, 0
