@@ -50,6 +50,34 @@ means no `apid`, so the Talos API port never listens. There is no workaround —
 the qemu provisioner wants `/dev/kvm`, which such hosts do not expose either.
 Measured 2026-08-27 on a host where bit 24 was the only one of 41 missing.
 
+## Host requirement: a kernel of 6.15 or newer (Talos 1.14)
+
+Talos 1.14 builds the writable `/etc` of each node as an overlayfs whose layers are
+passed as O_PATH file descriptors (`fsconfig` `FSCONFIG_SET_FD`, key `lowerdir+`).
+Linux accepts layers by file descriptor from 6.13 and O_PATH ones from 6.15. On a
+kernel that does not, every node dies at boot while the containers look started:
+
+```
+failed to set up /etc overlay ... FSCONFIG_SET_FD failed: bad file descriptor: key="lowerdir+"
+```
+
+and `talos_machine_bootstrap` waits until its timeout. Measured on 6.12.107
+(Debian 13) with Docker 29: the same call returns `EBADF`; a GitHub-hosted
+`ubuntu-24.04` runner (6.17) boots. The Docker daemon's kernel is what counts, so
+a WSL2 distribution and a Docker Desktop VM run on whatever kernel Microsoft or Docker
+ships: look it up rather than assume. `task local-up` asks the kernel the same question
+(`scripts/dev/check-host-overlay-fd.sh`, one second) and refuses a daemon on this
+machine's own kernel that says no; a daemon it cannot ask only gets a warning.
+Check by hand: `docker info --format '{{.KernelVersion}}'`.
+
+The guard only applies to Talos 1.14 and later (`TF_VAR_talos_version`, else this
+module's default). The older Talos does not make that call: on the same kernel 6.12.107
+host, `TF_VAR_talos_version=v1.13.9 TF_VAR_kubernetes_version=v1.36.3 task local-up`
+booted and `task local-verify` passed apart from the pin comparison (it compares the
+shipped pin). Add `TF_VAR_control_plane_count=1 TF_VAR_worker_count=1` on a small host:
+3 + 3 ran that 3.8 GB machine out of memory (the API stopped answering) with no overlay
+error in any node.
+
 ## Quick start
 
 ```bash

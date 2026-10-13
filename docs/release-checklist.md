@@ -64,9 +64,9 @@ docker run --rm ubuntu:24.04 bash -c '
 
 On a Docker host, from the same clone, no `.env.sh`: `task local-up`,
 `local-status`, `local-test`, `local-down`. A host that fails the guards cannot
-boot Talos in Docker and is refused in about a second (PR #138): record a skip,
-not a pass. One that passes them can still fail later (#291, ten minutes in):
-record what happened, not a pass.
+boot Talos in Docker and is refused in about a second (PR #138; a kernel under
+6.15 since #291): record a skip, not a pass. One that passes them can still fail
+later: record what happened, not a pass.
 
 - [ ] `local-up` renders `cilium-local.yaml` itself when the manifest is absent,
       and a second `local-up` does not re-render it (same mtime, size, inode).
@@ -80,8 +80,8 @@ record what happened, not a pass.
 - [ ] at the shipped pin: `docs/status.md` records the Docker lane only at Talos
       1.13.9 / Kubernetes 1.36.3 (2026-08-24), the commit that moved the pin says it
       did not run the lane at the new pair on the host that made it, and `task
-      local-up` at 1.14.2 does not start on the two hosts tried (kernel 6.12, #291):
-      record what your host does.
+      local-up` at 1.14.2 needs a host kernel of 6.15 or newer (#291; it was refused on
+      the two kernel 6.12 hosts tried): record what your host does, and its kernel.
 
 ## 3. Emulated cloud — no account, real provider binaries
 

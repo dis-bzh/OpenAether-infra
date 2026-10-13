@@ -13,8 +13,8 @@ Two different people land here, and they want different pages.
 
 **You want a cluster.** The one that needs no account and no credentials is
 `task local-up`, a six-node Talos cluster in Docker; at the shipped Talos 1.14.2
-it did not start on the two hosts tried (kernel 6.12, #291), though it booted on a hosted
-runner with one control plane and one worker, so read that issue first. Then
+it needs a host kernel of 6.15 or newer (#291), and `task local-up` refuses a host
+below that in a second. Then
 [Quick start](#quick-start) for a cloud, or
 [`docs/first-cluster.md`](docs/first-cluster.md) for the walked-through version,
 bare machine to a cluster you can reach, upgrade and destroy.
@@ -139,7 +139,7 @@ Talos/cluster stack is provider-agnostic. Details:
 | **OVH** | ✅ the same five, the same day, and the 1.14 climb 2026-10-03 over three zones | EU-WEST-PAR (OpenStack) | Octavia LB, floating IPs, SNAT router, private network. A control plane can stay `ACTIVE` while dead at first boot (#49: seen 2026-10-06 and 2026-10-10, cause unknown, a Nova hard reboot clears it) |
 | **Outscale / Numspot** | ✅ the same five, measured 2026-08-20, and the 1.14 climb 2026-10-03 over three subregions | eu-west-2 | Redeployed on a **fresh Net** after an internal LBU timeout upstream left one stuck in `provisioning` (request 399530, closed). Two scars: a Net created before that fix still refuses deletion and only the provider can clear it (#43; until then `purge-orphans` cannot end clean there), and the object store ignores `If-None-Match`, so the `use_lockfile` state lock is deliberately off here |
 | **Proxmox (on-prem)** | 🧪 code-complete, unit-tested — **never applied for real** | PVE single/multi-host | Talos VIP (no managed LB), host nftables NAT/DNAT, manual prerequisites |
-| **Local (Docker)** | ⚠️ validated 2026-08-24 at Talos 1.13.9; at the shipped 1.14.2 `task local-up` did not start on the two hosts tried (#291) and booted on a hosted runner at 1 CP + 1 worker (2026-10-11) | WSL2 / Docker | 3 CP + 3 workers, etcd quorum, Cilium — credential-free proof of `modules/talos` |
+| **Local (Docker)** | ⚠️ validated 2026-08-24 at Talos 1.13.9; at the shipped 1.14.2 it needs a host kernel of 6.15 or newer (#291): it did not start on the two kernel 6.12 hosts tried and booted on a hosted runner (kernel 6.17) at 1 CP + 1 worker (2026-10-11) | WSL2 / Docker | 3 CP + 3 workers, etcd quorum, Cilium — credential-free proof of `modules/talos` |
 
 ## Repository structure
 
@@ -186,8 +186,8 @@ nothing.
 
 Brings up a real **3 control plane + 3 worker** Talos cluster in Docker, on the
 **same `modules/talos/` used in production**. Last passing 3 + 3 run: Talos 1.13.9,
-2026-08-24; at the shipped 1.14.2 it did not start on the two hosts tried (#291) and booted on a hosted runner at 1 control
-plane + 1 worker (2026-10-11).
+2026-08-24; at the shipped 1.14.2 it needs a host kernel of 6.15 or newer (#291): it did not start on the two kernel 6.12 hosts
+tried and booted on a hosted runner (kernel 6.17) at 1 control plane + 1 worker (2026-10-11).
 
 ```bash
 task local-up        # full deploy
