@@ -80,7 +80,10 @@ retour arrière d'un upgrade (#270) ; le rôle `workload` sur n'importe quel clo
 l'ajout de workers, et Longhorn et CNPG pendant un retrait de nœud, sur OVH et
 Outscale ; le failover sur toute paire autre qu'OVH vers Scaleway, qui fut une
 reconstruction à un control plane et un worker, sans le contenu d'etcd ;
-`deploy_flux = true` sur un cluster réel. Chacun avec son barreau :
+`deploy_flux = true` au-delà d'un déploiement (Scaleway, rôle management, 2026-10-12) terminé
+en 201 sur l'assertion `flux-system` et qui n'a atteint toutes les Kustomizations Ready qu'après le
+semis manuel d'OpenBao : ni second `cluster-up`, ni upgrade, ni rôle `workload`, ni autre cloud, ni
+exécution sans surveillance. Chacun avec son barreau :
 [`CHANGELOG.md`](CHANGELOG.md), Known limits.
 
 Points ouverts :

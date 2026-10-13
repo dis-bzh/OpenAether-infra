@@ -292,6 +292,86 @@ Cheaper still, and where a gate fix belongs first:
 [`scripts/dev/test-rolling-replace.sh`](../scripts/dev/test-rolling-replace.sh)
 exercises the same logic against a stub kubectl in seconds, with no cluster.
 
+## Going back
+
+An upgrade is not undone by running the upgrade backwards: `converge-versions.sh`
+refuses a pin below what the fleet runs ("that is a DOWNGRADE"), and so does
+`cluster-upgrade`. What exists is Talos's own A/B switch, and an etcd restore.
+Both were run on Scaleway on 2026-10-12 with the `0.1.0` and `0.2.0` tags (Talos
+1.13.9 and Kubernetes 1.36.3 to 1.14.2 and 1.37.1, 3 control planes + 2 workers,
+the 1 Hz probe of the section above running). One provider, by hand: the timings
+are Scaleway's, the mechanism is Talos's. The rest is what was **not** measured.
+
+### A worker: `talosctl rollback`
+
+```bash
+kubectl drain <node> --ignore-daemonsets --delete-emptydir-data
+talosctl -n <node-ip> rollback          # boots the previous partition
+kubectl uncordon <node>                 # when the node is Ready again
+```
+
+Back on 1.13.9 and Ready in 21 s and 39 s. It also worked with Kubernetes already at
+1.37.1: the worker came up with kubelet v1.37.1 and ran Cilium and the prober.
+`cluster-verify` stays red, `the fleet is MIXED on Talos`, until the node is rolled
+forward again; a second `rollback` on the same node switches back to the newer
+partition, and `task cluster-upgrade` rolls it forward the usual way. It is valid only
+while the node's previous partition still holds the version you want: a further
+upgrade overwrites it.
+
+### A control plane: not across a minor that bumps etcd
+
+⚠️ **`talosctl rollback` on a control plane from Talos 1.14 to 1.13 breaks etcd.**
+The node boots, joins as Ready, and its etcd crash-loops:
+
+```
+discovery failed ... error: version "3.7.0" is not supported
+```
+
+Talos 1.14.2 ships etcd 3.7 and the upgrade writes its storage version (3.7.0); Talos
+1.13.9 ships etcd 3.6.12, which refuses that data. `etcd members` still lists the
+member (membership is not health), so read `talosctl service etcd` on the node. With
+two of three control planes rolled back the quorum was lost and the API was down for
+about 11 minutes, until a second `rollback` on those two brought them forward again.
+Do not roll back a second control plane to see whether the first one is fine.
+
+### A control plane: restore a snapshot taken before the upgrade
+
+The way back for the control planes is a restore, and it needs a snapshot that
+**predates the first control plane of the upgrade**: `task etcd-snapshot` (encrypted,
+`gpg -d` it first) or `talosctl etcd snapshot`, taken on the version you will return
+to. Nothing in `cluster-upgrade` takes one for you today.
+
+```bash
+talosctl -n <node-ip> rollback                      # every node, workers included
+talosctl -n <cp-ip> reset --graceful=false --reboot \
+  --system-labels-to-wipe EPHEMERAL                 # each control plane: wipes etcd
+talosctl -n <one-cp-ip> bootstrap --recover-from=etcd.snapshot
+```
+
+Measured: three etcd members 52 s after the `bootstrap`, five nodes Ready, the API
+answering again 4.3 minutes after the first `rollback` (236 consecutive failed probe
+seconds), etcd 3.6.12 again, `cluster-verify` 14/14 once the pins were lowered. **Every
+change since the snapshot is gone**: a ConfigMap written after it was missing
+afterwards, one written before it was there.
+
+### What does not go back
+
+- **Kubernetes.** `talosctl upgrade-k8s --to 1.36.3` on a 1.37.1 cluster answers
+  `unsupported upgrade path 1.37->1.36`. A restore after the Kubernetes bump was not
+  tried (the drill held Kubernetes at 1.36.3): start the way back from a snapshot
+  taken before the Talos step, and bump Kubernetes only once the Talos step has soaked.
+- **The Terraform state and the pins.** After the restore, lowering `talos_version` in
+  the tfvars makes `infra-plan` plan `talos_machine_secrets.this[0] must be replaced`
+  (the provider replaces the secrets when the version goes down; `prevent_destroy`
+  stops an apply, and a regenerated PKI would be worse than the problem). The state has
+  to go back too, to a copy taken before the climb, and the replica's "newest five"
+  generations were all written during it. Until then leave the pins where they are: the
+  cluster runs the old version and `cluster-verify` reads `MIXED`. Not measured: copying
+  a pre-climb state back.
+- Not measured either: other clouds, Proxmox, a Longhorn or CNPG workload across the
+  restore, and a control plane rollback inside a Talos minor (a patch), where etcd's
+  storage version does not move and it may well work.
+
 ## Replacing a node rather than upgrading it
 
 `--upgrade` cannot carry a disk or zone change — those need a new VM. Same

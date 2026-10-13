@@ -14,6 +14,40 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ## [Unreleased]
 
+### Validated
+
+- **`deploy_flux = true`, Scaleway, 2026-10-12, on the 0.2.0 tag commit, once, stage by stage from a maintainer's lab
+  script.** Management role, 3 control planes across three zones + 2 workers (`POP2-4C-16G`), `git_ref = refs/tags/0.1.0`
+  (OpenAether-apps 0.1.0). `cluster-up` applied and ended 201 after 486 s on `cluster-verify`: 13 passed, 1 failed, 0
+  could not be checked, the failure being `flux-system exists`. Flux followed the tag and reconciled the `management`
+  profile. Counted from the first Flux object: 12 of 35 Kustomizations Ready at 2 minutes, 29 of 35 at 6.5 minutes, then
+  the same six not Ready for about 17 minutes (`cnpg` waits on the ExternalSecret `cnpg-backup-s3`, which reads
+  `backup/s3-primary`; its first 15-minute health check failed and it retried after 2 minutes). Counted from the start of
+  `scripts/ops/seed-openbao.sh scaleway` (docs/admin-access.md, section 3; five paths written, four left alone): `cnpg`
+  Ready after 11 s and the last of the six after 114 s (about 60 s of it the 1-minute retry of
+  `observability-vm-customresources`, whose first dry-run found no VMAlert CRD), then every Kustomization Ready (61 of 62
+  Flux objects; the 62nd is an OCI HelmRepository, which has no Ready condition) until the last sample 7.5 minutes later;
+  15 HelmReleases InstallSucceeded, 127 pods Running and 6 Completed. The 17 minutes are the lab's order (seeding after
+  the observation snapshots), not a product latency; the product facts are that it does not converge without the seeding
+  and that it converged in 114 s with it. Figures come from the Kustomizations' lastTransitionTime and the controller
+  logs. It corrects, for this lab and without moving the 0.2.0 text, the 0.2.0 statements that no cluster has followed the
+  apps tag: only `refs/tags/0.1.0` was followed, `refs/heads/main` was not. Torn down in the two commands (52 resources,
+  `purge-orphans` clean, `verify-provider-clean` rc 0). Not run: a second `cluster-up`, `cluster-idempotency`, an upgrade
+  or a roll with Flux, the PKI signing, Grafana SSO, a backup or a restore, another cloud or role.
+
+### Added
+
+- **`docs/upgrade.md`, "Going back": what was measured of rolling an upgrade back (#270).** Real cloud, by hand, Scaleway,
+  2026-10-12, the `0.1.0` and `0.2.0` tags (Talos 1.13.9 and Kubernetes 1.36.3 to 1.14.2 and 1.37.1, 3 control planes + 2
+  workers). A worker comes back with `talosctl rollback` in 21 to 39 s, also with Kubernetes at 1.37.1. A control plane
+  does not, across a minor that moves etcd's storage version: Talos 1.13.9's etcd refuses the data Talos 1.14.2's wrote
+  (`version "3.7.0" is not supported`) and two rolled-back control planes cost the quorum for about 11 minutes. The way back
+  for the control planes is a restore of an etcd snapshot taken before the upgrade: three members 52 s after the
+  `bootstrap`, the API back 4.3 minutes after the first rollback, everything since the snapshot lost. Lowering the pins
+  afterwards makes the plan replace the Talos secrets (the state has to go back too). Not measured: the state copy back,
+  a restore after the Kubernetes bump, other clouds, a patch-level control plane rollback. `cluster-upgrade` still takes
+  no snapshot and #270 stays open for the tooling and the decisions it lists.
+
 ---
 
 ## [0.2.0] — 2026-10-12
