@@ -78,8 +78,12 @@ in git. 0.1.0 is the first entry describing something proven.
   five left alone on the second run; `backup/s3-replica` carried the replica cloud's endpoint and keys, not the primary's (#296 observed
   on a real cross-provider setup). `task cluster-security` 30 of 31 passed (one skipped: no MinIO namespace), including the new 4.5. Torn
   down in the two commands (53 resources), `purge-orphans` and `verify-provider-clean` clean, the lab's seven buckets and its images
-  deleted. **Not run:** `cluster-upgrade` with its new pre-upgrade safeguards on a cloud, a second `cluster-up`, another cloud or role.
-  What the same run found in OpenAether-apps is in that repository's CHANGELOG.
+  deleted. **A second run on the hardened code (87daaf4, same day):** `task cluster-up` refused a signing-only key in
+  `openbao_recovery_pgp_keys` in one second, before any resource was created, printing each key's fingerprint; with the key replaced it
+  applied and bootstrapped unaided, the seeding wrote five paths, the hardened apps bootstrap passed (see that repository's CHANGELOG),
+  35 of 35 Kustomizations were Ready 132 s after the seeding began, `cluster-security` 30 of 31. **Not run:** `cluster-upgrade` with its new
+  pre-upgrade safeguards on a cloud, a second `cluster-up`, another cloud or role. What the runs found in OpenAether-apps is in that
+  repository's CHANGELOG.
 
 - **`deploy_flux = true`, Scaleway, 2026-10-12, on the 0.2.0 tag commit, once, stage by stage from a maintainer's lab
   script.** Management role, 3 control planes across three zones + 2 workers (`POP2-4C-16G`), `git_ref = refs/tags/0.1.0`
