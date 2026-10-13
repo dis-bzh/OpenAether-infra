@@ -355,6 +355,28 @@ for bad_n in 0 -1 abc 2.5; do
     && ok "STATE_GENERATIONS=$bad_n: refused, naming the variable, with no call made" || bad "STATE_GENERATIONS=$bad_n: rc=$RC calls=$(wc -l <"$LOG") $OUT"
 done
 
+echo "--- STATE_LABEL: a labelled copy that no retention removes (#270) ---"
+plain() { held | grep -E "^$KEYP\.[0-9]{8}T[0-9]{6}Z$" | sed "s#^$KEYP\.##" | tr '\n' ' '; }   # the plain generations only
+rm -rf "$ST"; for n in 1 2 3 4 5; do bak "$n"; done
+bak 6 "" "STATE_LABEL=pre-upgrade"
+is "the run completes" 0 "$RC"
+LAB="$KEYP.pre-upgrade.$(ts 6)"
+grep -qF "s3://$REPL/$LAB --sse AES256" <<<"$(uploads | sed -n 1p)" \
+  && ok "the FIRST upload is <key>.<label>.<UTC timestamp>, still before the current object" || bad "first upload: $(uploads | sed -n 1p)"
+is "…which holds the bytes of the current object" STATE-6 "$(body ".pre-upgrade.$(ts 6)")"
+is "…and removes nothing, although five plain generations are held" 0 "$(rms | wc -l)"
+is "the plain generations are untouched" "$(want 1 2 3 4 5)" "$(plain)"
+grep -q "labelled copy $LAB kept" <<<"$OUT" && ok "and the result says the copy is never removed" || bad "$OUT"
+for n in 7 8 9 10 11 12; do bak "$n"; done
+is "six plain runs later the plain generations rolled over to the newest five" "$(want 8 9 10 11 12)" "$(plain)"
+held | grep -qxF "$LAB" && ok "…and the labelled copy is still there" || bad "the labelled copy was removed: $(held)"
+grep -qF "$LAB" <<<"$(rms)" && bad "retention named the labelled copy" || ok "retention never named it"
+bak 13 "" "STATE_LABEL=Bad_Label"
+[ "$RC" -ne 0 ] && [ "$(calls aws:)" = 0 ] && grep -q "STATE_LABEL" <<<"$OUT" \
+  && ok "an invalid label is refused, naming the variable, with no call made" || bad "rc=$RC calls=$(calls aws:) $OUT"
+ENV_EXTRA="$GEN_ENV"; OUT="$(run "$BS" --list "$ROOT")"; RC=$?
+grep -qP "^  pre-upgrade\t[^\t]+\t[0-9]+\t$LAB\$" <<<"$OUT" && ok "--list shows the labelled copy under its label" || bad "$OUT"
+
 echo "--- --list: what the replica holds, most recently written first, readable, read-only ---"
 rm -rf "$ST"; for n in 1 3 2; do seed "$(ts "$n")" "" ".$(ts "$n")"; done; seed x CURRENT
 for stray in .bak 2 ".$(ts 1).bak" ".x$(ts 1)"; do seed x STRAY "$stray"; done
@@ -527,6 +549,20 @@ is "an empty bucket (null listing) removes nothing and still succeeds" "0 0" "$(
 
 # =============================================================================
 echo
+echo "--- SNAPSHOT_LABEL: named for its purpose, and never pruned (#270) ---"
+ENV_EXTRA="$BASE KEEP=30 SNAPSHOT_LABEL=pre-upgrade OA_STUB_LIST=$(keys 40)"
+OUT="$(runes)"; RC=$?
+is "the script completes" 0 "$RC"
+is "two uploads (primary + replica)" 2 "$(uploads | wc -l)"
+[ "$(grep -cE 'backups/etcd/pre-upgrade-etcd-[0-9]{8}T[0-9]{6}Z\.snap\.gpg' <<<"$(uploads)")" = 2 ] \
+  && ok "both are backups/etcd/pre-upgrade-etcd-<timestamp>.snap.gpg" || bad "$(uploads)"
+is "forty plain snapshots held, KEEP=30: nothing removed by a labelled run" 0 "$(rms | wc -l)"
+grep -q "labelled: never pruned" <<<"$OUT" && ok "and the result says so" || bad "$OUT"
+ENV_EXTRA="$BASE SNAPSHOT_LABEL=Bad_Label"
+OUT="$(runes)"; RC=$?
+[ "$RC" -ne 0 ] && [ "$(calls talosctl:)" = 0 ] && grep -q "SNAPSHOT_LABEL" <<<"$OUT" \
+  && ok "an invalid label is refused, naming the variable, before any snapshot" || bad "rc=$RC $OUT"
+
 echo "=== resolve-s3-cred.sh ==="
 RS=scripts/internal/resolve-s3-cred.sh
 # <provider> <ak|sk> [primary|backup] [endpoint] — the CLI order differs from

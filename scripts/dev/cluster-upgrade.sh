@@ -22,6 +22,9 @@
 # makes the version arithmetic below testable rather than first exercised on a
 # paying account.
 #
+# BEFORE THE FIRST STEP it takes an encrypted etcd snapshot and a copy of the state under names no retention removes
+# (UPGRADE_SKIP_SNAPSHOT=1 to start without): the way back for a control plane is a restore of those (#270).
+#
 # Usage: cluster-upgrade.sh <provider> <role> [ssh-key]
 set -euo pipefail
 
@@ -302,6 +305,27 @@ if [ "${DRY_RUN:-}" = "1" ]; then
   diff -u "$ROOT/infrastructure/opentofu/cluster/envs/${ROLE}-${PROVIDER}.tfvars" "$TFVARS" || true
   ok "dry run: versions resolved and the tfvars rewrite is well-formed"
   exit 0
+fi
+
+# --- The way back, secured BEFORE anything moves (#270) ------------------------
+# Across a minor that moves etcd's storage version a control plane does not roll back (docs/upgrade.md, "Going back"):
+# the way back is a restore of an etcd snapshot taken before the first control plane of the climb, with the Terraform
+# state as it was. Neither exists afterwards, so both are taken here, encrypted, under names no retention removes (the
+# plain generations are the newest five, and a climb writes several). A run that cannot take them does not start.
+# UPGRADE_SKIP_SNAPSHOT=1 starts without, and says what that costs.
+if [ "${UPGRADE_SKIP_SNAPSHOT:-}" = "1" ]; then
+  echo "  ⚠ UPGRADE_SKIP_SNAPSHOT=1: no etcd snapshot and no state copy were taken. If a control plane has to go back across"
+  echo "    a minor, nothing brings it back."
+else
+  echo "▶ Securing the way back: an encrypted etcd snapshot and a copy of the state, before the first step"
+  SNAPSHOT_LABEL=pre-upgrade task etcd-snapshot PROVIDER="$PROVIDER" ROLE="$ROLE" KEY="$KEY" ||
+    fail "the pre-upgrade etcd snapshot could not be taken, so nothing was upgraded.
+  Fix that (tunnels, credentials, TF_VAR_encryption_passphrase), or start without it with UPGRADE_SKIP_SNAPSHOT=1."
+  STATE_LABEL=pre-upgrade task backup-state PROVIDER="$PROVIDER" ROLE="$ROLE" ||
+    fail "the pre-upgrade copy of the state could not be written, so nothing was upgraded.
+  Fix that, or start without it with UPGRADE_SKIP_SNAPSHOT=1."
+  ok "way back secured: backups/etcd/pre-upgrade-etcd-<timestamp>.snap.gpg in both artifact buckets, and the state copy
+    <state key>.pre-upgrade.<timestamp> in the replica (task backup-state -- --list). Neither is ever pruned."
 fi
 
 # --- The service probe (#41) ---------------------------------------------------

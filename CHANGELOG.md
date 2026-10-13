@@ -38,6 +38,18 @@ in git. 0.1.0 is the first entry describing something proven.
 - `cluster-security-tests.sh` 4.5 now asserts that no Shamir-share or root-token Secret exists in `foundation-vault` (it asserted
   that an unsealer was running).
 
+### Added
+
+- **`task cluster-upgrade` secures the way back before it moves anything (#270).** An encrypted etcd snapshot
+  (`backups/etcd/pre-upgrade-etcd-<timestamp>.snap.gpg`, both artifact buckets) and a labelled copy of the state
+  (`<state key>.pre-upgrade.<timestamp>` in the replica) are written first, under names no retention removes, and the run
+  does not start when it cannot take them (`UPGRADE_SKIP_SNAPSHOT=1` starts without, and prints what that costs). The
+  drill of #270 measured that the way back for the control planes across a minor is a restore of exactly these two;
+  nothing took them. `SNAPSHOT_LABEL` (etcd-snapshot.sh) and `STATE_LABEL` (backup-state.sh, `--list` shows them) are the
+  mechanism. Rung: mocked (new checks in test-state-backups.sh and test-cluster-checks.sh); not run on a cloud, and the state copy back is still the
+  unmeasured part named in docs/upgrade.md. The route decisions of #270 (a supported flag to lower a pin, the Kubernetes
+  rule) stay open.
+
 ### Fixed
 
 - **`seed-openbao.sh` seeded the replica store with the primary provider's S3 keys (#296).** The replica's pair is now asked

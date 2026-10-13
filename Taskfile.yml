@@ -1767,7 +1767,9 @@ tasks:
       Upgrade Kubernetes then Talos on a running cluster, MEASURING the interruption instead of
       asserting there was none. Targets come from cluster/variables.tf; the tfvars is expected to pin
       one patch below. DRY_RUN=1 resolves the versions and stops, needing no cluster. It asks nothing:
-      its applies run with APPROVE=auto. Usage: task upgrade PROVIDER=scaleway [ROLE=management] [KEY=~/.ssh/key]
+      its applies run with APPROVE=auto. Before the first step it takes an encrypted etcd snapshot and a copy of the
+      state that no retention removes (UPGRADE_SKIP_SNAPSHOT=1 to start without). Usage: task upgrade
+      PROVIDER=scaleway [ROLE=management] [KEY=~/.ssh/key]
     # PROVIDER is REQUIRED, not defaulted. Twenty targets used to fall back to
     # scaleway in silence — including destroy and down — so a command typed
     # while working on another cloud aimed at the wrong account. The refusal is
@@ -1784,6 +1786,7 @@ tasks:
       DRY_RUN: '{{.DRY_RUN | default ""}}'
       UPGRADE_TALOS_TO: '{{.UPGRADE_TALOS_TO | default ""}}'
       UPGRADE_K8S_TO: '{{.UPGRADE_K8S_TO | default ""}}'
+      UPGRADE_SKIP_SNAPSHOT: '{{.UPGRADE_SKIP_SNAPSHOT | default ""}}'
     cmds:
       - defer: *receipt
       # cluster-upgrade.sh was reachable from no target and from no workflow —
