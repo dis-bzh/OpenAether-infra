@@ -73,8 +73,11 @@ Known limits). Figures and dates: [`docs/status.md`](docs/status.md). Proxmox ha
 roll with zero failed probes (#42); rolling an upgrade back (#270); the `workload`
 role on any cloud; worker growth, and Longhorn and CNPG under node removal, on OVH
 and Outscale; the failover on any pair but OVH to Scaleway, which was a rebuild at
-one control plane and one worker with no etcd contents; `deploy_flux = true` on a
-real cluster. Each with its rung: [`CHANGELOG.md`](CHANGELOG.md), Known limits.
+one control plane and one worker with no etcd contents; `deploy_flux = true` beyond one
+deploy (Scaleway, management role, 2026-10-12) that ended 201 on the `flux-system`
+assertion and reached every Kustomization Ready only after the manual OpenBao seeding:
+no second `cluster-up`, no upgrade, no `workload` role, no other cloud, not unattended.
+Each with its rung: [`CHANGELOG.md`](CHANGELOG.md), Known limits.
 
 Open items:
 [the open issues](https://github.com/dis-bzh/OpenAether-infra/issues).
