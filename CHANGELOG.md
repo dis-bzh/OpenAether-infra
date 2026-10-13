@@ -16,6 +16,10 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Security
 
+- **Secrets-at-rest cipher said as it is (ANSSI PA-079 R12).** The comments in `modules/talos/main.tf` called the etcd
+  encryption `AES-256-GCM`; Talos' `secretbox` is XSalsa20-Poly1305. `docs/upgrade.md` now records the deviation (not a
+  listed AEAD; Talos offers no AEAD alternative) and that the key has no verified in-place rotation. Docs and comments
+  only, nothing run; it does not add a rotation procedure, a KMS provider or a new cipher.
 - **Day-1 seeding without a root token (#296, #297).** `scripts/ops/seed-openbao.sh` read the root token from the Secret
   `openbao-recovery` and passed it, with every value, on the `kubectl exec` command line. With OpenAether-apps 0.2.0 there is
   no such Secret (the bootstrap revokes the root token), and the script now uses the ServiceAccount `openbao-seeder`:
