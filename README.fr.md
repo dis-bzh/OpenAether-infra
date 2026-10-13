@@ -252,8 +252,8 @@ restent disponibles pour n'en piloter qu'une.
 jour-1, puisque `cluster-up` s'est terminé par `task cluster-verify` ; relance-la
 seule à tout moment. Le parcours jour-1 de la plateforme applicative — escrow,
 signature offline de la PKI, accès aux UIs — est
-[docs/admin-access.fr.md](docs/admin-access.fr.md), et il appartient à la version
-qui déploie des applications.
+[docs/admin-access.fr.md](docs/admin-access.fr.md) ; il vaut pour tout cluster construit avec
+`deploy_flux = true`, dont le DAG Flux ne converge pas avant que son § 3 (`scripts/ops/seed-openbao.sh`) ait tourné.
 
 ### Teardown
 

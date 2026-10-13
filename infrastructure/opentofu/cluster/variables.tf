@@ -361,6 +361,45 @@ variable "git_ref" {
   }
 }
 
+# The OpenBao recovery shares (OpenAether-apps, foundation/vault). OpenBao unseals itself with a static key, so no
+# human holds an unseal share; what the operators hold are RECOVERY shares, used only to generate a root token in an
+# emergency. They come out of `sys/init` encrypted to the keys below, so the cluster never stores a usable share.
+variable "openbao_recovery_pgp_keys" {
+  description = <<-EOT
+    The operators' PGP PUBLIC keys, one per recovery-share holder, each `gpg --export <id> | base64 -w0` (the key needs
+    an encryption subkey). Published as the ConfigMap `openbao-operator-keys`, which switches the OpenBao bootstrap to
+    PRODUCTION mode: N shares, each encrypted to one of these keys. Empty = DEVELOPMENT mode: one plaintext share in a
+    Secret labelled as such. With deploy_flux on a prod cluster, at least 3 keys are required. Public data; the private
+    keys never come near this repository.
+  EOT
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for k in var.openbao_recovery_pgp_keys : can(regex("^[A-Za-z0-9+/]{200,}={0,2}$", trimspace(k)))])
+    error_message = "openbao_recovery_pgp_keys: each entry is a PGP public key exported with `gpg --export <id> | base64 -w0` (one line of base64, no armor, no private key)."
+  }
+  validation {
+    condition     = length(var.openbao_recovery_pgp_keys) == 0 || length(var.openbao_recovery_pgp_keys) >= 3
+    error_message = "openbao_recovery_pgp_keys: either empty (development) or at least 3 keys, so that a threshold of 2 still means two different people."
+  }
+  validation {
+    condition     = length(distinct([for k in var.openbao_recovery_pgp_keys : trimspace(k)])) == length(var.openbao_recovery_pgp_keys)
+    error_message = "openbao_recovery_pgp_keys: the same key twice would let one person hold two shares."
+  }
+}
+
+variable "openbao_recovery_threshold" {
+  description = "How many recovery shares generate a root token. Null = a majority of the keys (floor(N/2)+1). At least 2, at most N."
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.openbao_recovery_threshold == null || (var.openbao_recovery_threshold >= 2 && var.openbao_recovery_threshold == floor(var.openbao_recovery_threshold))
+    error_message = "openbao_recovery_threshold: an integer of at least 2 (one share would be a single point of failure and compromise)."
+  }
+}
+
 variable "deploy_app_lb" {
   description = <<-EOT
     Create the public HTTP/HTTPS load balancer that fronts the application

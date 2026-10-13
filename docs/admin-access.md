@@ -3,32 +3,55 @@
 🇫🇷 [Version française](admin-access.fr.md)
 
 The manual post-deployment steps for a cluster carrying the **application
-platform**, in order. **0.2.0 deploys none of it** — an infrastructure-only
-cluster was already verified by `task cluster-up`, and nothing below applies.
-Validated on Scaleway, 2026-07-25.
+platform**, in order: any cluster built with `deploy_flux = true`. A cluster built
+with `deploy_flux = false` (the default) runs none of it, and nothing below
+applies. On a `deploy_flux = true` cluster `task cluster-up` still ends red, by
+design (the verifier asserts that Flux is absent), and Flux sits at 29 of 35
+Kustomizations until § 3 has run: that is expected, and § 3 is the remedy.
 Convention: `KC=infrastructure/opentofu/cluster/kubeconfig`.
+
+OpenBao keeps **no root token and no unseal key in a log or a readable Secret**:
+it unseals itself with a static key, and what operators hold are *recovery* shares
+(production: encrypted to their PGP keys, from `openbao_recovery_pgp_keys`).
+Design and runbooks: `OpenAether-apps/apps/base/foundation/vault/README.md`. This
+page needs apps 0.2.0 or later; a cluster still on apps 0.1.0 keeps the older
+bootstrap and the older instructions of infra 0.2.0.
+
+For the commands below, the helper that exchanges a ServiceAccount token for an
+OpenBao token *inside the pod* (no OpenBao token ever crosses your terminal):
+
+```bash
+bao_admin() {
+  kubectl --kubeconfig $KC -n foundation-vault create token openaether-admin --duration=15m \
+  | kubectl --kubeconfig $KC -n foundation-vault exec -i openbao-0 -- sh -c \
+      'BAO_TOKEN="$(bao write -field=token auth/kubernetes/login role=openaether-admin jwt="$(cat)")" exec bao "$@"' sh "$@"
+}
+```
 
 ## 1. Escrow (IMMEDIATE)
 
-Three secrets into Bitwarden EU, then wiped from local output:
+Four things off the cluster, in your password manager or vault, then wiped from local output.
+**Losing the seal key loses every secret in OpenBao**: it is the master key of its data.
 
-| What | Where | Why |
+| What | How | Why |
 |---|---|---|
-| Shamir shares (5/3) + root token | `kubectl logs -n foundation-vault job/openbao-init` (also Secret `openbao-recovery`) | OpenBao unseal/DR — the truth must live offline |
-| restic password | `kubectl logs -n foundation-vault job/openbao-vault-bootstrap` (printed ONCE) | without it the backups are undecryptable the day OpenBao is lost |
+| Seal key | `kubectl -n foundation-vault get secret openbao-seal-key -o jsonpath='{.data.key}' \| base64 -d \| gpg --encrypt -r <you> -o openbao-seal-key.gpg` | OpenBao DR: a raft snapshot is encrypted by it |
+| Recovery shares | `kubectl -n foundation-vault get secret openbao-recovery-shares -o yaml > openbao-recovery-shares.yaml` (PGP-encrypted: safe to store anywhere) | break-glass root token and DR; the Secret dies with the cluster |
+| restic password | `bao_admin kv get -mount=secret -field=password backup/restic` | without it the backups are undecryptable the day OpenBao is lost |
 | `TF_VAR_encryption_passphrase` | already in your vault | tfstate + gpg artifacts + etcd snapshots |
+
+A cluster without `openbao_recovery_pgp_keys` is a **development** bootstrap: one plaintext share in
+`openbao-recovery-dev`, labelled as such. Do not put anything that matters on it.
 
 ## 2. Sign the PKI intermediate (unblocks HTTPS)
 
-The bootstrap Job prints the CSR. Sign it **offline** with the root CA, then:
+The first `openbao-vault-bootstrap` run prints the CSR (public data):
+`kubectl --kubeconfig $KC -n foundation-vault logs job/openbao-vault-bootstrap | sed -n '/BEGIN CERTIFICATE REQUEST/,/END CERTIFICATE REQUEST/p'`.
+Sign it **offline** with the root CA, then:
 
 ```bash
-# https, and skip-verify: the listener holds the cluster's own self-signed pair.
-# This said `http://` until 2026-08-14 and answered "Client sent an HTTP request
-# to an HTTPS server" — the command as written could never have worked.
-kubectl --kubeconfig $KC exec -i openbao-0 -n foundation-vault -- \
-  env BAO_ADDR=https://127.0.0.1:8200 BAO_SKIP_VERIFY=true BAO_TOKEN=<root_token> \
-  bao write pki/intermediate/set-signed certificate=@- < intermediate-signed.pem
+kubectl --kubeconfig $KC -n foundation-vault exec -i openbao-0 -- sh -c 'cat > /tmp/int.crt' < intermediate-signed.pem
+bao_admin write pki/intermediate/set-signed certificate=@/tmp/int.crt
 ```
 
 `openaether-tls` then goes Ready on its own and the 443 listener is programmed.
@@ -36,49 +59,42 @@ Runbook: `OpenAether-apps/apps/base/foundation/vault/pki-root-offline-runbook.md
 
 ## 3. Seed the backup destinations
 
-**`scripts/ops/seed-openbao.sh <provider>` does all of this**, write-if-absent so
-a re-run cannot rotate `backup/restic` and orphan every existing backup. Use it;
-the commands below are what it runs and why.
+**`source .env.sh && scripts/ops/seed-openbao.sh <provider>` does all of this.** It needs the
+S3 keys of the primary store and, when the replica is on another cloud, of that cloud
+(`<CLOUD>_BACKUP_AWS_*`: the replica is opened with the keys of whoever holds it), and
+reads `OA_SLACK_WEBHOOK_URL` / `OA_DEADMANSSWITCH_URL` (placeholders are seeded, with a
+warning, when unset). The buckets must **pre-exist** (restic does not create them), on
+different providers in production: the application backups bucket
+`s3-<project>-<provider>-backups-<env>` and its `-backup` twin; the script announces the first.
 
-This is not optional polish: without `backup/s3-primary` alone, six Kustomizations
-stay not-Ready and the DAG never converges — measured on Scaleway 2026-08-14,
-where all 35 went Ready within two minutes of seeding. A deploy is not finished
-until this has run.
+It is **create-only**: every secret is written with `cas=0`, so a re-run cannot overwrite
+one (a rotated value does not fail, it breaks whatever holds the old one). Its identity is
+the ServiceAccount `openbao-seeder`: Kubernetes issues a 10-minute token, OpenBao exchanges it
+inside the pod for a token whose policy `secret-seeder` can **create** the five paths below
+and read their metadata, nothing else. Neither the token nor a value is on a command line;
+the script prints paths, never values. The restic password, the database passwords and
+Longhorn's passphrase are **not** seeded here: `openbao-vault-bootstrap` generates them
+inside OpenBao and prints none.
 
-Buckets must **pre-exist** (restic does not create them), on different providers
-in production.
+This is not optional polish: without `backup/s3-primary` alone, six Kustomizations stay
+not-Ready and the DAG never converges (measured on Scaleway: 29 of 35 until seeded, all 35
+within about two minutes after). A deploy is not finished until this has run.
 
-```bash
-bao kv put secret/backup/s3-primary endpoint=… bucket=… access_key=… secret_key=…
-bao kv put secret/backup/s3-replica endpoint=… bucket=… access_key=… secret_key=…
-bao kv put secret/observability/loki-s3 endpoint=… bucket=… accessKey=… secretKey=…
-# Slack incoming webhook — Alertmanager will not start without it, on purpose
-bao kv put secret/observability/alertmanager-slack webhook-url=https://hooks.slack.com/services/…
-# On a throwaway cluster ANY value works: Alertmanager starts, delivery just fails.
-# Dead-man's switch — the ONLY signal that survives this cluster dying.
-# Alertmanager will not start without it either. Slack-only? Then drop the
-# Watchdog route from vm-customresources/vmalert.yaml, deliberately.
-bao kv put secret/observability/alertmanager-deadmansswitch url=https://hc-ping.com/<uuid>
-# Also required (missed on a first pass, found live 2026-07-30): the CNPG app
-# DB passwords and Longhorn's volume-encryption passphrase. Without these the
-# grafana-db/zitadel-db Cluster still becomes Ready (bootstrap generates ITS
-# OWN placeholder if the secret is absent at initdb time) but the app can't
-# actually connect — auth fails silently until this is seeded AND the
-# Postgres role is aligned (ALTER ROLE ... WITH PASSWORD, once, if initdb
-# already ran with a different placeholder).
-bao kv put secret/grafana/db password=$(openssl rand -base64 24 | tr -d '=+/')
-bao kv put secret/zitadel/db username=zitadel password=$(openssl rand -base64 24 | tr -d '=+/')
-bao kv put secret/backup/restic password=$(openssl rand -base64 36 | tr -d '=+/')
-bao kv put secret/longhorn/encryption passphrase=$(openssl rand -base64 48 | tr -d '=+/')
+```text
+secret/backup/s3-primary                      endpoint bucket access_key secret_key
+secret/backup/s3-replica                      endpoint bucket access_key secret_key   (the replica cloud's keys)
+secret/observability/loki-s3                  endpoint bucket accessKey secretKey     (its own destination: Loki never writes to the backup bucket)
+secret/observability/alertmanager-slack       webhook-url   (Alertmanager will not start without it; on a throwaway cluster any value works)
+secret/observability/alertmanager-deadmansswitch   url      (the only signal that survives this cluster dying; Slack-only? drop the Watchdog route from vm-customresources/vmalert.yaml, deliberately)
 ```
 
-`s3-primary` feeds three mechanisms at once: restic, CNPG PITR and Longhorn
-volume backups. **Loki gets its own destination** so it never has write access to
-the backup bucket.
+Clusters seeded before this change keep what they have (create-only): if `backup/s3-replica`
+holds the primary's keys for a replica on another cloud (#296), correct it by hand with
+`bao_admin kv put -mount=secret backup/s3-replica …`.
 
-Until seeded, the ExternalSecrets stay NotReady, the CronJobs idle and Loki does
-not install — deliberate. Test with
-`kubectl create job --from=cronjob/openbao-snapshot test -n foundation-vault`.
+`s3-primary` feeds three mechanisms at once: restic, CNPG PITR and Longhorn volume backups.
+Until seeded, the ExternalSecrets stay NotReady, the CronJobs idle and Loki does not install:
+deliberate. Test with `kubectl create job --from=cronjob/openbao-snapshot test -n foundation-vault`.
 
 ## 4. Preflight the quotas — before deploying
 
@@ -227,7 +243,7 @@ regression.
 
 ## Checklist
 
-- [ ] Shamir shares + root token escrowed
+- [ ] OpenBao seal key + recovery shares escrowed
 - [ ] restic password escrowed
 - [ ] Intermediate signed (HTTPS working)
 - [ ] Backup buckets created + destinations seeded

@@ -42,25 +42,47 @@ flux schema version >/dev/null 2>&1 || {
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-# Fixed dummy values for every ${...} the template declares — see
-# cluster/main.tf's templatefile() call for the real ones (grep it if this
-# list and that call ever disagree). None need to resolve to anything real:
-# the point is that the RENDERED yaml is schema-valid, not that these values
-# mean something.
-sed \
-  -e 's|\${namespace}|flux-system|g' \
-  -e 's|\${git_repo_url}|https://example.invalid/openaether.git|g' \
-  -e 's|\${git_ref}|refs/heads/main|g' \
-  -e 's|\${cluster_role}|management|g' \
-  -e 's|\${cluster_id}|openaether-check-flux-schema|g' \
-  -e 's|\${backup_target_url}|s3://openaether-check@fr-par/|g' \
-  -e 's|\${backup_s3_bucket}|openaether-check|g' \
-  -e 's|\${backup_s3_endpoint}|s3.fr-par.example.invalid|g' \
-  "$TEMPLATE" > "$tmp/rendered.yaml"
+# Rendered by OpenTofu's own templatefile(), not by sed: the template has %{ if }/%{ for } directives (the OpenBao
+# recovery-share ConfigMap), and a different engine would validate a different manifest. Both shapes are checked: no
+# keys (a development cluster) and three keys (a production one). Fixed dummy values — see cluster/main.tf's
+# templatefile() call for the real ones (grep it if this list and that call ever disagree). None need to resolve
+# to anything real: the point is that the RENDERED yaml is schema-valid, not that these values mean something.
+command -v tofu >/dev/null 2>&1 || { echo "✗ tofu not found — the template is rendered with templatefile()" >&2; exit 1; }
+mkdir -p "$tmp/render"
+cat > "$tmp/render/main.tf" <<HCL
+variable "keys" {
+  type = list(string)
+}
+output "manifest" {
+  value = templatefile("$ROOT/$TEMPLATE", {
+    namespace         = "flux-system"
+    git_repo_url      = "https://example.invalid/openaether.git"
+    git_ref           = "refs/heads/main"
+    cluster_role      = "management"
+    cluster_id        = "openaether-check-flux-schema"
+    backup_target_url = "s3://openaether-check@fr-par/"
+    backup_s3_bucket  = "openaether-check"
+    backup_s3_endpoint = "s3.fr-par.example.invalid"
+    openbao_pgp_keys  = var.keys
+    openbao_threshold = 2
+  })
+}
+HCL
+(cd "$tmp/render" && tofu init -input=false >/dev/null 2>&1) || { echo "✗ tofu init failed in the render sandbox" >&2; exit 1; }
+render() { # <name> <keys json>
+  (cd "$tmp/render" && tofu apply -auto-approve -input=false -var "keys=$2" >/dev/null 2>&1 && tofu output -raw manifest) > "$tmp/$1.yaml" ||
+    { echo "✗ the template does not render ($1)" >&2; exit 1; }
+}
+render rendered-dev '[]'
+render rendered-prod '["AAAA","BBBB","CCCC"]'
+grep -q 'name: openbao-operator-keys' "$tmp/rendered-prod.yaml" && ! grep -q 'name: openbao-operator-keys' "$tmp/rendered-dev.yaml" ||
+  { echo "✗ the recovery-share ConfigMap is not rendered exactly when keys are given" >&2; exit 1; }
 
 flux schema extract crd "$VENDORED" -d "$tmp/schemas" >/dev/null
 
-flux schema validate "$tmp/rendered.yaml" \
-  --schema-location "$tmp/schemas" --schema-location default --verbose
+for f in rendered-dev rendered-prod; do
+  flux schema validate "$tmp/$f.yaml" \
+    --schema-location "$tmp/schemas" --schema-location default --verbose
+done
 
 echo "OK — flux-bootstrap.yaml.tftpl renders to schema-valid manifests (CRDs from the vendored flux-install.yaml)."

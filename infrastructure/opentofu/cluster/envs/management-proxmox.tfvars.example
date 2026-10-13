@@ -95,6 +95,18 @@ git_repo_url = "https://github.com/dis-bzh/OpenAether-apps.git"
 # cluster within the reconcile interval. refs/heads/<branch> to test.
 git_ref          = "refs/tags/0.1.0"
 
+# OpenBao recovery-share holders (only read when deploy_flux = true). OpenBao unseals itself; what the operators hold are
+# RECOVERY shares, for an emergency root token. Each key is a person's PGP PUBLIC key, `gpg --export <id> | base64 -w0`
+# (it needs an encryption subkey). Empty = a DEVELOPMENT bootstrap (one plaintext share in a labelled Secret).
+# environment = "prod" with deploy_flux = true refuses to plan without at least 3. Then, once: escrow the seal key
+# (OpenAether-apps foundation/vault/README.md, Day 0).
+# openbao_recovery_pgp_keys = [
+#   "mQGNBF...",   # operator 1
+#   "mQGNBF...",   # operator 2
+#   "mQGNBF...",   # operator 3
+# ]
+# openbao_recovery_threshold = 2   # default: a majority
+
 # --- Backup / DR object stores (any S3-compatible store) ----------------------
 # Proxmox has no native object storage — point these at an external S3 (e.g. a
 # Scaleway/OVH bucket). Each store is opened with the keys of the cloud that

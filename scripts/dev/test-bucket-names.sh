@@ -129,13 +129,11 @@ for kind in primary replica; do
 done
 
 echo "=== the Day-1 seeder names the SAME backups bucket backup.tf publishes ==="
-# Same shape: RUN seed-openbao.sh against a stub kubectl (every path reads as
-# already set, so nothing is written) and read the bucket it announces. It was
-# the seventh place building the name and the only one dropping the suffix, so
-# restic and Loki were seeded with a bucket backup.tf never created (#166).
+# Same shape: RUN seed-openbao.sh against a stub kubectl that answers nothing (it gives up after OPENBAO_WAIT=0, having
+# announced the bucket first) and read the bucket it announces. It was the seventh place building the name and the only
+# one dropping the suffix, so restic and Loki were seeded with a bucket backup.tf never created (#166).
 cat >"$SB/kubectl" <<'STUB'
 #!/usr/bin/env bash
-case "$*" in "get secret openbao-recovery"*) printf 'stub-token' | base64 ;; "exec "*" secrets list") printf 'secret/\n' ;; esac
 exit 0
 STUB
 chmod +x "$SB/kubectl"; printf 'apiVersion: v1\n' >"$SB/kubeconfig"

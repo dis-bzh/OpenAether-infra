@@ -14,6 +14,44 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ## [Unreleased]
 
+### Security
+
+- **Day-1 seeding without a root token (#296, #297).** `scripts/ops/seed-openbao.sh` read the root token from the Secret
+  `openbao-recovery` and passed it, with every value, on the `kubectl exec` command line. With OpenAether-apps 0.2.0 there is
+  no such Secret (the bootstrap revokes the root token), and the script now uses the ServiceAccount `openbao-seeder`:
+  Kubernetes issues a 10-minute token, OpenBao exchanges it inside the pod for a token whose policy `secret-seeder` can
+  **create** five paths and read their metadata. The token and the documents travel on stdin, never on a command line; every
+  secret is written with `cas=0`, so a re-run cannot overwrite one. The script no longer seeds `backup/restic`,
+  `grafana/db`, `zitadel/db` or `longhorn/encryption`: `openbao-vault-bootstrap` generates them inside OpenBao, create-only,
+  and prints none, which removes the race of #297 (the script could win it and the escrow print was lost). **Needs apps 0.2.0:**
+  on a cluster still bootstrapped by apps 0.1.0 the script fails and says to use the 0.2.0 tag's script. Rung: mocked (a stub
+  `kubectl`, 66 checks); the remote loop was run once against a real OpenBao 2.7.1 with the real policy (create, left alone,
+  refused). The Kubernetes-auth login is not exercised until a cluster runs apps 0.2.0.
+- **`openbao_recovery_pgp_keys` / `openbao_recovery_threshold`: who holds the OpenBao recovery shares.** OpenBao unseals itself
+  with a static key, so no human holds an unseal share; what operators hold are recovery shares, used only to generate a root
+  token. Given at least three PGP public keys, the Flux bootstrap manifest also publishes the ConfigMap
+  `openbao-operator-keys`, which switches the apps bootstrap to production mode: one share per key, encrypted to it. Without
+  keys the bootstrap is a development one (a single plaintext share in a labelled Secret). `environment = "prod"` with
+  `deploy_flux = true` refuses to plan without three keys, and a threshold above the number of keys, below 2, a duplicate key
+  or a private key pasted by mistake are refused. Rung: mocked (`tofu test`, 9 runs; the template rendered by OpenTofu
+  in both shapes and validated by `check-flux-schema.sh`).
+- `cluster-security-tests.sh` 4.5 now asserts that no Shamir-share or root-token Secret exists in `foundation-vault` (it asserted
+  that an unsealer was running).
+
+### Fixed
+
+- **`seed-openbao.sh` seeded the replica store with the primary provider's S3 keys (#296).** The replica's pair is now asked
+  for with its own endpoint (`resolve-s3-cred.sh <provider> ak|sk backup <replica endpoint>`), as every other replica
+  consumer does, and the run fails before any write when that pair is empty. A cluster seeded earlier keeps what it has
+  (create-only): correct `backup/s3-replica` by hand (docs/admin-access.md, section 3). Rung: mocked (a cross-provider tfvars).
+- **The red of a `deploy_flux = true` cluster pointed nowhere (#298, #300).** The `flux-system exists` line now names
+  `seed-openbao.sh` and `admin-access.md` § 3, the app-load-balancer line states that its "nothing serves" holds for an
+  infra-only cluster, and `README.md` / `admin-access.md` no longer say that Day-1 belongs to a later release: it applies to
+  any cluster built with `deploy_flux = true`. The assertion that Flux is absent is unchanged.
+- **Day-1 inputs written nowhere (#299, documented part).** `docs/admin-access.md` § 3 now names `source .env.sh`, the two
+  alerting variables, the replica cloud's `<CLOUD>_BACKUP_AWS_*` keys and the two bucket names (`ensure-buckets.sh` creating
+  them stays an open decision on #299).
+
 ### Validated
 
 - **`deploy_flux = true`, Scaleway, 2026-10-12, on the 0.2.0 tag commit, once, stage by stage from a maintainer's lab
