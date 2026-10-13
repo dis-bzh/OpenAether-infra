@@ -45,7 +45,7 @@ esac
 exit 0
 EOF
 chmod +x "$W/stub"
-for s in internal/talos-version.sh internal/ensure-buckets.sh internal/converge-versions.sh \
+for s in internal/talos-version.sh internal/ensure-buckets.sh internal/check-openbao-keys.sh internal/converge-versions.sh \
          internal/tf-backend.sh internal/bootstrap-in-state.sh internal/explain-failure.sh bootstrap/talos-image.sh \
          bootstrap/render-bootstrap-manifests.sh bootstrap/talos-tunnels.sh bootstrap/adopt-bootstrap.sh bootstrap/grow-nodes.sh internal/refuse-node-deletes.sh \
          ops/backup-state.sh dev/infra-verify.sh; do
@@ -228,6 +228,11 @@ run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
 [ "$rc" = 0 ] && [ "$(calls '^ensure-buckets.sh .*--preflight$')" = 1 ] \
   && ok "control: a good passphrase reaches the preflight ensure-buckets once" \
   || bad "control, exit $rc, preflight calls $(calls '^ensure-buckets.sh .*--preflight$'): $(tail_of)"
+# The OpenBao recovery-share keys are checked in the same pre-flight, before the buckets and before anything bills.
+[ "$(calls '^check-openbao-keys.sh .*management-scaleway.tfvars$')" = 1 ] \
+  && [ "$(awk '/^check-openbao-keys.sh /{k=NR} /^ensure-buckets.sh .*--preflight$/{b=NR} END{print (k && b && k < b) ? "yes" : "no"}' "$W/calls.log")" = yes ] \
+  && ok "the recovery-share keys are checked once, before the preflight ensure-buckets" \
+  || bad "check-openbao-keys.sh calls: $(calls '^check-openbao-keys.sh ') / order: $(grep -nE '^(check-openbao-keys|ensure-buckets)' "$W/calls.log" | head -3 | tr '\n' ' ')"
 for c in "|is not set" "change-me-fixture-passphrase|is still the example"; do
   EXTRA="TF_VAR_encryption_passphrase=${c%%|*}" run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
   # Anchored: go-task echoes the whole script into $O, so an unanchored match is always true.
