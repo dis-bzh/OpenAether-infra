@@ -68,8 +68,8 @@ in git. 0.1.0 is the first entry describing something proven.
 
 - **The Day-1 path of the OpenBao redesign, `deploy_flux = true`, Scaleway, 2026-10-13, on this branch (8d4a036 for the apply and the
   seeding; later commits touched the upgrade path and documentation only), with OpenAether-apps `claude/security-bootstrap`.**
-  Management role, 3 control planes + 2 workers, replica store on OVH. `cluster-up` applied (53 resources) and ended 201 after 570 s on
-  the `flux-system exists` line, which now names `seed-openbao.sh`. Three PGP public keys in `openbao_recovery_pgp_keys` produced the
+  Management role, 3 control planes + 2 workers, replica store on OVH. `cluster-up` ended 201 after 570 s on
+  the `flux-system exists` line (13 passed, 1 failed), which now names `seed-openbao.sh`. Three PGP public keys in `openbao_recovery_pgp_keys` produced the
   ConfigMap `openbao-operator-keys` in the Flux bootstrap manifest and OpenBao bootstrapped in production mode (three shares encrypted
   to the keys, threshold 2). `seed-openbao.sh` ran with a ServiceAccount token (no root token exists): five paths written in 2.6 s, all
   five left alone on the second run; `backup/s3-replica` carried the replica cloud's endpoint and keys, not the primary's (#296 observed
