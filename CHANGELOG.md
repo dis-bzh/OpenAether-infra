@@ -14,7 +14,76 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ## [Unreleased]
 
+### Security
+
+- **Day-1 seeding without a root token (#296, #297).** `scripts/ops/seed-openbao.sh` read the root token from the Secret
+  `openbao-recovery` and passed it, with every value, on the `kubectl exec` command line. With OpenAether-apps 0.2.0 there is
+  no such Secret (the bootstrap revokes the root token), and the script now uses the ServiceAccount `openbao-seeder`:
+  Kubernetes issues a 10-minute token, OpenBao exchanges it inside the pod for a token whose policy `secret-seeder` can
+  **create** five paths and read their metadata. The token and the documents travel on stdin, never on a command line; every
+  secret is written with `cas=0`, so a re-run cannot overwrite one. The script no longer seeds `backup/restic`,
+  `grafana/db`, `zitadel/db` or `longhorn/encryption`: `openbao-vault-bootstrap` generates them inside OpenBao, create-only,
+  and prints none, which removes the race of #297 (the script could win it and the escrow print was lost). **Needs apps 0.2.0:**
+  on a cluster still bootstrapped by apps 0.1.0 the script fails and says to use the 0.2.0 tag's script. Rung: mocked (a stub
+  `kubectl`, 66 checks); the remote loop was run once against a real OpenBao 2.7.1 with the real policy (create, left alone,
+  refused). The Kubernetes-auth login is not exercised until a cluster runs apps 0.2.0.
+- **`openbao_recovery_pgp_keys` / `openbao_recovery_threshold`: who holds the OpenBao recovery shares.** OpenBao unseals itself
+  with a static key, so no human holds an unseal share; what operators hold are recovery shares, used only to generate a root
+  token. Given at least three PGP public keys, the Flux bootstrap manifest also publishes the ConfigMap
+  `openbao-operator-keys`, which switches the apps bootstrap to production mode: one share per key, encrypted to it. Without
+  keys the bootstrap is a development one (a single plaintext share in a labelled Secret). `environment = "prod"` with
+  `deploy_flux = true` refuses to plan without three keys, and a threshold above the number of keys, below 2, a duplicate key
+  or a private key pasted by mistake are refused. Rung: mocked (`tofu test`, 9 runs; the template rendered by OpenTofu
+  in both shapes and validated by `check-flux-schema.sh`).
+- **`task cluster-up` checks the OpenBao recovery-share keys before it bills** (`scripts/internal/check-openbao-keys.sh`, tested against real
+  gpg keys): `sys/init` commits the cluster before it encrypts the shares, so a key with no usable encryption subkey (a signing-only or
+  expired key) ends the first run in a re-init. Each key's fingerprint is printed. Found by an independent review of the redesign.
+- `cluster-security-tests.sh` 4.5 now asserts that no Shamir-share or root-token Secret exists in `foundation-vault` (it asserted
+  that an unsealer was running).
+
+### Added
+
+- **`task cluster-upgrade` secures the way back before it moves anything (#270).** An encrypted etcd snapshot
+  (`backups/etcd/pre-upgrade-etcd-<timestamp>.snap.gpg`, both artifact buckets) and a labelled copy of the state
+  (`<state key>.pre-upgrade.<timestamp>` in the replica) are written first, under names no retention removes, and the run
+  does not start when it cannot take them (`UPGRADE_SKIP_SNAPSHOT=1` starts without, and prints what that costs). The
+  drill of #270 measured that the way back for the control planes across a minor is a restore of exactly these two;
+  nothing took them. `SNAPSHOT_LABEL` (etcd-snapshot.sh) and `STATE_LABEL` (backup-state.sh, `--list` shows them) are the
+  mechanism. Rung: mocked (new checks in test-state-backups.sh and test-cluster-checks.sh); not run on a cloud, and the state copy back is still the
+  unmeasured part named in docs/upgrade.md. The route decisions of #270 (a supported flag to lower a pin, the Kubernetes
+  rule) stay open.
+
+### Fixed
+
+- **`seed-openbao.sh` seeded the replica store with the primary provider's S3 keys (#296).** The replica's pair is now asked
+  for with its own endpoint (`resolve-s3-cred.sh <provider> ak|sk backup <replica endpoint>`), as every other replica
+  consumer does, and the run fails before any write when that pair is empty. A cluster seeded earlier keeps what it has
+  (create-only): correct `backup/s3-replica` by hand (docs/admin-access.md, section 3). Rung: mocked (a cross-provider tfvars).
+- **The red of a `deploy_flux = true` cluster pointed nowhere (#298, #300).** The `flux-system exists` line now names
+  `seed-openbao.sh` and `admin-access.md` § 3, the app-load-balancer line states that its "nothing serves" holds for an
+  infra-only cluster, and `README.md` / `admin-access.md` no longer say that Day-1 belongs to a later release: it applies to
+  any cluster built with `deploy_flux = true`. The assertion that Flux is absent is unchanged.
+- **Day-1 inputs written nowhere (#299, documented part).** `docs/admin-access.md` § 3 now names `source .env.sh`, the two
+  alerting variables, the replica cloud's `<CLOUD>_BACKUP_AWS_*` keys and the two bucket names (`ensure-buckets.sh` creating
+  them stays an open decision on #299).
+
 ### Validated
+
+- **The Day-1 path of the OpenBao redesign, `deploy_flux = true`, Scaleway, 2026-10-13, on this branch (8d4a036 for the apply and the
+  seeding; later commits touched the upgrade path and documentation only), with OpenAether-apps `claude/security-bootstrap`.**
+  Management role, 3 control planes + 2 workers, replica store on OVH. `cluster-up` ended 201 after 570 s on
+  the `flux-system exists` line (13 passed, 1 failed), which now names `seed-openbao.sh`. Three PGP public keys in `openbao_recovery_pgp_keys` produced the
+  ConfigMap `openbao-operator-keys` in the Flux bootstrap manifest and OpenBao bootstrapped in production mode (three shares encrypted
+  to the keys, threshold 2). `seed-openbao.sh` ran with a ServiceAccount token (no root token exists): five paths written in 2.6 s, all
+  five left alone on the second run; `backup/s3-replica` carried the replica cloud's endpoint and keys, not the primary's (#296 observed
+  on a real cross-provider setup). `task cluster-security` 30 of 31 passed (one skipped: no MinIO namespace), including the new 4.5. Torn
+  down in the two commands (53 resources), `purge-orphans` and `verify-provider-clean` clean, the lab's seven buckets and its images
+  deleted. **A second run on the hardened code (87daaf4, same day):** `task cluster-up` refused a signing-only key in
+  `openbao_recovery_pgp_keys` in one second, before any resource was created, printing each key's fingerprint; with the key replaced it
+  applied and bootstrapped unaided, the seeding wrote five paths, the hardened apps bootstrap passed (see that repository's CHANGELOG),
+  35 of 35 Kustomizations were Ready 132 s after the seeding began, `cluster-security` 30 of 31. **Not run:** `cluster-upgrade` with its new
+  pre-upgrade safeguards on a cloud, a second `cluster-up`, another cloud or role. What the runs found in OpenAether-apps is in that
+  repository's CHANGELOG.
 
 - **`deploy_flux = true`, Scaleway, 2026-10-12, on the 0.2.0 tag commit, once, stage by stage from a maintainer's lab
   script.** Management role, 3 control planes across three zones + 2 workers (`POP2-4C-16G`), `git_ref = refs/tags/0.1.0`

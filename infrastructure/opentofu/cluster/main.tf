@@ -449,6 +449,9 @@ locals {
     git_ref      = var.git_ref
     cluster_role = var.cluster_role
     cluster_id   = local.cluster_id
+    # Recovery-share holders of OpenBao (openbao-keys.tf). Empty list = the ConfigMap is not rendered.
+    openbao_pgp_keys  = local.openbao_pgp_keys
+    openbao_threshold = local.openbao_threshold
     # Destination for Longhorn volume backups. The full URL is assembled HERE:
     # on the manifest side `value:` is a plain string and Flux substitution
     # cannot concatenate conditionally (no `${x:+y}`).

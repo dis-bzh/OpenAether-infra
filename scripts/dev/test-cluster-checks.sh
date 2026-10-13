@@ -66,6 +66,8 @@ cat >"$STUB_DIR/kubectl" <<'STUB'
 #!/usr/bin/env bash
 argv="$(basename "$0") $*"
 printf '%s\n' "$argv" >>"${STUB_LOG:-/dev/null}"
+# The labels a call was made with (the pre-upgrade safeguards pass them through the environment, not the argv).
+[ -z "${SNAPSHOT_LABEL:-}${STATE_LABEL:-}" ] || printf 'labels SNAPSHOT_LABEL=%s STATE_LABEL=%s (for %s)\n' "${SNAPSHOT_LABEL:-}" "${STATE_LABEL:-}" "$argv" >>"${STUB_LOG:-/dev/null}"
 # STUB_IMAGE_BUILD: `task image-build` runs that real talos-image.sh the way the
 # Taskfile does, with its tofu, aws and curl stubbed, so its pin handling is real.
 if [ -n "${STUB_IMAGE_BUILD:-}" ] && [[ $argv == "task image-build "* ]]; then
@@ -247,7 +249,8 @@ VERIFY_OK+='delete namespace upgrade-probe\t0\t\n'
 # and the next run would skip that step for ever. The survey uses custom-columns
 # so it is a different question from the jsonpath counters below, which is what
 # lets one stub plan answer "v0.0.1 today" and "v0.0.2 afterwards" in one run.
-SURVEY_PRE='custom-columns=V:.status.nodeInfo.kubeletVersion\t0\tv0.0.1%%v0.0.1\n'
+SURVEY_PRE='task etcd-snapshot\t0\t\ntask backup-state\t0\t\n'
+SURVEY_PRE+='custom-columns=V:.status.nodeInfo.kubeletVersion\t0\tv0.0.1%%v0.0.1\n'
 SURVEY_PRE+='custom-columns=V:.status.nodeInfo.osImage\t0\tTalos (v0.0.1)%%Talos (v0.0.1)\n'
 
 UPGRADE_OK="$SURVEY_PRE"
@@ -354,6 +357,43 @@ called 'task image-build PROVIDER=stubcloud VERSION=v0.0.2 ENSURE=1' \
 { called 'APPROVE=auto -- --cp-only --upgrade' && called 'APPROVE=auto -- --workers-only --upgrade'; } \
   && ok "the roll is driven non-interactively with APPROVE=auto, control planes first" \
   || bad "the roll was not called with APPROVE=auto (an unattended lane would hang on its prompt)"
+
+# --- the way back is secured BEFORE anything moves (#270) -----------------------
+called "task etcd-snapshot PROVIDER=${PROVIDER} ROLE=${ROLE} KEY=${KEYFILE}" \
+  && ok "an encrypted etcd snapshot is taken for this provider, role and key" || bad "no task etcd-snapshot call: $(grep -c . "$STUB_LOG") calls"
+called "task backup-state PROVIDER=${PROVIDER} ROLE=${ROLE}" \
+  && ok "…and the state is copied" || bad "no task backup-state call"
+called "labels SNAPSHOT_LABEL=pre-upgrade STATE_LABEL= (for task etcd-snapshot" \
+  && called "labels SNAPSHOT_LABEL= STATE_LABEL=pre-upgrade (for task backup-state" \
+  && ok "…both labelled pre-upgrade, so no retention removes them" || bad "the labels did not reach the tasks: $(grep '^labels' "$STUB_LOG")"
+{ [ "$(last_at 'task etcd-snapshot')" -lt "$(first_at 'task image-build')" ] \
+  && [ "$(last_at 'task backup-state')" -lt "$(first_at 'task image-build')" ] \
+  && [ "$(last_at 'task backup-state')" -lt "$(first_at 'services/http:upgrade-probe')" ] \
+  && [ "$(last_at 'task backup-state')" -lt "$(first_at 'task infra-apply')" ]; } \
+  && ok "…both before the image, the service probe and the first apply" || bad "a snapshot was taken after something had moved"
+said 'way back secured' && ok "and the run says where they are" || bad "no 'way back secured' line"
+
+tfvars v0.0.1 v0.0.1
+plan "task etcd-snapshot\t1\ttunnels closed\n${UPGRADE_OK}${VERIFY_OK}"
+upgrade
+{ [ "$RUN_RC" -ne 0 ] && said 'pre-upgrade etcd snapshot could not be taken' && said 'UPGRADE_SKIP_SNAPSHOT=1'; } \
+  && ok "a snapshot that cannot be taken stops the run, naming the way to start without" || bad "the run went on without a snapshot (rc=$RUN_RC)"
+called 'task infra-apply' && bad "an apply ran although the snapshot failed" || ok "…before any apply"
+tfvars v0.0.1 v0.0.1
+plan "task backup-state\t1\tno replica\n${UPGRADE_OK}${VERIFY_OK}"
+upgrade
+{ [ "$RUN_RC" -ne 0 ] && said 'copy of the state could not be written'; } \
+  && ok "a state copy that cannot be written stops the run as well" || bad "the run went on without a state copy (rc=$RUN_RC)"
+called 'task infra-apply' && bad "an apply ran although the state copy failed" || ok "…before any apply"
+tfvars v0.0.1 v0.0.1
+plan "${UPGRADE_OK}${VERIFY_OK}"
+run env UPGRADE_SKIP_SNAPSHOT=1 "$UPGRADE" "$PROVIDER" "$ROLE" "$KEYFILE"
+{ [ "$RUN_RC" -eq 0 ] && said 'UPGRADE_SKIP_SNAPSHOT=1' && said 'nothing brings it back'; } \
+  && ok "UPGRADE_SKIP_SNAPSHOT=1 starts anyway and says what that costs" || bad "the skip is silent or refused (rc=$RUN_RC)"
+called 'task etcd-snapshot' && bad "a snapshot was taken although it was skipped" || ok "…and takes none"
+tfvars v0.0.1 v0.0.1
+plan "${UPGRADE_OK}${VERIFY_OK}"
+upgrade
 
 # --- and what it verifies at the end ------------------------------------------
 # One verifier, because the release ships one floor. This asserts the chain is

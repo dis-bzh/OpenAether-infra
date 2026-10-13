@@ -470,6 +470,8 @@ tasks:
       # scripts that died silently on an absent optional key.
       - ./scripts/dev/test-state-backups.sh
       - ./scripts/dev/test-seed-openbao.sh
+      # The recovery-share keys, checked for an encryption subkey before anything bills (sys/init commits, then fails).
+      - ./scripts/dev/test-check-openbao-keys.sh
       # Nothing said "tainted", so re-running destroyed a load balancer the
       # provider was still building. This keeps that sentence on screen.
       - ./scripts/dev/test-explain-failure.sh
@@ -741,6 +743,9 @@ tasks:
         # --preflight adds prod's replica-on-another-cloud rule, for a cluster
         # with no state object yet. Only here: infra-apply, which cluster-upgrade
         # and converge-versions call, must keep working on a deployed cluster.
+        # The OpenBao recovery-share keys: sys/init commits the cluster BEFORE it encrypts the shares, so a key with no
+        # encryption subkey bricks the first run. Free to check here, a re-init after.
+        ./scripts/internal/check-openbao-keys.sh "$TFVARS" || exit 1
         ./scripts/internal/ensure-buckets.sh "$TFVARS" --preflight || exit 1
       # image-build reads the pin from ROLE's tfvars. VERSION is blanked because
       # go-task hands it an exported or typed one, and the tfvars is the decision.
@@ -1767,7 +1772,9 @@ tasks:
       Upgrade Kubernetes then Talos on a running cluster, MEASURING the interruption instead of
       asserting there was none. Targets come from cluster/variables.tf; the tfvars is expected to pin
       one patch below. DRY_RUN=1 resolves the versions and stops, needing no cluster. It asks nothing:
-      its applies run with APPROVE=auto. Usage: task upgrade PROVIDER=scaleway [ROLE=management] [KEY=~/.ssh/key]
+      its applies run with APPROVE=auto. Before the first step it takes an encrypted etcd snapshot and a copy of the
+      state that no retention removes (UPGRADE_SKIP_SNAPSHOT=1 to start without). Usage: task upgrade
+      PROVIDER=scaleway [ROLE=management] [KEY=~/.ssh/key]
     # PROVIDER is REQUIRED, not defaulted. Twenty targets used to fall back to
     # scaleway in silence — including destroy and down — so a command typed
     # while working on another cloud aimed at the wrong account. The refusal is
@@ -1784,6 +1791,7 @@ tasks:
       DRY_RUN: '{{.DRY_RUN | default ""}}'
       UPGRADE_TALOS_TO: '{{.UPGRADE_TALOS_TO | default ""}}'
       UPGRADE_K8S_TO: '{{.UPGRADE_K8S_TO | default ""}}'
+      UPGRADE_SKIP_SNAPSHOT: '{{.UPGRADE_SKIP_SNAPSHOT | default ""}}'
     cmds:
       - defer: *receipt
       # cluster-upgrade.sh was reachable from no target and from no workflow —

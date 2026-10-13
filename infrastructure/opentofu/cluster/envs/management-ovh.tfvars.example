@@ -95,6 +95,19 @@ git_repo_url     = "https://github.com/dis-bzh/OpenAether-apps.git"
 # cluster within the reconcile interval. refs/heads/<branch> to test.
 git_ref          = "refs/tags/0.1.0"
 
+# OpenBao recovery-share holders (only read when deploy_flux = true). OpenBao unseals itself; what the operators hold are
+# RECOVERY shares, for an emergency root token. Each key is a person's PGP PUBLIC key, `gpg --export <id> | base64 -w0`
+# (it needs an encryption subkey; `task cluster-up` checks it and prints the fingerprint). Empty = a DEVELOPMENT bootstrap (one plaintext
+# share in a labelled Secret, which can not become a production one).
+# environment = "prod" with deploy_flux = true refuses to plan without at least 3. Then, once: escrow the seal key
+# (OpenAether-apps foundation/vault/README.md, Day 0).
+# openbao_recovery_pgp_keys = [
+#   "mQGNBF...",   # operator 1
+#   "mQGNBF...",   # operator 2
+#   "mQGNBF...",   # operator 3
+# ]
+# openbao_recovery_threshold = 2   # default: a majority
+
 # --- Backup / DR object stores (OVH S3-compatible Object Storage) -------------
 # Derived buckets (you don't set them) — parts come from this file,
 # and each has a "-backup" twin:

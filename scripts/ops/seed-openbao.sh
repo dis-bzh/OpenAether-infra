@@ -1,25 +1,20 @@
 #!/usr/bin/env bash
-# Seed the Day-1 secrets a fresh cluster cannot converge without.
+# Seed the Day-1 secrets a fresh cluster cannot converge without (S3 keys of the two backup stores and of Loki, the
+# alerting URLs). Without them the Flux DAG sits at 29 of 35: six Kustomizations wait for `backup/s3-primary` alone.
 #
-# `docs/admin-access.md` § 3 lists these as manual `bao kv put` calls, and they
-# are the difference between a cluster that looks up and a cluster whose Flux DAG
-# converges: measured on Scaleway 2026-08-14, six Kustomizations sat not-Ready
-# for want of `backup/s3-primary` alone, and all 35 went Ready within two minutes
-# of seeding. Nothing automated it and nothing checked it, so the only lane that
-# could have caught it — the unattended one — asserted a convergence the product
-# never delivers on its own.
+# CREATE-ONLY. The secrets are written with `cas=0`, so a re-run can never overwrite one (a rotated value does not
+# fail, it just breaks whatever holds the old one). The application secrets (restic password, database passwords,
+# Longhorn passphrase...) are NOT seeded here: openbao-vault-bootstrap generates them, in OpenBao, and prints none.
 #
-# WRITE-IF-ABSENT, never overwrite. Re-running must not rotate `backup/restic`:
-# a new password does not fail, it makes every existing backup undecryptable.
-# Same for the DB passwords, which the running Postgres roles already hold.
-#
-# Values come from the environment (the same `.env.sh` / CI secrets everything
-# else uses). Nothing is printed: the script says which path it wrote, never what.
+# NO ROOT TOKEN. OpenBao has none (apps >= 0.2.0 revokes it right after bootstrap). The script asks Kubernetes for a
+# 10-minute token of the ServiceAccount `openbao-seeder`, and OpenBao exchanges it, inside the pod, for a token whose
+# policy `secret-seeder` can create these five paths and nothing else. Neither that token nor a value is ever on a
+# command line (here or in the pod): they travel on the stdin of `kubectl exec`. Nothing is printed but the path.
 #
 # What it deliberately does NOT do, because a human is genuinely required:
-#   - sign the PKI intermediate offline with the root CA (§ 2)
+#   - sign the PKI intermediate offline with the root CA (admin-access.md § 2)
 #   - register the Grafana OIDC client in Zitadel through a browser (`grafana/oidc`)
-# Neither blocks the DAG — verified on the same cluster.
+# Neither blocks the DAG.
 #
 # Usage: seed-openbao.sh <scaleway|ovh|outscale|proxmox> [role]
 set -euo pipefail
@@ -31,6 +26,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT/scripts/lib/common.sh"   # oa_project / oa_backup_bucket
 CLUSTER="$ROOT/infrastructure/opentofu/cluster"
 TFVARS="${OA_ENVS_DIR:-$CLUSTER/envs}/${ROLE}-${PROVIDER}.tfvars"   # OA_ENVS_DIR: a test sandbox
+NS=foundation-vault
 
 export KUBECONFIG="${KUBECONFIG:-$CLUSTER/kubeconfig}"
 
@@ -38,119 +34,42 @@ fail() { echo "✗ $*" >&2; exit 1; }
 
 [ -f "$TFVARS" ] || fail "no $TFVARS"
 command -v kubectl >/dev/null || fail "kubectl is required"
+command -v jq >/dev/null || fail "jq is required"
 
 tfvar() { # <key> — read a top-level string from the env file; empty when absent
-  # sed, not grep|sed: an absent key made grep exit 1, and under pipefail +
-  # set -e that killed the script at the assignment with no output at all —
-  # the "vanish" this file's own comments below refuse for the root token.
+  # sed, not grep|sed: an absent key made grep exit 1, and under pipefail + set -e that killed the script at the
+  # assignment with no output at all.
   sed -nE "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"?([^\"#]*)\"?.*/\1/p" "$TFVARS" |
     head -1 | tr -d '[:space:]'
 }
 
-# --- Where the secrets go -----------------------------------------------------
-
-# `task cluster-up` leaves the kubeconfig in the state, not necessarily on disk, and this
-# runs before anything else fetches it. Without this the script died at the first
-# kubectl call — see the `|| true` note directly below for why it died silently.
+# `task cluster-up` leaves the kubeconfig in the state, not necessarily on disk.
 if [ ! -s "$KUBECONFIG" ]; then
   (cd "$ROOT" && task kubeconfig ROLE="$ROLE" PROVIDER="$PROVIDER") >/dev/null 2>&1 ||
     fail "could not fetch the kubeconfig for ${ROLE}-${PROVIDER}"
 fi
 
-# WAIT for OpenBao to exist. Day-1 seeding runs right after `task cluster-up`, and at
-# that moment Flux has barely started: `foundation-vault` is several
-# Kustomizations down the DAG and its init Job has not produced the recovery
-# Secret yet. Failing here was just being early — measured twice on 2026-08-14.
-# OPENBAO_WAIT is in seconds.
-#
-# `|| true` on the substitution is load-bearing. Under `set -e` with `pipefail` a
-# failing command substitution aborts the script AT THE ASSIGNMENT, so the check
-# below never ran and the script exited 1 with NO OUTPUT AT ALL — the one thing
-# an error path must never do.
-OPENBAO_WAIT="${OPENBAO_WAIT:-1200}"
-__deadline=$((SECONDS + OPENBAO_WAIT))
-ROOT_TOKEN=""
-while :; do
-  ROOT_TOKEN="$(kubectl get secret openbao-recovery -n foundation-vault \
-    -o jsonpath='{.data.root_token}' 2>/dev/null | base64 -d || true)"
-  [ -n "$ROOT_TOKEN" ] && break
-  if [ "$SECONDS" -ge "$__deadline" ]; then
-    fail "no root token in Secret/openbao-recovery after ${OPENBAO_WAIT}s — is foundation-vault reconciling, and does \$KUBECONFIG reach the cluster?"
-  fi
-  sleep 15
-done
+# --- The values (resolved BEFORE waiting: a missing credential fails in a second, not after twenty minutes) ---------
 
-# ⚠️ https, not http. admin-access.md said `BAO_ADDR=http://127.0.0.1:8200` and
-# the pod answers "Client sent an HTTP request to an HTTPS server" — the
-# documented command could never have worked. Skip-verify because the listener
-# holds the cluster's own self-signed pair and we are already inside the pod.
-bao() {
-  kubectl exec -i openbao-0 -n foundation-vault -- \
-    env BAO_ADDR=https://127.0.0.1:8200 BAO_SKIP_VERIFY=true BAO_TOKEN="$ROOT_TOKEN" \
-    bao "$@"
-}
-
-# The Secret can exist a few seconds before the pod answers, and it is unsealed
-# by its own Job — so wait here too rather than racing it.
-while :; do
-  bao status >/dev/null 2>&1 && break
-  [ "$SECONDS" -lt "$__deadline" ] || fail "OpenBao did not answer within ${OPENBAO_WAIT}s (sealed?)"
-  sleep 10
-done
-
-# And wait for the KV engine to be MOUNTED. Being unsealed is not being ready:
-# `openbao-vault-bootstrap` enables `secret/` in a Job of its own, and until it
-# has, every write here fails — which is exactly how this failed on the fourth
-# clean run, one stage further along than the time before.
-while :; do
-  bao secrets list 2>/dev/null | grep -q '^secret/' && break
-  [ "$SECONDS" -lt "$__deadline" ] || fail "the KV engine at secret/ was never mounted within ${OPENBAO_WAIT}s — is openbao-vault-bootstrap still running?"
-  sleep 10
-done
-
-exists() { bao kv get "secret/$1" >/dev/null 2>&1; }
-
-put() { # <path> <k=v>...
-  local path="$1"; shift
-  if exists "$path"; then
-    echo "  = secret/$path (already set, left alone)"
-    return 0
-  fi
-  local err
-  # Keep stderr. Swallowing it made the first failure here read as
-  # "could not write secret/backup/s3-primary" with no reason at all, which is
-  # the same blindness this script exists to remove.
-  if err="$(bao kv put "secret/$path" "$@" 2>&1 >/dev/null)"; then
-    echo "  + secret/$path"
-  else
-    fail "could not write secret/$path: ${err}"
-  fi
-}
-
-rnd() { openssl rand -base64 "$1" | tr -d '=+/'; }
-
-# --- The values ---------------------------------------------------------------
-
-# S3 credentials: the same resolver the Taskfile uses, so one place decides.
-# Same `|| true` reasoning as the root token above: report, do not vanish.
-AK="$("$ROOT/scripts/internal/resolve-s3-cred.sh" "$PROVIDER" ak || true)"
-SK="$("$ROOT/scripts/internal/resolve-s3-cred.sh" "$PROVIDER" sk || true)"
-[ -n "$AK" ] && [ -n "$SK" ] || fail "no S3 credentials in scope for $PROVIDER (source .env.sh?)"
-
+# S3 credentials: the same resolver the Taskfile uses. A store is opened with the keys of the cloud that HOLDS it, so
+# the replica's pair is asked for with its own endpoint; seeding the primary's pair there (#296) wrote Scaleway keys
+# for an OVH endpoint. `|| true`: report, do not vanish under set -e.
 PRIMARY_EP="$(tfvar s3_primary_endpoint)"
 REPLICA_EP="$(tfvar s3_replica_endpoint)"
 [ -n "$PRIMARY_EP" ] || fail "s3_primary_endpoint is not set in $TFVARS"
 [ -n "$REPLICA_EP" ] || REPLICA_EP="$PRIMARY_EP"
 
-# Application-backup bucket, through the SAME derivation as cluster/backup.tf
-# and every other shell caller — this was the one place that rebuilt the name
-# by hand and dropped bucket_suffix, so a suffixed cluster's restic and Loki
-# were pointed at a bucket nothing created (#166). bucket_suffix is optional.
+AK="$("$ROOT/scripts/internal/resolve-s3-cred.sh" "$PROVIDER" ak || true)"
+SK="$("$ROOT/scripts/internal/resolve-s3-cred.sh" "$PROVIDER" sk || true)"
+[ -n "$AK" ] && [ -n "$SK" ] || fail "no S3 credentials in scope for $PROVIDER (source .env.sh?)"
+RAK="$("$ROOT/scripts/internal/resolve-s3-cred.sh" "$PROVIDER" ak backup "$REPLICA_EP" || true)"
+RSK="$("$ROOT/scripts/internal/resolve-s3-cred.sh" "$PROVIDER" sk backup "$REPLICA_EP" || true)"
+[ -n "$RAK" ] && [ -n "$RSK" ] || fail "no S3 credentials in scope for the replica store $REPLICA_EP (source .env.sh? the replica's cloud has its own keys)"
+
+# Application-backup bucket, through the SAME derivation as cluster/backup.tf and every other shell caller (#166).
 BUCKET="$(oa_backup_bucket "$(oa_project "$(tfvar cluster_name)" "$(tfvar bucket_suffix || true)")" "$PROVIDER" "$(tfvar environment)")"
 
-# Alerting endpoints are real in production and arbitrary on a throwaway cluster,
-# which admin-access.md says explicitly. Take them from the environment when set,
-# and say which of the two happened rather than quietly using a placeholder.
+# Alerting endpoints are real in production and arbitrary on a throwaway cluster. Say which of the two happened.
 SLACK_URL="${OA_SLACK_WEBHOOK_URL:-}"
 DMS_URL="${OA_DEADMANSSWITCH_URL:-}"
 if [ -z "$SLACK_URL" ] || [ -z "$DMS_URL" ]; then
@@ -161,20 +80,89 @@ if [ -z "$SLACK_URL" ] || [ -z "$DMS_URL" ]; then
   DMS_URL="${DMS_URL:-https://hc-ping.com/00000000-0000-0000-0000-000000000000}"
 fi
 
+# One compact JSON document per secret, `path<TAB>{"options":{"cas":0},"data":{...}}`, values through the environment of
+# jq (never an argument). Keys keep the names the ExternalSecrets read.
+doc() { # <path> <key=ENVVAR>... — values come from the named variables
+  local path="$1"; shift
+  local filter='{options:{cas:0},data:{}}' k
+  for k in "$@"; do filter="$filter | .data[\"${k%%=*}\"] = \$ENV.${k#*=}"; done
+  printf '%s\t' "$path"
+  jq -nc "$filter"
+}
+PAYLOAD="$(
+  EP1="$PRIMARY_EP" B1="$BUCKET" A1="$AK" S1="$SK" \
+  EP2="$REPLICA_EP" B2="${BUCKET}-backup" A2="$RAK" S2="$RSK" \
+  SL="$SLACK_URL" DM="$DMS_URL" \
+  bash -c "$(declare -f doc)
+    doc backup/s3-primary endpoint=EP1 bucket=B1 access_key=A1 secret_key=S1
+    doc backup/s3-replica endpoint=EP2 bucket=B2 access_key=A2 secret_key=S2
+    doc observability/loki-s3 endpoint=EP1 bucket=B1 accessKey=A1 secretKey=S1
+    doc observability/alertmanager-slack webhook-url=SL
+    doc observability/alertmanager-deadmansswitch url=DM"
+)"
+EXPECTED="$(printf '%s\n' "$PAYLOAD" | grep -c .)"
+
+# --- Where it runs ------------------------------------------------------------------------------------------------
+
+# Stdin of the exec: line 1 = the ServiceAccount token, then the documents. In the pod: log in with it (the token is
+# piped into `bao write ... jwt=-`, a shell builtin printf, so it is on no command line), then one `bao write` per
+# document. The policy only allows `create`, so a path that exists answers 403 (and cas=0 would refuse it anyway):
+# the metadata read, which the policy allows, tells "left alone" from a real refusal.
+# shellcheck disable=SC2016  # the $ are for the remote shell
+REMOTE='
+read -r jwt || exit 4
+tok="$(printf "%s" "$jwt" | bao write -field=token auth/kubernetes/login role=secret-seeder jwt=-)" || { echo "LOGIN-FAILED"; exit 3; }
+export BAO_TOKEN="$tok"
+tab="$(printf "\t")"
+while IFS="$tab" read -r path data; do
+  [ -n "$path" ] || continue
+  if err="$(printf "%s" "$data" | bao write -format=json "secret/data/$path" - 2>&1 >/dev/null)"; then echo "+ $path"
+  elif bao read -format=json "secret/metadata/$path" >/dev/null 2>&1; then echo "= $path"
+  else echo "! $path: $(printf "%s" "$err" | tr "\n" " ")"; fi
+done'
+
+# The token is minted per attempt (10 minutes; a TokenRequest JWT can be replayed until it expires, which is why it is short). The wait is for OpenBao itself to be configured: the first
+# login succeeds only once openbao-vault-bootstrap has created the role, so "can log in" is the readiness test.
+OPENBAO_WAIT="${OPENBAO_WAIT:-1200}"
+POLL="${OA_SEED_POLL:-15}"   # seconds between attempts (a test knob)
+deadline=$((SECONDS + OPENBAO_WAIT))
 echo "▶ Seeding Day-1 secrets (${PROVIDER}/${ROLE}, bucket ${BUCKET})"
+last_note=0; ERR=""
+while :; do
+  OUT=""
+  if jwt="$(kubectl -n "$NS" create token openbao-seeder --duration=10m 2>&1)" && [ -n "$jwt" ]; then
+    if OUT="$( { printf '%s\n' "$jwt"; printf '%s\n' "$PAYLOAD"; } |
+               kubectl exec -i openbao-0 -n "$NS" -- sh -c "$REMOTE" 2>&1 )"; then
+      break
+    fi
+    ERR="$OUT"
+  else
+    ERR="$jwt"   # the error text, not a token
+  fi
+  jwt=""
+  if [ "$SECONDS" -ge "$deadline" ]; then
+    hint=""
+    grep -q 'serviceaccounts "openbao-seeder" not found' <<<"$ERR" &&
+      hint=" A cluster bootstrapped by apps 0.1.0 has no seeding identity (it keeps a root token in a Secret): seed it with the script of OpenAether-infra 0.2.0, or move the cluster to apps >= 0.2.0."
+    fail "OpenBao did not accept the seeding identity within ${OPENBAO_WAIT}s — is foundation-vault reconciling (kubectl -n $NS get pods,jobs), did openbao-vault-bootstrap finish, and does \$KUBECONFIG reach the cluster? Last answer: $(tr '\n' ' ' <<<"${ERR:-none}" | cut -c1-300).${hint}"
+  fi
+  if [ $((SECONDS - last_note)) -ge 60 ]; then echo "  … waiting for OpenBao to accept the seeding identity"; last_note=$SECONDS; fi
+  sleep "$POLL"
+done
 
-put backup/s3-primary endpoint="$PRIMARY_EP" bucket="$BUCKET" access_key="$AK" secret_key="$SK"
-put backup/s3-replica endpoint="$REPLICA_EP" bucket="${BUCKET}-backup" access_key="$AK" secret_key="$SK"
-put backup/restic password="$(rnd 36)"
-put observability/loki-s3 endpoint="$PRIMARY_EP" bucket="$BUCKET" accessKey="$AK" secretKey="$SK"
-put observability/alertmanager-slack webhook-url="$SLACK_URL"
-put observability/alertmanager-deadmansswitch url="$DMS_URL"
-put grafana/db password="$(rnd 24)"
-put zitadel/db username=zitadel password="$(rnd 24)"
-put longhorn/encryption passphrase="$(rnd 48)"
+WROTE=0; KEPT=0; FAILED=0
+while IFS= read -r line; do
+  case "$line" in
+    "+ "*) echo "  + secret/${line#+ }"; WROTE=$((WROTE + 1)) ;;
+    "= "*) echo "  = secret/${line#= } (already set, left alone)"; KEPT=$((KEPT + 1)) ;;
+    "! "*) echo "  ✗ secret/${line#! }" >&2; FAILED=$((FAILED + 1)) ;;
+  esac
+done <<<"$OUT"
+[ "$FAILED" -eq 0 ] || fail "could not write $FAILED secret(s) (see above)"
+[ $((WROTE + KEPT)) -eq "$EXPECTED" ] || fail "expected $EXPECTED answers from OpenBao, got $((WROTE + KEPT)): $(tr '\n' ' ' <<<"$OUT" | cut -c1-300)"
 
-# ExternalSecrets refresh hourly. Nudge them, or the cluster spends up to an hour
-# looking broken for secrets that are already there.
+# ExternalSecrets refresh hourly. Nudge them, or the cluster spends up to an hour looking broken for secrets that are
+# already there.
 echo "▶ Nudging ExternalSecrets to re-read"
 kubectl get externalsecrets -A -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' 2>/dev/null |
   while read -r ns name; do

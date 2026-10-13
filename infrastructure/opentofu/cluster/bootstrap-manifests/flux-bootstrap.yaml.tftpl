@@ -10,6 +10,7 @@
 #   ${backup_target_url} — ex: s3://s3-openaether-ovh-backups-dev@eu-west-par/
 #   ${backup_s3_bucket} ${backup_s3_endpoint} — same destination, CNPG format
 #   ${namespace}      — ex: flux-system
+#   openbao_pgp_keys, openbao_threshold — recovery-share holders (list of base64 PGP public keys; quorum). Not interpolated: a list.
 ---
 # Cluster identity, consumed through `postBuild.substituteFrom` by the bricks
 # that must distinguish themselves from ANOTHER cluster. Today: the restic
@@ -41,6 +42,32 @@ data:
   # CNPG wants the bucket and endpoint separately (barmanObjectStore).
   BACKUP_S3_BUCKET: ${backup_s3_bucket}
   BACKUP_S3_ENDPOINT: ${backup_s3_endpoint}
+%{ if length(openbao_pgp_keys) > 0 ~}
+---
+# OpenBao PRODUCTION bootstrap: the operators' PGP PUBLIC keys. openbao-init reads this ConfigMap and encrypts one
+# recovery share to each key; without it the bootstrap is a development one (apps foundation/vault/README.md).
+# The namespace is created here because this manifest is applied before Flux reconciles anything; the `namespaces`
+# brick adopts it and adds its labels.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: foundation-vault
+  labels:
+    openaether.io/managed: "true"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openbao-operator-keys
+  namespace: foundation-vault
+  labels:
+    openaether.io/managed: "true"
+data:
+  threshold: "${openbao_threshold}"
+%{ for i, k in openbao_pgp_keys ~}
+  pgp-${i + 1}: "${k}"
+%{ endfor ~}
+%{ endif ~}
 ---
 apiVersion: source.toolkit.fluxcd.io/v1
 kind: GitRepository

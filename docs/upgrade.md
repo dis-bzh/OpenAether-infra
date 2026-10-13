@@ -337,9 +337,11 @@ Do not roll back a second control plane to see whether the first one is fine.
 ### A control plane: restore a snapshot taken before the upgrade
 
 The way back for the control planes is a restore, and it needs a snapshot that
-**predates the first control plane of the upgrade**: `task etcd-snapshot` (encrypted,
-`gpg -d` it first) or `talosctl etcd snapshot`, taken on the version you will return
-to. Nothing in `cluster-upgrade` takes one for you today.
+**predates the first control plane of the upgrade**. `task cluster-upgrade` takes it for
+you before its first step (`backups/etcd/pre-upgrade-etcd-<timestamp>.snap.gpg` in both
+artifact buckets, encrypted, `gpg -d` it first; no retention removes it) and refuses to
+start when it cannot, unless `UPGRADE_SKIP_SNAPSHOT=1`. By hand: `task etcd-snapshot`
+or `talosctl etcd snapshot`, taken on the version you will return to.
 
 ```bash
 talosctl -n <node-ip> rollback                      # every node, workers included
@@ -364,8 +366,10 @@ afterwards, one written before it was there.
   the tfvars makes `infra-plan` plan `talos_machine_secrets.this[0] must be replaced`
   (the provider replaces the secrets when the version goes down; `prevent_destroy`
   stops an apply, and a regenerated PKI would be worse than the problem). The state has
-  to go back too, to a copy taken before the climb, and the replica's "newest five"
-  generations were all written during it. Until then leave the pins where they are: the
+  to go back too, to a copy taken before the climb: `task cluster-upgrade` writes one
+  (`<state key>.pre-upgrade.<timestamp>` in the replica, listed by `task backup-state -- --list`,
+  never pruned), because the replica's "newest five" generations are all written during the
+  climb. Until then leave the pins where they are: the
   cluster runs the old version and `cluster-verify` reads `MIXED`. Not measured: copying
   a pre-climb state back.
 - Not measured either: other clouds, Proxmox, a Longhorn or CNPG workload across the

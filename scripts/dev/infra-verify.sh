@@ -186,7 +186,7 @@ info "The floor is the floor — what this release says is NOT there"
 # Not cosmetic. deploy_flux defaults to false; if something re-enables it the
 # cluster silently stops being the thing this release validated.
 if K get ns flux-system >/dev/null 2>&1; then
-  bad "flux-system exists — this is not a pure-infra cluster (deploy_flux?)"
+  bad "flux-system exists — this is not a pure-infra cluster (deploy_flux?). If deploy_flux = true is on purpose, this red is expected until the Day-1 seeding has run: scripts/ops/seed-openbao.sh <provider> (docs/admin-access.md § 3)"
 else
   ok "no flux-system namespace — Talos and Cilium, as scoped"
 fi
@@ -200,7 +200,7 @@ if [ "$PROVIDER" != local ]; then
   if APP_LB="$(cd "$CLUSTER_DIR" && timeout 60 tofu output -raw app_lb_ip 2>/dev/null)"; then
     case "$APP_LB" in
       N/A | "" | null) ok "no application load balancer (deploy_app_lb=false)" ;;
-      *) bad "an application load balancer exists and is billed, pointing at Gateway NodePorts nothing serves" ;;
+      *) bad "an application load balancer exists and is billed; on an infra-only cluster it points at Gateway NodePorts nothing serves (with deploy_flux = true the Gateway serves them, and this red is the flux-system one repeated)" ;;
     esac
   else
     unk "could not read app_lb_ip (is the backend initialised, are the S3 credentials exported?) — the absence of an app LB is UNCHECKED"

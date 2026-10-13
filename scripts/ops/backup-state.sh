@@ -17,6 +17,11 @@
 # backend while its bytes are the primary bucket's, one object only while the backend is that bucket
 # (not after a reconfigure against the replica).
 #
+# STATE_LABEL=<label> writes the generation as <key>.<label>.<UTC timestamp> instead: a copy that retention never
+# touches (it only ever names <key>.<timestamp>), kept for a moment that must be undoable. `cluster-upgrade` takes one
+# (`pre-upgrade`) before the first step, because the way back for a control plane is a restore of the etcd snapshot AND
+# the state as they were before the climb, and the newest five plain generations are all written during it (#270).
+#
 # Creds:
 #   primary : the ambient AWS_* (the Taskfile sets it to the cluster provider's keys)
 #   replica : <PU>_BACKUP_AWS_* -> BACKUP_AWS_* -> primary    (../lib/common.sh::s3_cred)
@@ -32,6 +37,9 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # A retention that keeps nothing (0, a typo) is refused, not guessed.
 GENERATIONS="${STATE_GENERATIONS:-5}"
 [[ "$GENERATIONS" =~ ^[1-9][0-9]*$ ]] || { echo "✗ STATE_GENERATIONS must be a whole number, 1 or more (got '$GENERATIONS'): nothing was replicated." >&2; exit 1; }
+LABEL="${STATE_LABEL:-}"
+[ -z "$LABEL" ] || [[ "$LABEL" =~ ^[a-z][a-z0-9-]{0,30}$ ]] \
+  || { echo "✗ STATE_LABEL must be lowercase letters, digits and dashes, starting with a letter (got '$LABEL'): nothing was replicated." >&2; exit 1; }
 command -v aws >/dev/null 2>&1 || { echo "✗ aws CLI required"; exit 1; }
 command -v jq  >/dev/null 2>&1 || { echo "✗ jq required"; exit 1; }
 oa_aws_compat
@@ -83,11 +91,14 @@ replica() { AWS_ACCESS_KEY_ID="$BACKUP_AK" AWS_SECRET_ACCESS_KEY="$BACKUP_SK" aw
 # and nothing else: retention never touches a key it did not name itself.
 rows() { replica s3api list-objects-v2 --bucket "$REPLICA_BUCKET" --prefix "$KEY" --query 'Contents[].[Key,LastModified,Size]' --output json; }
 JQ_GEN='def gen: .[0] | startswith($k + ".") and (ltrimstr($k + ".") | test("^[0-9]{8}T[0-9]{6}Z$"));'
+# What --list shows: the plain generations retention manages, and the labelled copies it never touches.
+JQ_LISTED='def gen: .[0] | startswith($k + ".") and (ltrimstr($k + ".") | test("^([a-z][a-z0-9-]{0,30}\\.)?[0-9]{8}T[0-9]{6}Z$"));
+  def kind: if (.[0] | ltrimstr($k + ".") | test("^[0-9]")) then "generation" else (.[0] | ltrimstr($k + ".") | sub("\\..*$"; "")) end;'
 
 if [ "$LIST" = 1 ]; then
   echo "s3://$REPLICA_BUCKET/ on ${REPLICA_EP}, most recently written first (LastModified, not the key's stamp: that is the writing machine's clock). Restore one by copying it over the state key (README, \"Lost the Talos secrets\")."
-  rows | jq -r --arg k "$KEY" "$JQ_GEN"' (. // []) | ([.[] | select(.[0] == $k)] + ([.[] | select(gen)] | sort_by([.[1], .[0]]) | reverse))
-    | if length == 0 then "  (no state object under \($k))" else .[] | ["  " + (if .[0] == $k then "current   " else "generation" end), .[1], .[2], .[0]] | @tsv end'
+  rows | jq -r --arg k "$KEY" "$JQ_LISTED"' (. // []) | ([.[] | select(.[0] == $k)] + ([.[] | select(gen)] | sort_by([.[1], .[0]]) | reverse))
+    | if length == 0 then "  (no state object under \($k))" else .[] | ["  " + (if .[0] == $k then "current   " else kind end), .[1], .[2], .[0]] | @tsv end'
   exit 0
 fi
 
@@ -105,7 +116,7 @@ aws s3 cp "s3://$PRIMARY_BUCKET/$KEY" "$WORK/state" \
 # The dated copy first: the current object is only replaced once the same bytes sit beside it under a name that stays.
 GEN=""
 if [ "$SECRETS" = 1 ]; then
-  GEN="$KEY.$(date -u +%Y%m%dT%H%M%SZ)"
+  GEN="$KEY.${LABEL:+$LABEL.}$(date -u +%Y%m%dT%H%M%SZ)"
   replica s3 cp "$WORK/state" "s3://$REPLICA_BUCKET/$GEN" --sse AES256 >/dev/null \
     || { echo "✗ could not write s3://$REPLICA_BUCKET/$GEN: the current replica was left as it is." >&2; exit 1; }
 fi
@@ -118,6 +129,11 @@ else
   echo "✓ tfstate replicated (still client-encrypted) to s3://$REPLICA_BUCKET/$KEY — on ${REPLICA_EP}"
 fi
 [ -n "$GEN" ] || { echo "  no generation written: this state holds no Talos secrets, so the older generations that do are left alone."; exit 0; }
+
+if [ -n "$LABEL" ]; then
+  echo "  labelled copy $GEN kept: retention never removes it. List: backup-state.sh --list"
+  exit 0
+fi
 
 # Retention: names sort chronologically. The key just written is never a victim whatever its clock says: a
 # machine whose clock is behind would otherwise prune the newest copy at once. A failure here costs space, not data.

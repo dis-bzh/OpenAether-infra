@@ -246,8 +246,8 @@ for when you want to drive one of them alone.
 **After deployment**: an infrastructure-only cluster has no day-1 step left, since
 `cluster-up` ended with `task cluster-verify`; re-run that alone at any time. The
 application platform's day-1 path — escrow, offline PKI signing, UI access — is
-[docs/admin-access.md](docs/admin-access.md), and it belongs to the release that
-deploys applications.
+[docs/admin-access.md](docs/admin-access.md); it applies to any cluster built with
+`deploy_flux = true`, whose Flux DAG does not converge until its § 3 (`scripts/ops/seed-openbao.sh`) has run.
 
 ### Teardown
 

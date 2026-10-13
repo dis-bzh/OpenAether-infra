@@ -9,6 +9,9 @@
 # passphrase as the tfstate → primary + replica artifact buckets, keeping the
 # last $KEEP.
 #
+# SNAPSHOT_LABEL=<label> names the artifact <label>-etcd-<timestamp>.snap.gpg and skips retention: the prune only lists
+# etcd-*, so a labelled snapshot is never a victim. `cluster-upgrade` takes a `pre-upgrade` one before the first step (#270).
+#
 # Restore (disaster only — wipes current etcd; prefer GitOps reconvergence):
 #   gpg -d etcd-<ts>.snap.gpg > etcd.snap
 #   talosctl -e <cp> -n <cp-ip> bootstrap --recover-from=etcd.snap
@@ -20,6 +23,9 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 KEEP="${KEEP:-30}"
+LABEL="${SNAPSHOT_LABEL:-}"
+[ -z "$LABEL" ] || [[ "$LABEL" =~ ^[a-z][a-z0-9-]{0,30}$ ]] \
+  || { echo "✗ SNAPSHOT_LABEL must be lowercase letters, digits and dashes, starting with a letter (got '$LABEL')" >&2; exit 1; }
 TALOSCONFIG_FILE="${TALOSCONFIG:-./talosconfig}"
 
 for bin in tofu jq talosctl aws gpg; do
@@ -65,7 +71,7 @@ echo "✓ etcd snapshot taken via ${took} ($(du -h "$SNAP" | cut -f1))"
 
 # --- 2) client-side encrypt (same model as backup-artifacts.sh) --------------
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
-OUT="$WORK/etcd-${TS}.snap.gpg"
+OUT="$WORK/${LABEL:+$LABEL-}etcd-${TS}.snap.gpg"
 gpg --batch --yes --quiet --pinentry-mode loopback --passphrase-fd 3 \
     --s2k-mode 3 --s2k-count 65011712 --s2k-digest-algo SHA512 \
     --symmetric --cipher-algo AES256 -o "$OUT" "$SNAP" 3< <(printf '%s' "$PASSPHRASE")
@@ -77,6 +83,7 @@ put_and_prune() { # bucket endpoint region ak sk
     aws s3 cp "$OUT" "s3://${bucket}/backups/etcd/$(basename "$OUT")" \
       --endpoint-url "$ep" --region "$region" --sse AES256 >/dev/null
 
+  [ -z "$LABEL" ] || return 0   # a labelled snapshot is kept for a purpose, and the prune below only lists etcd-*
   # Retention: timestamped names sort lexically == chronologically. The slice
   # end is clamped at 0: a negative end counts from the END in jq, so with fewer
   # than $KEEP snapshots `.[0:(length - KEEP)]` deleted all but the newest few —
@@ -98,4 +105,8 @@ put_and_prune() { # bucket endpoint region ak sk
 put_and_prune "$PRIMARY_BUCKET" "$PRIMARY_EP" "$PRIMARY_REGION" "$PRIMARY_AK" "$PRIMARY_SK"
 put_and_prune "$REPLICA_BUCKET" "$REPLICA_EP" "$REPLICA_REGION" "$BACKUP_AK"  "$BACKUP_SK"
 
-echo "✓ Encrypted etcd snapshot → s3://${PRIMARY_BUCKET}/backups/etcd/ + s3://${REPLICA_BUCKET}/backups/etcd/ (keep ${KEEP})"
+if [ -n "$LABEL" ]; then
+  echo "✓ Encrypted etcd snapshot → s3://${PRIMARY_BUCKET}/backups/etcd/$(basename "$OUT") + s3://${REPLICA_BUCKET}/backups/etcd/$(basename "$OUT") (labelled: never pruned)"
+else
+  echo "✓ Encrypted etcd snapshot → s3://${PRIMARY_BUCKET}/backups/etcd/ + s3://${REPLICA_BUCKET}/backups/etcd/ (keep ${KEEP})"
+fi
