@@ -204,6 +204,9 @@ tasks:
       # force-moved upstream changes no committed byte, so this compares
       # against the sha256 recorded the last time either was rendered (#119).
       - ./scripts/dev/check-upstream-artifacts-lock.sh
+      # An `image:` pinned by tag alone, with no digest in the tree or in
+      # flux-image-digests.lock, is a tag upstream can re-push unseen. Offline.
+      - ./scripts/dev/check-image-pins.sh --enforce
 
   fmt:
     desc: Format OpenTofu code
@@ -440,6 +443,8 @@ tasks:
       # Six places build a bucket name, in two languages that cannot import each
       # other. Nothing but this compares them.
       - ./scripts/dev/test-bucket-names.sh
+      # The classifier behind `task lint`'s image-pin check, on fixtures.
+      - ./scripts/dev/test-image-pins.sh
       # The backup path had no inverse until 0.5.0. This is the round trip —
       # the real enc() against the real dec(), offline.
       - ./scripts/dev/test-restore.sh

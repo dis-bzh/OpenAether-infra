@@ -62,6 +62,7 @@ PYPI_API = "https://pypi.org/pypi"
 OSV_QUERY_URL = "https://api.osv.dev/v1/query"
 DEFAULT_MIN_AGE_DAYS = 7  # test-clea.sh keeps it equal to clea.toml
 MAX_MIN_AGE_DAYS = 3650  # beyond this the date arithmetic overflows: a typo, not a policy
+MAX_MINORS_BEHIND = 50  # beyond this the rule can never fire: a typo, not a policy
 TAG_MEMORY = 3  # tags remembered per dependency, so one scan where `latest` flips forgets none
 SKIP_DIRS = {".git", "node_modules", ".terraform", ".terraform-validate", "vendor"}
 
@@ -474,6 +475,23 @@ def is_prerelease(value: str) -> bool:
 
 def is_newer(current: str, candidate: str) -> bool:
     return version_key(candidate) > version_key(current)
+
+
+def minors_behind(current: str, latest: str) -> int | None:
+    """Minor releases `latest` is ahead of `current`; a newer major counts as unbounded.
+
+    None when either side is not `major.minor[.x]` (a sha, a date, a bare number):
+    a lag that cannot be measured is not reported as zero, and not as a failure either.
+    """
+    def parts(value: str):
+        m = re.match(r"v?(\d+)\.(\d+)", value.strip())
+        return (int(m.group(1)), int(m.group(2))) if m else None
+    cur, new = parts(current), parts(latest)
+    if cur is None or new is None:
+        return None
+    if new <= cur:
+        return 0
+    return 10 ** 6 if new[0] > cur[0] else new[1] - cur[1]
 
 
 def same_shape(current: str, candidate: str) -> bool:
@@ -1095,6 +1113,30 @@ def policy_of(state: dict) -> tuple[datetime, int]:
     return now, days if ok else DEFAULT_MIN_AGE_DAYS
 
 
+def valid_minors(n) -> bool:
+    return isinstance(n, int) and not isinstance(n, bool) and 0 <= n <= MAX_MINORS_BEHIND
+
+
+def lagging(state: dict) -> tuple[int, list[dict]]:
+    """The dependencies more than `max_minors_behind` minors (or any major) behind. 0 = rule off.
+
+    Judged on what is pinned, not on what is offered: a release held back for its age
+    is still a release the pin is missing, and the point of the rule is a pin that
+    drifted for a long time, which the age rule by itself never surfaces.
+    """
+    limit = (state.get("policy") or {}).get("max_minors_behind", 0)
+    if not valid_minors(limit) or limit == 0:
+        return 0, []
+    out = []
+    for d in state.get("deps", []):
+        if not d.get("behind"):
+            continue
+        lag = minors_behind(str(d.get("current", "")), str(d.get("latest", "")))
+        if lag is not None and lag > limit:
+            out.append(dict(d, lag=lag))
+    return limit, out
+
+
 def cmd_scan(args) -> int:
     root = repo_root(args.root)
     cfg = load_config(root / args.config)
@@ -1104,6 +1146,10 @@ def cmd_scan(args) -> int:
     if not valid_days(min_days):
         raise CleaError("clea.toml: [policy] min_release_age_days must be a whole number "
                         f"of days, 0 to {MAX_MIN_AGE_DAYS} (got {min_days!r})")
+    max_minors = cfg["policy"].get("max_minors_behind", 0)
+    if not valid_minors(max_minors):
+        raise CleaError("clea.toml: [policy] max_minors_behind must be a whole number "
+                        f"of minor releases, 0 (off) to {MAX_MINORS_BEHIND} (got {max_minors!r})")
     errors: list[str] = []
     osv = Osv(errors, osv_rows(cfg))
     anchors, novalue = scan_anchors(root, scan["marker"], scan["exclude"], scan["include"])
@@ -1223,7 +1269,9 @@ def cmd_scan(args) -> int:
 
     state = {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "policy": {"min_release_age_days": min_days},
+        # max_minors_behind is recorded only when the rule is on, so a state scanned
+        # without it is byte-identical to what was written before the rule existed.
+        "policy": {"min_release_age_days": min_days, **({"max_minors_behind": max_minors} if max_minors else {})},
         "deps": deps,
         "novalue": [{"dep": a.dep, "file": a.path, "line": a.line,
                      "reason": a.reason} for a in novalue],
@@ -1517,6 +1565,16 @@ def render_report(state: dict) -> str:
         lines += ["## Held back", "", held_note, "",
                   _table(rows, ["dependency", "pinned", "upstream", "age", "held because",
                                 "where", "release"]), ""]
+
+    limit, far = lagging(state)
+    if far:
+        rows = [[f"`{d['dep']}`", f"`{d['current']}`", f"`{d['latest']}`",
+                 "a newer major" if d["lag"] >= 10 ** 6 else f"{d['lag']} minors",
+                 f"`{d['file']}:{d['line']}`"] for d in far]
+        lines += [f"## Behind by more than {limit} minor release(s)", "",
+                  "A pin this far back is outside what upstream usually patches, whatever the age "
+                  "rule says about the newest release. Review each one: bump it, or record why not.", "",
+                  _table(rows, ["dependency", "pinned", "upstream", "behind by", "where"]), ""]
 
     if any(d.get("osv") for d in deps):
         hits: dict[tuple[str, str], tuple[list[str], dict]] = {}

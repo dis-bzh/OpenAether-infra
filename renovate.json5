@@ -57,6 +57,13 @@
   dependencyDashboardApproval: true,
   labels: ["dependencies"],
 
+  // Security fixes (ANSSI HYG-M34: patch within a month, docs/patching.md). Renovate's own default for this block
+  // already skips the schedule, the PR limits, the dashboard approval above and minimumReleaseAge, so a fix is
+  // proposed at once: only the label is ours. Needs the repository's Dependency graph and Dependabot alerts on,
+  // and the App allowed to read them; OSV adds the ecosystems GitHub's feed lacks (pypi, go...).
+  vulnerabilityAlerts: { labels: ["dependencies", "security"] },
+  osvVulnerabilityAlerts: true,
+
   // Off: it reads the SHA in `rev:` as a tag ("Tag <sha> not found") and so can never bump a hook. The custom manager below reads the SHA and its tag comment.
   "pre-commit": { enabled: false },
 

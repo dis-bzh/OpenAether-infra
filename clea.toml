@@ -24,6 +24,10 @@ silent_after_days = 8
 # (test-clea.sh checks). 0 switches the rule off, with minimumReleaseAge absent there.
 [policy]
 min_release_age_days = 7
+# The report adds a section for a pin more than this many minor releases (or any major)
+# behind upstream, held back or not (ANSSI HYG-M34/R35: supported versions). 0 = off.
+# Report only: it fails nothing, it names what to review.
+max_minors_behind = 2
 
 # Which OSV package to ask about a dependency (PyPI ones are asked by name already).
 # Without a row, a GitHub release is asked by commit, which cannot clear it:

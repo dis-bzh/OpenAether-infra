@@ -16,6 +16,20 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Security
 
+- **Patch policy and the signals behind it (ANSSI hygiene measure 34, audit ids HYG-M34, SSDLC CICD-AIP-01a/-03, NT-35 R2 in part).**
+  `docs/patching.md` states the rule (security fix merged or waived in writing within 30 days, 7 when exploited or internet-reachable)
+  and what feeds it. `renovate.json5` gains `vulnerabilityAlerts` (label only: Renovate's default for that block already skips the
+  schedule, the dashboard approval and `minimumReleaseAge`) and `osvVulnerabilityAlerts`. Cléa gets an optional
+  `[policy] max_minors_behind` (set to 2 in `clea.toml`): its report lists every pin more than that many minor releases, or a major,
+  behind upstream, held back or not; report only, 15 new assertions in `test-clea.sh`. `scripts/dev/check-image-pins.sh --enforce` runs in
+  `task lint` and fails on an `image:` pinned by tag with neither `@sha256` nor an entry in `flux-image-digests.lock` (none today);
+  `.github/workflows/image-digests.yml` runs `check-flux-image-digests.sh` weekly (anonymous ghcr.io, no credential, never on a PR).
+  Rung: mocked/static; the digest check was also run once against ghcr.io. Renovate's validator was not run (no Node here), and
+  the new Renovate keys are checked only against its published JSON schema. It does **not** upgrade Istio, cert-manager, Kyverno or
+  CNPG (those pins live in `OpenAether-apps`), does not move the bastion image off Ubuntu 22.04 (a replacement of a deployed
+  bastion, left to its own change), does not enable Renovate `pinDigests` (this repository has no manifest a Renovate manager would
+  rewrite: the Flux and Cilium manifests are generated), and the 30 days are a commitment of one maintainer, not a control.
+
 - **Passphrase hygiene for the state, the access artifacts and the etcd snapshots (ANSSI PG-083 weak-entropy rule, B2 one key / one use, PA-079 R4 and R14 in part).**
   `scripts/ops/gen-passphrase.sh` prints `openssl rand -base64 48`. `task cluster-up` runs an entropy heuristic on the
   passphrase after the existing placeholder check (distinct characters, repeated block, runs, common words; random base64 and hex
