@@ -117,11 +117,11 @@ capped one (`config_contract` in `modules/talos/main.tf`, which says why). A bum
 the installer image in the config; offline renders under provider 0.12.0 show nothing else, but
 no `cluster-upgrade` has run under it yet.
 
-**After pulling the provider 0.12.0 pin**, run `tofu init -backend=false -upgrade` in
-`infrastructure/opentofu/cluster` (or `task validate`, which shares the lock). The lock file is
-local and gitignored, so every `infra-*` task stops at init until you do. `-upgrade` moves every
-provider within its constraint: read the next plan. To move only talos, delete its block from
-`.terraform.lock.hcl` and run a plain `tofu init`.
+**After pulling a provider pin**, the committed `.terraform.lock.hcl` of `cluster/` and `talos-image/` already
+names the version (docs/supply-chain.md): a plain `tofu init` in `infrastructure/opentofu/cluster` is enough, and
+an init that says the lock does not match the constraint means the PR forgot `task lock-providers`. That task
+moves every provider within its constraint: read the next plan. A clone that still has an older local lock
+(from before it was committed) is fixed by deleting that file and running `tofu init`.
 
 **On Outscale the image build dominates the whole upgrade.** The image is
 registered from a snapshot imported through a provider-side queue: 8 min on

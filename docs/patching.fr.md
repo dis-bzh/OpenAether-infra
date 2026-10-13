@@ -22,7 +22,7 @@ un délai manqué.
 
 | Épingle | Où | Mise à jour par | Appliquée à un cluster par |
 |---|---|---|---|
-| Providers OpenTofu | `versions.tf` | Renovate | `tofu plan` / `apply`, à la main |
+| Providers OpenTofu | `versions.tf`, `.terraform.lock.hcl` | Renovate | `tofu plan` / `apply`, à la main |
 | Talos, Kubernetes | valeurs par défaut de `variables.tf` | Renovate (label `cluster-version`) | `task cluster-upgrade`, [`upgrade.fr.md`](upgrade.fr.md) |
 | Manifestes Cilium, Flux | `bootstrap-manifests/` | Renovate change l'épingle, `task render-manifests` régénère (`needs-regen`) | rendus au prochain bootstrap ; un cluster en marche suit `OpenAether-apps` |
 | Actions CI, hooks pre-commit, versions d'outils | workflows, `.pre-commit-config.yaml`, `scripts/` | Renovate | PR fusionnée |

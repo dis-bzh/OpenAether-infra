@@ -6,6 +6,9 @@ name: Real-Cloud Regression
 # block below. DORMANT until its secrets exist: the first step names whichever one is missing.
 #
 # PREREQUISITES, per provider you intend to run — a workflow cannot create any of these:
+#   0. A GitHub environment named `sandbox` (Settings, Environments) with required reviewers and a
+#      deployment branch rule restricted to `main`; the secrets below live in IT, not in the repository
+#      secrets. Every matrix entry waits for approval, so `all` asks three times.
 #   1. SANDBOX accounts, not the ones a human deploys on: the teardown steps run `task cluster-down`
 #      with APPROVE=auto on whatever state the tfvars below point at.
 #   2. A DEDICATED SSH keypair: its private half is CI_BASTION_SSH_PRIVATE_KEY and its PUBLIC half
@@ -62,6 +65,10 @@ permissions:
 jobs:
   regression:
     name: Deploy + verify + teardown (${{ matrix.provider }})
+    # The protected environment holding the sandbox secrets (docs/supply-chain.md): required reviewers, main only.
+    # Without it any user with write access could dispatch this from a branch of their own and read every key.
+    # GitHub creates a missing environment WITHOUT protection; repo-settings.yml reports one that has none.
+    environment: sandbox
     runs-on: ubuntu-latest
     # A cold image build can run long; the teardown must not be starved of time by an apply that
     # ran out the clock.

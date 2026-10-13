@@ -451,6 +451,10 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       items** list built from the open issue titles that day (`gh issue list
       --state open`): several known limits appear in no tracked file. Link the
       issues, not a backlog file. Not a pre-release (the owner's decision, 2026-10-12).
+- [ ] the release carries `openaether-infra-<tag>.cdx.json` (the `SBOM` workflow attaches it on
+      publish; `gh release view <tag> --json assets`) and the last `SBOM` run's image scans are green
+      or each red one is in `.vex/openaether-infra.openvex.json`. `docs/supply-chain.md` says what
+      the inventory covers and what it does not.
 - [ ] the examples and the default pin the apps tag, and it exists. OpenAether-apps
       is tagged and released first (`git ls-remote --tags
       https://github.com/dis-bzh/OpenAether-apps refs/tags/0.1.0` prints it).

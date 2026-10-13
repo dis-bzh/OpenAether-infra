@@ -69,6 +69,11 @@
 
   packageRules: [
     {
+      description: "The committed .terraform.lock.hcl lists providers under registry.opentofu.org: look them up there, so a bump writes the hashes that registry serves (Renovate defaults to registry.terraform.io). That registry gives release dates too, so minimumReleaseAge still applies.",
+      matchDatasources: ["terraform-provider"],
+      registryUrls: ["https://registry.opentofu.org"],
+    },
+    {
       description: "Routine OpenTofu provider bumps, bundled. Majors stay separate — bpg/proxmox and outscale/outscale in particular have no 1.0 yet and move fast on schema.",
       matchManagers: ["terraform"],
       matchUpdateTypes: ["minor", "patch"],

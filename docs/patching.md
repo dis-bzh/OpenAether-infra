@@ -20,7 +20,7 @@ cannot land yet and an **expiry date**; past it, the waiver is a missed deadline
 
 | Pin | Where | Bumped by | Applied to a cluster by |
 |---|---|---|---|
-| OpenTofu providers | `versions.tf` | Renovate | `tofu plan` / `apply`, by hand |
+| OpenTofu providers | `versions.tf`, `.terraform.lock.hcl` | Renovate | `tofu plan` / `apply`, by hand |
 | Talos, Kubernetes | `variables.tf` defaults | Renovate (`cluster-version` label) | `task cluster-upgrade`, [`upgrade.md`](upgrade.md) |
 | Cilium, Flux manifests | `bootstrap-manifests/` | Renovate bumps the pin, `task render-manifests` regenerates (`needs-regen`) | rendered at the next bootstrap; a running cluster follows `OpenAether-apps` |
 | CI actions, pre-commit hooks, tool versions | workflows, `.pre-commit-config.yaml`, `scripts/` | Renovate | merged PR |

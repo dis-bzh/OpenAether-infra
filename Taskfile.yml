@@ -235,11 +235,29 @@ tasks:
     env:
       TF_DATA_DIR: .terraform-validate
     cmds:
-      # -upgrade because .terraform.lock.hcl is gitignored — a pure local cache,
-      # yet shared with the deploy lane. Without it, every existing clone breaks
-      # the moment a version constraint moves, naming a command this never runs.
-      - tofu init -backend=false -upgrade
+      # The lock is committed (reviewed hashes). readonly: a constraint bumped
+      # without `task lock-providers` fails here, in CI too, instead of resolving
+      # a fresh provider binary nobody reviewed.
+      - tofu init -backend=false -lockfile=readonly
       - tofu validate
+
+  lock-providers:
+    desc: >-
+      Re-resolve the provider versions of the cluster and talos-image roots within
+      their constraints and rewrite their committed .terraform.lock.hcl for the four
+      platforms operators use. Needs the network, ~1 GB of TMPDIR; no credential.
+    cmds:
+      - |
+        set -e
+        # tofu unpacks every provider for every platform in TMPDIR; /tmp is a small tmpfs on some hosts.
+        for root in cluster talos-image; do
+          ( cd infrastructure/opentofu/$root
+            export TF_DATA_DIR=.terraform-validate
+            tofu init -backend=false -upgrade >/dev/null
+            tofu providers lock -platform=linux_amd64 -platform=linux_arm64 \
+              -platform=darwin_arm64 -platform=darwin_amd64 )
+        done
+        git diff --stat -- 'infrastructure/opentofu/*/.terraform.lock.hcl'
 
   apps-validate:
     desc: "Validate the OpenAether-apps Flux DAG, the generated pick.py profiles and the children's Cilium"
@@ -445,6 +463,10 @@ tasks:
       - ./scripts/dev/test-bucket-names.sh
       # The classifier behind `task lint`'s image-pin check, on fixtures.
       - ./scripts/dev/test-image-pins.sh
+      # images.lock: the verifier, the lock writer against a fake Factory, the committed lock's format.
+      - ./scripts/dev/test-image-checksum.sh
+      # The CycloneDX inventory behind the weekly/release SBOM workflow, on a fixture and on the real tree.
+      - ./scripts/dev/test-sbom.sh
       # The backup path had no inverse until 0.5.0. This is the round trip —
       # the real enc() against the real dec(), offline.
       - ./scripts/dev/test-restore.sh
@@ -586,14 +608,18 @@ tasks:
     cmds:
       - defer: *receipt
       # Self-sufficient from a cold shell/CI runner — `tofu test` needs the
-      # providers and modules resolved first. -upgrade: see `validate`.
-      - tofu init -backend=false -upgrade
+      # providers and modules resolved first, from the committed lock (see `validate`).
+      - tofu init -backend=false -lockfile=readonly
       - tofu test
       # Module-level tests: the root's tests above never run a module's own logic.
+      # modules/talos is not a deployed root and has no committed lock: -upgrade, as before.
       - tofu -chdir=../modules/talos init -backend=false -upgrade
       - tofu -chdir=../modules/talos test
+      # The Proxmox image module's checksum switch (images.lock): same shape, same reason.
+      - tofu -chdir=../modules/talos-image/proxmox init -backend=false -upgrade
+      - tofu -chdir=../modules/talos-image/proxmox test
       # The image root's mocked test, with the same data dir (relative, so it resolves there).
-      - cd ../talos-image && tofu init -backend=false -upgrade && tofu test
+      - cd ../talos-image && tofu init -backend=false -lockfile=readonly && tofu test
 
   clea-scan:
     desc: >-

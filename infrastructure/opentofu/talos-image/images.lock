@@ -1,0 +1,12 @@
+# sha256 of the Image Factory raw.zst each talos-image module downloads, one line per
+# "<schematic>/<version>/<platform>-<arch>". Written by scripts/bootstrap/talos-image-lock.sh;
+# read by the talos-image root (image_checksum_mode, default warn). Review a change to this file
+# like a change to code: each line is the OS every node of that version boots.
+d27a246643fb98bb817d58dcca1277e72ad346b0e7e12d4fbc8825e6eb061863  613e1592b2da41ae5e265e8789429f22e121aab91cb4deb6bc3c0b6262961245/v1.14.2/aws-amd64
+118d12bba5ae8ce409b04a74df4115beeeaf33caea2ca4b563ae9b406c27b863  613e1592b2da41ae5e265e8789429f22e121aab91cb4deb6bc3c0b6262961245/v1.14.2/aws-arm64
+ebfc1ba620afa83ef7eccae7ea83d0a551c0245a46336e3b380f9aa0ac3acce1  613e1592b2da41ae5e265e8789429f22e121aab91cb4deb6bc3c0b6262961245/v1.14.2/nocloud-amd64
+a1478eeda20ac34e2af5d3b3ef2acd1d672de31c02e384526ed989482e476200  613e1592b2da41ae5e265e8789429f22e121aab91cb4deb6bc3c0b6262961245/v1.14.2/nocloud-arm64
+8cfd27f0325da259f9b02ce48ce7f26ed4fcf4f5a80a390795d4d3efc924c490  613e1592b2da41ae5e265e8789429f22e121aab91cb4deb6bc3c0b6262961245/v1.14.2/openstack-amd64
+a8f886753e25e9c9d304d7d75f656ebb5a1f2efe046564da0266ed72611c1dfb  613e1592b2da41ae5e265e8789429f22e121aab91cb4deb6bc3c0b6262961245/v1.14.2/openstack-arm64
+7298fb36530b99d84d3b2eae1d9498fc629dc9d785324eaa13d2537f49d41bb6  613e1592b2da41ae5e265e8789429f22e121aab91cb4deb6bc3c0b6262961245/v1.14.2/scaleway-amd64
+af956ae90c1b3e05129621c0a48fc694723c4405d7f9484a8b504db75520d3a1  613e1592b2da41ae5e265e8789429f22e121aab91cb4deb6bc3c0b6262961245/v1.14.2/scaleway-arm64

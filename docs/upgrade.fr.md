@@ -126,11 +126,11 @@ sous un contrat plafonné (`config_contract` dans `modules/talos/main.tf`, qui d
 bump vers 1.14 change l'image d'installation dans la configuration ; les rendus hors ligne sous
 le provider 0.12.0 ne montrent rien d'autre, mais aucun `cluster-upgrade` n'a encore tourné sous lui.
 
-**Après avoir tiré le pin du provider 0.12.0**, lancer `tofu init -backend=false -upgrade` dans
-`infrastructure/opentofu/cluster` (ou `task validate`, qui partage le lock). Le fichier de lock est
-local et ignoré par git : toutes les tâches `infra-*` s'arrêtent à l'init tant que ce n'est pas fait.
-`-upgrade` déplace chaque provider dans sa contrainte : lire le plan suivant. Pour ne déplacer que
-talos, supprimer son bloc de `.terraform.lock.hcl` et lancer un `tofu init` simple.
+**Après avoir tiré un pin de provider**, le `.terraform.lock.hcl` versionné de `cluster/` et `talos-image/` nomme
+déjà la version (docs/supply-chain.fr.md) : un `tofu init` simple dans `infrastructure/opentofu/cluster` suffit, et
+un init qui dit que le lock ne correspond pas à la contrainte signale une PR qui a oublié `task lock-providers`.
+Cette tâche déplace chaque provider dans sa contrainte : lire le plan suivant. Un clone qui garde un ancien lock
+local (d'avant son versionnement) se corrige en supprimant ce fichier puis en lançant `tofu init`.
 
 **Sur Outscale, la construction de l'image domine tout l'upgrade.** L'image est
 enregistrée depuis un snapshot importé via une file côté provider : 8 min le

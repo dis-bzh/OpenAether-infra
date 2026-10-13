@@ -487,17 +487,23 @@ resource "terraform_data" "talos_tunnels" {
     join(",", local.worker_ips),
   ]
 
+  # Values travel as environment variables, never spliced into the command line: a user name or key path with a
+  # space or a metacharacter stays one argument. pathexpand() resolves the default "~/.ssh/..." here, since an
+  # env value is not tilde-expanded by the shell. test-talos-tunnels.sh runs this block with hostile values.
   provisioner "local-exec" {
-    command = join(" ", concat(
-      [
-        "${path.module}/../../../scripts/bootstrap/talos-tunnels.sh", "open-direct",
-        "--bastion", local.bastion_ip,
-        "--user", local.bastion_user,
-        "--cps", join(",", local.control_plane_ips),
-        "--key", var.ssh_key_path,
-      ],
-      length(local.worker_ips) > 0 ? ["--workers", join(",", local.worker_ips)] : []
-    ))
+    interpreter = ["/usr/bin/env", "bash", "-c"]
+    environment = {
+      OA_TUNNEL_BASTION = local.bastion_ip
+      OA_TUNNEL_USER    = local.bastion_user
+      OA_TUNNEL_CPS     = join(",", local.control_plane_ips)
+      OA_TUNNEL_WORKERS = join(",", local.worker_ips)
+      OA_TUNNEL_KEY     = pathexpand(var.ssh_key_path)
+    }
+    command = <<-EOT
+      exec "${path.module}/../../../scripts/bootstrap/talos-tunnels.sh" open-direct \
+        --bastion "$OA_TUNNEL_BASTION" --user "$OA_TUNNEL_USER" --cps "$OA_TUNNEL_CPS" \
+        --key "$OA_TUNNEL_KEY" $${OA_TUNNEL_WORKERS:+--workers "$OA_TUNNEL_WORKERS"}
+    EOT
   }
 }
 

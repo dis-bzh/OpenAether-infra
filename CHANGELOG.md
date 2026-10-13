@@ -16,6 +16,26 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Security
 
+- **Supply chain: committed provider locks, a checksum lane for the Talos boot images, an SBOM, a protected environment for the cloud workflow, rulesets as code (ANSSI SSDLC CICD-AIP-01c/-03, PROV-REC03, CICD-IAM-03/-05, CIO-REC03, SCM-REC06/-07, SBOM25-1/-2/-3 in part).**
+  `.terraform.lock.hcl` of `cluster/` and `talos-image/` is committed (linux and macOS, amd64 and arm64); both roots' `>=` provider
+  constraints become `~>`; `task validate`/`test` and CI run `tofu init -lockfile=readonly` (shown to fail on a constraint bumped without
+  a refresh); `task lock-providers` refreshes by hand and Renovate looks providers up on registry.opentofu.org. `talos-image/images.lock`
+  records the sha256 of the Factory raw image per platform and arch for the pinned Talos version; `verify-image-checksum.sh` runs after
+  the download in the Scaleway, OVH and Outscale modules, driven by `image_checksum_mode` (**`warn` by default**: today's behaviour plus a
+  message; `enforce` stops the build; `off`), and Proxmox passes the provider's `checksum` under `enforce` only. `talos_tunnels` hands its
+  values to `local-exec` as environment variables (a key path with a space or `$(...)` stays data; it stays off by default). `real-cloud-regression.yml`
+  runs in an environment `sandbox`. `sbom.yml` (weekly and on release) attaches a CycloneDX 1.5 inventory (`gen-sbom.py`: tool pins, locked
+  providers, bootstrap images with digests, Factory images with hashes) and Trivy-scans the bootstrap images; `.vex/` holds an empty OpenVEX file.
+  `.github/rulesets/` holds the two rulesets as exported; `check-required-checks.sh` compares them with GitHub, requires a pull request,
+  no force-push and no deletion on main, and **warns** (fails under `--strict-main`) on 0 approving reviews, no required signatures and the
+  admin bypass on main; it also checks the `sandbox` environment. `docs/supply-chain.md` has the rotation table. Rung: mocked/static
+  (`tofu test` on the image root and the Proxmox module, stub harnesses, 79 offline cases for the settings check); the settings check was
+  also run once, read-only, against the live repository; the Factory was downloaded for real to write the lock. Nothing was run on a cloud or
+  a Proxmox host, Trivy and the Renovate validator were not run, and the new workflow has not run. It does **not**
+  prove the Factory serves stable bytes over months, that Proxmox's checksum covers the compressed file, that provider versions in the locks
+  are the ones the clusters ran on, or that the `sandbox` environment exists with reviewers (create it, then move the secrets); it adds no OIDC,
+  no bucket versioning, no image signature verification, and it covers none of what `OpenAether-apps` deploys.
+
 - **Patch policy and the signals behind it (ANSSI hygiene measure 34, audit ids HYG-M34, SSDLC CICD-AIP-01a/-03, NT-35 R2 in part).**
   `docs/patching.md` states the rule (security fix merged or waived in writing within 30 days, 7 when exploited or internet-reachable)
   and what feeds it. `renovate.json5` gains `vulnerabilityAlerts` (label only: Renovate's default for that block already skips the
