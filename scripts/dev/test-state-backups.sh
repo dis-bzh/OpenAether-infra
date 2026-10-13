@@ -505,6 +505,25 @@ GNUPGHOME="$G" gpg --batch --quiet --pinentry-mode loopback --passphrase wrong -
   && bad "a wrong passphrase decrypted it" || ok "a wrong passphrase does not"
 rm -rf "$G"
 
+echo "--- a separate artifact passphrase: the snapshot opens with it, and NOT with the state passphrase ---"
+ENV_EXTRA="$BASE TF_VAR_artifact_passphrase=an-artifact-passphrase-distinct-from-the-state-one"
+OUT="$(runes)"; RC=$?
+is "the script completes" 0 "$RC"
+ART="$(ls "$CAP"/etcd-*.snap.gpg 2>/dev/null | head -1)"
+G="$(mktemp -d)"
+DEC="$(GNUPGHOME="$G" gpg --batch --quiet --pinentry-mode loopback \
+        --passphrase an-artifact-passphrase-distinct-from-the-state-one -d "$ART" 2>/dev/null)"
+is "it decrypts with the artifact passphrase" "ETCD-PLAINTEXT-127.0.0.1:50000" "$DEC"
+GNUPGHOME="$G" gpg --batch --quiet --pinentry-mode loopback --passphrase correct-horse-battery-staple-32chars -d "$ART" >/dev/null 2>&1 \
+  && bad "the state passphrase opened the artifact-passphrase snapshot" || ok "the state passphrase does not"
+rm -rf "$G"
+ENV_EXTRA="$BASE TF_VAR_artifact_passphrase="
+OUT="$(runes)"; RC=$?
+G="$(mktemp -d)"; ART="$(ls "$CAP"/etcd-*.snap.gpg 2>/dev/null | head -1)"
+GNUPGHOME="$G" gpg --batch --quiet --pinentry-mode loopback --passphrase correct-horse-battery-staple-32chars -d "$ART" >/dev/null 2>&1 \
+  && ok "an EMPTY artifact passphrase counts as unset: the state passphrase is used" || bad "empty artifact passphrase did not fall back (rc=$RC)"
+rm -rf "$G"
+
 echo "--- cp-0 is down: cp-1 through the next port, and the result says so ---"
 ENV_EXTRA="$BASE OA_STUB_TALOS_DOWN=127.0.0.1:50000"
 OUT="$(runes)"; RC=$?

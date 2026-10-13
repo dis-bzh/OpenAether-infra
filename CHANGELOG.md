@@ -16,6 +16,19 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Security
 
+- **Passphrase hygiene for the state, the access artifacts and the etcd snapshots (ANSSI PG-083 weak-entropy rule, B2 one key / one use, PA-079 R4 and R14 in part).**
+  `scripts/ops/gen-passphrase.sh` prints `openssl rand -base64 48`. `task cluster-up` runs an entropy heuristic on the
+  passphrase after the existing placeholder check (distinct characters, repeated block, runs, common words; random base64 and hex
+  pass): **warn by default**, `OA_PASSPHRASE_CHECK=enforce` refuses, `=off` silences. New optional `artifact_passphrase`
+  (`TF_VAR_artifact_passphrase`, default null = unchanged behaviour and no plan diff) encrypts the gpg talosconfig/kubeconfig
+  backups and the etcd snapshots; `restore-artifacts.sh` tries it first and falls back to the state passphrase, so older objects
+  open. The pbkdf2 parameters of the state encryption are pinned to OpenTofu 1.12's defaults (600000 / sha512 / 32, read back
+  from a state's own metadata: existing states decrypt unchanged). `task kubeconfig` writes both files 0600, the snapshot cron
+  warns on a `.env.sh` readable by others, and the false "SSE-C" and "authenticated/OCB" wording is gone. Rung: mocked (`tofu
+  test`, the stub harnesses with real gpg, a real go-task), plus a local-backend decrypt check of the pbkdf2 defaults; nothing
+  run on a cluster or against a real store. It does **not** make gpg an AEAD (still CFB + SHA-1 MDC), does not add `enforced = true`
+  (an unencrypted state would stop planning), does not move artifacts to PGP public keys, and splitting the secrets is only as
+  good as the places they are kept.
 - **Secrets-at-rest cipher said as it is (ANSSI PA-079 R12).** The comments in `modules/talos/main.tf` called the etcd
   encryption `AES-256-GCM`; Talos' `secretbox` is XSalsa20-Poly1305. `docs/upgrade.md` now records the deviation (not a
   listed AEAD; Talos offers no AEAD alternative) and that the key has no verified in-place rotation. Docs and comments

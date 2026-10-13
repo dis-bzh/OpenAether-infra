@@ -108,7 +108,7 @@ variable; the summary:
 | Outscale (compute) | `OSC_ACCESS_KEY`, `OSC_SECRET_KEY`, `OSC_REGION` |
 | S3 (state + backups) | `<PU>_AWS_ACCESS_KEY_ID` / `<PU>_AWS_SECRET_ACCESS_KEY`, where `PU` = `SCW`/`OVH`/`OUTSCALE`. Scaleway & Outscale **default to their API keys**; OVH needs dedicated S3 keys. **No ambient `AWS_*` fallback** (it could silently use another provider's keys); `task` resolves these and exports `AWS_*` internally. |
 | Backup replica | Nothing new: the `-backup` store is opened with the `<PU>_AWS_*` of the cloud `s3_replica_endpoint` names, so an Outscale replica reads `OUTSCALE_AWS_*`. `<PU>_BACKUP_AWS_*` only if you want that one store to have its own pair. |
-| All | `TF_VAR_encryption_passphrase` (≥ 32 chars; encrypts state **and** backups) |
+| All | `TF_VAR_encryption_passphrase` (≥ 32 chars, generate it with `scripts/ops/gen-passphrase.sh`; encrypts the state, and the backups unless `TF_VAR_artifact_passphrase` is set) |
 
 ## Environment Files
 
@@ -274,12 +274,12 @@ by its endpoint. Bucket names are derived from the cluster:
 | Artifact | Primary | Replica | Client encryption |
 |----------|---------|---------|-------------------|
 | tfstate | `s3-<project>-<provider>-tfstate-<env>` | `…-backup` | OpenTofu `encryption{}` (AES-GCM + PBKDF2) |
-| talosconfig / kubeconfig | `s3-<project>-<provider>-<role>-<env>` | `…-backup` | gpg `--symmetric` AES-256 (authenticated) |
+| talosconfig / kubeconfig | `s3-<project>-<provider>-<role>-<env>` | `…-backup` | gpg `--symmetric` AES-256 (OpenPGP CFB + SHA-1 MDC: tamper-evident, not an AEAD mode) |
 
 where `<project>` is `cluster_name`'s first segment (`openaether`) and `<provider>`
 is the cluster's active provider (`scaleway`/`ovh`/`outscale`).
 
-Both reuse the **same** `TF_VAR_encryption_passphrase`. Artifacts are pushed during
+Both reuse the **same** `TF_VAR_encryption_passphrase` unless `TF_VAR_artifact_passphrase` is set (then the artifacts and etcd snapshots use it; restore tries it first). Artifacts are pushed during
 the Phase-2 apply (`backup-artifacts.sh`); the state is replicated **after** the
 apply (`backup-state.sh` / `task backup-state`), because the backend only flushes
 the new state on apply exit. Beside the current replica object it keeps dated **generations** (`<key>.<UTC timestamp>`):
@@ -309,7 +309,8 @@ export OUTSCALE_AWS_SECRET_ACCESS_KEY=...
 ### Restore a backup
 
 ```bash
-# 1. Decrypt a backed-up artifact (same passphrase as the tfstate):
+# 1. Decrypt a backed-up artifact (TF_VAR_artifact_passphrase if you set one, else the tfstate passphrase;
+#    scripts/ops/restore-artifacts.sh does this and tries both):
 aws s3 cp s3://s3-<project>-scaleway-management-<env>/backups/kubeconfig.gpg - \
   --endpoint-url https://s3.fr-par.scw.cloud --region fr-par | \
   gpg --batch --quiet --pinentry-mode loopback --passphrase-fd 3 \

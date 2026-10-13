@@ -38,7 +38,7 @@ Four things off the cluster, in your password manager or vault, then wiped from 
 | Seal key | `kubectl -n foundation-vault get secret openbao-seal-key -o jsonpath='{.data.key}' \| base64 -d \| gpg --encrypt -r <you> -o openbao-seal-key.gpg` | OpenBao DR: a raft snapshot is encrypted by it |
 | Recovery shares | `for i in 1 2 3; do kubectl -n foundation-vault get secret openbao-recovery-shares -o jsonpath="{.data.share-$i}" \| base64 -d > openbao-share-$i.b64; done` (PGP-encrypted: safe to store anywhere) | break-glass root token and DR; the Secret dies with the cluster |
 | restic password | `bao_admin kv get -mount=secret -field=password backup/restic` | without it the backups are undecryptable the day OpenBao is lost |
-| `TF_VAR_encryption_passphrase` | already in your vault | tfstate + gpg artifacts + etcd snapshots |
+| `TF_VAR_encryption_passphrase` | already in your vault | tfstate (+ gpg artifacts + etcd snapshots unless `TF_VAR_artifact_passphrase` is set) |
 
 A cluster without `openbao_recovery_pgp_keys` is a **development** bootstrap: one plaintext share in
 `openbao-recovery-dev`, labelled as such, and it can not be turned into a production one (re-initialise it). Do not put anything that

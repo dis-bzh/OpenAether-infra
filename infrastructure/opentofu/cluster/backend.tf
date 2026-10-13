@@ -1,5 +1,5 @@
 variable "encryption_passphrase" {
-  description = "Passphrase (>=32 chars) for OpenTofu state encryption (PBKDF2 → AES-GCM) and SSE-C of the remote state object. Supply via TF_VAR_encryption_passphrase; never commit."
+  description = "Passphrase (>=32 chars) for OpenTofu client-side state and plan encryption (PBKDF2 → AES-GCM); the object store never sees the key. Supply via TF_VAR_encryption_passphrase; never commit. Generate it: scripts/ops/gen-passphrase.sh."
   type        = string
   sensitive   = true
 
@@ -9,7 +9,22 @@ variable "encryption_passphrase" {
   # passphrase remains guessable. Store it in a password manager / KMS.
   validation {
     condition     = length(var.encryption_passphrase) >= 32
-    error_message = "encryption_passphrase must be at least 32 characters long for SSE-C key derivation."
+    error_message = "encryption_passphrase must be at least 32 characters long (state encryption key derivation). Generate one: scripts/ops/gen-passphrase.sh."
+  }
+}
+
+# Optional second secret for the gpg-encrypted access artifacts (talosconfig, kubeconfig) and etcd snapshots, so that
+# one leaked passphrase does not open the state AND the artifacts AND every Secret in etcd. Unset = they keep using
+# encryption_passphrase, as before. The scripts read the same name from the environment (etcd-snapshot.sh).
+variable "artifact_passphrase" {
+  description = "Optional separate passphrase (>=32 chars) for the gpg-encrypted talosconfig/kubeconfig backups and etcd snapshots. Unset or empty: encryption_passphrase is used. Supply via TF_VAR_artifact_passphrase; keep it in a different place from the state passphrase."
+  type        = string
+  sensitive   = true
+  default     = null
+
+  validation {
+    condition     = var.artifact_passphrase == null ? true : (var.artifact_passphrase == "" || length(var.artifact_passphrase) >= 32)
+    error_message = "artifact_passphrase must be unset, empty, or at least 32 characters long."
   }
 }
 
@@ -17,6 +32,11 @@ terraform {
   encryption {
     key_provider "pbkdf2" "migration_key" {
       passphrase = var.encryption_passphrase
+      # Pinned to what OpenTofu 1.12 defaults to (read back from a state's metadata), so a future default
+      # never changes the derivation silently. A state records its own parameters: this only governs new writes.
+      iterations    = 600000
+      hash_function = "sha512"
+      key_length    = 32
     }
 
     method "aes_gcm" "migration_method" {

@@ -41,7 +41,7 @@ d'OpenBao** : c'est la clé maîtresse de ses données.
 | Clé de seal | `kubectl -n foundation-vault get secret openbao-seal-key -o jsonpath='{.data.key}' \| base64 -d \| gpg --encrypt -r <toi> -o openbao-seal-key.gpg` | DR d'OpenBao : un snapshot raft est chiffré par elle |
 | Parts de recovery | `for i in 1 2 3; do kubectl -n foundation-vault get secret openbao-recovery-shares -o jsonpath="{.data.share-$i}" \| base64 -d > openbao-share-$i.b64; done` (chiffrées PGP : peuvent être rangées n'importe où) | root token de bris de glace et DR ; le Secret meurt avec le cluster |
 | Password restic | `bao_admin kv get -mount=secret -field=password backup/restic` | sans lui, backups indéchiffrables le jour où OpenBao est perdu |
-| `TF_VAR_encryption_passphrase` | déjà dans ton vault | tfstate + artefacts gpg + snapshots etcd |
+| `TF_VAR_encryption_passphrase` | déjà dans ton vault | tfstate (+ artefacts gpg + snapshots etcd, sauf si `TF_VAR_artifact_passphrase` est défini) |
 
 Un cluster sans `openbao_recovery_pgp_keys` est un bootstrap de **développement** : une
 part en clair dans `openbao-recovery-dev`, étiquetée comme telle, qui ne peut pas devenir un bootstrap de production (réinitialiser).

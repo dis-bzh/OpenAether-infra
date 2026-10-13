@@ -5,8 +5,8 @@
 # cluster content, this covers what lives only in etcd (Secrets written by Jobs,
 # PVC bindings…).
 #
-# talosctl snapshot through the SSH tunnels → gpg AES-256 with the SAME
-# passphrase as the tfstate → primary + replica artifact buckets, keeping the
+# talosctl snapshot through the SSH tunnels → gpg AES-256 (CFB + SHA-1 MDC, not an AEAD) under
+# TF_VAR_artifact_passphrase when set, else the tfstate passphrase → primary + replica artifact buckets, keeping the
 # last $KEEP.
 #
 # SNAPSHOT_LABEL=<label> names the artifact <label>-etcd-<timestamp>.snap.gpg and skips retention: the prune only lists
@@ -32,7 +32,11 @@ for bin in tofu jq talosctl aws gpg; do
   command -v "$bin" >/dev/null 2>&1 || { echo "✗ $bin is required" >&2; exit 1; }
 done
 [ -f "$TALOSCONFIG_FILE" ] || { echo "✗ talosconfig not found: $TALOSCONFIG_FILE" >&2; exit 1; }
-PASSPHRASE="${TF_VAR_encryption_passphrase:?✗ TF_VAR_encryption_passphrase required (same passphrase as the tfstate)}"
+# tofu reads the state, so the state passphrase is always required here. A separate artifact passphrase (empty counts
+# as unset) is what the snapshot is encrypted with, so that one leak does not open the state too; restore-artifacts.sh
+# tries it first and falls back to the state one, which keeps every older object readable.
+: "${TF_VAR_encryption_passphrase:?✗ TF_VAR_encryption_passphrase required (tofu reads the encrypted state)}"
+PASSPHRASE="${TF_VAR_artifact_passphrase:-$TF_VAR_encryption_passphrase}"
 export TALOSCONFIG="$TALOSCONFIG_FILE"
 oa_aws_compat
 
@@ -69,7 +73,7 @@ done
 [ -n "$took" ] || { echo "✗ etcd snapshot failed on every CP — tunnels open? (talos-tunnels.sh open)" >&2; exit 1; }
 echo "✓ etcd snapshot taken via ${took} ($(du -h "$SNAP" | cut -f1))"
 
-# --- 2) client-side encrypt (same model as backup-artifacts.sh) --------------
+# --- 2) client-side encrypt (same model and passphrase as backup-artifacts.sh) ---
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT="$WORK/${LABEL:+$LABEL-}etcd-${TS}.snap.gpg"
 gpg --batch --yes --quiet --pinentry-mode loopback --passphrase-fd 3 \
