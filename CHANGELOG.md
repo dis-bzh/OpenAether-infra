@@ -16,6 +16,27 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Security
 
+- **Bastion OS baseline, opt-in: sysctl, auditd, journald, sshd directives, mounts, root-owned `authorized_keys.d`, in-VM nftables logging, key-type validation (ANSSI BP-028 R9/R11/R12/R14/R28/R29/R36/R38/R58/R73, NT-007 R14/R15/R23/R24/R26, NT-006 R3/R6, NT-SSH R8/R10; addresses the audit's F16, F04, F05, F07, F09, F03, TLS-15 and LOG-08).**
+  New variable `bastion_baseline` (`enabled` default **false**; `audit_logging` default true; `restrict_ssh_source`, `time_servers`, `revoked_keys` default off/empty). With it off the cloud-init is **byte for byte
+  what 0.1.0 shipped** (`test-cluster-checks.sh` pins the hash, now with the two extra template inputs), so no deployed bastion changes. **Turning `enabled` on changes `user_data`, which
+  REPLACES the bastion on OVH and Outscale** (new IP, new host key, the Talos tunnels die with it; the plan decides on Scaleway and Proxmox): apply it on a fresh cluster or in a planned window with a second session
+  open, never during a bootstrap or an upgrade, and read the plan first. `restrict_ssh_source` and `revoked_keys` put `admin_ip` / the revoked keys into `user_data`, so changing them replaces the bastion too.
+  On: a sysctl file (R9 minus modules_disabled, R11, R12 minus the ARP options, R14), auditd with execve/`/etc`/mount/module/ptrace rules and **no `-e 2`**, a persistent journald capped at 200 MB / 90 days, a second sshd drop-in
+  (`LogLevel VERBOSE`, `StrictModes`, `PermitUserEnvironment no`, `AllowStreamLocalForwarding no`, `GatewayPorts no`, `RevokedKeys`) that the runcmd deletes again if `sshd -t` rejects it, `AcceptEnv` commented out of the main file with a
+  copy kept, `authorized_keys.d/<user>` root:root 0644, `/var/tmp` tmpfs noexec, `/boot` 700, umask 0077, sudo 4750 root:sudo, snapd/ModemManager masked, no tcpdump/netcat on new VMs, chrony on `time_servers`, and nftables
+  rate-limited `nft-drop-in/out` log rules and ICMP in limited to echo-request and fragmentation-needed. Not changed: port 22, the user, the keys, `AllowTcpForwarding`/`PermitOpen`, the egress rules, `talos-tunnels.sh`.
+  Always on (no resource changes): `bastion_ssh_keys` refuses `ssh-dss`, unknown types, a line break inside an entry and an `ssh-rsa` under `bastion_ssh_rsa_min_bits` (default 2048 so a deployed key keeps planning; 3072 selectable),
+  checked on the type token (options prefixes and the truncated fixtures still pass). New: `scripts/ops/bastion-logs-pull.sh` (journal since a cursor + audit log off the VM, gpg-encrypted with `OA_LOGS_PASSPHRASE`; does not upload),
+  `bastion-harden-check.sh` probes with `/dev/tcp` instead of `nc` and gains section 9 (`BASTION_BASELINE=1`), and `task bastion-baseline-check`.
+  Rung: **local Docker for the rendered files only** - `bastion-baseline-check.sh` runs the exact bytes on Ubuntu 22.04 and 24.04 (sshd -t, a real key login, the fingerprint in the login line, tunnels through `PermitOpen`, a revoked key refused,
+  the guard removing a broken drop-in, `nft -c` and the ruleset loaded in a container network namespace accepting 22 from the admin source only, sysctl names in `/proc/sys`, audit rules parsed by libaudit, sudo mode, umask), `cloud-init schema`,
+  `tofu test` for the input rules, stub harnesses for the two scripts. **Nothing booted a cloud image**: not proven are cloud-init ordering on a real first boot, auditd loading the rules in a real kernel, `journalctl` match syntax of the pull script,
+  chrony taking the source file, `rp_filter=1` on a Scaleway bastion with its private NIC, that a provider keeps the admin source address, and the unattended-upgrades interaction (statoverride, masked units).
+  Measured on the way: OpenSSH 8.9 already refuses unix-socket forwarding while `PermitOpen` is set, so `AllowStreamLocalForwarding no` is defence in depth, and the `Accepted publickey ... SHA256:` line already carries the fingerprint at the default log level (what `LogLevel VERBOSE` adds is the `authorized_keys` line number of the key and the session start/close).
+  **Not done**: `restrict,port-forwarding` key options (they would change the interactive login path; `bastion-harden-check.sh` would need rewriting first), removing the `sudo` group from the login user (kept; sudo is restricted to the group instead),
+  client-side `Ciphers`/`KexAlgorithms` in `talos-tunnels.sh`, `ListenAddress`, an upload of the pulled logs, a cloud audit-trail export, and the documented Grafana tunnel `-L ...:443` that `PermitOpen` refuses (a documentation defect in `docs/admin-access.md`, untouched).
+  Also: the Feint lane renders the same template and now passes the two new inputs with the baseline off; `task test-scripts` runs the three 0.2.0 ops harnesses (netcheck, exposure scan, RBAC review) that `task lint`'s reachability check found unwired.
+
 - **Ops verification tooling: encryption at rest read back, an exposure scan, a behavioural network check, an RBAC review (ANSSI HYG M37/M38 evidence, NT-006 R14; NSA/CISA AUTH-03 and the Cilium encryption control).**
   `infra-verify.sh` now reads `STATE` and `EPHEMERAL` back from each node's Talos API and fails unless they are `ready` and `luks2`, and
   fails when the kube-apiserver has no `--encryption-provider-config` (the volume id is taken from Talos' source and has never been read on a

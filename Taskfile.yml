@@ -581,6 +581,13 @@ tasks:
       - ./scripts/dev/test-encryption-at-rest.sh
       # cluster-security-tests.sh: Cilium WireGuard (1.8), development OpenBao bootstrap (4.6), escrow record (4.7).
       - ./scripts/dev/test-security-tests-checks.sh
+      # The read-only ops checks of the security pass: denied flows, exposed ports, RBAC subjects.
+      - ./scripts/dev/test-cluster-netcheck.sh
+      - ./scripts/dev/test-exposure-scan.sh
+      - ./scripts/dev/test-rbac-review.sh
+      # The bastion scripts: harden-check (egress probes, opt-in baseline section) and the log pull.
+      - ./scripts/dev/test-bastion-harden-check.sh
+      - ./scripts/dev/test-bastion-logs-pull.sh
       # grow-nodes.sh (#59): machines, then tunnels, then only the new nodes' configuration.
       - ./scripts/dev/test-grow-nodes.sh
       - ./scripts/dev/test-refuse-node-deletes.sh
@@ -2054,6 +2061,19 @@ tasks:
     cmds:
       - defer: *receipt
       - ./scripts/dev/ssh-ca-check.sh
+
+  bastion-baseline-check:
+    desc: >-
+      Bastion OS baseline (bastion_baseline), rung "local Docker": renders the shared cloud-init with and without
+      it and runs the exact bytes on Ubuntu 22.04 and 24.04 in Docker - sshd -t and a real login, the key
+      fingerprint in the log, tunnels through PermitOpen, RevokedKeys, nft -c and the loaded ruleset, sysctl
+      names, audit-rule syntax, sudo mode. No cloud account, nothing written to the host. Needs Docker.
+    preconditions:
+      - sh: command -v docker
+        msg: bastion-baseline-check needs Docker; nothing ran and no receipt was written.
+    cmds:
+      - defer: *receipt
+      - ./scripts/dev/bastion-baseline-check.sh
 
   feint-evidence:
     desc: >-

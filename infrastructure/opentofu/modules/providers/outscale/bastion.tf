@@ -89,6 +89,8 @@ resource "outscale_vm" "bastion" {
     extra_runcmd      = []
     ssh_ca_public_key = var.bastion_ssh_ca_public_key
     ssh_ca_principals = var.bastion_ssh_ca_principals
+    baseline          = var.bastion_baseline
+    admin_ip          = var.admin_ip
   }))
 
   tags {

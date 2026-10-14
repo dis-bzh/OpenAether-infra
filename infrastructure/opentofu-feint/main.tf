@@ -31,6 +31,8 @@ locals {
     extra_runcmd      = []
     ssh_ca_public_key = ""
     ssh_ca_principals = ""
+    baseline          = { enabled = false, audit_logging = true, restrict_ssh_source = false, time_servers = [], revoked_keys = [] }
+    admin_ip          = []
   })
 }
 

@@ -226,6 +226,7 @@ module "scw" {
 
   admin_ip         = var.admin_ip
   bastion_ssh_keys = lookup(var.bastion_ssh_keys, "scaleway", [])
+  bastion_baseline = var.bastion_baseline
 }
 
 # ==============================================================================
@@ -255,6 +256,7 @@ module "ovh" {
 
   admin_ip         = var.admin_ip
   bastion_ssh_keys = lookup(var.bastion_ssh_keys, "ovh", [])
+  bastion_baseline = var.bastion_baseline
 }
 
 # ==============================================================================
@@ -282,6 +284,7 @@ module "outscale" {
 
   admin_ip         = var.admin_ip
   bastion_ssh_keys = lookup(var.bastion_ssh_keys, "outscale", [])
+  bastion_baseline = var.bastion_baseline
 }
 
 # ==============================================================================
@@ -323,6 +326,7 @@ module "proxmox" {
 
   admin_ip         = var.admin_ip
   bastion_ssh_keys = lookup(var.bastion_ssh_keys, "proxmox", [])
+  bastion_baseline = var.bastion_baseline
 }
 
 # ==============================================================================

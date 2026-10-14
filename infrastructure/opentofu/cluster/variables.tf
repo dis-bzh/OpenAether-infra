@@ -329,9 +329,81 @@ variable "admin_ip" {
 }
 
 variable "bastion_ssh_keys" {
-  description = "SSH public keys per provider. Key = provider name (scaleway/ovh/outscale), value = list of SSH public keys. Add a key to grant multi-admin access without changing the list structure."
+  description = "SSH public keys per provider. Key = provider name (scaleway/ovh/outscale), value = list of SSH public keys. Add a key to grant multi-admin access without changing the list structure. Accepted types: ssh-ed25519, sk-ssh-ed25519@openssh.com, ecdsa-sha2-nistp256/384/521, sk-ecdsa-sha2-nistp256@openssh.com and ssh-rsa of at least bastion_ssh_rsa_min_bits; one key per list entry."
   type        = map(list(string))
   default     = {}
+
+  # The key lines are written verbatim to authorized_keys. Checked on the type token, not on the blob
+  # (the test fixtures and the examples carry truncated blobs), and an options prefix is allowed.
+  validation {
+    condition     = alltrue([for k in flatten(values(var.bastion_ssh_keys)) : !strcontains(k, "\n") && !strcontains(k, "\r")])
+    error_message = "bastion_ssh_keys: one key per list entry, no line break inside an entry (a second line would be a second, unreviewed authorized_keys line)."
+  }
+
+  validation {
+    condition = alltrue([for k in flatten(values(var.bastion_ssh_keys)) :
+      can(regex("(^|\\s)(ssh-ed25519|sk-ssh-ed25519@openssh\\.com|ecdsa-sha2-nistp(256|384|521)|sk-ecdsa-sha2-nistp256@openssh\\.com|ssh-rsa)\\s+[^\\s]", k))
+    ])
+    error_message = "bastion_ssh_keys: only ssh-ed25519, sk-ssh-ed25519@openssh.com, ecdsa-sha2-nistp256/384/521, sk-ecdsa-sha2-nistp256@openssh.com and ssh-rsa keys are accepted (ssh-dss and anything unrecognised are refused)."
+  }
+
+  # RSA size from the base64 blob length (a 2048-bit key is about 372 characters, 3072 bits about 544): the blob
+  # cannot be decoded here, so the floor sits just below the nominal length.
+  validation {
+    condition = alltrue([for k in flatten(values(var.bastion_ssh_keys)) :
+      !can(regex("(^|\\s)ssh-rsa\\s", k)) || length(regex("(?:^|\\s)ssh-rsa\\s+([^\\s]+)", k)[0]) >= (var.bastion_ssh_rsa_min_bits >= 3072 ? 540 : 370)
+    ])
+    error_message = "bastion_ssh_keys: an ssh-rsa key is shorter than bastion_ssh_rsa_min_bits. Use ssh-ed25519, or a longer RSA key."
+  }
+}
+
+variable "bastion_ssh_rsa_min_bits" {
+  description = "Smallest ssh-rsa key accepted in bastion_ssh_keys: 2048 (default, so a key already deployed keeps planning) or 3072 (ANSSI-preferred). Only checks; it changes no resource."
+  type        = number
+  default     = 2048
+
+  validation {
+    condition     = contains([2048, 3072], var.bastion_ssh_rsa_min_bits)
+    error_message = "bastion_ssh_rsa_min_bits is 2048 or 3072."
+  }
+}
+
+# The bastion's OS baseline (sysctl, auditd, journald, sshd directives, mounts, in-VM nftables logging and
+# source filter). OFF by default: turning `enabled` on changes the cloud-init user_data, which REPLACES the
+# bastion on OVH and Outscale (new IP, new host key) and is ignored by a running instance elsewhere - apply it
+# on a fresh cluster or in a planned window, never during a bootstrap (CHANGELOG).
+variable "bastion_baseline" {
+  description = <<-EOT
+    Opt-in bastion hardening baseline (default: nothing changes).
+      enabled             - master switch. false renders the cloud-init byte for byte as before.
+      audit_logging       - with enabled: auditd (execve, /etc, mount, modules, ptrace), persistent size-capped journald, bastion user in adm and systemd-journal.
+      restrict_ssh_source - with enabled: the in-VM firewall accepts port 22 from admin_ip only (Proxmox has no security group). admin_ip is then part of the user_data: changing it replaces the bastion, and a running bastion keeps the OLD source list - use it where a replacement is acceptable.
+      time_servers        - with enabled: chrony with these NTP servers (empty: the image's time service stays).
+      revoked_keys        - with enabled: public keys (authorized_keys lines) written to sshd's RevokedKeys file; changing the list replaces the bastion.
+  EOT
+  type = object({
+    enabled             = optional(bool, false)
+    audit_logging       = optional(bool, true)
+    restrict_ssh_source = optional(bool, false)
+    time_servers        = optional(list(string), [])
+    revoked_keys        = optional(list(string), [])
+  })
+  default = {}
+
+  validation {
+    condition     = alltrue([for t in var.bastion_baseline.time_servers : can(regex("^[A-Za-z0-9.:-]+$", t))])
+    error_message = "bastion_baseline.time_servers: host names or addresses only."
+  }
+
+  validation {
+    condition     = alltrue([for k in var.bastion_baseline.revoked_keys : !strcontains(k, "\n") && !strcontains(k, "\r") && length(trimspace(k)) > 0])
+    error_message = "bastion_baseline.revoked_keys: one public key per entry, no line break, no empty entry."
+  }
+
+  validation {
+    condition     = var.bastion_baseline.enabled || (length(var.bastion_baseline.revoked_keys) == 0 && length(var.bastion_baseline.time_servers) == 0 && !var.bastion_baseline.restrict_ssh_source)
+    error_message = "bastion_baseline: restrict_ssh_source, time_servers and revoked_keys only apply with enabled = true; they would be silently ignored."
+  }
 }
 
 # ==============================================================================
