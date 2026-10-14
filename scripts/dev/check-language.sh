@@ -19,6 +19,17 @@
 #      every operator who built an Outscale image. A comment is read once; that
 #      line is read every run.
 #
+# What it reads, beyond the above: inline `# ...` comments, the string literals
+# and docstrings of Python (sys.exit, errors.append and raise are not "printed"
+# lines, and a French usage error sat there unseen), YAML `readme:`,
+# `description:`, `message:` and `summary:` values with their continuation lines
+# (they reach a cluster), and *.example, *.hcl, *.json5, *.tpl, *.toml files. On top of the
+# word list, any accented French letter in prose is reported: the word list is
+# whack-a-mole, the accent rule catches what it has not met yet. (The accent
+# rule alone would miss accent-free French, which is why neither replaces the
+# other.) A `.languageignore` entry whose files scan clean is itself a failure:
+# the list can only shrink.
+#
 # BLIND TO UNTRACKED FILES: it scans `git ls-files`, so a new script passes until
 # it is committed. check-version-drift.sh was written, run clean, committed, and
 # only then reported a French word in its own comment. Run this again after
@@ -32,7 +43,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # Words chosen for one property: they are French and they are not English, not
 # an identifier, and not a common abbreviation. That rules out the tempting ones
-# — `son`, `car`, `pas`, `on`, `or`, `sur`, `main`, `distinct` — every one of
+# — `son`, `car`, `pas`, `on`, `or`, `main`, `distinct` — every one of
 # which is an ordinary English word or appears in code.
 #
 # The list is necessarily incomplete, and every widening has found real lines
@@ -40,9 +51,17 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # first set, and sixteen `# Groupe NN` headers survived the second. Widen it
 # again when you meet French this misses — and check the new words against BOTH
 # repositories before committing, which is what caught `distinct`.
-WORDS='le|la|les|des|une|dans|pour|avec|cette|être|est|sont|était|sera|qui|que|quand|ainsi|alors|aussi|avant|après|chaque|comme|depuis|donc|déjà|encore|entre|jamais|leur|mais|même|moins|notre|parce|peut|plutôt|puis|sans|sous|toujours|tout|toute|toutes|tous|très|vers|voici|voilà|faut|doit|doivent|ici|cela|ceci|celui|celle|nous|vous|elles|ils|du|au|aux|ni|elle|leurs|afin|lorsque|selon|plusieurs|ceux|celles|ensuite|enfin|pourrait|pourraient|publique|publiques|groupe|groupes|nom|noms|certificat|certificats|interne|internes|externe|externes|fichier|fichiers|exemple|exemples|attendu|attendue|ordinaire|ordinaires|racine|seule|seul|court|courte|observee|observée|valide|valider|ajoute|ajouter|affiche|utilise|supprime|renvoie|permet'
+# `sur` was excluded here for years; measured on 2026-10-14 over every prose
+# line of this repository it matched 15 lines, all French, none English (the
+# SANs acronym is case-sensitive and does not collide). Run the same count on
+# the sibling repository before copying it there.
+WORDS='le|la|les|des|une|dans|pour|avec|cette|être|est|sont|était|sera|qui|que|quand|ainsi|alors|aussi|avant|après|chaque|comme|depuis|donc|déjà|encore|entre|jamais|leur|mais|même|moins|notre|parce|peut|plutôt|puis|sans|sous|toujours|tout|toute|toutes|tous|très|vers|voici|voilà|faut|doit|doivent|ici|cela|ceci|celui|celle|nous|vous|elles|ils|du|au|aux|ni|elle|leurs|afin|lorsque|selon|plusieurs|ceux|celles|ensuite|enfin|pourrait|pourraient|publique|publiques|groupe|groupes|nom|noms|certificat|certificats|interne|internes|externe|externes|fichier|fichiers|exemple|exemples|attendu|attendue|ordinaire|ordinaires|racine|seule|seul|court|courte|observee|observée|valide|valider|ajoute|ajouter|affiche|utilise|supprime|renvoie|permet|sur|natif|veut|autoriser|stockage|cet|ces|ses|aucun|aucune|soit|fois|rien|manquant|vouliez|brique|briques|disponibles|existe|invalide|et|ou|ne|matchait|jetable|derrière|remplace|applicatif|fonctionne|fournie|gestion|trop|instancier'
 
-usage() { sed -n '2,20p' "$0" | sed 's/^# \?//'; }
+# Second tier: words that are French but also plausible in code (`pas`, `tel`), so they only count inside COMMENT lines and inline
+# comments, which are prose. Measured: "utiliser fromEntities: cluster (pas fromEndpoints...)" and "vendu tel quel" passed the first tier.
+WORDS_COMMENT='pas|utiliser|utilisé|vendu|tel|tels|quel|quelle|lequel|laquelle'
+
+usage() { sed -n '2,12p' "$0" | sed 's/^# \?//'; }
 case "${1:-}" in
   --list) printf '%s\n' "$WORDS" | tr '|' '\n'; exit 0 ;;
   -h|--help) usage; exit 0 ;;
@@ -51,13 +70,21 @@ esac
 # .languageignore, if present, lists path prefixes this repository has decided
 # are French on purpose — with the reason on the line above. It is an allowlist,
 # not a silencer: everything not named in it is checked.
+# NO_IGNORE=1 turns it off (the stale-entry check scans the listed files bare);
+# ONLY=<glob> restricts a scan to the paths matching it.
 ignored() {
   local repo="$1" path="$2" pattern
   # This file, always and without an entry anywhere. It necessarily contains the
   # words it hunts — the list itself, and the sentence explaining `sans` versus
   # the SANs acronym. Relying on each repository to remember an allowlist line
   # meant the copy in the sibling repository failed its own CI on first run.
-  [ "$path" = "scripts/dev/check-language.sh" ] && return 0
+  # Its test holds French fixtures on purpose, for the same reason.
+  case "$path" in scripts/dev/check-language.sh|scripts/dev/test-check-language.sh) return 0 ;; esac
+  if [ -n "${ONLY:-}" ]; then
+    # shellcheck disable=SC2254
+    case "$path" in $ONLY) ;; *) return 0 ;; esac
+  fi
+  [ -z "${NO_IGNORE:-}" ] || return 1
   [ -f "$repo/.languageignore" ] || return 1
   while read -r pattern; do
     case "$pattern" in ''|\#*) continue ;; esac
@@ -75,8 +102,46 @@ md_files() {
     | grep -vE '^(CHANGELOG\.fr|.*/vendor/|.*/node_modules/)'
 }
 
-# Code: the comment line of the four languages this repository writes.
-code_files() { git -C "$1" ls-files '*.tf' '*.tftpl' '*.yaml' '*.yml' '*.sh' '*.py'; }
+# Code: the comment line of the languages this repository writes. `.example`
+# and the config dialects were outside this list, which is how a whole French
+# example file was never read.
+code_files() {
+  git -C "$1" ls-files '*.tf' '*.tftpl' '*.yaml' '*.yml' '*.sh' '*.py' '*.example' '*.hcl' '*.json5' '*.tpl' '*.toml'
+}
+
+# Shared by both awk programs: is this prose line French? Word list (case-sensitive,
+# see above) or any accented French letter. Alternation, not a bracket expression:
+# mawk is byte-oriented and a bracket of multibyte letters matches stray bytes of
+# em dashes and arrows.
+AWK_FRENCH='
+function french(text,    n, i, w, cap) {
+  if (text ~ /(é|è|ê|ë|à|â|ç|î|ï|ô|ù|û|ü|œ|É|È|À|Ç)/) return 1
+  # French elision (l-apostrophe-admin, d-apostrophe-un, n-apostrophe-est): a short
+  # letter group, an apostrophe and a letter, after a non-word character. English
+  # contractions put the apostrophe AFTER a word (dont, its), so they do not match.
+  # (No apostrophes in this comment: the awk program is single-quoted.)
+  if (text ~ ("(^|[^[:alnum:]_])(l|d|qu|n|s|j|c|m|t)" sprintf("%c", 39) "[[:alpha:]]")) return 1
+  n = split(words, w, "|")
+  for (i = 1; i <= n; i++) {
+    cap = toupper(substr(w[i], 1, 1)) substr(w[i], 2)
+    # Case-SENSITIVE, deliberately: `sans` is French, `SANs` is the
+    # certificate acronym, and a case-insensitive match calls the second
+    # one a translation defect on every TLS comment in the repository.
+    # A leading hyphen means a flag, not a word: `-le 15`, `-la`, `-du` are
+    # shell test operators and CLI switches. No French word in this repository
+    # follows a hyphen directly.
+    if (text ~ ("(^|[^[:alnum:]_-])(" w[i] "|" cap ")([^[:alnum:]_]|$)")) return 1
+  }
+  return 0
+}
+function french_comment(text,    n, i, w, cap) {
+  n = split(wordsc, w, "|")
+  for (i = 1; i <= n; i++) {
+    cap = toupper(substr(w[i], 1, 1)) substr(w[i], 2)
+    if (text ~ ("(^|[^[:alnum:]_-])(" w[i] "|" cap "|" toupper(w[i]) ")([^[:alnum:]_]|$)")) return 1
+  }
+  return 0
+}'
 
 hits=0
 
@@ -87,22 +152,11 @@ scan_markdown() {
     ignored "$repo" "$f" && continue
     # awk rather than grep: a fenced block has to be skipped, and a French word
     # inside a shell example is not prose.
-    awk -v words="$WORDS" -v file="$f" '
+    awk -v words="$WORDS" -v file="$f" "$AWK_FRENCH"'
       /^[[:space:]]*```/ { fence = !fence; next }
       fence { next }
-      {
-        n = split(words, w, "|")
-        for (i = 1; i <= n; i++) {
-          cap = toupper(substr(w[i], 1, 1)) substr(w[i], 2)
-          # Case-SENSITIVE, deliberately: `sans` is French, `SANs` is the
-          # certificate acronym, and a case-insensitive match calls the second
-          # one a translation defect on every TLS comment in the repository.
-          if ($0 ~ ("(^|[^[:alnum:]_])(" w[i] "|" cap ")([^[:alnum:]_]|$)")) {
-            printf "%s:%d: %s\n", file, NR, $0
-            next
-          }
-        }
-      }' "$repo/$f"
+      /\.fr\.md/ { next }   # the link to the French twin is allowed to say so
+      french($0) { printf "%s:%d: %s\n", file, NR, $0 }' "$repo/$f"
   done < <(md_files "$repo")
 }
 
@@ -111,26 +165,22 @@ scan_code() {
   while read -r f; do
     [ -n "$f" ] || continue
     ignored "$repo" "$f" && continue
-    awk -v words="$WORDS" -v file="$f" '
-      # Two kinds of prose: comment lines (# for yaml/sh/py/tf, // and * for the
-      # hcl/go style) and the text a script shows its user.
-      #
-      # `help=` and `description=` are shown, even though nothing prints them in
-      # the source: argparse does, on every --help. Without them this reported
-      # the repository clean while `preflight-quotas.py --help` answered "VMs que
-      # la topologie ajoutera" between two English options — a half-translated
-      # block, which is the 2026-07-29 regression CLAUDE.md names by hand.
-      # A third kind, and the one that got away: an HCL `description = <<-EOT`
-      # heredoc. Its body is neither a comment nor a line carrying
-      # `description=`, so every continuation line was invisible — which is how
-      # a whole French sentence sat in the middle of an English block in
-      # ovh/variables.tf, in the text `tofu` prints to the operator.
-      #
-      # A fourth kind, same blind spot: `cat <<EOT` / `cat >&2 <<EOT`. Its body
-      # matches none of comment, printed or description= either — exactly the
-      # shape that hid the fleet-down.sh <projet>/<project> mismatch. Narrowed
-      # to a bare `cat` opener so `cat > file <<EOF` (redirect, not printed) and
-      # piped heredocs (`| cat <<EOF`, `kubectl apply -f - <<EOF`) stay out.
+    awk -v words="$WORDS" -v wordsc="$WORDS_COMMENT" -v file="$f" "$AWK_FRENCH"'
+      # Prose in code, by kind:
+      #  - comment lines (# for yaml/sh/py/tf, // and * for the hcl/go style);
+      #  - the text a script shows its user. `help=` and `description=` count even
+      #    though nothing prints them in the source: argparse does, on every
+      #    --help (the 2026-07-29 half-translated block);
+      #  - heredoc bodies: an HCL `description = <<-EOT` and a bare `cat <<EOT`
+      #    (the text `tofu` and fleet-down.sh print), narrowed to `cat` so that
+      #    `cat > file <<EOF` and piped heredocs stay out;
+      #  - inline `# comment` after code;
+      #  - YAML `readme:`, `description:`, `message:`, `summary:` values and the
+      #    continuation lines of a multi-line one: they reach a cluster;
+      #  - in Python, docstrings and every string literal (sys.exit, errors.append
+      #    and raise are not "printed" lines, and a usage error in French sat in
+      #    scripts/pick.py for months).
+      BEGIN { py = (file ~ /\.py$/) }
       /description[[:space:]]*=[[:space:]]*<<-?[A-Za-z_]+/ || /^[[:space:]]*cat([[:space:]]+>&[0-9])?[[:space:]]*<<-?[A-Za-z_]+/ {
         match($0, /<<-?[A-Za-z_]+/)
         term = substr($0, RSTART, RLENGTH)
@@ -139,36 +189,72 @@ scan_code() {
       }
       in_doc && $0 ~ ("^[[:space:]]*" term "[[:space:]]*$") { in_doc = 0; next }
       {
-        comment = ($0 ~ /^[[:space:]]*(#|\/\/|\*)/)
-        printed = (!comment && $0 ~ /((echo|print|printf|puts)[[:space:](]|(help|description)=)/)
-        if (!comment && !printed && !in_doc) next
-        text = $0
-        # In a printed line, a substitution is code, not prose: `du -h "$SNAP"`
-        # inside an otherwise English message is the `du` command, and reporting
-        # it as French is how a checker earns its way onto the ignore list.
-        if (printed) { gsub(/\$\([^)]*\)/, " ", text); gsub(/\$\{[^}]*\}/, " ", text) }
-        n = split(words, w, "|")
-        for (i = 1; i <= n; i++) {
-          cap = toupper(substr(w[i], 1, 1)) substr(w[i], 2)
-          # A leading hyphen means a flag, not a word: `-le 15`, `-la`, `-du` are
-          # shell test operators and CLI switches, and reading them as French is
-          # how a checker earns its place on the ignore list. No French word in
-          # this repository follows a hyphen directly.
-          # (No apostrophes in this comment: the awk program is single-quoted,
-          #  and one here silently ends it and hands the rest to bash.)
-          if (text ~ ("(^|[^[:alnum:]_-])(" w[i] "|" cap ")([^[:alnum:]_]|$)")) {
-            printf "%s:%d: %s\n", file, NR, $0
-            next
+        line = $0
+        text = ""
+        comment = (line ~ /^[[:space:]]*(#|\/\/|\*)/)
+        printed = (!comment && line ~ /((echo|print|printf|puts)[[:space:](]|(help|description)=)/)
+        if (comment || in_doc) text = line
+        else if (printed) {
+          # A substitution is code, not prose: `du -h "$SNAP"` inside an
+          # otherwise English message is the `du` command.
+          text = line
+          gsub(/\$\([^)]*\)/, " ", text); gsub(/\$\{[^}]*\}/, " ", text)
+        }
+        # Python docstrings: a line is inside while an odd number of triple quotes
+        # has been seen; the opening and closing lines count too.
+        if (py) {
+          q = line; nq = gsub(/"""/, "", q)
+          if (in_py || nq > 0) text = text " " line
+          if (nq % 2 == 1) in_py = !in_py
+          else if (!in_py && !comment && nq == 0) {
+            lit = ""; rest = line
+            while (match(rest, /"[^"]*"|\047[^\047]*\047/)) {
+              lit = lit " " substr(rest, RSTART + 1, RLENGTH - 2)
+              gsub(/\\n/, " ", lit)   # a leading \n would hide the first word
+              rest = substr(rest, RSTART + RLENGTH)
+            }
+            text = text " " lit
           }
         }
+        # YAML prose values.
+        match(line, /^[[:space:]]*/); ind = RLENGTH
+        if (in_str && line !~ /^[[:space:]]*$/ && ind > str_ind) text = text " " line
+        else in_str = 0
+        if (line ~ /^[[:space:]-]*(readme|description|message|summary):[[:space:]]*[^[:space:]]/) {
+          in_str = 1; str_ind = ind; text = text " " line
+        }
+        # Inline comment after code (needs whitespace on both sides of the hash).
+        if (!comment && match(line, /[[:space:]]#[[:space:]].*/)) text = text " " substr(line, RSTART)
+        ctext = ""
+        if (comment) ctext = line
+        else if (match(line, /[[:space:]]#[[:space:]].*/)) ctext = substr(line, RSTART)
+        if ((text != "" && french(text)) || (ctext != "" && french_comment(ctext))) printf "%s:%d: %s\n", file, NR, $0
       }' "$repo/$f"
   done < <(code_files "$repo")
 }
 
+# A `.languageignore` entry whose files scan clean is a stale silencer: the file
+# was translated and the line stayed. Nothing else would ever remove it.
+stale_entries() {
+  local repo="$1" pattern out n=0
+  [ -f "$repo/.languageignore" ] || return 0
+  while read -r pattern; do
+    case "$pattern" in ''|\#*) continue ;; esac
+    out="$( { NO_IGNORE=1 ONLY="$pattern" scan_markdown "$repo"; NO_IGNORE=1 ONLY="$pattern" scan_code "$repo"; } || true )"
+    if [ -z "$out" ]; then
+      echo ".languageignore: '$pattern' scans clean, remove the entry" >&2
+      n=$((n + 1))
+    fi
+  done < "$repo/.languageignore"
+  return "$n"
+}
+
 repos=("${@:-$ROOT}")
+stale=0
 for repo in "${repos[@]}"; do
   repo="$(cd "$repo" && pwd)"
   out="$( { scan_markdown "$repo"; scan_code "$repo"; } || true )"
+  stale_entries "$repo" || stale=$((stale + $?))
   if [ -n "$out" ]; then
     # Prefix only when several repositories are in play: with one, it turns a
     # real path into one that does not exist.
@@ -181,9 +267,10 @@ for repo in "${repos[@]}"; do
   fi
 done
 
-if [ "$hits" -gt 0 ]; then
+if [ "$hits" -gt 0 ] || [ "$stale" -gt 0 ]; then
   echo
-  echo "✗ $hits line(s) of French where English is canonical." >&2
+  [ "$hits" -eq 0 ] || echo "✗ $hits line(s) of French where English is canonical." >&2
+  [ "$stale" -eq 0 ] || echo "✗ $stale stale .languageignore entr(y/ies)." >&2
   echo "  Translate them, or move the file to <name>.fr.md and write the English one." >&2
   exit 1
 fi

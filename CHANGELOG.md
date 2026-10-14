@@ -17,16 +17,16 @@ in git. 0.1.0 is the first entry describing something proven.
 ### Security
 
 - **Day-1 seeding without a root token (#296, #297).** `scripts/ops/seed-openbao.sh` read the root token from the Secret
-  `openbao-recovery` and passed it, with every value, on the `kubectl exec` command line. With OpenAether-apps 0.2.0 there is
+  `openbao-recovery` and passed it, with every value, on the `kubectl exec` command line. With OpenAether-apps 0.1.1 there is
   no such Secret (the bootstrap revokes the root token), and the script now uses the ServiceAccount `openbao-seeder`:
   Kubernetes issues a 10-minute token, OpenBao exchanges it inside the pod for a token whose policy `secret-seeder` can
   **create** five paths and read their metadata. The token and the documents travel on stdin, never on a command line; every
   secret is written with `cas=0`, so a re-run cannot overwrite one. The script no longer seeds `backup/restic`,
   `grafana/db`, `zitadel/db` or `longhorn/encryption`: `openbao-vault-bootstrap` generates them inside OpenBao, create-only,
-  and prints none, which removes the race of #297 (the script could win it and the escrow print was lost). **Needs apps 0.2.0:**
-  on a cluster still bootstrapped by apps 0.1.0 the script fails and says to use the 0.2.0 tag's script. Rung: mocked (a stub
+  and prints none, which removes the race of #297 (the script could win it and the escrow print was lost). **Needs apps 0.1.1:**
+  on a cluster still bootstrapped by apps 0.1.0 the script fails and says to use the infra 0.2.0 tag's script. Rung: mocked (a stub
   `kubectl`, 66 checks); the remote loop was run once against a real OpenBao 2.7.1 with the real policy (create, left alone,
-  refused). The Kubernetes-auth login is not exercised until a cluster runs apps 0.2.0.
+  refused). The Kubernetes-auth login is not exercised until a cluster runs apps 0.1.1 (it did, on three clouds: see Validated).
 - **`openbao_recovery_pgp_keys` / `openbao_recovery_threshold`: who holds the OpenBao recovery shares.** OpenBao unseals itself
   with a static key, so no human holds an unseal share; what operators hold are recovery shares, used only to generate a root
   token. Given at least three PGP public keys, the Flux bootstrap manifest also publishes the ConfigMap
@@ -41,7 +41,27 @@ in git. 0.1.0 is the first entry describing something proven.
 - `cluster-security-tests.sh` 4.5 now asserts that no Shamir-share or root-token Secret exists in `foundation-vault` (it asserted
   that an unsealer was running).
 
+### Changed
+
+- **The `git_ref` default and the twelve `envs/*.tfvars.example` pin OpenAether-apps `refs/tags/0.1.1`** (they pinned 0.1.0). The
+  pair is infra 0.2.1 with apps 0.1.1; infra 0.2.0 stays on apps 0.1.0 and cannot move. apps 0.1.1 initialises OpenBao with a
+  static seal: **a cluster built from infra 0.2.0 and apps 0.1.0 cannot be moved to this pair in place; build a new cluster, on
+  new buckets** (a rebuild on the old backup bucket meets the old WAL archive and CloudNativePG refuses to archive into it,
+  `OpenAether-apps/docs/traps.md`). Nothing here ran an upgrade.
+- **`scripts/dev/check-language.sh` is the OpenAether-apps copy again** (`check-skill-parity.sh` compares them byte for byte and
+  `task apps-validate` against the apps tag was red on it). It now reads inline comments, Python strings and accents, so it
+  found eight genuinely French lines here, now English: the Cilium parity message, two preflight messages, the Flux bootstrap
+  template header and the Proxmox VIP comments. Its own cases come with it (`test-check-language.sh`, wired into `test-scripts`).
+  The accent rule reads the name of the dependency watcher, Cléa, as French: 18 files that are English apart from that name are
+  in `.languageignore` with the reason, **temporarily** (the script can only learn the name in both repositories at once).
+
 ### Added
+
+- **`explain-failure.sh` points at the OVH router's SNAT port** when a run says `time is not in sync` and touched `module.ovh`.
+  Seen once on a real account: a router whose `network:router_centralized_snat` port stayed DOWN left every node without DNS or
+  NTP, and a fresh router of the same code was ACTIVE. The message gives the read-only command and says a bad router does not
+  recover (tear down and run `cluster-up` again). It is a hint on the transcript, not a guard: a guard that fails a healthy
+  apply on a transient DOWN has not been measured. Rung: mocked (three cases in `test-explain-failure.sh`).
 
 - **`task cluster-upgrade` secures the way back before it moves anything (#270).** An encrypted etcd snapshot
   (`backups/etcd/pre-upgrade-etcd-<timestamp>.snap.gpg`, both artifact buckets) and a labelled copy of the state
@@ -54,6 +74,10 @@ in git. 0.1.0 is the first entry describing something proven.
   rule) stay open.
 
 ### Fixed
+
+- `docs/admin-access.md` (and its French twin) read the PKI CSR from KV (`bao_admin kv get -field=csr secret/pki/intermediate-csr`),
+  not from the bootstrap Job's log, which is removed an hour after the Job ends; the page and the seed script say apps 0.1.1,
+  not 0.2.0, and tell a 0.1.0 cluster to be rebuilt.
 
 - **`seed-openbao.sh` seeded the replica store with the primary provider's S3 keys (#296).** The replica's pair is now asked
   for with its own endpoint (`resolve-s3-cred.sh <provider> ak|sk backup <replica endpoint>`), as every other replica

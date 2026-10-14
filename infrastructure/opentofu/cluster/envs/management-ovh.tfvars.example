@@ -93,7 +93,7 @@ bastion_ssh_keys = {
 git_repo_url     = "https://github.com/dis-bzh/OpenAether-apps.git"
 # Pin the platform: a commit on a branch would otherwise reach a running
 # cluster within the reconcile interval. refs/heads/<branch> to test.
-git_ref          = "refs/tags/0.1.0"
+git_ref          = "refs/tags/0.1.1"
 
 # OpenBao recovery-share holders (only read when deploy_flux = true). OpenBao unseals itself; what the operators hold are
 # RECOVERY shares, for an emergency root token. Each key is a person's PGP PUBLIC key, `gpg --export <id> | base64 -w0`

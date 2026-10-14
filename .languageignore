@@ -10,3 +10,27 @@ CLAUDE.md
 # French; rewriting them would falsify what was published under those tags.
 # Entries from 1.0.1 on are English — see the note at the top of that entry.
 CHANGELOG.md
+
+# The accent rule of the shared check-language.sh reads the name of this repository's dependency
+# watcher, Cléa, as French. These files are English apart from that name. TEMPORARY: the script is
+# duplicated byte for byte with OpenAether-apps (check-skill-parity.sh), so the name can only be
+# taught to it in both repositories at once, with the next apps release; these entries go then
+# (the check fails on an entry whose file scans clean, so they cannot be forgotten).
+.github/workflows/ci.yml
+.github/workflows/clea.yml
+Taskfile.yml
+clea.toml
+docs/clea.md
+docs/status.md
+renovate.json5
+scripts/clea/README.md
+scripts/clea/clea.py
+scripts/dev/check-flux-image-digests.sh
+scripts/dev/check-tool-pins.sh
+scripts/dev/check-upstream-artifacts-lock.sh
+scripts/dev/test-clea.sh
+scripts/dev/test-evidence-age.sh
+scripts/dev/test-setup-checks.sh
+scripts/dev/test-talos-image.sh
+scripts/internal/install-shellcheck.sh
+scripts/setup.sh

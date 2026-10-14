@@ -472,6 +472,8 @@ tasks:
       - ./scripts/dev/test-seed-openbao.sh
       # The recovery-share keys, checked for an encryption subkey before anything bills (sys/init commits, then fails).
       - ./scripts/dev/test-check-openbao-keys.sh
+      # The language check (inline comments, Python strings, accents): its own cases.
+      - ./scripts/dev/test-check-language.sh
       # Nothing said "tainted", so re-running destroyed a load balancer the
       # provider was still building. This keeps that sentence on screen.
       - ./scripts/dev/test-explain-failure.sh
@@ -953,7 +955,7 @@ tasks:
         set -o pipefail
         # Idempotency guard: control_plane_count/worker_count (cluster/main.tf) are
         # gated by talos_bootstrap, so forcing =false here on an ALREADY-bootstrapped
-        # cluster zeroes them and drops talos_machine_bootstrap et al. from state —
+        # cluster zeroes them and drops talos_machine_bootstrap and the others from state —
         # bootstrap-phase2 then recreates them, re-sending the bootstrap RPC against
         # a live etcd, which Talos correctly refuses (AlreadyExists) and which also
         # invalidates the kubeconfig output. Found live 2026-07-30 re-running `task

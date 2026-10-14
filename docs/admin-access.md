@@ -14,7 +14,7 @@ OpenBao keeps **no root token and no unseal key in a log or a readable Secret**:
 it unseals itself with a static key, and what operators hold are *recovery* shares
 (production: encrypted to their PGP keys, from `openbao_recovery_pgp_keys`).
 Design and runbooks: `OpenAether-apps/apps/base/foundation/vault/README.md`. This
-page needs apps 0.2.0 or later; a cluster still on apps 0.1.0 keeps the older
+page needs apps 0.1.1 or later; a cluster still on apps 0.1.0 keeps the older
 bootstrap and the older instructions of infra 0.2.0.
 
 For the commands below, the helper that exchanges a ServiceAccount token for an
@@ -47,8 +47,9 @@ it with yours (`scripts/internal/check-openbao-keys.sh <env file>` runs the same
 
 ## 2. Sign the PKI intermediate (unblocks HTTPS)
 
-The first `openbao-vault-bootstrap` run prints the CSR (public data):
-`kubectl --kubeconfig $KC -n foundation-vault logs job/openbao-vault-bootstrap | sed -n '/BEGIN CERTIFICATE REQUEST/,/END CERTIFICATE REQUEST/p'`.
+The first `openbao-vault-bootstrap` run stores the CSR (public data) in KV, because the Job and its log are removed an hour
+after it ends and offline signing takes longer. Read it with the admin helper above:
+`bao_admin kv get -field=csr secret/pki/intermediate-csr > intermediate.csr`.
 Sign it **offline** with the root CA, then:
 
 ```bash

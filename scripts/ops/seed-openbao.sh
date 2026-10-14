@@ -6,7 +6,7 @@
 # fail, it just breaks whatever holds the old one). The application secrets (restic password, database passwords,
 # Longhorn passphrase...) are NOT seeded here: openbao-vault-bootstrap generates them, in OpenBao, and prints none.
 #
-# NO ROOT TOKEN. OpenBao has none (apps >= 0.2.0 revokes it right after bootstrap). The script asks Kubernetes for a
+# NO ROOT TOKEN. OpenBao has none (apps >= 0.1.1 revokes it right after bootstrap). The script asks Kubernetes for a
 # 10-minute token of the ServiceAccount `openbao-seeder`, and OpenBao exchanges it, inside the pod, for a token whose
 # policy `secret-seeder` can create these five paths and nothing else. Neither that token nor a value is ever on a
 # command line (here or in the pod): they travel on the stdin of `kubectl exec`. Nothing is printed but the path.
@@ -143,7 +143,7 @@ while :; do
   if [ "$SECONDS" -ge "$deadline" ]; then
     hint=""
     grep -q 'serviceaccounts "openbao-seeder" not found' <<<"$ERR" &&
-      hint=" A cluster bootstrapped by apps 0.1.0 has no seeding identity (it keeps a root token in a Secret): seed it with the script of OpenAether-infra 0.2.0, or move the cluster to apps >= 0.2.0."
+      hint=" A cluster bootstrapped by apps 0.1.0 has no seeding identity (it keeps a root token in a Secret): seed it with the script of OpenAether-infra 0.2.0, or build a new cluster on apps >= 0.1.1 (a cluster initialised by 0.1.0 cannot be moved in place)."
     fail "OpenBao did not accept the seeding identity within ${OPENBAO_WAIT}s — is foundation-vault reconciling (kubectl -n $NS get pods,jobs), did openbao-vault-bootstrap finish, and does \$KUBECONFIG reach the cluster? Last answer: $(tr '\n' ' ' <<<"${ERR:-none}" | cut -c1-300).${hint}"
   fi
   if [ $((SECONDS - last_note)) -ge 60 ]; then echo "  … waiting for OpenBao to accept the seeding identity"; last_note=$SECONDS; fi

@@ -57,7 +57,7 @@ node_distribution = {
     network_bridge = "vmbr1"
     network_cidr   = "10.0.0.0/24"
     gateway_ip     = "10.0.0.1"
-    apiserver_vip  = "10.0.0.100" # spare IP the CP owns; posé dès 1 CP for 3-CP later
+    apiserver_vip  = "10.0.0.100" # spare IP the CP owns; set from the first CP, for 3-CP later
 
     # Host-as-bastion (default): the Proxmox host is the SSH jump. Supply its
     # public IP + user (the same access you keep for Debian/Proxmox upgrades).
@@ -90,7 +90,7 @@ admin_ip = ["YOUR_IP/32"]
 git_repo_url = "https://github.com/dis-bzh/OpenAether-apps.git"
 # Pin the platform: a commit on a branch would otherwise reach a running
 # cluster within the reconcile interval. refs/heads/<branch> to test.
-git_ref          = "refs/tags/0.1.0"
+git_ref          = "refs/tags/0.1.1"
 
 # --- Backup / DR object stores ------------------------------------------------
 # This failover cluster runs when your primary provider is DOWN, so its PRIMARY

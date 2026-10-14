@@ -16,7 +16,7 @@ lisible** : il se descelle seul avec une clé statique, et ce que détiennent le
 opérateurs, ce sont des parts de *recovery* (en production : chiffrées à leurs clés
 PGP, via `openbao_recovery_pgp_keys`). Conception et runbooks :
 `OpenAether-apps/apps/base/foundation/vault/README.md`. Cette page demande apps
-0.2.0 ou plus ; un cluster encore sur apps 0.1.0 garde l'ancien bootstrap et les
+0.1.1 ou plus ; un cluster encore sur apps 0.1.0 garde l'ancien bootstrap et les
 anciennes instructions de l'infra 0.2.0.
 
 Pour les commandes ci-dessous, le helper qui échange un token de ServiceAccount
@@ -50,8 +50,9 @@ son empreinte : compare-la à la tienne (`scripts/internal/check-openbao-keys.sh
 
 ## 2. Signer l'intermediate PKI (débloque le HTTPS)
 
-Le premier passage d'`openbao-vault-bootstrap` affiche le CSR (donnée publique) :
-`kubectl --kubeconfig $KC -n foundation-vault logs job/openbao-vault-bootstrap | sed -n '/BEGIN CERTIFICATE REQUEST/,/END CERTIFICATE REQUEST/p'`.
+Le premier passage d'`openbao-vault-bootstrap` range le CSR (donnée publique) dans KV, car le Job et son log sont supprimés
+une heure après sa fin et la signature hors ligne prend plus longtemps. Le lire avec l'assistant admin ci-dessus :
+`bao_admin kv get -field=csr secret/pki/intermediate-csr > intermediate.csr`.
 Le signer **hors ligne** avec la root CA, puis :
 
 ```bash
