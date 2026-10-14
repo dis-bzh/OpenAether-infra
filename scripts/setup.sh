@@ -55,7 +55,7 @@ CHECKOV_VERSION="3.3.22"
 # renovate: datasource=pypi depName=yamllint
 YAMLLINT_VERSION="1.38.0"
 # renovate: datasource=pypi depName=pre-commit
-PRECOMMIT_VERSION="4.6.2"
+PRECOMMIT_VERSION="4.7.0"
 
 # check_cmd <tool> [pinned-version]
 #
