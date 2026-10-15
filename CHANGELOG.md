@@ -117,7 +117,8 @@ ANSSI hardening work, not released yet. **Nothing here is a claim of compliance 
   check fetches the deployment-branch patterns and fails on anything but `main` (a `*` policy passed before) and warns on
   "protected branches" only (82 self-test cases, 3 new). `task kubeconfig` creates its two files with `touch` and `chmod 0600`
   (BSD `install` on macOS may refuse `/dev/null`; **not run on macOS**). `test-talos-tunnels.sh` checks that `OA_TUNNEL_KEY` is
-  still `pathexpand()`ed. Docs and variable text now say that `checksum_mode = enforce` on a Proxmox root that already holds
+  still `pathexpand()`ed. `test-passphrase.sh` checks a fixed hex value instead of a random one (a random 32-character hex string
+  has fewer than 10 distinct characters about once in 10^4 draws and was flagged, so the line flaked). Docs and variable text now say that `checksum_mode = enforce` on a Proxmox root that already holds
   the image plans its re-download (bpg 0.116 `checksum` forces replacement; the resource is deprecated there), that a Talos bump
   needs `talos-image-lock.sh` run by hand (the Renovate PR body says so), and what `osvVulnerabilityAlerts` actually reaches.
   Rung: mocked/static, nothing run on a cluster or a Proxmox host. It does **not** automate the lock update, and

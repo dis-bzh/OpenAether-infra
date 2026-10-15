@@ -22,7 +22,9 @@ done
 [ "$flagged" = 0 ] && ok "120 generated values (gen-passphrase.sh, base64 48, hex 32): none flagged" || bad "$flagged generated values were flagged"
 out="$("$GEN")"
 { [ "$(wc -l <<<"$out")" = 1 ] && [ "${#out}" = 64 ]; } && ok "gen-passphrase.sh prints one line of 64 characters (48 random bytes)" || bad "gen output: ${#out} chars"
-[ -z "$(oa_passphrase_problems "$(openssl rand -hex 16)")" ] && ok "a 32-character hex value (128 bits) is accepted" || bad "hex 16 flagged"
+# A fixed value: a random hex-16 has fewer than 10 distinct characters about once in 10^4 draws and the heuristic then
+# rightly flags it, which made this line flaky.
+[ -z "$(oa_passphrase_problems "9f86d081884c7d659a2feaa0c55ad015")" ] && ok "a 32-character hex value (128 bits) is accepted" || bad "hex 16 flagged"
 
 echo "=== the obvious weak shapes are flagged, each for its own reason ==="
 want() { # label value expected-fragment
