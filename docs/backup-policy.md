@@ -77,6 +77,7 @@ and **not verified on any provider** (support and cost differ; the lab checklist
 
 One identity per store, limited to its bucket by the **operator** (the providers' S3 keys are account-wide by default, and this repository ships no policy: the shape below is what the check expects, not something verified on
 Scaleway, OVH or Outscale). Without the pairs the cluster runs on the operator's keys, which open every bucket of the cluster and may delete in all of them; `seed-openbao.sh` says so.
+The state and artifact buckets are written only from the operator's machine and CI, so no identity of the cluster is meant to reach them.
 
 | Identity (seed variable, OpenBao path) | May open | Needs | Must be refused |
 |---|---|---|---|

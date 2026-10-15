@@ -77,6 +77,7 @@ et **non vérifié chez aucun provider** (support et coût diffèrent ; la liste
 
 Une identité par store, limitée à son bucket par l'**opérateur** (les clés S3 des providers couvrent tout le compte par défaut, et ce dépôt ne fournit aucune politique : la forme ci-dessous est ce que le contrôle attend, pas
 quelque chose de vérifié chez Scaleway, OVH ou Outscale). Sans les paires, le cluster tourne avec les clés de l'opérateur, qui ouvrent tous les buckets du cluster et peuvent y supprimer ; `seed-openbao.sh` le dit.
+Les buckets d'état et d'artefacts ne sont écrits que depuis la machine de l'opérateur et la CI : aucune identité du cluster n'est censée les atteindre.
 
 | Identité (variable du seed, chemin OpenBao) | Peut ouvrir | A besoin de | Doit être refusé |
 |---|---|---|---|
