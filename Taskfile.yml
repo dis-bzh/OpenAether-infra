@@ -193,6 +193,9 @@ tasks:
       # A path stops resolving and nothing notices — in a comment, read once,
       # or a printed string, read (and copy-pasted) on every run (#118).
       - ./scripts/dev/check-dead-references.sh
+      # The docs/ pairs (EN canonical, FR twin): both open with a link to the other, the security set has the same
+      # sections on both sides, and no relative link points nowhere.
+      - ./scripts/dev/check-doc-twins.sh
       # ci.yml installed yamllint/shellcheck/renovate-config-validator with no
       # version pin, between a comment arguing against exactly that (#113).
       - ./scripts/dev/check-tool-pins.sh
@@ -543,6 +546,9 @@ tasks:
       # and fixture-writing redirects are not, and .deadreferencesignore
       # scopes to the one file:candidate pair it names.
       - ./scripts/dev/test-dead-references.sh
+      # check-doc-twins.sh against throwaway repos: a missing twin, a missing back-link, a section on one side only,
+      # a dead link, and what it must leave alone (anchors, external links, fenced text).
+      - ./scripts/dev/test-check-doc-twins.sh
       # A host missing CAP_SYS_RESOURCE looked healthy for 90s before this,
       # then died on an unrelated-looking timeout (#54). Against a stubbed
       # capsh, and also against this host's real one where reachable.
