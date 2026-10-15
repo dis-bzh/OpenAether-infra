@@ -32,7 +32,7 @@ the bastion, an `admin_ip` allowlist), not by a dedicated network. This is a rec
 | 2. Cluster | Cilium network policies applied by the apps layer (cluster-wide default deny on **ingress**, DNS and kube-API egress allows, a policy per component), Istio ambient mTLS `STRICT` and default-deny authorization per ambient namespace, Cilium WireGuard between nodes | Pod-to-pod filtering, workload identity, node-to-node encryption of pod traffic | **No cluster-wide egress deny** (a cluster-wide one would break DNS under Cilium's policy intersection; the apps file says so). **No host firewall**: `enable-host-firewall` is false and Talos' network rules are not used, so the ports of the nodes themselves (50000, 50001, 2379-2381, 10250) are filtered by layer 1 only, and by each service's own mTLS or authentication |
 
 Both layers are read back from a live cluster by `task cluster-security` (policies, mTLS, WireGuard) and `task cluster-netcheck` (flows the policies must drop).
-Per-component egress rules, including the per-provider S3 FQDN lists, are in `OpenAether-apps` (`apps/base/*/networkpolicy.yaml`, checked by `scripts/dev/test-s3-egress-fqdns.py` there).
+Per-component egress rules, including the per-provider S3 FQDN lists, are in `OpenAether-apps` (`apps/base/*/networkpolicy.yaml`, checked by `OpenAether-apps/scripts/dev/test-s3-egress-fqdns.py`).
 
 ## 3. CIDR plan
 
@@ -152,7 +152,7 @@ The test requires every rule name above to have a row here, in both languages.
 | `cilium-vxlan`, `cilium-wireguard`, `cilium-health`, `cilium-icmp`, `cilium-metrics`, `wireguard` | pod networking, its encryption, health probes and path MTU discovery, agent metrics. On OVH and Outscale the `wireguard` rule names 51820 while Cilium's WireGuard listens on 51871: harmless today only because `inter_node` admits everything between members | WireGuard encrypts pod traffic between nodes |
 | `node-exporter` | metrics scrape, apps layer, hostNetwork (unverified here) | none beyond the subnet |
 | `dhcp` | private-network address leases (unverified) | none |
-| `gateway-<name>`, `http`, `https` | the application load balancer's backends on the Gateway's fixed NodePorts | only exists with `deploy_app_lb`; the Gateway's own routes authenticate (apps `docs/public-exposure.md`) |
+| `gateway-<name>`, `http`, `https` | the application load balancer's backends on the Gateway's fixed NodePorts | only exists with `deploy_app_lb`; the Gateway's own routes authenticate (`OpenAether-apps/docs/public-exposure.md`) |
 | `carrier-<name>` | load-balancer backend traffic that arrives from the carrier range; the origin is unconfirmed | kept until a real deploy shows it unused |
 | `inter_node` | all traffic between nodes (etcd, kubelet, Cilium) | **any port and any protocol between members**: broader than the matrix needs; narrowing it is planned work, not done |
 

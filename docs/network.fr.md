@@ -32,7 +32,7 @@ le bastion, une liste d'autorisation `admin_ip`), pas par un réseau dédié. C'
 | 2. Cluster | Politiques réseau Cilium posées par la couche apps (refus par défaut en **entrée** à l'échelle du cluster, autorisations DNS et API kube en sortie, une politique par composant), mTLS Istio ambient `STRICT` et autorisation par défaut-refus par namespace ambient, WireGuard de Cilium entre nœuds | Filtrage pod à pod, identité de charge de travail, chiffrement nœud à nœud du trafic des pods | **Pas de refus de sortie à l'échelle du cluster** (il casserait le DNS avec l'intersection des politiques Cilium ; le fichier apps le dit). **Pas de pare-feu d'hôte** : `enable-host-firewall` est faux et les règles réseau de Talos ne sont pas utilisées, donc les ports des nœuds eux-mêmes (50000, 50001, 2379-2381, 10250) ne sont filtrés que par la couche 1, et par le mTLS ou l'authentification propres à chaque service |
 
 Les deux couches sont relues sur un cluster vivant par `task cluster-security` (politiques, mTLS, WireGuard) et `task cluster-netcheck` (flux que les politiques doivent rejeter).
-Les règles de sortie par composant, y compris les listes de FQDN S3 par provider, sont dans `OpenAether-apps` (`apps/base/*/networkpolicy.yaml`, vérifiées par `scripts/dev/test-s3-egress-fqdns.py` là-bas).
+Les règles de sortie par composant, y compris les listes de FQDN S3 par provider, sont dans `OpenAether-apps` (`apps/base/*/networkpolicy.yaml`, vérifiées par `OpenAether-apps/scripts/dev/test-s3-egress-fqdns.py`).
 
 ## 3. Plan d'adressage
 
@@ -152,7 +152,7 @@ Le test exige que chaque nom de règle ci-dessus ait une ligne ici, dans les deu
 | `cilium-vxlan`, `cilium-wireguard`, `cilium-health`, `cilium-icmp`, `cilium-metrics`, `wireguard` | réseau des pods, son chiffrement, sondes de santé et découverte du MTU de chemin, métriques de l'agent. Sur OVH et Outscale la règle `wireguard` nomme 51820 alors que le WireGuard de Cilium écoute sur 51871 : sans effet aujourd'hui seulement parce que `inter_node` admet tout entre membres | WireGuard chiffre le trafic des pods entre nœuds |
 | `node-exporter` | collecte de métriques, couche apps, hostNetwork (non vérifié ici) | rien au-delà du sous-réseau |
 | `dhcp` | baux d'adresses du réseau privé (non vérifié) | aucune |
-| `gateway-<name>`, `http`, `https` | les backends du load balancer applicatif sur les NodePorts fixes de la Gateway | n'existe qu'avec `deploy_app_lb` ; les routes de la Gateway s'authentifient elles-mêmes (apps `docs/public-exposure.md`) |
+| `gateway-<name>`, `http`, `https` | les backends du load balancer applicatif sur les NodePorts fixes de la Gateway | n'existe qu'avec `deploy_app_lb` ; les routes de la Gateway s'authentifient elles-mêmes (`OpenAether-apps/docs/public-exposure.md`) |
 | `carrier-<name>` | trafic de backend de load balancer qui arrive de la plage carrier ; l'origine n'est pas confirmée | gardée jusqu'à ce qu'un vrai déploiement montre qu'elle est inutilisée |
 | `inter_node` | tout le trafic entre nœuds (etcd, kubelet, Cilium) | **n'importe quel port et protocole entre membres** : plus large que ce dont la matrice a besoin ; le resserrer est un travail prévu, pas fait |
 

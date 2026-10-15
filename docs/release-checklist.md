@@ -504,6 +504,52 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
 
 ---
 
+## Quarterly security review
+
+Every quarter, and before each release, by the maintainer, in this order. It reads and runs; it changes nothing by itself. Each item is a command or a comparison;
+record the review as one row of `audit-register.md`. None of it has been run as a routine yet: the first review is the test of this list.
+
+**Keys and secrets** (`key-management.md`)
+
+- [ ] every row of the key inventory still true: a new generated key, bucket or credential has a row; none is past its proposed period without a reason written in the row
+- [ ] the state and artifact passphrases (K5, K6) open from their escrow copies, held in two places: `task restore-artifacts PROVIDER=<p> FROM=replica` into a scratch directory succeeds, and a second person can open the vault entry
+- [ ] the OpenBao seal-key escrow is attested and younger than 400 days (`task cluster-security`, check 4.7) and names at least two custodians
+- [ ] S3 keys (K7) and provider keys (K8): list them at each provider, match each to a use, revoke what has none; the CI `sandbox` keys are younger than 90 days
+
+**Accounts and access** (`security-architecture.md`, section 3)
+
+- [ ] compare the privileged-accounts table with reality: provider console members and IAM, GitHub collaborators, tokens and the `sandbox` environment reviewers, the bastion's keys (`scripts/ops/bastion-fingerprints.sh`), the PGP keys of the recovery-share holders
+- [ ] `task rbac-review` against last quarter's file: every new line explained
+- [ ] anyone who left since the last review is gone from each of the above (`incident-response.md`, section 7, last rows)
+
+**Exposure** (`network.md`)
+
+- [ ] `task cluster-exposure PROVIDER=<p> FROM=denied` from an address outside `admin_ip`, `task cluster-netcheck PROVIDER=<p>`, `task cluster-security PROVIDER=<p> ENVIRONMENT=prod`
+- [ ] `scripts/dev/test-flow-matrix.sh` is green and the known gaps of `network.md` section 6 are re-read: closed, unchanged, or worse
+- [ ] `admin_ip` still lists only addresses in use
+
+**Backups and recovery** (`backup-policy.md`, `disaster-recovery.md`)
+
+- [ ] newest and oldest object on both stores for the state (`task backup-state PROVIDER=<p> -- --list`), the artifacts, the etcd snapshots (younger than 24 h if the cron is meant to run) and the bastion logs; a gap is an incident
+- [ ] the application backup alerts and restore-test jobs are green (apps), and `task check-alerts` shows no rule blind
+- [ ] the dead-man's switch reached its receiver this week
+- [ ] yearly: the disaster-recovery drill (`disaster-recovery.md`, section 5) and the incident drill (a mock S1 timed against `incident-response.md`), with their rows filled
+
+**Patching and components** (`patching.md`, `hardening.md` section 4, `component-selection.md`)
+
+- [ ] no advisory issue older than 30 days without a fix or a waiver that has not expired; the CERT-FR and GitHub-advisory reading of the quarter was done
+- [ ] the end-of-support date of each infrastructure pin (Talos, Kubernetes, Cilium, Flux, OpenTofu) read at the upstream page; any within six months is a row in the audit register
+- [ ] Cléa's last report is green or its reds are explained; Renovate is not silent (Cléa detects it); the VEX register and triage table still match the scans
+
+**Delivery chain** (`threat-model.md`)
+
+- [ ] `repo-settings.yml` is green on the live rulesets; the `sandbox` environment exists with its reviewers; no new token, secret, environment or workflow trigger since the last review that the threat model does not know
+- [ ] the `git_ref` of every running cluster is a tag, not a branch
+
+**Close the review**: add a row to `audit-register.md` (section 2), change the status of the actions it moved (section 3), and correct whichever page above turned out to be wrong.
+
+---
+
 ## What this checklist will not tell you
 
 Proxmox. `PMX-*` is code-complete, unit-tested, and has **never touched real

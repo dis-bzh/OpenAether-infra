@@ -314,6 +314,14 @@ task security            # hardening checks
 | [docs/upgrade.md](docs/upgrade.md) | Moving Kubernetes and Talos on a cluster that has to stay up |
 | [docs/supply-chain.md](docs/supply-chain.md) | Locked providers and boot images, the SBOM, who may run the cloud workflow, rulesets as code |
 | [docs/patching.md](docs/patching.md) | The patch deadline, what is pinned, and the signals that say a fix exists |
+| [docs/key-management.md](docs/key-management.md) | Every key: period, impact if lost or leaked, replacement, erasure, recorded deviations (TLS-12, TLS-19) |
+| [docs/incident-response.md](docs/incident-response.md) | Suspected compromise, in order: evidence, backups, containment, rotation table, restore point, register |
+| [docs/backup-policy.md](docs/backup-policy.md) | Per dataset: mechanism, RPO/RTO target, retention, destination, key holder, restore test, destruction; what is not backed up |
+| [docs/disaster-recovery.md](docs/disaster-recovery.md) | The one ordered recovery chain (OpenBao before Zitadel's database), prerequisites, time targets, the yearly drill |
+| [docs/security-architecture.md](docs/security-architecture.md) | Assets, administration paths and how each is authenticated, privileged accounts, accepted deviations |
+| [docs/network.md](docs/network.md) | Trust zones, CIDR plan, the two enforcement layers, the flow matrix (generated from the Terraform), known gaps |
+| [docs/hardening.md](docs/hardening.md) | Talos by design vs controls vs written deviations (BP-028, NT-007), and the vulnerability watch routine |
+| [docs/threat-model.md](docs/threat-model.md), [docs/component-selection.md](docs/component-selection.md), [docs/audit-register.md](docs/audit-register.md) | The delivery chain's threats; why each component and the VEX register; audits and corrective actions |
 | [docs/release-checklist.md](docs/release-checklist.md) | What to run before tagging a release, in the order that fails cheapest (English only) |
 | [docs/status.md](docs/status.md) | **Source of truth**: what runs, what is measured on a real account and since when (English only — living working document; open work is in the issues) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | **Read before a first pull request**: what counts as proof, the four rungs, commit trailers, AI-assisted contributions |
