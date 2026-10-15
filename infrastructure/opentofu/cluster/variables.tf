@@ -618,6 +618,34 @@ variable "deploy_app_lb" {
   default     = false
 }
 
+variable "app_lb_allowed_cidrs" {
+  description = <<-EOT
+    Source CIDRs allowed to reach the application load balancer (80/443). EMPTY
+    by default = no filter, exactly the behaviour before this variable existed:
+    every route on the Gateway (Zitadel, OpenBao UI, Grafana) then answers anyone
+    who sets its Host header.
+
+    When set, Scaleway gets allow-then-deny ACLs on both frontends, OVH
+    `allowed_cidrs` on both Octavia listeners, Outscale security-group rules on
+    the LB's group. Proxmox and local have no cloud LB and ignore it. Each module
+    also admits the cluster's own egress address (pods reach
+    https://zitadel.openaether.local through the LB) and, on Scaleway and OVH, the
+    private range; YOUR other public clients (an office, a CI runner, a monitor)
+    must be listed here or they lose access. `["0.0.0.0/0"]` is accepted: it turns
+    the machinery on while staying open, to prove the in-place update first.
+
+    Roll out empty, then open, then one provider (docs/network.md, section 6).
+    Enforcement is untested on a real cloud: docs/admin-access.md, section 6.
+  EOT
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for c in var.app_lb_allowed_cidrs : can(cidrhost(c, 0)) && !strcontains(c, ":")])
+    error_message = "Every app_lb_allowed_cidrs entry must be an IPv4 CIDR with its prefix, e.g. 203.0.113.4/32 — not a bare address."
+  }
+}
+
 variable "deploy_flux" {
   description = <<-EOT
     Install Flux on the cluster. FALSE by default: this release is infrastructure only —

@@ -49,3 +49,12 @@ output "bastion_egress_rules" {
     [for r in openstack_networking_secgroup_rule_v2.bastion_egress_https : "${r.protocol} ${r.port_range_min} any"],
   )
 }
+
+# Test-only: a test cannot read a child module's resources. The allowed_cidrs of the app LB listeners (null = no filter).
+output "app_lb_allowed_cidrs" {
+  description = "allowed_cidrs of the app LB http and https listeners, for tests (null = unfiltered)"
+  value = {
+    http  = one(openstack_lb_listener_v2.http[*].allowed_cidrs)
+    https = one(openstack_lb_listener_v2.https[*].allowed_cidrs)
+  }
+}

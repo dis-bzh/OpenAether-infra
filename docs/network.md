@@ -15,7 +15,7 @@
 | Z0 Internet | everything else | the public load balancers, and the bastion's port 22 if its address is allowed | n/a |
 | Z1 Operator workstation | `.env.sh`, tfvars, keys, `kubectl`, `talosctl`, `tofu` | the bastion (SSH) and the Kubernetes API load balancer (6443), both limited to `admin_ip`; the object stores | the operator only |
 | Z2 Bastion | one VM per cluster, public address, sshd; optional baseline, named operators, closed Internet egress | the cluster subnet on 6443 and 50000 (with the closed egress), the Internet on 80/443 otherwise | Z1, from `admin_ip` on port 22 |
-| Z3 Public edge | the Kubernetes API load balancer (6443) and, if `deploy_app_lb`, the application load balancer (80/443) | the nodes' private addresses | the Internet (application LB: **no source filter**, see section 6); `admin_ip` (API LB) |
+| Z3 Public edge | the Kubernetes API load balancer (6443) and, if `deploy_app_lb`, the application load balancer (80/443) | the nodes' private addresses | the Internet (application LB: **no source filter by default**, `app_lb_allowed_cidrs` adds one, see section 6); `admin_ip` (API LB) |
 | Z4 Cluster private network | control planes and workers, no public address; one flat subnet per provider | each other, the object stores and registries (outbound) | Z2, Z3, and members of the same subnet |
 | Z5 Workloads | namespaces, pods, the Istio ambient mesh for part of them, the foundation namespaces out of the mesh (OpenBao, cert-manager...) | per Cilium policy | per Cilium policy |
 | Z6 Object stores | the primary and replica buckets, at the providers | n/a | Z1 (S3 keys), Z4 (backups, Loki, CNPG; per-FQDN egress policy) |
@@ -51,7 +51,7 @@ that adopted an existing network may differ, which is why the rules follow `scw_
 ```text
                  Internet
                     |
-     (admin_ip only)|                       (no source filter when deploy_app_lb)
+     (admin_ip only)|                       (no filter unless app_lb_allowed_cidrs)
         +-----------+------------+                     |
         |                        |                     |
    [bastion :22]        [k8s API LB :6443]       [app LB :80/:443]
@@ -132,6 +132,8 @@ Each block is the output of `scripts/dev/gen-flow-matrix.sh <provider>`: edit th
 | `talos_api` | tcp | 50000 | bastion SG | always |
 | `http` | tcp | `var.app_lb_node_ports.http` | public subnet (LB) | `deploy_app_lb` |
 | `https` | tcp | `var.app_lb_node_ports.https` | public subnet (LB) | `deploy_app_lb` |
+| `app_lb_http` | tcp | 80 | `app_lb_allowed_cidrs`, cluster egress | `deploy_app_lb` and `app_lb_allowed_cidrs` |
+| `app_lb_https` | tcp | 443 | `app_lb_allowed_cidrs`, cluster egress | `deploy_app_lb` and `app_lb_allowed_cidrs` |
 | `wireguard` | udp | 51820 | cluster SG members | always |
 | `inter_node` | all | all | cluster SG members | always |
 <!-- flow-matrix:outscale:end -->
@@ -153,6 +155,7 @@ The test requires every rule name above to have a row here, in both languages.
 | `node-exporter` | metrics scrape, apps layer, hostNetwork (unverified here) | none beyond the subnet |
 | `dhcp` | private-network address leases (unverified) | none |
 | `gateway-<name>`, `http`, `https` | the application load balancer's backends on the Gateway's fixed NodePorts | only exists with `deploy_app_lb`; the Gateway's own routes authenticate (`OpenAether-apps/docs/public-exposure.md`) |
+| `app_lb_http`, `app_lb_https` | Outscale only: the load balancer's group is the cluster group, so the allowed public clients of 80/443 are rules in it | only with `app_lb_allowed_cidrs`; not run on a cloud, whether the group filters the load balancer at all is the first lab check |
 | `carrier-<name>` | load-balancer backend traffic that arrives from the carrier range; the origin is unconfirmed | kept until a real deploy shows it unused |
 | `inter_node` | all traffic between nodes (etcd, kubelet, Cilium) | **any port and any protocol between members**: broader than the matrix needs; narrowing it is planned work, not done |
 
@@ -170,8 +173,11 @@ Listed so that a reader does not take the matrix for more than it is. None is ch
    A staged plan exists in the audit (explicit port lists replacing `inter_node`, then an opt-in Talos or Cilium host firewall in audit mode, then enforcement); stage 0 is this page.
 3. **OVH and Outscale `inter_node` admits every protocol and port between members.**
 4. **Node egress is open** (Scaleway `outbound_default_policy = accept`, OVH explicit all-egress rules, Outscale declares none). A compromised node can reach anything; an egress allowlist risks image pulls, S3 backups and first boot and needs a design.
-5. **The application load balancer has no source filter** when `deploy_app_lb` is true: every route on the Gateway answers anyone who sets its Host header, and a route's own login is its only protection
+5. **The application load balancer has no source filter by default** when `deploy_app_lb` is true: every route on the Gateway answers anyone who sets its Host header, and a route's own login is its only protection
    (`OpenAether-apps/docs/public-exposure.md`, which lists the routes and how each authenticates). `admin_ip` guards the Kubernetes API frontend and the bastion only. `admin-access.md` said the gateway was "nothing public": corrected.
+   **`app_lb_allowed_cidrs` (empty by default, so nothing changes until it is set) adds the filter at the provider**: Scaleway allow-then-deny ACLs on both frontends, OVH `allowed_cidrs` on both listeners, Outscale
+   security-group rules; Proxmox and local have no cloud load balancer. The list must hold every public client, the cluster's own egress address is added automatically. It was checked by plan assertions only (mocked): that a cloud
+   enforces it, that pods still reach Zitadel through the load balancer and that the update is in place are lab checks (`admin-access.md`, section 6). It does not authenticate anything: a listed address still reaches every route's login.
 6. **No cluster-wide egress deny** (section 2).
 
 ## 7. Recorded deviations

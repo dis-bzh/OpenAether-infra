@@ -2,7 +2,7 @@
 # OVH / OpenStack — Load Balancers (Octavia)
 # Two separate LBs matching the provider contract:
 #   k8s: port 6443 → control planes (allowed_cidrs = admin_ip)
-#   app: public 80/443 → the Gateway's NodePorts on the workers (open)
+#   app: public 80/443 → the Gateway's NodePorts on the workers (open, or allowed_cidrs = app_lb_allowed_cidrs)
 # ==============================================================================
 
 # --- Kubernetes API LB ---
@@ -113,6 +113,17 @@ resource "openstack_networking_port_v2" "k8s_vip" {
 # the Gateway's NodePorts, so without applications this LB and its floating IP
 # are billed to forward traffic to ports where nothing listens.
 
+locals {
+  # Caller list + the cluster's own egress (workers leave through the router's address; pods reach the
+  # Gateway through this LB's floating IP) + the node subnet. null = no allowed_cidrs = no filter.
+  # sort(): Octavia returns the list sorted, an unsorted one diffs against its state on every plan.
+  app_lb_allowed_cidrs = length(var.app_lb_allowed_cidrs) == 0 ? null : sort(distinct(concat(
+    var.app_lb_allowed_cidrs,
+    ["10.0.0.0/24"],
+    [for f in openstack_networking_router_v2.this.external_fixed_ip : "${f.ip_address}/32" if !strcontains(f.ip_address, ":")],
+  )))
+}
+
 resource "openstack_lb_loadbalancer_v2" "app" {
   count         = var.deploy_app_lb ? 1 : 0
   name          = "${var.cluster_name}-app-lb"
@@ -141,6 +152,7 @@ resource "openstack_lb_listener_v2" "http" {
   protocol        = "TCP"
   protocol_port   = 80
   loadbalancer_id = openstack_lb_loadbalancer_v2.app[0].id
+  allowed_cidrs   = local.app_lb_allowed_cidrs
 }
 
 resource "openstack_lb_pool_v2" "http" {
@@ -166,6 +178,7 @@ resource "openstack_lb_listener_v2" "https" {
   protocol        = "TCP"
   protocol_port   = 443
   loadbalancer_id = openstack_lb_loadbalancer_v2.app[0].id
+  allowed_cidrs   = local.app_lb_allowed_cidrs
 }
 
 resource "openstack_lb_pool_v2" "https" {

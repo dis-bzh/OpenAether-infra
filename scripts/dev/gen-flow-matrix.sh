@@ -47,7 +47,7 @@ case "$PROV" in
     [ -f "$F" ] || { echo "✗ $F not found" >&2; exit 1; }
     echo "$HDR"
     awk -v prov="$PROV" '
-      function reset() { name = ""; ing = 0; proto = "all"; pmin = ""; pmax = ""; src = "-"; cond = "always"; cidr = "" }
+      function reset() { name = ""; ing = 0; proto = "all"; pmin = ""; pmax = ""; src = "-"; cond = "always"; cidr = ""; app = 0 }
       function emit(   ports) {
         if (!ing || name == "") return
         ports = (pmin == "" ? "all" : (pmin == pmax ? pmin : pmin "-" pmax))
@@ -67,11 +67,13 @@ case "$PROV" in
       /^  (protocol|ip_protocol|    ip_protocol) +=/ || /^ *(protocol|ip_protocol) += "/ { match($0, /"[^"]+"/); proto = substr($0, RSTART + 1, RLENGTH - 2); if (proto == "-1") proto = "all" }
       /(port_range_min|from_port_range) +=/ { v = $3; gsub(/[^0-9a-z_.]/, "", v); pmin = v }
       /(port_range_max|to_port_range) +=/ { v = $3; gsub(/[^0-9a-z_.]/, "", v); pmax = v }
-      /(remote_ip_prefix|ip_range) +=/ { v = $0; sub(/^[^=]*= */, "", v); gsub(/"/, "", v); src = (v ~ /each\.value/ ? "`admin_ip`" : (v ~ /outscale_subnet\.public/ ? "public subnet (LB)" : (v ~ /^[0-9]/ ? "`" v "`" : "`" v "`"))) }
+      /(remote_ip_prefix|ip_range) +=/ { v = $0; sub(/^[^=]*= */, "", v); gsub(/"/, "", v); src = (v ~ /each\.value/ ? (app ? "`app_lb_allowed_cidrs`, cluster egress" : "`admin_ip`") : (v ~ /outscale_subnet\.public/ ? "public subnet (LB)" : (v ~ /^[0-9]/ ? "`" v "`" : "`" v "`"))) }
       # The group of the rule itself is a 2-space attribute; the group it admits is `remote_group_id` or a deeper `security_group_id`.
       /remote_group_id|^ {4,}security_group_id/ { s = srcfrom($0); if (s != "") src = s }
       /count += +var\.deploy_app_lb/ { cond = "`deploy_app_lb`" }
       /for_each += +toset\(var\.admin_ip\)/ { src = "`admin_ip`" }
+      # Opt-in public clients of the app LB: the set is empty unless the list is given.
+      /for_each += +local\.app_lb_sources/ { app = 1; src = "`app_lb_allowed_cidrs`, cluster egress"; cond = "`deploy_app_lb` and `app_lb_allowed_cidrs`" }
     ' "$F"
     ;;
   *) echo "✗ unknown provider: $PROV" >&2; exit 2 ;;
@@ -88,7 +90,9 @@ if [ "$FR" = 1 ]; then
     -e 's/public subnet (LB)/sous-réseau public (LB)/' \
     -e 's/| all | all |/| tous | tous |/' \
     -e 's/the k8s API port when `k8s_lb_mode = "managed"`, and the gateway ports/le port de l'"'"'API k8s quand `k8s_lb_mode = "managed"`, et les ports de la passerelle/' \
-    -e 's/the matching load balancer exists/le load balancer correspondant existe/'
+    -e 's/the matching load balancer exists/le load balancer correspondant existe/' \
+    -e 's/`deploy_app_lb` and `app_lb_allowed_cidrs`/`deploy_app_lb` et `app_lb_allowed_cidrs`/' \
+    -e 's/, cluster egress/, sortie du cluster/'
 else
   render
 fi

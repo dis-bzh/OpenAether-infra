@@ -42,6 +42,10 @@ a bastion declares them with the cluster root's types and hands them to `_shared
 template inputs: forget one and the render fails). A module with a security group applies `bastion_internet_egress` to its egress rules
 as well, with `moved` blocks so the default plans no change. Wiring is pinned in `scripts/dev/test-cluster-checks.sh`.
 
+Optional app-LB input, default `[]` (no filter, nothing changes): `app_lb_allowed_cidrs`. A module with a cloud application load balancer
+filters its public 80/443 to that list plus the cluster's own egress address, as an in-place update of the load balancer (a replacement
+would change the public IP); a module without one (Proxmox, local) does not declare it, and the root only hands it to `scw`, `ovh`, `outscale`.
+
 ## Rules
 
 1. **No Talos logic** — Provider modules MUST NOT contain `data.talos_machine_configuration`,

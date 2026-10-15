@@ -56,3 +56,13 @@ output "bastion_egress_rules" {
     "${lower(r.protocol)} ${r.port != null && r.port != 0 ? tostring(r.port) : "-"} ${r.ip_range}"
   ]
 }
+
+# Test-only: a test cannot read a child module's resources. Each app LB frontend's ACLs as "action subnets".
+output "app_lb_acls" {
+  description = "The ACLs of the app LB http and https frontends as 'action subnet,subnet', in evaluation order, for tests"
+  value = {
+    for k, fes in { http = scaleway_lb_frontend.http, https = scaleway_lb_frontend.https } : k => flatten([
+      for fe in fes : [for a in fe.acl : "${a.action[0].type} ${join(",", a.match[0].ip_subnet)}"]
+    ])
+  }
+}

@@ -200,6 +200,14 @@ check "single_provider_per_cluster" {
   }
 }
 
+# A warning, not a failure: an allow-list that filters nothing must not pass for protection.
+check "app_lb_allowed_cidrs_applies" {
+  assert {
+    condition     = length(var.app_lb_allowed_cidrs) == 0 || (var.deploy_app_lb && length(setintersection(local.active_providers, ["scaleway", "ovh", "outscale"])) > 0)
+    error_message = "app_lb_allowed_cidrs is set but filters nothing: it needs deploy_app_lb = true on Scaleway, OVH or Outscale (Proxmox and local have no cloud load balancer)."
+  }
+}
+
 # ==============================================================================
 # Scaleway Infrastructure
 # ==============================================================================
@@ -221,6 +229,8 @@ module "scw" {
   additional_zones = local.scw_dist.zones != null ? local.scw_dist.zones : ["fr-par-1", "fr-par-2", "fr-par-3"]
   k8s_lb_mode      = local.scw_dist.k8s_lb_mode
   deploy_app_lb    = var.deploy_app_lb
+
+  app_lb_allowed_cidrs = var.app_lb_allowed_cidrs
 
   worker_storage = var.worker_storage
 
@@ -258,6 +268,8 @@ module "ovh" {
   k8s_lb_mode        = local.ovh_dist.k8s_lb_mode
   deploy_app_lb      = var.deploy_app_lb
 
+  app_lb_allowed_cidrs = var.app_lb_allowed_cidrs
+
   worker_storage = var.worker_storage
 
   admin_ip         = var.admin_ip
@@ -291,6 +303,8 @@ module "outscale" {
   bastion_image_id   = local.osc_dist.bastion_image_id
   k8s_lb_mode        = local.osc_dist.k8s_lb_mode
   deploy_app_lb      = var.deploy_app_lb
+
+  app_lb_allowed_cidrs = var.app_lb_allowed_cidrs
 
   worker_storage = var.worker_storage
 

@@ -203,3 +203,9 @@ variable "app_lb_node_ports" {
     https = 30443
   }
 }
+
+variable "app_lb_allowed_cidrs" {
+  description = "Source CIDRs allowed to reach the application LB (80/443). Empty = no filter (the historical behaviour). Non-empty = only these, plus the cluster's own egress address; see the root variable of the same name."
+  type        = list(string)
+  default     = []
+}

@@ -76,3 +76,12 @@ output "bastion_egress_rules" {
     [for r in outscale_security_group_rule.bastion_egress_https : "${r.ip_protocol} ${r.from_port_range}-${r.to_port_range} ${r.ip_range}"],
   )
 }
+
+# Test-only: a test cannot read a child module's resources. The sources admitted on the app LB ports, as "port source".
+output "app_lb_sources" {
+  description = "Source CIDRs of the app LB inbound rules (80, 443), for tests; empty = no rule (unfiltered or no app LB)"
+  value = {
+    http  = sort([for k, r in outscale_security_group_rule.app_lb_http : k])
+    https = sort([for k, r in outscale_security_group_rule.app_lb_https : k])
+  }
+}

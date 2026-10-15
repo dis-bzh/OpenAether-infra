@@ -15,7 +15,7 @@
 | Z0 Internet | tout le reste | les load balancers publics, et le port 22 du bastion si l'adresse est autorisée | n/a |
 | Z1 Poste de l'opérateur | `.env.sh`, tfvars, clés, `kubectl`, `talosctl`, `tofu` | le bastion (SSH) et le load balancer de l'API Kubernetes (6443), tous deux limités à `admin_ip` ; les stores objet | l'opérateur seul |
 | Z2 Bastion | une VM par cluster, adresse publique, sshd ; baseline optionnelle, opérateurs nominatifs, sortie Internet fermée | le sous-réseau du cluster sur 6443 et 50000 (avec la sortie fermée), Internet sur 80/443 sinon | Z1, depuis `admin_ip` sur le port 22 |
-| Z3 Bord public | le load balancer de l'API Kubernetes (6443) et, si `deploy_app_lb`, le load balancer applicatif (80/443) | les adresses privées des nœuds | Internet (LB applicatif : **aucun filtre de source**, voir section 6) ; `admin_ip` (LB de l'API) |
+| Z3 Bord public | le load balancer de l'API Kubernetes (6443) et, si `deploy_app_lb`, le load balancer applicatif (80/443) | les adresses privées des nœuds | Internet (LB applicatif : **aucun filtre de source par défaut**, `app_lb_allowed_cidrs` en ajoute un, voir section 6) ; `admin_ip` (LB de l'API) |
 | Z4 Réseau privé du cluster | control planes et workers, sans adresse publique ; un sous-réseau plat par provider | entre eux, les stores objet et les registres (sortant) | Z2, Z3, et les membres du même sous-réseau |
 | Z5 Charges de travail | namespaces, pods, le maillage ambient Istio pour une partie, les namespaces de fondation hors maillage (OpenBao, cert-manager...) | selon les politiques Cilium | selon les politiques Cilium |
 | Z6 Stores objet | les buckets primaire et réplica, chez les providers | n/a | Z1 (clés S3), Z4 (sauvegardes, Loki, CNPG ; politique de sortie par FQDN) |
@@ -51,7 +51,7 @@ qui a adopté un réseau existant peut différer, c'est pourquoi les règles sui
 ```text
                  Internet
                     |
-     (admin_ip only)|                       (no source filter when deploy_app_lb)
+     (admin_ip only)|                       (no filter unless app_lb_allowed_cidrs)
         +-----------+------------+                     |
         |                        |                     |
    [bastion :22]        [k8s API LB :6443]       [app LB :80/:443]
@@ -132,6 +132,8 @@ Chaque bloc est la sortie de `scripts/dev/gen-flow-matrix.sh --fr <provider>` : 
 | `talos_api` | tcp | 50000 | SG du bastion | toujours |
 | `http` | tcp | `var.app_lb_node_ports.http` | sous-réseau public (LB) | `deploy_app_lb` |
 | `https` | tcp | `var.app_lb_node_ports.https` | sous-réseau public (LB) | `deploy_app_lb` |
+| `app_lb_http` | tcp | 80 | `app_lb_allowed_cidrs`, sortie du cluster | `deploy_app_lb` et `app_lb_allowed_cidrs` |
+| `app_lb_https` | tcp | 443 | `app_lb_allowed_cidrs`, sortie du cluster | `deploy_app_lb` et `app_lb_allowed_cidrs` |
 | `wireguard` | udp | 51820 | membres du SG du cluster | toujours |
 | `inter_node` | tous | tous | membres du SG du cluster | toujours |
 <!-- flow-matrix:outscale:end -->
@@ -153,6 +155,7 @@ Le test exige que chaque nom de règle ci-dessus ait une ligne ici, dans les deu
 | `node-exporter` | collecte de métriques, couche apps, hostNetwork (non vérifié ici) | rien au-delà du sous-réseau |
 | `dhcp` | baux d'adresses du réseau privé (non vérifié) | aucune |
 | `gateway-<name>`, `http`, `https` | les backends du load balancer applicatif sur les NodePorts fixes de la Gateway | n'existe qu'avec `deploy_app_lb` ; les routes de la Gateway s'authentifient elles-mêmes (`OpenAether-apps/docs/public-exposure.md`) |
+| `app_lb_http`, `app_lb_https` | Outscale seulement : le groupe du load balancer est le groupe du cluster, les clients publics admis sur 80/443 sont donc des règles dans ce groupe | seulement avec `app_lb_allowed_cidrs` ; non exécuté sur un cloud, savoir si le groupe filtre le load balancer est le premier contrôle en laboratoire |
 | `carrier-<name>` | trafic de backend de load balancer qui arrive de la plage carrier ; l'origine n'est pas confirmée | gardée jusqu'à ce qu'un vrai déploiement montre qu'elle est inutilisée |
 | `inter_node` | tout le trafic entre nœuds (etcd, kubelet, Cilium) | **n'importe quel port et protocole entre membres** : plus large que ce dont la matrice a besoin ; le resserrer est un travail prévu, pas fait |
 
@@ -170,8 +173,12 @@ Listées pour qu'un lecteur ne prenne pas la matrice pour plus qu'elle n'est. Au
    Un plan par étapes existe dans l'audit (des listes de ports explicites à la place d'`inter_node`, puis un pare-feu d'hôte Talos ou Cilium optionnel en mode audit, puis l'application) ; l'étape 0 est cette page.
 3. **`inter_node` d'OVH et Outscale admet tous protocoles et ports entre membres.**
 4. **La sortie des nœuds est ouverte** (Scaleway `outbound_default_policy = accept`, OVH des règles de sortie totale explicites, Outscale n'en déclare aucune). Un nœud compromis peut tout joindre ; une liste d'autorisation de sortie risque les téléchargements d'images, les sauvegardes S3 et le premier démarrage, et demande une conception.
-5. **Le load balancer applicatif n'a pas de filtre de source** quand `deploy_app_lb` est vrai : chaque route de la Gateway répond à quiconque pose son en-tête Host, et la connexion propre à la route est sa seule protection
+5. **Le load balancer applicatif n'a pas de filtre de source par défaut** quand `deploy_app_lb` est vrai : chaque route de la Gateway répond à quiconque pose son en-tête Host, et la connexion propre à la route est sa seule protection
    (`OpenAether-apps/docs/public-exposure.md`, qui liste les routes et la façon dont chacune s'authentifie). `admin_ip` ne garde que le frontal de l'API Kubernetes et le bastion. `admin-access.fr.md` disait la passerelle « rien de public » : corrigé.
+   **`app_lb_allowed_cidrs` (vide par défaut, donc rien ne change tant qu'elle n'est pas renseignée) ajoute le filtre chez le provider** : ACL allow puis deny sur les deux frontaux Scaleway, `allowed_cidrs` sur les deux
+   listeners OVH, règles de groupe de sécurité Outscale ; Proxmox et local n'ont pas de load balancer cloud. La liste doit contenir tous les clients publics, l'adresse de sortie du cluster est ajoutée automatiquement.
+   Vérifié par des assertions de plan seulement (mocké) : qu'un cloud l'applique, que les pods joignent encore Zitadel par le load balancer et que la mise à jour se fait en place sont des contrôles de laboratoire
+   (`admin-access.fr.md`, section 6). Elle n'authentifie rien : une adresse listée atteint toujours la connexion de chaque route.
 6. **Pas de refus de sortie à l'échelle du cluster** (section 2).
 
 ## 7. Écarts consignés
