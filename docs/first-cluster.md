@@ -111,6 +111,9 @@ snapshots, so one leak opens all three. Set a second one, generated the same way
 export TF_VAR_artifact_passphrase="$(scripts/ops/gen-passphrase.sh)"   # keep it elsewhere than the first
 ```
 
+Set it through the environment only: `etcd-snapshot.sh` does not read tfvars files, so a value put there would
+encrypt the access artifacts under it and the snapshots under the state passphrase (the script warns when it sees it).
+
 Setting it re-uploads the artifacts under it on the next apply. Older objects stay readable
 (`restore-artifacts.sh` tries it first and falls back to the state passphrase), but **a snapshot written under
 it cannot be opened without it**: back it up like the first one. Held in the same place as the state passphrase,

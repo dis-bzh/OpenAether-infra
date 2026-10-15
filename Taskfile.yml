@@ -1719,9 +1719,10 @@ tasks:
       - |
         BACKEND="$(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)" || exit 1
         tofu init -reconfigure $BACKEND
-      # Admin credentials: created 0600 (install also tightens an existing file), not the umask's 0644.
-      - install -m 0600 /dev/null kubeconfig
-      - install -m 0600 /dev/null talosconfig
+      # Admin credentials: created empty then chmod 0600 (also tightens an existing file), not the umask's 0644.
+      # touch + chmod, not `install /dev/null`: BSD install on macOS refuses a non-regular source.
+      - touch kubeconfig talosconfig
+      - chmod 0600 kubeconfig talosconfig
       - tofu output -raw kubeconfig > kubeconfig
       - tofu output -raw talosconfig > talosconfig
       - echo "KUBECONFIG and TALOSCONFIG written to infrastructure/opentofu/cluster/"

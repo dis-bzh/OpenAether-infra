@@ -30,6 +30,7 @@ resource "proxmox_virtual_environment_download_file" "talos" {
   # Set only under checksum_mode = "enforce": the provider takes `checksum` + `checksum_algorithm`, and Proxmox
   # then refuses a file that differs. UNVERIFIED whether the digest is taken before or after the server
   # decompresses the .zst; images.lock records the compressed file's. Try it on a host before relying on it.
+  # bpg 0.116: `checksum` is RequiresReplace, so turning enforce on over an existing file plans its re-download.
   checksum           = local.verify_checksum ? var.expected_sha256 : null
   checksum_algorithm = local.verify_checksum ? "sha256" : null
 

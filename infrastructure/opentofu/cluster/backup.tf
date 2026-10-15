@@ -19,7 +19,8 @@
 
 locals {
   # Unset or empty artifact_passphrase = the state passphrase, exactly as before the variable existed.
-  artifact_passphrase_set = var.artifact_passphrase != null && var.artifact_passphrase != ""
+  # nonsensitive(): that it is set is no secret, and the mark would hide the whole triggers_replace map in every plan.
+  artifact_passphrase_set = nonsensitive(var.artifact_passphrase != null && var.artifact_passphrase != "")
   artifact_passphrase     = local.artifact_passphrase_set ? var.artifact_passphrase : var.encryption_passphrase
 
   # Bucket naming convention: s3-<project>-<provider>-{tfstate|<role>}-<env> (+ -backup).

@@ -37,6 +37,12 @@ done
 # tries it first and falls back to the state one, which keeps every older object readable.
 : "${TF_VAR_encryption_passphrase:?✗ TF_VAR_encryption_passphrase required (tofu reads the encrypted state)}"
 PASSPHRASE="${TF_VAR_artifact_passphrase:-$TF_VAR_encryption_passphrase}"
+# Only the environment is read here, while backup.tf also honours a tfvars file: a value set there would encrypt the
+# artifacts under it and these snapshots under the state passphrase (restore still opens both, but the split is lost).
+if [ -z "${TF_VAR_artifact_passphrase:-}" ] \
+   && grep -qsE '^[[:space:]]*artifact_passphrase[[:space:]]*=' envs/*.tfvars ./*.auto.tfvars ./terraform.tfvars; then
+  echo "⚠ artifact_passphrase is set in a tfvars file but not in TF_VAR_artifact_passphrase: this snapshot uses the state passphrase. Export TF_VAR_artifact_passphrase." >&2
+fi
 export TALOSCONFIG="$TALOSCONFIG_FILE"
 oa_aws_compat
 

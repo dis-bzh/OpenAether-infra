@@ -10,7 +10,7 @@
 #     PR; signatures wait for a signing key), failures under --strict-main;
 #   - rulesets as code: .github/rulesets/*.json is what GitHub enforces, field for field;
 #   - the `sandbox` environment real-cloud-regression.yml runs in has required reviewers
-#     and a branch restriction (absent = warning: the workflow is dormant).
+#     and a branch restriction to `main` (absent = warning: the workflow is dormant).
 # Exit 0 matches, 1 differs, 2 not verifiable. An empty or unreadable answer is
 # 2, never "nothing is required". Run by .github/workflows/repo-settings.yml.
 #
@@ -287,8 +287,17 @@ def check_environment(api, repo, out):
     problems = []
     if not any(isinstance(p, dict) and p.get("type") == "required_reviewers" for p in env.get("protection_rules", [])):
         problems.append(f"environment {SANDBOX} has no required reviewers: any run on it reads the provider keys unattended")
-    if not env.get("deployment_branch_policy"):
+    policy = env.get("deployment_branch_policy")
+    if not policy:
         problems.append(f"environment {SANDBOX} accepts any branch: a user with write access can run their own branch with its secrets")
+    elif policy.get("custom_branch_policies"):
+        # A custom policy is only a restriction if the patterns are main: `*` is "any branch" with a policy attached.
+        names = [p.get("name") for _, page in pages(api, f"/repos/{repo}/environments/{SANDBOX}/deployment-branch-policies?per_page=100",
+                                                    "branch_policies") for p in page]
+        if not names or any(n != BRANCH for n in names):
+            problems.append(f"environment {SANDBOX} allows {names or 'no pattern'}, not only '{BRANCH}': a branch matching one of them runs with its secrets")
+    else:
+        warn(out, f"environment {SANDBOX} is limited to protected branches, not to '{BRANCH}': any branch with classic protection can run it")
     return problems, f"environment {SANDBOX}: required reviewers and a branch restriction"
 
 
@@ -341,6 +350,13 @@ def self_test(fixture):
         for p in (RUNS, RUNS + "&page=2"):
             body(a, p)["total_count"] -= 1
         body(a, RUNS + "&page=2")["check_runs"].pop()
+
+    def sandbox_env(a, patterns):
+        return {R + "/environments/sandbox": {"status": 200, "body": {
+            "name": "sandbox", "protection_rules": [{"type": "required_reviewers"}, {"type": "branch_policy"}],
+            "deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True}}},
+                R + "/environments/sandbox/deployment-branch-policies?per_page=100": {"status": 200, "body": {
+                    "total_count": len(patterns), "branch_policies": [{"name": n, "type": "branch"} for n in patterns]}}}
 
     def tags(a):
         return body(a, TAGS)
@@ -482,12 +498,17 @@ def self_test(fixture):
          {"tolerate_unreadable_bypass": True}, 0, "match .github/rulesets/"),
         ("... no directory given: not compared, and said", None, {"committed": None}, 0, "no rulesets directory given"),
         ("sandbox environment absent: a warning", None, {}, 0, "⚠ no environment 'sandbox'"),
-        ("... present with reviewers and a branch rule", lambda a: a.update({R + "/environments/sandbox": {"status": 200, "body": {
-            "name": "sandbox", "protection_rules": [{"type": "required_reviewers"}, {"type": "branch_policy"}],
-            "deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True}}}}), {}, 0,
+        ("... present with reviewers and a branch rule", lambda a: a.update(sandbox_env(a, ["main"])), {}, 0,
          "environment sandbox: required reviewers and a branch restriction"),
-        ("... present without required reviewers", lambda a: a.update({R + "/environments/sandbox": {"status": 200, "body": {
-            "name": "sandbox", "protection_rules": [], "deployment_branch_policy": {"custom_branch_policies": True}}}}), {}, 1,
+        ("... a custom branch policy that allows every branch (`*`)", lambda a: a.update(sandbox_env(a, ["main", "*"])), {}, 1,
+         "not only 'main'"),
+        ("... a custom branch policy with no pattern", lambda a: a.update(sandbox_env(a, [])), {}, 1, "allows no pattern"),
+        ("... limited to protected branches only: a warning", lambda a: a.update({R + "/environments/sandbox": {"status": 200, "body": {
+            "name": "sandbox", "protection_rules": [{"type": "required_reviewers"}],
+            "deployment_branch_policy": {"protected_branches": True, "custom_branch_policies": False}}}}), {}, 0,
+         "limited to protected branches"),
+        ("... present without required reviewers", lambda a: (a.update(sandbox_env(a, ["main"])),
+                                                              a[R + "/environments/sandbox"]["body"].update(protection_rules=[])), {}, 1,
          "has no required reviewers"),
         ("... present accepting any branch", lambda a: a.update({R + "/environments/sandbox": {"status": 200, "body": {
             "name": "sandbox", "protection_rules": [{"type": "required_reviewers"}], "deployment_branch_policy": None}}}), {}, 1,

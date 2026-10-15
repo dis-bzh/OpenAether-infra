@@ -41,12 +41,20 @@ between the download and the conversion in the three local-exec modules.
 | `off` | not looked at |
 
 - A new Talos version has no line yet: `scripts/bootstrap/talos-image-lock.sh --arch amd64,arm64`
-  downloads each file (about 230 MB) and records it; `--check` re-downloads and compares.
+  downloads each file (about 230 MB, eight of them, about 1 GB) and records it; `--check` re-downloads and compares.
+  Nothing runs it for you: a Renovate bump of the pinned Talos version turns `test-image-checksum.sh` and the
+  images-lock test red until its lines are committed (the PR body says so). That is the gate working, not a flake.
+- If `enforce` fails a release build on a file that has not changed upstream in any way you can see, run `--check`
+  first: a regenerated artifact is a mismatch to read, and `warn` is the way back to today's behaviour.
 - The same file came back byte-identical on two downloads an hour apart. Whether the Factory
   keeps serving the same bytes for months is **not known**: that is why the default is `warn`.
 - Proxmox downloads server-side, so only `enforce` does anything there (the provider's
   `checksum` argument). Whether Proxmox takes that digest before or after it decompresses the
-  `.zst` is **unverified**: try it on a host first.
+  `.zst` is **unverified**: try it on a host first. In the bpg provider (0.116) `checksum`
+  forces a replacement: turning `enforce` on in a root that already holds the file plans a
+  destroy and a new download of it, so read that plan, or turn it on in a fresh root. The
+  `proxmox_virtual_environment_download_file` resource is also deprecated in that release
+  (removed in 1.0); it is not replaced here.
 - The installer reference in the machine config (`factory.talos.dev/installer/<schematic>:<version>`)
   is still a tag, not a digest.
 

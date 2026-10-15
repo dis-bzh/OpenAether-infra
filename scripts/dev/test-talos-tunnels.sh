@@ -221,6 +221,11 @@ GOT="$(tf_run "" 'x; touch '"$W"'/pwned' '$(touch '"$W"'/pwned)')"
 { [ ! -e "$W/pwned" ] && grep -qF 'x; touch' <<<"$GOT" && grep -qF '$(touch' <<<"$GOT"; } \
   && ok "a user name and a key path full of shell syntax are data: nothing ran, both arrived verbatim" \
   || bad "shell metacharacters were interpreted (pwned: $([ -e "$W/pwned" ] && echo yes || echo no)): $(tr '\n' '|' <<<"$GOT")"
+# The environment block is not part of the command and a mock plan does not run it: without pathexpand() the default
+# "~/.ssh/..." reaches the script unexpanded, since an env value is not tilde-expanded by the shell.
+grep -Eq '^[[:space:]]*OA_TUNNEL_KEY[[:space:]]*=[[:space:]]*pathexpand\(var\.ssh_key_path\)[[:space:]]*$' "$ROOT/infrastructure/opentofu/cluster/main.tf" \
+  && ok "OA_TUNNEL_KEY is pathexpand(var.ssh_key_path): the default ~/.ssh/... is expanded before the script sees it" \
+  || bad "main.tf no longer expands the key path with pathexpand()"
 
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$PASS" -gt 0 ] && [ "$FAIL" -eq 0 ]

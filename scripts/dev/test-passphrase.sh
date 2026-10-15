@@ -62,6 +62,15 @@ out="$(run TF_VAR_encryption_passphrase="$GOOD" TF_VAR_artifact_passphrase="$GOO
 { [ "$rc" = 0 ] && grep -q 'equals' <<<"$out"; } && ok "warn: equal passphrases are reported but not refused" || bad "equal, warn: rc=$rc $out"
 run OA_PASSPHRASE_CHECK=enforce TF_VAR_encryption_passphrase="$GOOD" TF_VAR_artifact_passphrase= >/dev/null && ok "an empty artifact passphrase counts as unset" || bad "empty artifact passphrase refused"
 
+echo "=== the wiring a tofu test cannot see: what the backup provisioner receives ==="
+# artifact-passphrase.tftest.hcl asserts the local, not the local-exec environment (a mock plan has no provisioner).
+BK="$ROOT/infrastructure/opentofu/cluster/backup.tf"
+grep -Eq '^[[:space:]]*PASSPHRASE[[:space:]]*=[[:space:]]*local\.artifact_passphrase[[:space:]]*$' "$BK" \
+  && ok "backup.tf hands the script local.artifact_passphrase, not the state passphrase" || bad "backup.tf PASSPHRASE is not local.artifact_passphrase"
+grep -Eq 'PASSPHRASE[[:space:]]*=.*var\.encryption_passphrase' "$BK" && bad "backup.tf hands PASSPHRASE the state passphrase directly" || ok "no PASSPHRASE assignment bypasses the local"
+grep -q 'PASSPHRASE="${TF_VAR_artifact_passphrase:-$TF_VAR_encryption_passphrase}"' "$ROOT/scripts/ops/etcd-snapshot.sh" \
+  && ok "etcd-snapshot.sh prefers TF_VAR_artifact_passphrase, then the state one" || bad "etcd-snapshot.sh passphrase selection changed"
+
 echo
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$PASS" -gt 0 ] && [ "$FAIL" -eq 0 ]

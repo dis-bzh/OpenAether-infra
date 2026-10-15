@@ -114,6 +114,9 @@ la même façon :
 export TF_VAR_artifact_passphrase="$(scripts/ops/gen-passphrase.sh)"   # à garder ailleurs que la première
 ```
 
+La définir par l'environnement uniquement : `etcd-snapshot.sh` ne lit pas les fichiers tfvars, donc une valeur placée
+là chiffrerait les artefacts d'accès sous elle et les snapshots sous la passphrase d'état (le script avertit s'il le voit).
+
 Elle re-téléverse les artefacts sous ce secret au prochain apply. Les anciens objets restent lisibles
 (`restore-artifacts.sh` l'essaie d'abord, puis retombe sur la passphrase d'état), mais **un snapshot
 écrit sous elle ne s'ouvre pas sans elle** : sauvegarde-la comme la première. Gardée au même endroit que

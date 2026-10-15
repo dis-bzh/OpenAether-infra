@@ -31,10 +31,12 @@ not cover them.
 
 ## How a fix is noticed
 
-1. **Renovate `vulnerabilityAlerts` and `osvVulnerabilityAlerts`** open a PR for a pin
-   with a published advisory, outside the schedule and the 7-day release age (Renovate's
-   default for that block). They need GitHub's Dependabot alerts on (they are) and the
-   Renovate App allowed to read them.
+1. **Renovate `vulnerabilityAlerts`** opens a PR for a pin with a published advisory,
+   outside the schedule and the 7-day release age (Renovate's default for that block). It
+   needs GitHub's Dependency graph and Dependabot alerts on (alerts are; the graph was not
+   checked) and the Renovate App allowed to read them. `osvVulnerabilityAlerts` is
+   experimental and reaches direct dependencies of a few ecosystems only (pypi, go, npm...,
+   not GitHub releases, providers or images): here, at most the pip pin in a workflow.
 2. **Cléa's daily report** lists advisories on the pins in force (OSV) and, since
    `max_minors_behind` in `clea.toml`, every pin more than two minor releases behind.
    A pin that far back is outside what upstream usually patches.

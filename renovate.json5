@@ -60,7 +60,9 @@
   // Security fixes (ANSSI HYG-M34: patch within a month, docs/patching.md). Renovate's own default for this block
   // already skips the schedule, the PR limits, the dashboard approval above and minimumReleaseAge, so a fix is
   // proposed at once: only the label is ours. Needs the repository's Dependency graph and Dependabot alerts on,
-  // and the App allowed to read them; OSV adds the ecosystems GitHub's feed lacks (pypi, go...).
+  // and the App allowed to read them. osvVulnerabilityAlerts is experimental, reads direct dependencies only and
+  // knows crate/go/npm/pypi/... but not github-releases, terraform-provider or docker: here it can only reach the
+  // pip pin in a workflow, so GitHub's feed above is the one that counts.
   vulnerabilityAlerts: { labels: ["dependencies", "security"] },
   osvVulnerabilityAlerts: true,
 
@@ -74,7 +76,7 @@
       registryUrls: ["https://registry.opentofu.org"],
     },
     {
-      description: "Routine OpenTofu provider bumps, bundled. Majors stay separate — bpg/proxmox and outscale/outscale in particular have no 1.0 yet and move fast on schema.",
+      description: "Routine OpenTofu provider bumps, bundled. Majors stay separate; bpg/proxmox in particular has no 1.0 yet and moves fast on schema (outscale/outscale is at 1.x, where `~> 1.8` lets any minor in).",
       matchManagers: ["terraform"],
       matchUpdateTypes: ["minor", "patch"],
       groupName: "opentofu providers (minor/patch)",
@@ -88,6 +90,9 @@
       description: "Talos/Kubernetes gate a running cluster's control plane. Bumping is a one-node-at-a-time `task rolling-replace`, never automated — see docs/upgrade.md.",
       matchPackageNames: ["siderolabs/talos", "kubernetes/kubernetes"],
       labels: ["dependencies", "cluster-version"],
+      // The sha256 lock of the Factory images (talos-image/images.lock) is keyed by version: a bump of the pinned
+      // version leaves test-image-checksum.sh and the images-lock test red until its lines exist. Renovate cannot run the script.
+      prBodyNotes: ["For a Talos OS version bump (not the provider): run `scripts/bootstrap/talos-image-lock.sh --arch amd64,arm64` (about 1 GB of downloads) and commit infrastructure/opentofu/talos-image/images.lock, or the checksum tests stay red (docs/supply-chain.md)."],
     },
     {
       description: "setup-opentofu's `tofu_version` is already read by the anchored regex manager; the native `uses-with` dependency would raise a second, competing branch for the same lines.",

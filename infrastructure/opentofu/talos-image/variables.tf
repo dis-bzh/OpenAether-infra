@@ -31,7 +31,7 @@ variable "image_checksum_mode" {
   description = <<-EOT
     What to do when the downloaded Factory image does not match its sha256 in images.lock, or none is recorded:
     "warn" (default) prints it and builds; "enforce" fails (set TF_VAR_image_checksum_mode=enforce for a release
-    build); "off" is the pre-lock behaviour. Proxmox downloads server-side, so only "enforce" does anything there.
+    build); "off" is the pre-lock behaviour. Proxmox downloads server-side, so only "enforce" does anything there, and it re-downloads an existing file.
   EOT
   type        = string
   default     = "warn"

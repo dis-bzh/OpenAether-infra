@@ -49,7 +49,7 @@ variable "expected_sha256" {
 }
 
 variable "checksum_mode" {
-  description = "off | warn | enforce: what to do when the downloaded image does not match expected_sha256 (or none is recorded). See scripts/internal/verify-image-checksum.sh."
+  description = "off | warn | enforce: what to do when the downloaded image does not match expected_sha256 (or none is recorded). See scripts/internal/verify-image-checksum.sh. Only enforce reaches the provider, and there it forces the existing download_file to be replaced (docs/supply-chain.md)."
   type        = string
   default     = "warn"
 

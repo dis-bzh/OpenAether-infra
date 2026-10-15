@@ -1,6 +1,7 @@
 # Optional artifact_passphrase (the gpg-encrypted access artifacts and etcd snapshots): unset keeps the state passphrase and
 # adds nothing to the backup triggers, so a deployed cluster sees no diff; set, it is the secret the backup script receives.
-# The local-exec itself (gpg, aws) is not run here: scripts/dev/test-restore.sh and test-state-backups.sh own that.
+# The local-exec itself (gpg, aws) is not run here, and a mock plan does not expose its environment: scripts/dev/test-restore.sh and
+# test-state-backups.sh own the script, test-passphrase.sh greps that backup.tf passes it local.artifact_passphrase.
 
 mock_provider "scaleway" {}
 mock_provider "openstack" {}
@@ -134,6 +135,19 @@ run "unset_keeps_the_state_passphrase_and_the_old_triggers" {
   }
 }
 
+run "unset_does_not_make_the_triggers_sensitive" {
+  command = plan
+  # Whether a second passphrase is set is not a secret; marking it so hides the talosconfig/kubeconfig hash diffs from every plan.
+  assert {
+    condition     = !issensitive(terraform_data.backup[0].triggers_replace)
+    error_message = "an unset artifact_passphrase must leave the backup triggers readable in the plan"
+  }
+  assert {
+    condition     = !issensitive(local.artifact_passphrase_set)
+    error_message = "'is a separate artifact passphrase set' is a fact, not a secret"
+  }
+}
+
 run "empty_counts_as_unset" {
   command = plan
   variables {
@@ -145,7 +159,7 @@ run "empty_counts_as_unset" {
   }
 }
 
-run "set_is_what_the_backup_script_receives_and_joins_the_triggers" {
+run "set_replaces_the_state_passphrase_and_joins_the_triggers" {
   command = plan
   variables {
     artifact_passphrase = "artifact-passphrase-0123456789abcdefghijklmn"

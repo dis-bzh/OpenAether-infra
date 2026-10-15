@@ -130,6 +130,22 @@ in git. 0.1.0 is the first entry describing something proven.
 - `cluster-security-tests.sh` 4.5 now asserts that no Shamir-share or root-token Secret exists in `foundation-vault` (it asserted
   that an unsealer was running).
 
+- **Review fixes for the passphrase, supply-chain and ops-check changes above (ANSSI PG-083, SSDLC CICD-AIP-03, CICD-IAM-03; found by an independent review).**
+  `test-passphrase.sh` now greps that `backup.tf` hands the backup script `local.artifact_passphrase` (reverting it to the state
+  passphrase left every test green before; the line was changed and the new check went red). `artifact_passphrase_set` is
+  `nonsensitive()`: it derived from a sensitive variable and so hid the whole `triggers_replace` map in every plan, set or not (a
+  test asserts it is readable; no value changes, so no plan diff is expected, **not run against a real state**). `etcd-snapshot.sh` warns
+  when `artifact_passphrase` is in a tfvars file but not in `TF_VAR_artifact_passphrase`, the case where artifacts and snapshots would
+  silently end up under different passphrases (the variable's description now says environment only). The sandbox-environment
+  check fetches the deployment-branch patterns and fails on anything but `main` (a `*` policy passed before) and warns on
+  "protected branches" only (82 self-test cases, 3 new). `task kubeconfig` creates its two files with `touch` and `chmod 0600`
+  (BSD `install` on macOS may refuse `/dev/null`; **not run on macOS**). `test-talos-tunnels.sh` checks that `OA_TUNNEL_KEY` is
+  still `pathexpand()`ed. Docs and variable text now say that `checksum_mode = enforce` on a Proxmox root that already holds
+  the image plans its re-download (bpg 0.116 `checksum` forces replacement; the resource is deprecated there), that a Talos bump
+  needs `talos-image-lock.sh` run by hand (the Renovate PR body says so), and what `osvVulnerabilityAlerts` actually reaches.
+  Rung: mocked/static, nothing run on a cluster or a Proxmox host. It does **not** automate the lock update, and
+  does not replace the deprecated Proxmox resource.
+
 ### Added
 
 - **`task cluster-upgrade` secures the way back before it moves anything (#270).** An encrypted etcd snapshot

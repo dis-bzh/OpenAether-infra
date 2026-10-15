@@ -17,7 +17,7 @@ variable "encryption_passphrase" {
 # one leaked passphrase does not open the state AND the artifacts AND every Secret in etcd. Unset = they keep using
 # encryption_passphrase, as before. The scripts read the same name from the environment (etcd-snapshot.sh).
 variable "artifact_passphrase" {
-  description = "Optional separate passphrase (>=32 chars) for the gpg-encrypted talosconfig/kubeconfig backups and etcd snapshots. Unset or empty: encryption_passphrase is used. Supply via TF_VAR_artifact_passphrase; keep it in a different place from the state passphrase."
+  description = "Optional separate passphrase (>=32 chars) for the gpg-encrypted talosconfig/kubeconfig backups and etcd snapshots. Unset or empty: encryption_passphrase is used. Supply it ONLY via TF_VAR_artifact_passphrase (etcd-snapshot.sh reads the environment, not a tfvars file); keep it in a different place from the state passphrase."
   type        = string
   sensitive   = true
   default     = null

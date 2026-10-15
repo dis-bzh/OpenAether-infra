@@ -41,13 +41,22 @@ entre le téléchargement et la conversion dans les trois modules local-exec.
 | `off` | non regardé |
 
 - Une nouvelle version de Talos n'a pas encore de ligne : `scripts/bootstrap/talos-image-lock.sh --arch amd64,arm64`
-  télécharge chaque fichier (environ 230 Mo) et l'enregistre ; `--check` retélécharge et compare.
+  télécharge chaque fichier (environ 230 Mo, huit au total, environ 1 Go) et l'enregistre ; `--check` retélécharge et compare.
+  Rien ne le lance à votre place : une montée Renovate de la version Talos épinglée met `test-image-checksum.sh`
+  et le test images-lock au rouge tant que ses lignes ne sont pas commitées (le corps de la PR le dit). C'est la barrière qui
+  fonctionne, pas un test instable.
+- Si `enforce` fait échouer une construction de release sur un fichier dont rien ne montre qu'il a changé en amont, lancer
+  d'abord `--check` : un artefact régénéré est un écart à lire, et `warn` ramène au comportement d'avant.
 - Le même fichier est revenu identique octet pour octet sur deux téléchargements espacés d'une
   heure. Que la Factory serve les mêmes octets pendant des mois n'est **pas connu** : c'est
   pourquoi le défaut est `warn`.
 - Proxmox télécharge côté serveur : seul `enforce` y fait quelque chose (l'argument `checksum`
   du provider). Que Proxmox prenne cette empreinte avant ou après avoir décompressé le `.zst`
-  est **non vérifié** : à essayer d'abord sur un hôte.
+  est **non vérifié** : à essayer d'abord sur un hôte. Dans le provider bpg (0.116), `checksum`
+  force le remplacement : activer `enforce` dans une racine qui détient déjà le fichier planifie sa
+  destruction et un nouveau téléchargement, donc lire ce plan, ou l'activer dans une racine neuve. La
+  ressource `proxmox_virtual_environment_download_file` est aussi dépréciée dans cette version
+  (retirée en 1.0) ; elle n'est pas remplacée ici.
 - La référence de l'installeur dans la machine config (`factory.talos.dev/installer/<schematic>:<version>`)
   reste un tag, pas un digest.
 

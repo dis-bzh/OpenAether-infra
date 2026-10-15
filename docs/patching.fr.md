@@ -33,10 +33,13 @@ page ne les couvre pas.
 
 ## Comment un correctif est repéré
 
-1. **`vulnerabilityAlerts` et `osvVulnerabilityAlerts` de Renovate** ouvrent une PR pour
-   une épingle visée par un avis publié, hors planning et sans l'âge de 7 jours (défaut
-   de Renovate pour ce bloc). Elles demandent les alertes Dependabot de GitHub (actives)
-   et l'autorisation de les lire pour l'App Renovate.
+1. **`vulnerabilityAlerts` de Renovate** ouvre une PR pour une épingle visée par un avis
+   publié, hors planning et sans l'âge de 7 jours (défaut de Renovate pour ce bloc). Il
+   demande le graphe de dépendances et les alertes Dependabot de GitHub (les alertes sont
+   actives ; le graphe n'a pas été vérifié) et l'autorisation de les lire pour l'App Renovate.
+   `osvVulnerabilityAlerts` est expérimental et ne couvre que les dépendances directes de
+   quelques écosystèmes (pypi, go, npm... mais pas les releases GitHub, les providers ni les
+   images) : ici, au mieux l'épingle pip d'un workflow.
 2. **Le rapport quotidien de Cléa** liste les avis sur les épingles en vigueur (OSV) et,
    depuis `max_minors_behind` dans `clea.toml`, toute épingle en retard de plus de deux
    versions mineures. Une épingle aussi loin est hors de ce que l'amont corrige d'ordinaire.
