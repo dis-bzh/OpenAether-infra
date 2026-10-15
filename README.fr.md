@@ -27,6 +27,11 @@ fermer sans compte cloud.
 
 ## Version
 
+**0.2.1** (correctif) — pas de nouveau périmètre. C'est la moitié infra du couple avec OpenAether-apps 0.2.0 : seeding Day-1 sans
+jeton root, un bucket dédié à Loki, une vérification de langue partagée avec les apps et la documentation Day-1 corrigée. Elle a été exécutée une
+fois à la main (Scaleway et OVH avec le tag apps 0.2.0 tel qu'épinglé, Outscale avec le profil réduit des apps sur une branche) ; voir `CHANGELOG.md` pour ce qui a été observé ou non. Un cluster construit par la
+0.2.0 (apps 0.1.0) ne peut pas y être migré sur place.
+
 **0.2.0** — le même périmètre que la 0.1.0 et rien au-dessus : Talos et Cilium,
 Flux désactivé, pas de CAPI, pas d'applications. Elle ajoute ce qui suit le
 déploiement : Talos v1.14.2 et Kubernetes v1.37.1 comme pin par défaut, des

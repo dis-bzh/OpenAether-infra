@@ -68,7 +68,7 @@ bastion_ssh_keys = {
 git_repo_url     = "https://github.com/dis-bzh/OpenAether-apps.git"
 # Pin the platform: a commit on a branch would otherwise reach a running
 # cluster within the reconcile interval. refs/heads/<branch> to test.
-git_ref          = "refs/tags/0.1.0"
+git_ref          = "refs/tags/0.2.0"
 
 # OpenBao recovery-share holders (only read when deploy_flux = true). OpenBao unseals itself; what the operators hold are
 # RECOVERY shares, for an emergency root token. Each key is a person's PGP PUBLIC key, `gpg --export <id> | base64 -w0`
@@ -88,6 +88,7 @@ git_ref          = "refs/tags/0.1.0"
 # and each has a "-backup" twin:
 #   state            -> s3-<cluster_name>-scaleway-tfstate-<environment>
 #   kube/talosconfig -> s3-<cluster_name>-scaleway-management-<environment>
+#   Loki logs        -> s3-<cluster_name>-scaleway-logs-<environment>   (no replica twin)
 # PRIMARY = this cluster's own object store. REPLICA = its "-backup" twin.
 # Each is opened with the credentials of the cloud that HOLDS it: the replica
 # uses the keys of whatever s3_replica_endpoint points at. So a Scaleway cluster

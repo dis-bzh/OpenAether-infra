@@ -67,13 +67,14 @@ bastion_ssh_keys = {
 git_repo_url     = "https://github.com/dis-bzh/OpenAether-apps.git"
 # Pin the platform: a commit on a branch would otherwise reach a running
 # cluster within the reconcile interval. refs/heads/<branch> to test.
-git_ref          = "refs/tags/0.1.0"
+git_ref          = "refs/tags/0.2.0"
 
 # --- Backup / DR object stores ------------------------------------------------
 # Derived buckets (you don't set them) — parts come from this file,
 # and each has a "-backup" twin:
 #   state            -> s3-<cluster_name>-scaleway-tfstate-<environment>
 #   kube/talosconfig -> s3-<cluster_name>-scaleway-management-<environment>
+#   Loki logs        -> s3-<cluster_name>-scaleway-logs-<environment>   (no replica twin)
 # Replicate BACK to your primary provider once it recovers: that store is opened
 # with ITS OWN keys, the cloud named by s3_replica_endpoint below.
 s3_primary_endpoint = "https://s3.fr-par.scw.cloud"

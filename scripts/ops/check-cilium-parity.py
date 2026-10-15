@@ -145,7 +145,7 @@ def main() -> int:
                 continue
             if got is None:
                 drift.append(
-                    f"  {name} : `{key}` ABSENT — le socle pose {key}={want}. "
+                    f"  {name} : `{key}` ABSENT — the base sets {key}={want}. "
                     "A missing key takes the CHART DEFAULT, which differs."
                 )
             else:

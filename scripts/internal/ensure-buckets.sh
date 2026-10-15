@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # OpenAether — ensure the backup object stores exist (idempotent).
 #
-# Creates the four buckets a cluster needs, names derived from its tfvars (same
+# Creates the buckets a cluster needs, names derived from its tfvars (same
 # convention as cluster/backup.tf): tfstate and artifacts, each with a -backup
-# replica.
+# replica, plus Loki's own logs bucket (no replica; seed-openbao.sh points Loki at it).
 #
 # Only the STATE PRIMARY must exist before `tofu init` (the S3 backend does not
-# create its own bucket) — that one is FATAL. The other three are used later and
+# create its own bucket) — that one is FATAL. The others are used later and
 # may live on another provider, so they are best-effort and never block a deploy.
 #
 # --preflight (cluster-up only) also refuses a prod cluster with no state object
@@ -63,9 +63,18 @@ ensure_bucket() { # name  endpoint  region  access_key  secret_key
        aws s3api head-bucket --bucket "$1" --endpoint-url "$2" --region "$3" >/dev/null 2>&1; then
     echo "  ✓ $1 (exists)"
   else
-    AWS_ACCESS_KEY_ID="$4" AWS_SECRET_ACCESS_KEY="$5" \
-      aws s3 mb "s3://$1" --endpoint-url "$2" --region "$3" >/dev/null \
-      && echo "  + $1 (created)"
+    local err
+    if err="$(AWS_ACCESS_KEY_ID="$4" AWS_SECRET_ACCESS_KEY="$5" \
+         aws s3 mb "s3://$1" --endpoint-url "$2" --region "$3" 2>&1 >/dev/null)"; then
+      echo "  + $1 (created)"
+    # The CLI retries a request whose answer was lost: the first attempt created the bucket, the retry is told it is ours.
+    # Seen on Scaleway for a bucket that did not exist a second earlier; refusing the deploy for it helps nobody.
+    elif grep -q 'BucketAlreadyOwnedByYou' <<<"$err"; then
+      echo "  ✓ $1 (already ours: a request the CLI retried, or a bucket head-bucket could not see)"
+    else
+      echo "$err" >&2
+      return 1
+    fi
   fi
 }
 
@@ -102,6 +111,11 @@ ensure_bucket "$STATE_PRIMARY" "$PRIMARY_EP" "$PRIMARY_REGION" "$PRIMARY_AK" "$P
 
 ensure_bucket "$ARTIFACT_PRIMARY" "$PRIMARY_EP" "$PRIMARY_REGION" "$PRIMARY_AK" "$PRIMARY_SK" ||
   echo "  ⚠ ${ARTIFACT_PRIMARY} not ready (will retry at backup time)"
+
+# Loki's own bucket (#302): seed-openbao.sh points Loki at it, and Loki does not create it. Best-effort, like the artifacts.
+LOGS_BUCKET="$(oa_logs_bucket "$PROJECT" "$PROVIDER" "$ENVN")"
+ensure_bucket "$LOGS_BUCKET" "$PRIMARY_EP" "$PRIMARY_REGION" "$PRIMARY_AK" "$PRIMARY_SK" ||
+  echo "  ⚠ ${LOGS_BUCKET} not ready: Loki stores nothing until it exists"
 
 # --- The two shapes, and neither of them silent -------------------------------
 #

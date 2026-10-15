@@ -52,7 +52,7 @@ exposed) as your recovery path. That lets you harden host SSH aggressively witho
 risk of locking yourself out. Note: IPMI may be limited on the Eco/SYS line —
 confirm on your model in the Manager.
 
-## apiserver VIP (posé dès 1 CP)
+## apiserver VIP (set from the first control plane)
 
 `apiserver_vip` is a spare address in `network_cidr` the control plane owns so a
 later move from 1 CP → 3 CP does **not** re-address the apiserver. This module

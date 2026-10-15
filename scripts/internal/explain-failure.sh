@@ -78,6 +78,28 @@ TXT
   fi
 fi
 
+# OVH: a router whose SNAT port never came up leaves every node without egress (no DNS, no NTP), and the first thing Talos says
+# is that its time is not in sync. Seen once, on a real account (a fresh router of the same code was fine); the port is the
+# discriminator, and it is a read. Transcript only: the symptom AND an OVH resource in the same run.
+if [ -f "$LOG" ]; then
+  CLEAN="$(sed -E 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null)"
+  if grep -Fq 'time is not in sync' <<<"$CLEAN" && grep -Fq 'module.ovh[0]' <<<"$CLEAN"; then
+    printf '\n\033[33m─── the nodes may have no egress (OVH router) ───\033[0m\n' >&2
+    cat >&2 <<'TXT'
+Talos waited for its clock and never got it. On OVH that has one cause seen so far besides a firewall rule: the router's
+SNAT port is DOWN, so the nodes cannot reach DNS or NTP (the Nova console log of a node shows `i/o timeout` to the
+resolver). Read-only check, with the OVH credentials of .env.sh:
+
+    openstack port list --device-owner network:router_centralized_snat -c ID -c Status -c "Fixed IP Addresses"
+
+ACTIVE is a good router. DOWN is a bad one and it does not recover: replacing the router in place fails while floating IPs
+are associated, so run `task cluster-down` and a fresh `task cluster-up`. Anything else (firewall, NTP blocked on the
+tenant) is not what this message can tell.
+
+TXT
+  fi
+fi
+
 STATE="$(timeout 90 tofu state pull 2>/dev/null)" || exit 0
 [ -n "$STATE" ] || exit 0
 

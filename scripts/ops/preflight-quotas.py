@@ -135,7 +135,7 @@ def main():
         print(f"  {label:14s} {bar(used, limit)}")
         if simulating and limit:
             after = used + add
-            verdict = "DÉPASSEMENT" if after > limit else "ok"
+            verdict = "OVER LIMIT" if after > limit else "ok"
             print(f"  {'':14s}   → after +{add}: {after}/{limit}  {verdict}")
             if after > limit:
                 over.append(label)

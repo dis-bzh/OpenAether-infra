@@ -6,7 +6,7 @@
 # fail, it just breaks whatever holds the old one). The application secrets (restic password, database passwords,
 # Longhorn passphrase...) are NOT seeded here: openbao-vault-bootstrap generates them, in OpenBao, and prints none.
 #
-# NO ROOT TOKEN. OpenBao has none (apps >= 0.2.0 revokes it right after bootstrap). The script asks Kubernetes for a
+# NO ROOT TOKEN. OpenBao has none (apps >= 0.1.1 revokes it right after bootstrap). The script asks Kubernetes for a
 # 10-minute token of the ServiceAccount `openbao-seeder`, and OpenBao exchanges it, inside the pod, for a token whose
 # policy `secret-seeder` can create these five paths and nothing else. Neither that token nor a value is ever on a
 # command line (here or in the pod): they travel on the stdin of `kubectl exec`. Nothing is printed but the path.
@@ -67,7 +67,21 @@ RSK="$("$ROOT/scripts/internal/resolve-s3-cred.sh" "$PROVIDER" sk backup "$REPLI
 [ -n "$RAK" ] && [ -n "$RSK" ] || fail "no S3 credentials in scope for the replica store $REPLICA_EP (source .env.sh? the replica's cloud has its own keys)"
 
 # Application-backup bucket, through the SAME derivation as cluster/backup.tf and every other shell caller (#166).
-BUCKET="$(oa_backup_bucket "$(oa_project "$(tfvar cluster_name)" "$(tfvar bucket_suffix || true)")" "$PROVIDER" "$(tfvar environment)")"
+PROJECT="$(oa_project "$(tfvar cluster_name)" "$(tfvar bucket_suffix || true)")"
+BUCKET="$(oa_backup_bucket "$PROJECT" "$PROVIDER" "$(tfvar environment)")"
+
+# Loki writes to ITS OWN bucket (#302): handing it the backups bucket let a compromised Loki erase the backups. Its keys
+# are the operator's, when given: both OA_LOKI_S3_ACCESS_KEY_ID and OA_LOKI_S3_SECRET_ACCESS_KEY, a pair that can reach
+# the logs bucket and nothing else (the providers' S3 keys are account-wide unless the operator scopes them). Without
+# them Loki gets the primary's keys, and the script says what that does and does not protect against.
+LOGS_BUCKET="$(oa_logs_bucket "$PROJECT" "$PROVIDER" "$(tfvar environment)")"
+LAK="${OA_LOKI_S3_ACCESS_KEY_ID:-}"; LSK="${OA_LOKI_S3_SECRET_ACCESS_KEY:-}"
+if [ -n "$LAK" ] || [ -n "$LSK" ]; then
+  [ -n "$LAK" ] && [ -n "$LSK" ] || fail "OA_LOKI_S3_ACCESS_KEY_ID and OA_LOKI_S3_SECRET_ACCESS_KEY go together: set both or neither"
+  LOKI_KEYS="dedicated"
+else
+  LAK="$AK"; LSK="$SK"; LOKI_KEYS="shared"
+fi
 
 # Alerting endpoints are real in production and arbitrary on a throwaway cluster. Say which of the two happened.
 SLACK_URL="${OA_SLACK_WEBHOOK_URL:-}"
@@ -92,11 +106,12 @@ doc() { # <path> <key=ENVVAR>... — values come from the named variables
 PAYLOAD="$(
   EP1="$PRIMARY_EP" B1="$BUCKET" A1="$AK" S1="$SK" \
   EP2="$REPLICA_EP" B2="${BUCKET}-backup" A2="$RAK" S2="$RSK" \
+  B3="$LOGS_BUCKET" A3="$LAK" S3="$LSK" \
   SL="$SLACK_URL" DM="$DMS_URL" \
   bash -c "$(declare -f doc)
     doc backup/s3-primary endpoint=EP1 bucket=B1 access_key=A1 secret_key=S1
     doc backup/s3-replica endpoint=EP2 bucket=B2 access_key=A2 secret_key=S2
-    doc observability/loki-s3 endpoint=EP1 bucket=B1 accessKey=A1 secretKey=S1
+    doc observability/loki-s3 endpoint=EP1 bucket=B3 accessKey=A3 secretKey=S3
     doc observability/alertmanager-slack webhook-url=SL
     doc observability/alertmanager-deadmansswitch url=DM"
 )"
@@ -126,7 +141,7 @@ done'
 OPENBAO_WAIT="${OPENBAO_WAIT:-1200}"
 POLL="${OA_SEED_POLL:-15}"   # seconds between attempts (a test knob)
 deadline=$((SECONDS + OPENBAO_WAIT))
-echo "▶ Seeding Day-1 secrets (${PROVIDER}/${ROLE}, bucket ${BUCKET})"
+echo "▶ Seeding Day-1 secrets (${PROVIDER}/${ROLE}, bucket ${BUCKET}, Loki bucket ${LOGS_BUCKET})"
 last_note=0; ERR=""
 while :; do
   OUT=""
@@ -143,7 +158,7 @@ while :; do
   if [ "$SECONDS" -ge "$deadline" ]; then
     hint=""
     grep -q 'serviceaccounts "openbao-seeder" not found' <<<"$ERR" &&
-      hint=" A cluster bootstrapped by apps 0.1.0 has no seeding identity (it keeps a root token in a Secret): seed it with the script of OpenAether-infra 0.2.0, or move the cluster to apps >= 0.2.0."
+      hint=" A cluster bootstrapped by apps 0.1.0 has no seeding identity (it keeps a root token in a Secret): seed it with the script of OpenAether-infra 0.2.0, or build a new cluster on apps >= 0.1.1 (a cluster initialised by 0.1.0 cannot be moved in place)."
     fail "OpenBao did not accept the seeding identity within ${OPENBAO_WAIT}s — is foundation-vault reconciling (kubectl -n $NS get pods,jobs), did openbao-vault-bootstrap finish, and does \$KUBECONFIG reach the cluster? Last answer: $(tr '\n' ' ' <<<"${ERR:-none}" | cut -c1-300).${hint}"
   fi
   if [ $((SECONDS - last_note)) -ge 60 ]; then echo "  … waiting for OpenBao to accept the seeding identity"; last_note=$SECONDS; fi
@@ -159,6 +174,22 @@ while IFS= read -r line; do
   esac
 done <<<"$OUT"
 [ "$FAILED" -eq 0 ] || fail "could not write $FAILED secret(s) (see above)"
+
+# What Loki really got, said from the answers of OpenBao and not from what this run intended: the entry is create-only, so a re-run
+# or a cluster seeded before the dedicated bucket keeps whatever it holds.
+if grep -q '^+ observability/loki-s3' <<<"$OUT"; then
+  if [ "$LOKI_KEYS" = shared ]; then
+    echo "⚠ Loki got the primary store's keys (OA_LOKI_S3_ACCESS_KEY_ID / OA_LOKI_S3_SECRET_ACCESS_KEY not set) and its own bucket."
+    echo "  That protects the backups from a misconfigured Loki; it does NOT protect them from a compromised one, because these"
+    echo "  keys reach the backups, state and artifact buckets too. Give Loki a key pair limited to ${LOGS_BUCKET} for that."
+  else
+    echo "  Loki got the key pair you gave (OA_LOKI_S3_*) and bucket ${LOGS_BUCKET}."
+  fi
+elif grep -q '^= observability/loki-s3' <<<"$OUT"; then
+  echo "⚠ observability/loki-s3 already existed and was left alone: Loki keeps the bucket and keys it holds. A cluster seeded before the"
+  echo "  dedicated logs bucket points at the BACKUPS bucket with the primary keys; ${LOGS_BUCKET}$([ "$LOKI_KEYS" = dedicated ] && echo " and the OA_LOKI_S3_* pair you set were") not applied."
+  echo "  Replace the entry by hand to change it (docs/admin-access.md, section 3)."
+fi
 [ $((WROTE + KEPT)) -eq "$EXPECTED" ] || fail "expected $EXPECTED answers from OpenBao, got $((WROTE + KEPT)): $(tr '\n' ' ' <<<"$OUT" | cut -c1-300)"
 
 # ExternalSecrets refresh hourly. Nudge them, or the cluster spends up to an hour looking broken for secrets that are

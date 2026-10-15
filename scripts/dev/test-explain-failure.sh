@@ -260,6 +260,26 @@ grep -q 'the bastion changed under the tunnels' <<<"$OUT" \
 : >"$LOG"
 
 
+echo "--- OVH nodes without egress: point at the SNAT port, only for that shape ---"
+printf '{"resources":[]}\n' >"$SB/state.json"; stub
+{ printf 'module.ovh[0].openstack_networking_router_v2.this: Creation complete after 5s\n'; printf '│ Error: talos_machine_bootstrap: time is not in sync yet\n'; } >"$LOG"
+OUT="$(run)"
+grep -q 'no egress (OVH router)' <<<"$OUT" && grep -q 'router_centralized_snat' <<<"$OUT" && grep -q 'cluster-down' <<<"$OUT" \
+  && ok "the clock error on an OVH run names the SNAT port, and the way out" \
+  || bad "the OVH egress shape was not printed for its own transcript"
+printf 'module.scw[0].scaleway_instance_server.cp: Creation complete\n│ Error: time is not in sync yet\n' >"$LOG"
+OUT="$(run)"
+grep -q 'no egress (OVH router)' <<<"$OUT" \
+  && bad "another cloud's clock error was blamed on an OVH router" \
+  || ok "the same error on another cloud stays quiet"
+printf 'module.ovh[0].openstack_networking_router_v2.this: Creation complete after 5s\nApply complete! Resources: 1 added.\n' >"$LOG"
+OUT="$(run)"
+grep -q 'no egress (OVH router)' <<<"$OUT" \
+  && bad "an OVH run that broke nothing was reported" \
+  || ok "an OVH run with no clock error stays quiet"
+: >"$LOG"
+
+
 # --- the wiring itself -------------------------------------------------------
 # Everything above only inspects tasks that ALREADY defer to the explainer, so
 # deleting the wiring made the script invisible and left this suite green: 107

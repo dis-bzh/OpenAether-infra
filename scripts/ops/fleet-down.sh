@@ -288,12 +288,13 @@ _tfv() { grep -E "^[[:space:]]*$1[[:space:]]*=" "$TFV" 2>/dev/null | head -1 | s
 CN="$(oa_project "$(_tfv cluster_name)" "$(_tfv bucket_suffix)")"
 ENVN="$(_tfv environment)"
 cat <<EOT
-  S3 buckets (state, artifacts, backups) — destroying them also removes any
+  S3 buckets (state, artifacts, backups, Loki's logs) — destroying them also removes any
   possibility of restoring:
     (each of the first two also has a "-backup" twin)
     s3-${CN:-<project>}-${PROVIDER}-tfstate-${ENVN:-<env>}
     s3-${CN:-<project>}-${PROVIDER}-${ROLE}-${ENVN:-<env>}
     s3-${CN:-<project>}-*-backups-${ENVN:-<env>}   (restic, all providers)
+    s3-${CN:-<project>}-${PROVIDER}-logs-${ENVN:-<env>}   (Loki; no teardown removes it, delete it by hand)
   Talos images (reusable — one set per version built; a rebuild is 8 min to over 1 h on Outscale):
     task talos-image PROVIDER=$PROVIDER LIST=1 shows them, VERSION=<v> PRUNE=1 removes one; the
     state is one key per version in bucket s3-${CN:-<project>}-${PROVIDER}-talos-image.

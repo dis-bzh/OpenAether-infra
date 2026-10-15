@@ -95,8 +95,39 @@ is "no s3_replica_endpoint: the replica falls back to the primary endpoint" "htt
 is "…in the -backup bucket" "s3-example-scaleway-backups-test-backup" "$(field backup/s3-replica bucket)"
 is "…with the primary's keys (same cloud)" "STUB-PRIMARY-AK" "$(field backup/s3-replica access_key)"
 is "loki-s3 uses accessKey/secretKey, the names the ExternalSecret reads" "STUB-PRIMARY-SK" "$(field observability/loki-s3 secretKey)"
+is "loki writes to its OWN bucket, never the backups bucket (#302)" "s3-example-scaleway-logs-test" "$(field observability/loki-s3 bucket)"
+[ "$(field observability/loki-s3 bucket)" != "$(field backup/s3-primary bucket)" ] && ok "…and it differs from the backups bucket" || bad "Loki shares the backups bucket"
+grep -q "does NOT protect them from a compromised one" <<<"$OUT" && ok "without dedicated keys it SAYS what the separation does not cover" || bad "silent shared keys: $OUT"
 grep -q "placeholders" <<<"$OUT" && ok "no alerting URLs in scope: it SAYS placeholders were seeded" || bad "silent placeholders: $OUT"
 grep -q "seed-openbao/synced-at=" "$LOG" && ok "ExternalSecrets are nudged to re-read" || bad "no annotate call recorded"
+
+echo "--- Loki with a key pair of its own: that pair is seeded, and the warning is gone ---"
+ENV_EXTRA="$BASE OA_LOKI_S3_ACCESS_KEY_ID=STUB-LOKI-AK OA_LOKI_S3_SECRET_ACCESS_KEY=STUB-LOKI-SK"
+OUT2="$(run)"; RC=$?
+is "the script completes" 0 "$RC"
+is "loki access key is the dedicated one" "STUB-LOKI-AK" "$(field observability/loki-s3 accessKey)"
+is "loki secret key is the dedicated one" "STUB-LOKI-SK" "$(field observability/loki-s3 secretKey)"
+is "the backups keep the primary's keys" "STUB-PRIMARY-AK" "$(field backup/s3-primary access_key)"
+grep -q "does NOT protect" <<<"$OUT2" && bad "the warning is printed for a dedicated pair" || ok "no warning for a dedicated pair"
+grep -q "STUB-LOKI" <<<"$OUT2" && bad "a Loki key was printed" || ok "the Loki keys are not printed"
+ENV_EXTRA="$BASE OA_LOKI_S3_ACCESS_KEY_ID=STUB-LOKI-AK"
+OUT2="$(run)"; RC=$?
+[ "$RC" -ne 0 ] && ok "half a pair is refused (rc=$RC)" || bad "seeded with half a Loki pair"
+is "…before any write" 0 "$(puts | wc -l)"
+ENV_EXTRA="$BASE"
+OUT="$(run)"
+
+echo "--- Loki entry already there (re-run, or a cluster seeded before the dedicated bucket): the script does not claim what it did not do ---"
+ENV_EXTRA="$BASE OA_STUB_EXISTING=observability/loki-s3"
+OUT2="$(run)"; RC=$?
+is "the script completes" 0 "$RC"
+grep -q "already existed and was left alone" <<<"$OUT2" && ok "it says the Loki entry was left alone" || bad "$OUT2"
+grep -q "does NOT protect" <<<"$OUT2" && bad "the shared-keys warning is printed for an entry that was not written" || ok "…and does not describe keys it did not write"
+ENV_EXTRA="$BASE OA_STUB_EXISTING=observability/loki-s3 OA_LOKI_S3_ACCESS_KEY_ID=STUB-LOKI-AK OA_LOKI_S3_SECRET_ACCESS_KEY=STUB-LOKI-SK"
+OUT2="$(run)"
+grep -q "pair you set were not applied" <<<"$OUT2" && ok "a dedicated pair set against an existing entry is reported as NOT applied" || bad "$OUT2"
+ENV_EXTRA="$BASE"
+OUT="$(run)"
 
 echo "--- the promise: which path, never what; no root token; nothing on a command line ---"
 for v in STUB-PRIMARY-SK STUB-PRIMARY-AK jwt-STUB-SA-TOKEN; do

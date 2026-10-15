@@ -14,19 +14,33 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-10-15
+
+**The infra half of the pair with OpenAether-apps 0.2.0: Day-1 seeding without a root token, a bucket of its own for Loki, a language check shared with the apps, and the Day-1 documentation corrected. A patch: no new scope.** It pins apps `refs/tags/0.2.0`. Read the entries below with their rung: real cloud means once, by hand, on the clouds named; nothing is repeated or unattended, and `cluster-up` with `deploy_flux = true` still ends 201 until the Day-1 seeding has run.
+
+**Not fixed, and not observed:** the dedicated Loki key pair was never run on a cloud; infra #302 stays open for it. `task cluster-upgrade`'s pre-upgrade safeguards (#270) have never run on a cloud. Outscale ran the reduced apps profile only. An OVH worker can stay `ACTIVE` while dead (#49): it happened once and was hard-rebooted. No disaster-recovery restore, no rolling upgrade with Flux, no Proxmox hardware.
+
 ### Security
 
+- **Loki writes to a bucket of its own (#302).** `seed-openbao.sh` seeded `observability/loki-s3` with the backups bucket and the
+  backup keys, so a compromised Loki could erase the backups, against what the docs and the ExternalSecret said. It now seeds
+  `s3-<project>-<provider>-logs-<env>` (`oa_logs_bucket`, created by `ensure-buckets.sh` beside the artifacts bucket) and, when
+  `OA_LOKI_S3_ACCESS_KEY_ID` and `OA_LOKI_S3_SECRET_ACCESS_KEY` are both set, that pair (half a pair is refused before any write).
+  **Without them Loki still gets the primary's keys, which are account-wide on the providers, and the script says that the
+  separate bucket then protects against a mistake and not against a compromise.** Scoped keys are the operator's to create; this
+  repository does not create them. A cluster seeded earlier keeps its entry (create-only). Rung: mocked (seed and name tests), and real
+  cloud once by hand on Scaleway and OVH with the shared keys (Validated); the dedicated pair was never run on a cloud.
 - **Day-1 seeding without a root token (#296, #297).** `scripts/ops/seed-openbao.sh` read the root token from the Secret
-  `openbao-recovery` and passed it, with every value, on the `kubectl exec` command line. With OpenAether-apps 0.2.0 there is
+  `openbao-recovery` and passed it, with every value, on the `kubectl exec` command line. With OpenAether-apps 0.1.1 there is
   no such Secret (the bootstrap revokes the root token), and the script now uses the ServiceAccount `openbao-seeder`:
   Kubernetes issues a 10-minute token, OpenBao exchanges it inside the pod for a token whose policy `secret-seeder` can
   **create** five paths and read their metadata. The token and the documents travel on stdin, never on a command line; every
   secret is written with `cas=0`, so a re-run cannot overwrite one. The script no longer seeds `backup/restic`,
   `grafana/db`, `zitadel/db` or `longhorn/encryption`: `openbao-vault-bootstrap` generates them inside OpenBao, create-only,
-  and prints none, which removes the race of #297 (the script could win it and the escrow print was lost). **Needs apps 0.2.0:**
-  on a cluster still bootstrapped by apps 0.1.0 the script fails and says to use the 0.2.0 tag's script. Rung: mocked (a stub
+  and prints none, which removes the race of #297 (the script could win it and the escrow print was lost). **Needs apps 0.1.1:**
+  on a cluster still bootstrapped by apps 0.1.0 the script fails and says to use the infra 0.2.0 tag's script. Rung: mocked (a stub
   `kubectl`, 66 checks); the remote loop was run once against a real OpenBao 2.7.1 with the real policy (create, left alone,
-  refused). The Kubernetes-auth login is not exercised until a cluster runs apps 0.2.0.
+  refused). The Kubernetes-auth login was exercised on real clusters running apps 0.1.1 and later (Scaleway and OVH full, Outscale reduced profile: see Validated).
 - **`openbao_recovery_pgp_keys` / `openbao_recovery_threshold`: who holds the OpenBao recovery shares.** OpenBao unseals itself
   with a static key, so no human holds an unseal share; what operators hold are recovery shares, used only to generate a root
   token. Given at least three PGP public keys, the Flux bootstrap manifest also publishes the ConfigMap
@@ -41,8 +55,33 @@ in git. 0.1.0 is the first entry describing something proven.
 - `cluster-security-tests.sh` 4.5 now asserts that no Shamir-share or root-token Secret exists in `foundation-vault` (it asserted
   that an unsealer was running).
 
+### Changed
+
+- **The `git_ref` default and the twelve `envs/*.tfvars.example` pin OpenAether-apps `refs/tags/0.2.0`** (they pinned 0.1.0). The pair
+  is infra 0.2.1 with apps 0.2.0, validated end to end with the pins as shipped (see Validated). Infra 0.2.1 with apps 0.1.1 was **not run**
+  (the only validated 0.1.1 pair is an infra commit on main, `f127a26`); infra 0.2.0 stays on apps 0.1.0 and cannot move. apps 0.1.1 and 0.2.0
+  initialise OpenBao with a static seal: **a cluster built from infra 0.2.0 and apps 0.1.0 cannot be moved to this pair in place; build a
+  new cluster, on new buckets** (a rebuild on the old backup bucket meets the old WAL archive and CloudNativePG refuses to archive into it,
+  `OpenAether-apps/docs/traps.md`). A cluster on apps 0.1.1 moving to 0.2.0 must recreate its VictoriaMetrics volumes and loses their metric
+  history (apps CHANGELOG, Upgrade notes). Nothing here ran an upgrade.
+- **`scripts/dev/check-language.sh` is the OpenAether-apps copy again** (`check-skill-parity.sh` compares them byte for byte and
+  `task apps-validate` against the apps tag was red on it). It now reads inline comments, Python strings and accents, so it
+  found eight genuinely French lines here, now English: the Cilium parity message, two preflight messages, the Flux bootstrap
+  template header and the Proxmox VIP comments. Its own cases come with it (`test-check-language.sh`, wired into `test-scripts`).
+  The name of the dependency watcher, Cléa, is no longer read as French (taught in both repositories at once).
 ### Added
 
+- **The environment-data rules of `.gitleaks-envdata.toml` judge the token, not the line, and know more names.** An independent review of the
+  copy added to OpenAether-apps showed that one private range or one word like `shared` on a line excused a real address next to it, that
+  `outscale_account_id` and `OSC_ACCOUNT_ID` (prefixed names) were not matched, and that the logs and artifact buckets were not covered. The same
+  file is fixed here; the probe now holds 16 values it must catch and 13 it must leave alone. Known limit: a line carrying a version word is
+  excused whole. Rung: the probe, run before the scan in CI.
+
+- **`explain-failure.sh` points at the OVH router's SNAT port** when a run says `time is not in sync` and touched `module.ovh`.
+  Seen once on a real account: a router whose `network:router_centralized_snat` port stayed DOWN left every node without DNS or
+  NTP, and a fresh router of the same code was ACTIVE. The message gives the read-only command and says a bad router does not
+  recover (tear down and run `cluster-up` again). It is a hint on the transcript, not a guard: a guard that fails a healthy
+  apply on a transient DOWN has not been measured. Rung: mocked (three cases in `test-explain-failure.sh`).
 - **`task cluster-upgrade` secures the way back before it moves anything (#270).** An encrypted etcd snapshot
   (`backups/etcd/pre-upgrade-etcd-<timestamp>.snap.gpg`, both artifact buckets) and a labelled copy of the state
   (`<state key>.pre-upgrade.<timestamp>` in the replica) are written first, under names no retention removes, and the run
@@ -54,6 +93,15 @@ in git. 0.1.0 is the first entry describing something proven.
   rule) stay open.
 
 ### Fixed
+
+- **`ensure-buckets.sh` refused a deploy over a bucket it had itself created.** On a real OVH run with the replica on Scaleway, the
+  AWS CLI retried a create whose answer was lost, and the retry was told `BucketAlreadyOwnedByYou`; the script counted that as a
+  failure of the replica store and stopped `cluster-up` before anything billed. That answer now counts as the bucket existing; any
+  other refusal still stops it and is printed. Rung: mocked (two cases in `test-backup-creds.sh`); the defect was seen once, on a real cloud.
+
+- `docs/admin-access.md` (and its French twin) read the PKI CSR from KV (`bao_admin kv get -field=csr secret/pki/intermediate-csr`),
+  not from the bootstrap Job's log, which is removed an hour after the Job ends; the page and the seed script say apps 0.1.1,
+  not 0.2.0, and tell a 0.1.0 cluster to be rebuilt.
 
 - **`seed-openbao.sh` seeded the replica store with the primary provider's S3 keys (#296).** The replica's pair is now asked
   for with its own endpoint (`resolve-s3-cred.sh <provider> ak|sk backup <replica endpoint>`), as every other replica
@@ -68,6 +116,30 @@ in git. 0.1.0 is the first entry describing something proven.
   them stays an open decision on #299).
 
 ### Validated
+
+- **The pair as shipped, 2026-10-15 (infra `dcd1ace`, no `git_ref` in the tfvars so the default `refs/tags/0.2.0` applied; apps tag 0.2.0 at
+  `22b00cc`).** Rung: real cloud, **once per cloud**, by hand. **Scaleway and OVH**, management role, 3 control planes + 2 workers,
+  `deploy_flux = true`, three throwaway PGP recovery keys: Flux followed `refs/tags/0.2.0` at `22b00cc`; `cluster-up` ended 201 on
+  `flux-system exists` only (13 passed, 1 failed); the seeding printed the shared-keys warning from OpenBao's answers; 35 of 35
+  Kustomizations, every pod Running; the Kyverno report held 2 results (the Istio-generated proxies, apps #70); `grafana-db` and
+  `zitadel-db` Ready with archiving True; Longhorn BackupTarget available; Loki's first objects in its own logs bucket after its 30-minute
+  idle flush, the backups bucket holding only `cnpg/`; `cluster-security` 30 of 31; strict plan "No changes". `task apps-validate` is green
+  against the tag. **Not run on the shipped pins:** Outscale (its quota only holds the reduced apps profile, which needs a branch, so the
+  Outscale run below is with a branch), an upgrade, the dedicated Loki key pair, Proxmox. Both clusters torn down, `purge-orphans` and
+  `verify-provider-clean` clean, lab buckets and images deleted.
+- **The 0.2.1 candidate with the apps 0.2.0 candidate on three clouds, 2026-10-15** (the apps branches are not tags; see that repository's
+  CHANGELOG for what ran inside). Rung: real cloud, **once per cloud**, by hand; `cluster-up` ended 201 on `flux-system exists` only
+  (13 passed, 1 failed), as documented until the Day-1 seeding. **Scaleway** (infra `4ae2357`): `seed-openbao.sh` printed the shared-keys
+  warning, wrote five paths; Loki wrote to the new `…-logs-<env>` bucket created by `ensure-buckets.sh` and nothing of Loki's reached the
+  backups bucket; 35 of 35 Kustomizations; `cluster-security` 30 of 31; strict plan "No changes". **OVH** (infra `39df1b8`): same, and the
+  run that exposed the `BucketAlreadyOwnedByYou` defect (Fixed above) first; one worker was dead after boot (issue #49), hard-rebooted and
+  `up` re-run. **Outscale, reduced apps profile only** (infra `39df1b8`): up in 1020 s (13 passed, 1 failed: the same line), seeding and the OpenBao snapshot job fine; `cluster-security` 25 of 31, the four failures being the mesh checks (that profile has no Istio).
+  **Changed after the last lab run (mocked only):** the seed script's closing message (now built from OpenBao's answers), the wording of
+  the `ensure-buckets` retried-create message, the logs bucket in the teardown list and docs, the gitleaks rules, the release checklist and
+  status text. **Not run:** the dedicated Loki key pair (the lab used the shared keys), `task cluster-upgrade` with the new safeguards, a second
+  `cluster-up`, the OVH SNAT hint (its failure did not recur), Proxmox. All three labs torn down; `purge-orphans` clean on Scaleway and OVH, and on
+  Outscale it lists only the standing OMI, kept on purpose (deleting it is the owner's call); lab buckets and images deleted by hand (Outscale's
+  image-lane buckets kept: state of that OMI).
 
 - **The Day-1 path of the OpenBao redesign, `deploy_flux = true`, Scaleway, 2026-10-13, on this branch (8d4a036 for the apply and the
   seeding; later commits touched the upgrade path and documentation only), with OpenAether-apps `claude/security-bootstrap`.**

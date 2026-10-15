@@ -76,7 +76,7 @@ bastion_ssh_keys = {
 git_repo_url     = "https://github.com/dis-bzh/OpenAether-apps.git"
 # Pin the platform: a commit on a branch would otherwise reach a running
 # cluster within the reconcile interval. refs/heads/<branch> to test.
-git_ref          = "refs/tags/0.1.0"
+git_ref          = "refs/tags/0.2.0"
 
 # --- Backup / DR object stores ------------------------------------------------
 # This failover cluster runs when your primary provider is DOWN, so its PRIMARY
@@ -86,6 +86,7 @@ git_ref          = "refs/tags/0.1.0"
 # twin):
 #   state            -> s3-<cluster_name>-ovh-tfstate-<environment>
 #   kube/talosconfig -> s3-<cluster_name>-ovh-management-<environment>
+#   Loki logs        -> s3-<cluster_name>-ovh-logs-<environment>   (no replica twin)
 s3_primary_endpoint = "https://s3.gra.io.cloud.ovh.net" # failover state on OVH (your primary is down)
 s3_primary_region   = "gra"
 s3_replica_endpoint = "https://s3.fr-par.scw.cloud"     # replicate back to Scaleway on recovery

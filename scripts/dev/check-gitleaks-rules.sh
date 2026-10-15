@@ -31,6 +31,16 @@ CATCH=(
   'organization_id = "7f3a91c2-4d5e-4b8a-9c1d-2e6f8a0b3c5d"'
   "token           = \"${FAKE_PAT}\""
   's3_bucket       = "s3-acme-scaleway-tfstate-prod"'
+  'allowed_cidr    = "51.158.3.7/32"'
+  'admin_cidrs     = ["10.0.0.0/8", "51.158.3.7/32"]'
+  'dns             = ["1.1.1.1", "51.158.3.7"]'
+  'ip              = "51.158.3.7" # shared'
+  'outscale_account_id = "123456789012"'
+  'OSC_ACCOUNT_ID=123456789012'
+  'scaleway_project_id = "7f3a91c2-4d5e-4b8a-9c1d-2e6f8a0b3c5d"'
+  's3_logs         = "s3-acme-scaleway-logs-prod"'
+  's3_art          = "s3-acme-scaleway-management-prod"'
+  's3_bucket       = "s3-dummy-scaleway-backups-dev"'
 )
 PASS=(
   'dns_nameservers = ["1.1.1.1", "8.8.8.8"]'
@@ -41,6 +51,11 @@ PASS=(
   'talosVersion    = "1.13.7.0"'
   'emulated_proj   = "11111111-1111-1111-1111-111111111111"'
   's3_bucket       = "s3-YOUR-PROJECT-scaleway-tfstate-prod"'
+  'provider_range  = "51.158.0.0/16"'
+  'private_list    = ["10.0.0.0/8", "192.168.1.1"]'
+  's3_bucket       = "s3-my-project-scaleway-backups-dev"'
+  'chart_version   = "1.13.7.0" # the chart'
+  'sha256          = "1.2.3.4"'
 )
 
 tmp=$(mktemp -d)

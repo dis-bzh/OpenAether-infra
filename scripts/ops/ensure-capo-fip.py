@@ -104,7 +104,7 @@ def main() -> int:
 
     if len(existing) > args.count:
         print(
-            f"  ⚠ {len(existing)} FIP portent la description '{description}' pour "
+            f"  ⚠ {len(existing)} FIPs carry the description '{description}' for "
             f"--count {args.count} — the extras are billed, purge them.",
             file=sys.stderr,
         )

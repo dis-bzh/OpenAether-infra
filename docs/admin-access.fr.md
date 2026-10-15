@@ -16,7 +16,7 @@ lisible** : il se descelle seul avec une clé statique, et ce que détiennent le
 opérateurs, ce sont des parts de *recovery* (en production : chiffrées à leurs clés
 PGP, via `openbao_recovery_pgp_keys`). Conception et runbooks :
 `OpenAether-apps/apps/base/foundation/vault/README.md`. Cette page demande apps
-0.2.0 ou plus ; un cluster encore sur apps 0.1.0 garde l'ancien bootstrap et les
+0.1.1 ou plus ; un cluster encore sur apps 0.1.0 garde l'ancien bootstrap et les
 anciennes instructions de l'infra 0.2.0.
 
 Pour les commandes ci-dessous, le helper qui échange un token de ServiceAccount
@@ -50,8 +50,9 @@ son empreinte : compare-la à la tienne (`scripts/internal/check-openbao-keys.sh
 
 ## 2. Signer l'intermediate PKI (débloque le HTTPS)
 
-Le premier passage d'`openbao-vault-bootstrap` affiche le CSR (donnée publique) :
-`kubectl --kubeconfig $KC -n foundation-vault logs job/openbao-vault-bootstrap | sed -n '/BEGIN CERTIFICATE REQUEST/,/END CERTIFICATE REQUEST/p'`.
+Le premier passage d'`openbao-vault-bootstrap` range le CSR (donnée publique) dans KV, car le Job et son log sont supprimés
+une heure après sa fin et la signature hors ligne prend plus longtemps. Le lire avec l'assistant admin ci-dessus :
+`bao_admin kv get -field=csr secret/pki/intermediate-csr > intermediate.csr`.
 Le signer **hors ligne** avec la root CA, puis :
 
 ```bash
@@ -89,10 +90,17 @@ ceci n'a pas tourné.
 ```text
 secret/backup/s3-primary                      endpoint bucket access_key secret_key
 secret/backup/s3-replica                      endpoint bucket access_key secret_key   (les clés du cloud du réplica)
-secret/observability/loki-s3                  endpoint bucket accessKey secretKey     (sa propre entrée, pour pouvoir le pointer ailleurs ; le seed lui donne aujourd'hui le bucket et les clés des sauvegardes : #302)
+secret/observability/loki-s3                  endpoint bucket accessKey secretKey     (son propre bucket, `s3-<projet>-<fournisseur>-logs-<env>`, créé par `ensure-buckets.sh` ; ses propres clés si tu les donnes, voir ci-dessous)
 secret/observability/alertmanager-slack       webhook-url   (sans lui Alertmanager ne démarre pas ; sur un cluster jetable, n'importe quelle valeur convient)
 secret/observability/alertmanager-deadmansswitch   url      (le seul signal qui survit à la mort du cluster ; Slack seul ? retirer la route Watchdog de vm-customresources/vmalert.yaml, délibérément)
 ```
+
+**Loki a son propre bucket (#302).** Le seed pointe `observability/loki-s3` sur `s3-<projet>-<fournisseur>-logs-<env>`, que
+`ensure-buckets.sh` crée à côté du bucket des artefacts (un cluster existant le crée à la main). Loki reçoit les clés du store
+primaire, sauf si tu exportes **les deux** `OA_LOKI_S3_ACCESS_KEY_ID` et `OA_LOKI_S3_SECRET_ACCESS_KEY` : une paire qui atteint ce
+bucket et rien d'autre, créée avec les outils de ton fournisseur (ses clés S3 sont par défaut valables pour tout le compte). Avec les
+clés partagées, le bucket séparé protège les sauvegardes d'une erreur de Loki, **pas** d'un Loki compromis, et le script le dit.
+Un cluster semé avant ce changement garde une entrée Loki qui pointe sur le bucket des sauvegardes (create-only).
 
 Les clusters semés avant ce changement gardent ce qu'ils ont (create-only) : si
 `backup/s3-replica` porte les clés du primaire pour un réplica chez un autre cloud (#296),

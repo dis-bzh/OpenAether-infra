@@ -439,14 +439,14 @@ else
   fail "4.4 OpenBao HA" "No openbao pod Running in foundation-vault"
 fi
 
-# 4.5 No unseal quorum and no root token kept in the cluster (apps >= 0.2.0: static seal, root token revoked).
+# 4.5 No unseal quorum and no root token kept in the cluster (apps >= 0.1.1: static seal, root token revoked).
 # A cluster still on apps 0.1.0 fails this on purpose: those two Secrets are the defect.
 LEFTOVER=$(kubectl get secret -n foundation-vault openbao-unseal-keys openbao-recovery --ignore-not-found -o name 2>/dev/null | grep -c . || true)
 LEFTOVER=${LEFTOVER:-0}
 if [ "$LEFTOVER" -eq 0 ]; then
   pass "4.5 No Shamir shares or root token in a Secret of foundation-vault"
 else
-  fail "4.5 Unseal shares / root token at rest" "$LEFTOVER of openbao-unseal-keys, openbao-recovery still exist (apps 0.1.0 bootstrap: move to apps >= 0.2.0)"
+  fail "4.5 Unseal shares / root token at rest" "$LEFTOVER of openbao-unseal-keys, openbao-recovery still exist (apps 0.1.0 bootstrap: build a new cluster on apps >= 0.1.1)"
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════

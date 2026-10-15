@@ -19,7 +19,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source=../lib/common.sh
 source "$ROOT/scripts/lib/common.sh"
-oa_require_fn oa_state_bucket oa_artifact_bucket oa_backup_bucket oa_project || exit 1
+oa_require_fn oa_state_bucket oa_artifact_bucket oa_backup_bucket oa_logs_bucket oa_project || exit 1
 
 PASS=0
 FAIL=0
@@ -42,6 +42,7 @@ eq "state, no suffix"    "$(oa_state_bucket "$(oa_project example)" scaleway dev
 eq "state, suffix"       "$(oa_state_bucket "$(oa_project example a1b2c3)" scaleway dev)" "s3-example-a1b2c3-scaleway-tfstate-dev"
 eq "artifact, suffix"    "$(oa_artifact_bucket "$(oa_project example a1b2c3)" ovh management prod)" "s3-example-a1b2c3-ovh-management-prod"
 eq "backups, suffix"     "$(oa_backup_bucket "$(oa_project example a1b2c3)" outscale prod)" "s3-example-a1b2c3-outscale-backups-prod"
+eq "logs, suffix"        "$(oa_logs_bucket "$(oa_project example a1b2c3)" outscale prod)" "s3-example-a1b2c3-outscale-logs-prod"
 
 echo "=== HCL and shell derive the SAME namespace ==="
 # `join("-", compact([...]))` in backup.tf against oa_project here. Reproduced
@@ -138,9 +139,13 @@ exit 0
 STUB
 chmod +x "$SB/kubectl"; printf 'apiVersion: v1\n' >"$SB/kubeconfig"
 WANT_SEED="$(oa_backup_bucket "$(oa_project "$CNAME" "$SUF")" scaleway "$ENVV")"
-got="$(PATH="$SB:$PATH" KUBECONFIG="$SB/kubeconfig" OPENBAO_WAIT=0 SCW_AWS_ACCESS_KEY_ID=k SCW_AWS_SECRET_ACCESS_KEY=k \
-       ./scripts/ops/seed-openbao.sh scaleway oatest 2>&1 | sed -nE 's/.*bucket ([a-z0-9-]+)\).*/\1/p' | head -1)"
+ANNOUNCED="$(PATH="$SB:$PATH" KUBECONFIG="$SB/kubeconfig" OPENBAO_WAIT=0 SCW_AWS_ACCESS_KEY_ID=k SCW_AWS_SECRET_ACCESS_KEY=k \
+       ./scripts/ops/seed-openbao.sh scaleway oatest 2>&1)"
+got="$(sed -nE 's/.*, bucket ([a-z0-9-]+), Loki bucket.*/\1/p' <<<"$ANNOUNCED" | head -1)"
 eq "seed-openbao announces the suffixed backups bucket" "$got" "$WANT_SEED"
+WANT_LOGS="$(oa_logs_bucket "$(oa_project "$CNAME" "$SUF")" scaleway "$ENVV")"
+got="$(sed -nE 's/.*Loki bucket ([a-z0-9-]+)\).*/\1/p' <<<"$ANNOUNCED" | head -1)"
+eq "…and Loki's own bucket, which ensure-buckets.sh creates under the same name" "$got" "$WANT_LOGS"
 
 
 echo "--- the state lock is claimed only where the store honours it ---"

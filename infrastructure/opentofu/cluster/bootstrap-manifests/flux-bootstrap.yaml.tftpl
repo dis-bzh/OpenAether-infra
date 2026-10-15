@@ -1,15 +1,15 @@
 # OpenAether — Flux bootstrap manifest (template)
 # Injected as a Talos inline_manifest during the initial bootstrap.
-# Remplace flux-root-app.yaml.tftpl.
+# Replaces flux-root-app.yaml.tftpl.
 #
-# Variables OpenTofu :
-#   ${git_repo_url}   — ex: https://github.com/dis-bzh/OpenAether.git
-#   ${git_ref}        — ex: refs/tags/0.1.0, or refs/heads/main
-#   ${cluster_role}   — ex: management (→ apps/flux/management)
+# OpenTofu variables:
+#   ${git_repo_url}   — e.g. https://github.com/dis-bzh/OpenAether.git
+#   ${git_ref}        — e.g. refs/tags/0.2.0, or refs/heads/main
+#   ${cluster_role}   — e.g. management (→ apps/flux/management)
 #   ${cluster_id}     — e.g. openaether-dev-ovh (the cluster's UNIQUE identity)
-#   ${backup_target_url} — ex: s3://s3-openaether-ovh-backups-dev@eu-west-par/
+#   ${backup_target_url} — e.g. s3://s3-openaether-ovh-backups-dev@eu-west-par/
 #   ${backup_s3_bucket} ${backup_s3_endpoint} — same destination, CNPG format
-#   ${namespace}      — ex: flux-system
+#   ${namespace}      — e.g. flux-system
 #   openbao_pgp_keys, openbao_threshold — recovery-share holders (list of base64 PGP public keys; quorum). Not interpolated: a list.
 ---
 # Cluster identity, consumed through `postBuild.substituteFrom` by the bricks

@@ -1,8 +1,8 @@
-# Release checklist — 0.2.0
+# Release checklist — 0.2.1
 
 English only: rewritten each release, and two copies would drift.
 
-What to run before tagging 0.2.0 and telling anyone about it. Ordered by what
+What to run before tagging 0.2.1 and telling anyone about it. Ordered by what
 fails cheapest. **Stop at the first red** — every later step assumes the earlier
 ones held.
 
@@ -15,11 +15,18 @@ commit, it moves. Name the rung every claim reached: mocked, emulated, local
 Docker, or real cloud — once by hand, or repeated. Nothing has run unattended to
 completion.
 
-0.2.0 keeps the 0.1.0 scope: one Talos cluster, Cilium as the whole platform, Flux
-off (`deploy_flux` defaults to false, and `cluster-verify` fails on a
-`flux-system` namespace), no applications, no CAPI. None of that is a gate here
-and the notes must not claim it. What 0.2.0 adds is §7. Three clouds have
-real-cloud rows and no bare metal does — say on what.
+**0.2.1 is a patch, and the sections below were written for 0.2.0.** It adds no scope: the Day-1 seeding without a root token, a
+bucket of its own for Loki, `ensure-buckets` accepting a retried create, the shared language check, the Day-1 documentation, and
+the pin of OpenAether-apps 0.2.0. What was run for it, and what was not:
+
+| Section | 0.2.1 |
+|---|---|
+| §1 clean machine | Run at the release commit (the stranger clone of §9). |
+| §2 local Docker | **Not run**: the kernel of the maintainer's host is older than 6.15 (`check-host-overlay-fd.sh`). |
+| §3 emulated cloud | **Not run** for 0.2.1: nothing in it changes the emulated lane. |
+| §4–§6 clouds | Run once by hand on Scaleway and OVH (full apps DAG) and Outscale (reduced apps profile) with the apps 0.2.0 candidate branches (CHANGELOG, Validated); run again with the **tag** pin before tagging. |
+| §7 upgrade, growth, removal | **Not run**: 0.2.1 does not change the upgrade path, except `cluster-upgrade`'s pre-upgrade snapshot (#270), which has never run on a cloud. |
+| §8 mechanics, §9 stranger | Run at the cut. |
 
 ---
 
@@ -406,7 +413,7 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       out, including what you chose not to fix (`CLAUDE.md`: an audit is not a
       PR). Never write a closing keyword before an issue number in a commit, PR
       or the notes: GitHub reads prose, and an open issue was closed that way.
-- [ ] `CHANGELOG.md`: `[0.2.0]` carries its date (2026-10-12) and anything merged since
+- [ ] `CHANGELOG.md`: `[0.2.1]` carries its date and anything merged since
       the text was written is folded into it (`[Unreleased]` stays empty), in the
       voice of 0.1.0: what it claims **and** what it does not, each with its rung,
       no hand-typed counts. Upgrade notes: unset pins inherit the new default and
@@ -453,7 +460,7 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       issues, not a backlog file. Not a pre-release (the owner's decision, 2026-10-12).
 - [ ] the examples and the default pin the apps tag, and it exists. OpenAether-apps
       is tagged and released first (`git ls-remote --tags
-      https://github.com/dis-bzh/OpenAether-apps refs/tags/0.1.0` prints it).
+      https://github.com/dis-bzh/OpenAether-apps refs/tags/0.2.0` prints it).
       The check is written down twice, because a tag is a snapshot and the skills
       are shared byte for byte. Against a checkout of **that tag** (what infra
       pins): `python3 scripts/ops/check-cilium-parity.py` here, `pick.py --validate`
@@ -461,7 +468,7 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       of `task apps-validate`, skill parity included; run on the tag it is red on
       the skills whenever they changed after the tag, by design. Then
       `grep -h git_ref infrastructure/opentofu/cluster/envs/*.example | sort -u`
-      prints one line, `refs/tags/0.1.0`, and so does the `default` of `git_ref` in
+      prints one line, `refs/tags/0.2.0`, and so does the `default` of `git_ref` in
       `variables.tf`. The two `feint-*` examples carry none.
 
 ## 9. Before communicating
