@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # cluster-security-tests.sh's checks on Cilium WireGuard (1.8) and the OpenBao bootstrap (4.6 development
-# share, 4.7 seal-key escrow record), run against a stub kubectl: the verdict of each line, failure cases
+# share, 4.7 seal-key escrow record and its proof), run against a stub kubectl: the verdict of each line, failure cases
 # included. SUT overrides the script under test (how the mutants run).
 set -uo pipefail
 
@@ -26,7 +26,11 @@ case "$*" in
   *"secret backup-restic-env"*"{.data.PRIMARY_ACCESS_KEY}"*) printf '%s' "${STUB_BKP_KEY:-}"; exit 0 ;;
   *"secret openbao-recovery-dev"*) [ "${STUB_DEV:-}" = 1 ] && exit 0; exit 1 ;;
   *"secret openbao-recovery-shares"*) [ "${STUB_SHARES:-}" = 1 ] && exit 0; exit 1 ;;
+  *"secret openbao-seal-key -o jsonpath={.data.key}"*) printf '%s' "${STUB_SEAL_B64:-}"; exit 0 ;;
   *"secret openbao-seal-key -o jsonpath"*) printf '%s' "${STUB_ESCROWED:-}"; exit 0 ;;
+  *"configmap openbao-escrow-ack"*"{.data.escrowed-at}"*) printf '%s' "${STUB_ACK_AT:-}"; exit 0 ;;
+  *"configmap openbao-escrow-ack"*"{.data.seal-key-sha256}"*) printf '%s' "${STUB_ACK_SHA:-}"; exit 0 ;;
+  *"configmap openbao-escrow-ack"*"{.data.holders}"*) printf '%s' "${STUB_ACK_N:-}"; exit 0 ;;
   *"secret openbao-seal-key"*) [ "${STUB_SEAL:-}" = 1 ] && exit 0; exit 1 ;;
   *"get secret"*) exit 1 ;;
 esac
@@ -64,12 +68,32 @@ OA_ENVIRONMENT=prod run
 verdict "4.6" "⏭" && ok "neither Secret is a skip, not a pass" || bad "none: $(line 4.6)"
 
 echo "=== 4.7 seal-key escrow record ==="
+# The live key is 32 raw bytes in the Secret (base64 in the API); the attestation holds the sha256 of those bytes.
+SEAL_B64="$(printf 'a-32-byte-seal-key-fixture-00000' | base64 -w0)"
+SEAL_SHA="$(printf 'a-32-byte-seal-key-fixture-00000' | sha256sum | cut -d' ' -f1)"
+TODAY="$(date +%F)"; OLD_DAY="$(python3 -c 'import datetime;print(datetime.date.today()-datetime.timedelta(days=401))')"
+esc() { STUB_SEAL=1 OA_ENVIRONMENT=prod OA_ESCROW_ANNOTATION_CHECK=1 STUB_SEAL_B64="$SEAL_B64" "$@"; }
 STUB_SEAL=1 OA_ENVIRONMENT=prod run
 verdict "4.7" "⏭" && ok "off by default, even on prod, until the escrow step exists" || bad "default: $(line 4.7)"
-STUB_SEAL=1 OA_ENVIRONMENT=prod OA_ESCROW_ANNOTATION_CHECK=1 run
+esc run
 verdict "4.7" "❌" && ok "opted in, prod, no annotation FAILS" || bad "missing annotation: $(line 4.7)"
-STUB_SEAL=1 STUB_ESCROWED=2026-10-01T00:00:00Z OA_ENVIRONMENT=prod OA_ESCROW_ANNOTATION_CHECK=1 run
-verdict "4.7" "✅" && ok "opted in, prod, annotation present passes" || bad "annotation present: $(line 4.7)"
+STUB_ESCROWED=2026-10-01T00:00:00Z esc run
+verdict "4.7" "❌" && grep -q 'no ConfigMap openbao-escrow-ack' <<<"$OUT" && ok "the annotation alone FAILS: the hash and the custodians are not recorded" || bad "annotation only: $(line 4.7)"
+STUB_ESCROWED=2026-10-01T00:00:00Z STUB_ACK_AT=$TODAY STUB_ACK_SHA=$SEAL_SHA STUB_ACK_N=2 esc run
+verdict "4.7" "✅" && ok "annotation + attestation of the live key, 2 holders, today: passes" || bad "complete record: $(line 4.7)"
+grep -qF "$SEAL_SHA$SEAL_B64" <<<"$OUT" && bad "the key or its encoding was printed" || ok "…and neither the key nor its encoding is printed"
+STUB_ESCROWED=x STUB_ACK_AT=$TODAY STUB_ACK_SHA=$(printf 'another key' | sha256sum | cut -d' ' -f1) STUB_ACK_N=2 esc run
+verdict "4.7" "❌" && grep -q 'another key than the live one' <<<"$OUT" && ok "an attestation of ANOTHER key (a rotation since) FAILS" || bad "old key: $(line 4.7)"
+STUB_ESCROWED=x STUB_ACK_AT=$TODAY STUB_ACK_SHA=$SEAL_SHA STUB_ACK_N=1 esc run
+verdict "4.7" "❌" && grep -q 'at least two' <<<"$OUT" && ok "one holder FAILS" || bad "one holder: $(line 4.7)"
+STUB_ESCROWED=x STUB_ACK_AT=$TODAY STUB_ACK_SHA=$SEAL_SHA STUB_ACK_N=two esc run
+verdict "4.7" "❌" && ok "a holders value that is not a number FAILS" || bad "holders text: $(line 4.7)"
+STUB_ESCROWED=x STUB_ACK_AT=$OLD_DAY STUB_ACK_SHA=$SEAL_SHA STUB_ACK_N=2 esc run
+verdict "4.7" "❌" && grep -q 'limit 400' <<<"$OUT" && ok "an attestation older than 400 days FAILS" || bad "stale: $(line 4.7)"
+STUB_ESCROWED=x STUB_ACK_AT=not-a-date STUB_ACK_SHA=$SEAL_SHA STUB_ACK_N=2 esc run
+verdict "4.7" "❌" && ok "an undated attestation FAILS" || bad "undated: $(line 4.7)"
+STUB_ESCROWED=x STUB_ACK_AT=$TODAY STUB_ACK_SHA=$SEAL_SHA STUB_ACK_N=2 STUB_SEAL=1 OA_ENVIRONMENT=prod OA_ESCROW_ANNOTATION_CHECK=1 run
+verdict "4.7" "❌" && grep -q 'cannot read the live seal key' <<<"$OUT" && ok "a live key that cannot be read is a FAIL, not a pass" || bad "unreadable key: $(line 4.7)"
 STUB_SEAL=1 OA_ENVIRONMENT=dev OA_ESCROW_ANNOTATION_CHECK=1 run
 verdict "4.7" "⏭" && ok "a dev cluster is skipped" || bad "dev: $(line 4.7)"
 OA_ENVIRONMENT=prod OA_ESCROW_ANNOTATION_CHECK=1 run

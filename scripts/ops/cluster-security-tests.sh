@@ -9,7 +9,7 @@
 #   ./cluster-security-tests.sh
 #   KUBECONFIG=/path/to/kubeconfig ./cluster-security-tests.sh
 #   OA_ENVIRONMENT=prod ./cluster-security-tests.sh      # the OpenBao bootstrap checks (4.6, 4.7) are strict on prod
-#   OA_ESCROW_ANNOTATION_CHECK=1 ./cluster-security-tests.sh   # also require the seal-key escrow record (4.7)
+#   OA_ESCROW_ANNOTATION_CHECK=1 ./cluster-security-tests.sh   # also require the seal-key escrow record (4.7: annotation, hash of the live key, two holders)
 # ══════════════════════════════════════════════════════════════════════════════
 
 set -euo pipefail
@@ -484,9 +484,11 @@ else
   skip "4.6 No development OpenBao bootstrap on prod" "no OpenBao recovery Secret found (not bootstrapped, or apps < 0.2.0)"
 fi
 
-# 4.7 The seal key leaves a record that it was escrowed. Losing it loses every OpenBao secret and nothing
-# else can tell whether the operator did the Day-0 step. The annotation is set by that step (apps DP-02);
-# until it exists in your apps ref the check is opt-in, and it never applies to a dev bootstrap.
+# 4.7 The seal key leaves a record that it was escrowed, and the record is of THIS key. Losing it loses every OpenBao
+# secret and nothing else can tell whether the operator did the Day-0 step. The annotation and the ConfigMap
+# openbao-escrow-ack are written by that step (`task escrow`, or the apps README Day 0, step 5); until it exists in your apps
+# ref the check is opt-in, and it never applies to a dev bootstrap. The apps CronJob cannot compare the hash (it never
+# reads the key); this check can, and so catches an escrow of a key that was rotated since. The key is hashed in a pipe, never printed.
 if [ "${OA_ESCROW_ANNOTATION_CHECK:-}" != "1" ]; then
   skip "4.7 Seal-key escrow recorded" "opt-in (OA_ESCROW_ANNOTATION_CHECK=1) until the escrow step that sets openaether.io/escrowed-at is in your apps ref"
 elif [ "$OA_ENV" != "prod" ]; then
@@ -495,10 +497,28 @@ elif ! kubectl -n foundation-vault get secret openbao-seal-key &>/dev/null; then
   skip "4.7 Seal-key escrow recorded" "no openbao-seal-key Secret (static seal not in use)"
 else
   ESCROWED=$(kubectl -n foundation-vault get secret openbao-seal-key -o jsonpath='{.metadata.annotations.openaether\.io/escrowed-at}' 2>/dev/null || echo "")
-  if [ -n "$ESCROWED" ]; then
-    pass "4.7 Seal-key escrow recorded ($ESCROWED)"
+  ACK_AT=$(kubectl -n foundation-vault get configmap openbao-escrow-ack -o jsonpath='{.data.escrowed-at}' 2>/dev/null || echo "")
+  ACK_SHA=$(kubectl -n foundation-vault get configmap openbao-escrow-ack -o jsonpath='{.data.seal-key-sha256}' 2>/dev/null || echo "")
+  ACK_N=$(kubectl -n foundation-vault get configmap openbao-escrow-ack -o jsonpath='{.data.holders}' 2>/dev/null || echo "")
+  SEAL_B64=$(kubectl -n foundation-vault get secret openbao-seal-key -o jsonpath='{.data.key}' 2>/dev/null || echo "")
+  LIVE_SHA=""; [ -z "$SEAL_B64" ] || LIVE_SHA=$(printf '%s' "$SEAL_B64" | base64 -d 2>/dev/null | sha256sum | cut -d' ' -f1)
+  ACK_AGE=$(python3 -c 'import datetime,sys
+try: print((datetime.date.today() - datetime.date.fromisoformat(sys.argv[1])).days)
+except Exception: print("x")' "$ACK_AT" 2>/dev/null || echo x)
+  if [ -z "$ESCROWED" ]; then
+    fail "4.7 Seal-key escrow recorded" "openbao-seal-key has no openaether.io/escrowed-at annotation: escrow it (task escrow, docs/admin-access.md section 1) and attest it"
+  elif [ -z "$ACK_AT" ]; then
+    fail "4.7 Seal-key escrow recorded" "annotated, but there is no ConfigMap openbao-escrow-ack: the hash and the custodians are not recorded (task escrow -- attest)"
+  elif [ -z "$LIVE_SHA" ]; then
+    fail "4.7 Seal-key escrow recorded" "cannot read the live seal key to compare it with the attestation (RBAC on Secrets?)"
+  elif [ "$ACK_SHA" != "$LIVE_SHA" ]; then
+    fail "4.7 Seal-key escrow recorded" "the attestation names another key than the live one (seal key rotated since?): escrow the new key and attest it again (task escrow)"
+  elif ! [[ "$ACK_N" =~ ^[0-9]+$ ]] || [ "$ACK_N" -lt 2 ]; then
+    fail "4.7 Seal-key escrow recorded" "the attestation names '$ACK_N' holder(s): an escrow needs at least two custodians"
+  elif ! [[ "$ACK_AGE" =~ ^[0-9]+$ ]] || [ "$ACK_AGE" -gt 400 ]; then
+    fail "4.7 Seal-key escrow recorded" "the attestation is $ACK_AGE days old or undated (limit 400): redo the escrow and its proof"
   else
-    fail "4.7 Seal-key escrow recorded" "openbao-seal-key has no openaether.io/escrowed-at annotation: escrow it (docs/admin-access.md section 1) and record it"
+    pass "4.7 Seal-key escrow recorded and proven for the live key ($ESCROWED, $ACK_N holders)"
   fi
 fi
 

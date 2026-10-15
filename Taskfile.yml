@@ -508,6 +508,10 @@ tasks:
       # scripts that died silently on an absent optional key.
       - ./scripts/dev/test-state-backups.sh
       - ./scripts/dev/test-seed-openbao.sh
+      # The escrow of the seal key, recovery shares and restic password (real gpg keys, stub cluster), and the one
+      # replace path for operator-supplied secrets (create-only seeding has none).
+      - ./scripts/dev/test-escrow-openbao.sh
+      - ./scripts/dev/test-rotate-secret.sh
       # The recovery-share keys, checked for an encryption subkey before anything bills (sys/init commits, then fails).
       - ./scripts/dev/test-check-openbao-keys.sh
       # The language check (inline comments, Python strings, accents): its own cases.
@@ -664,7 +668,8 @@ tasks:
   cluster-security:
     desc: >-
       Run runtime security validation tests on the cluster. ENVIRONMENT=prod makes the OpenBao bootstrap
-      checks strict (no openbao-recovery-dev); OA_ESCROW_ANNOTATION_CHECK=1 adds the seal-key escrow record.
+      checks strict (no openbao-recovery-dev); OA_ESCROW_ANNOTATION_CHECK=1 adds the seal-key escrow
+      record (annotation, hash of the live key, two holders).
     env:
       OA_ENVIRONMENT: '{{.ENVIRONMENT | default ""}}'
     cmds:
@@ -1963,6 +1968,26 @@ tasks:
       - task: kubeconfig
         vars: {ROLE: '{{.ROLE}}', PROVIDER: '{{.PROVIDER}}'}
       - ../../../scripts/ops/cluster-netcheck.sh {{if .CILIUM}}--cilium{{end}}
+
+  escrow:
+    desc: >-
+      Escrow the OpenBao seal key, recovery shares and restic password off the cluster, to at least TWO
+      custodians, prove the escrow opens to the LIVE key, then attest it (the record `cluster-security` 4.7 and
+      the apps CronJob read). Usage: task escrow -- export --out DIR -r KEYID -r KEYID
+      | verify --from DIR [--key-file F] | attest --from DIR (KUBECONFIG set, tunnels up;
+      docs/admin-access.md section 1). Writes secrets to DIR: keep it outside any repository.
+    cmds:
+      - ./scripts/ops/escrow-openbao.sh {{.CLI_ARGS}}
+
+  rotate-secret:
+    desc: >-
+      Replace one operator-supplied OpenBao secret with a new version (S3 key pairs, alert URLs, the Grafana
+      OIDC secret) and nudge the ExternalSecrets; paths that would break their consumers are refused with the
+      reason. Dry run unless --apply. Values come from OA_ROTATE_* in the environment. Usage: task rotate-secret
+      -- backup/s3-primary [--apply] [--restart ns/statefulset/name]. Create the new key at the provider
+      first, revoke the old one last (docs/incident-response.md section 7).
+    cmds:
+      - ./scripts/ops/rotate-secret.sh {{.CLI_ARGS}}
 
   rbac-review:
     desc: >-
