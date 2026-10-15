@@ -231,6 +231,18 @@ data volumes with no drain and no etcd leave (`scripts/internal/refuse-node-dele
 commands of its own, `task cluster-shrink-plan` then `task cluster-shrink`, measured on all three
 clouds: [`upgrade.md`](upgrade.md#removing-nodes).
 
+### Residual risk: the maintenance-mode apply
+
+A new node boots in Talos' maintenance mode, where its API answers with an **ephemeral certificate that nothing you hold can verify**, and the Talos provider
+sends it the full machine configuration: the cluster CAs and keys, the disk-encryption passphrase and the etcd Secrets key. The provider retries the handshake until the node switches
+to the cluster CA. So for those minutes **the node that receives the secrets is identified by its address, not by a credential**; a party on the private path between the
+bastion's tunnel and the node could pose as it. What stands in front of that, none of it an authentication of the node: the nodes have no public address; the Talos API is reached only through
+the SSH tunnel from the bastion; on OVH and Outscale the node group admits 50000 from the bastion group only (Scaleway: from the whole private subnet, whose group is not enforced
+there); the bastion is behind the `admin_ip` allowlist. The channel itself is encrypted, so only an active man in the middle on that path could use it. No code change makes it
+authenticated: it is how Talos bootstraps. `config_delivery = "userdata"` of the Talos module skips the maintenance-mode apply on platforms that can inject the configuration at creation (Docker uses it),
+at the price of the machine configuration sitting in the provider's metadata for the node; that trade was not evaluated for the three clouds. Recorded as a deviation in
+[`key-management.md`](key-management.md#5-recorded-deviations-and-residual-risks) and [`security-architecture.md`](security-architecture.md).
+
 ## 5. Talk to it
 
 ```bash

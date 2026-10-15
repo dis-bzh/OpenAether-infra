@@ -474,6 +474,11 @@ data "talos_machine_configuration" "worker" {
 #   2. timeouts.create = "15m" — headroom for slow cloud boot + CA transition.
 # In container mode (config_delivery = "userdata") do_apply is false → these
 # resources and the config_apply resources below are all skipped (inert local).
+#
+# RESIDUAL RISK (ANSSI DP-17): that maintenance certificate cannot be verified, so the full machine
+# config (cluster CAs, LUKS and secretbox keys) is sent to a node identified only by its address. What
+# narrows it, none of it a node authentication: no public address, the SSH tunnel, the bastion-only
+# security group on 50000 (OVH, Outscale). docs/first-cluster.md, "Residual risk: the maintenance-mode apply".
 # ==============================================================================
 
 resource "terraform_data" "talos_port_ready_cp" {

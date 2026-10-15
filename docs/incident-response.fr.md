@@ -133,7 +133,7 @@ Toutes les procédures sont écrites, **non exécutées** ; les objectifs de tem
 | Masterkey Zitadel, mots de passe de bases, passphrase Longhorn, mots de passe Grafana/MinIO | selon l'inventaire apps | `OpenAether-apps/docs/key-inventory.md`, « Replacing a key » | redémarrer les consommateurs ; noter que la masterkey n'a pas de rotation prise en charge et que celle de Longhorn ne doit pas changer sous des volumes chiffrés |
 | Secrets CI : `CI_BASTION_SSH_PRIVATE_KEY`, clés provider du sandbox, `CLEA_WORKFLOW_TOKEN`, le compte GitHub | le dépôt ou un compte est suspect | révoquer et réémettre chez l'émetteur ; `supply-chain.fr.md` les liste | revoir les exécutions de workflows et les rulesets (workflow `repo-settings`) |
 | Tout ce qui a été publié (un jeton ou une adresse dans un commit) | gitleaks, ou vous l'avez remarqué | révoquer d'abord ; une purge d'historique limite la suite mais « une donnée publiée est publiée » (`CLAUDE.md`) | renouveler tout ce que le fichier fuité listait |
-| Comptes humains Zitadel | un compte est suspect | désactiver l'utilisateur dans la console ; le MFA est forcé par la politique apps | vérifier les rôles Grafana |
+| Comptes humains Zitadel | un compte est suspect | désactiver l'utilisateur dans la console ; le MFA est forcé par la politique apps sur une nouvelle instance | vérifier les rôles Grafana |
 
 `seed-openbao.sh` ne fait que créer (`cas=0`) : une valeur renouvelée est écrite par l'opérateur comme nouvelle version du chemin (inventaire apps), pas en relançant le script.
 Une tâche rotate-secret et un mode de remplacement relèvent de l'outillage, hors du périmètre de cette page.

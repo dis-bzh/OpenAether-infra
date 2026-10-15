@@ -133,28 +133,37 @@ on the machine holding both the repo and the credentials.
 
 ## 6. Admin access to the UIs
 
-The gateway sits on a **private VPC IP** with the bastion SG restricted to
-`admin_ip` — nothing public. Routes: `vault|grafana|zitadel|longhorn.openaether.local`.
+The administration path reaches the gateway on a **private VPC IP**, through the bastion (its security group is restricted to
+`admin_ip`). Routes: `vault|grafana|zitadel.openaether.local`, and `longhorn.openaether.local` only where the Longhorn route was added by hand (it has no login and is
+not in the default kustomization).
+
+⚠️ **That private path is not the whole exposure.** With `deploy_app_lb = true` the application load balancer forwards public 80/443 to the same
+Gateway's NodePorts, with no source filter: every route then answers anyone who sets its Host header, and the route's own login is its only protection
+(the register is `OpenAether-apps/docs/public-exposure.md`; the filtering picture is [`network.md`](network.md), section 6). Off by default.
 
 ```bash
 # HTTPS (after step 2)
 ssh -i <bastion key> -L 8443:<gateway IP>:443 bastion@<bastion IP> -N
-# /etc/hosts: 127.0.0.1 grafana.openaether.local zitadel… vault… longhorn…
+# /etc/hosts: 127.0.0.1 grafana.openaether.local zitadel… vault…
 ```
 
 Import the root CA into the browser. Without TLS, for troubleshooting:
 `./scripts/ops/local-admin-portforward.sh`.
 
-**Do not use the OpenBao root token day to day** — it never expires and appears
-in no audit trail under a human's name. Two named policies exist:
+**There is no OpenBao root token to use day to day**: it is revoked at bootstrap, and a break-glass one takes a quorum of recovery-share holders
+(apps `vault/README.md`). A named human works through a ServiceAccount identity, exchanged inside the pod for a token that lasts hours: `bao_admin` above is
+`openaether-admin`; the read-only identity is the same helper with the ServiceAccount and role `openaether-reader`:
 
 ```bash
-bao token create -policy=openaether-admin  -ttl=8h -display-name=<name>
-bao token create -policy=openaether-reader -ttl=8h -display-name=<name>
+bao_reader() {
+  kubectl --kubeconfig $KC -n foundation-vault create token openaether-reader --duration=15m \
+  | kubectl --kubeconfig $KC -n foundation-vault exec -i openbao-0 -- sh -c \
+      'BAO_TOKEN="$(bao write -field=token auth/kubernetes/login role=openaether-reader jwt=-)" exec bao "$@"' sh "$@"
+}
 ```
 
-`openaether-admin` covers daily operations but explicitly denies seal, rekey and
-key rotation — those stay with the offline root token, deliberate and rare.
+`openaether-admin` covers daily operations but explicitly denies seal, rekey, key rotation, minting tokens and writing policies, mounts or roles — those stay with the
+recovery-share quorum (or git, for the configuration), deliberate and rare. The administration paths and who holds them: [`security-architecture.md`](security-architecture.md).
 
 ⚠️ If your public IP changes, the bastion stops letting you in, and a plain `task infra-apply` stops
 at its tunnel check: the tunnels cannot be rebuilt until the apply lands. Put the new address in

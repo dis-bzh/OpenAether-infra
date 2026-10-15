@@ -549,6 +549,9 @@ tasks:
       # check-doc-twins.sh against throwaway repos: a missing twin, a missing back-link, a section on one side only,
       # a dead link, and what it must leave alone (anchors, external links, fenced text).
       - ./scripts/dev/test-check-doc-twins.sh
+      # docs/network.md carries the node-inbound rules of each provider as a table generated from the Terraform:
+      # this fails when a table differs from the code or a rule has no justification row (both languages).
+      - ./scripts/dev/test-flow-matrix.sh
       # A host missing CAP_SYS_RESOURCE looked healthy for 90s before this,
       # then died on an unrelated-looking timeout (#54). Against a stubbed
       # capsh, and also against this host's real one where reachable.

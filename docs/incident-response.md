@@ -131,7 +131,7 @@ All procedures are written, **not run**; time targets are not measured.
 | Zitadel masterkey, database passwords, Longhorn passphrase, Grafana/MinIO passwords | per the apps inventory | `OpenAether-apps/docs/key-inventory.md`, "Replacing a key" | restart the consumers; note that the masterkey has no supported rotation and the Longhorn one must not change under encrypted volumes |
 | CI secrets: `CI_BASTION_SSH_PRIVATE_KEY`, sandbox provider keys, `CLEA_WORKFLOW_TOKEN`, the GitHub account | the repository or an account is suspect | revoke and reissue at the issuer; `supply-chain.md` lists them | review workflow runs and the rulesets (`repo-settings` workflow) |
 | Anything published (a token or an address in a commit) | gitleaks, or you noticed | revoke first; a history purge limits the tail but "a published datum is published" (`CLAUDE.md`) | rotate everything the leaked file listed |
-| Zitadel human accounts | an account is suspect | disable the user in the console; MFA is forced by the apps policy | check Grafana roles |
+| Zitadel human accounts | an account is suspect | disable the user in the console; MFA is forced by the apps policy on a new instance | check Grafana roles |
 
 `seed-openbao.sh` is create-only (`cas=0`): a rotated value is written by the operator as a new version of the path
 (apps inventory), not by re-running it. A rotate-secret task and a replace mode are tooling work, not in this page's scope.

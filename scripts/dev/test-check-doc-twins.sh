@@ -51,7 +51,7 @@ fixture_repo; pair key-management; printf '\n```\n# a shell comment is not a hea
 
 echo; echo "=== relative links ==="
 fixture_repo; pair key-management; printf '\nSee [x](gone.md) and [y](key-management.md#a) and [z](https://example.invalid/x).\n' >>"$TMP/repo/docs/key-management.md"
-printf '\nVoir [x](gone.md) et [y](key-management.fr.md#a).\n' >>"$TMP/repo/docs/key-management.fr.md"; commit; run
+printf '\nSee [x](gone.md) and [y](key-management.fr.md#a).\n' >>"$TMP/repo/docs/key-management.fr.md"; commit; run
 [ "$rc" -ne 0 ] && grep -q 'link to gone.md does not resolve' <<<"$out" && ok "a dead relative link is named" || bad "dead link passed: $out"
 ! grep -q 'key-management.md#a' <<<"$out" && ! grep -q 'example.invalid' <<<"$out" && ok "anchors and external links are left alone" || bad "an anchor or external link was flagged: $out"
 fixture_repo; pair key-management; printf '\n```\n[x](gone.md)\n```\n' >>"$TMP/repo/docs/key-management.md"; printf '\n```\n[x](gone.md)\n```\n' >>"$TMP/repo/docs/key-management.fr.md"; commit; run

@@ -239,6 +239,18 @@ haut et ses volumes de données sans drain ni sortie d'etcd (`scripts/internal/r
 nœuds a ses deux commandes, `task cluster-shrink-plan` puis `task cluster-shrink`, mesurées sur les trois
 clouds : [`upgrade.fr.md`](upgrade.fr.md#retirer-des-nœuds).
 
+### Risque résiduel : l'application en mode maintenance
+
+Un nouveau nœud démarre en mode maintenance de Talos, où son API répond avec un **certificat éphémère que rien de ce que vous détenez ne peut vérifier**, et le provider Talos
+lui envoie la configuration machine complète : les CA et clés du cluster, la passphrase de chiffrement des disques et la clé des Secrets etcd. Le provider rejoue la poignée de main jusqu'à ce que
+le nœud passe sur la CA du cluster. Donc, pendant ces minutes, **le nœud qui reçoit les secrets est identifié par son adresse, pas par un identifiant** ; une partie placée sur le chemin privé entre le
+tunnel du bastion et le nœud pourrait se faire passer pour lui. Ce qui se tient devant cela, sans rien qui authentifie le nœud : les nœuds n'ont pas d'adresse publique ; l'API Talos n'est atteinte que par
+le tunnel SSH depuis le bastion ; sur OVH et Outscale le groupe des nœuds n'admet 50000 que depuis le groupe du bastion (Scaleway : depuis tout le sous-réseau privé, dont le groupe n'y est pas appliqué) ;
+le bastion est derrière la liste d'autorisation `admin_ip`. Le canal lui-même est chiffré, donc seul un homme du milieu actif sur ce chemin pourrait en tirer parti. Aucun changement de code ne l'authentifie :
+c'est la façon dont Talos s'amorce. `config_delivery = "userdata"` du module Talos saute l'application en mode maintenance sur les plateformes qui peuvent injecter la configuration à la création (Docker l'utilise),
+au prix d'une configuration machine placée dans les métadonnées du provider pour ce nœud ; ce compromis n'a pas été évalué pour les trois clouds. Consigné comme écart dans
+[`key-management.fr.md`](key-management.fr.md#5-écarts-consignés-et-risques-résiduels) et [`security-architecture.fr.md`](security-architecture.fr.md).
+
 ## 5. Joindre le cluster
 
 ```bash
