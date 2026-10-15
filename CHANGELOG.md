@@ -52,11 +52,7 @@ in git. 0.1.0 is the first entry describing something proven.
   `task apps-validate` against the apps tag was red on it). It now reads inline comments, Python strings and accents, so it
   found eight genuinely French lines here, now English: the Cilium parity message, two preflight messages, the Flux bootstrap
   template header and the Proxmox VIP comments. Its own cases come with it (`test-check-language.sh`, wired into `test-scripts`).
-  The accent rule reads the name of the dependency watcher, Cléa, as French: 18 files that are English apart from that name are
-  in `.languageignore` with the reason, **temporarily** (the script can only learn the name in both repositories at once).
-
-### Added
-
+  The name of the dependency watcher, Cléa, is no longer read as French (taught in both repositories at once).
 - **`explain-failure.sh` points at the OVH router's SNAT port** when a run says `time is not in sync` and touched `module.ovh`.
   Seen once on a real account: a router whose `network:router_centralized_snat` port stayed DOWN left every node without DNS or
   NTP, and a fresh router of the same code was ACTIVE. The message gives the read-only command and says a bad router does not

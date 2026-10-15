@@ -45,6 +45,9 @@ case_ "French docstring"                       1 a.py    $'def f():\n    """Pars
 case_ "French in markdown prose"               1 a.md    $'# Title\n\nCette brique est optionnelle.'
 case_ "French inside a code fence is prose-free" 0 a.md  $'# Title\n\n```bash\necho "pour le test"\n```'
 case_ "link to the French twin"                0 a.md    $'# Title\n\n[Version française](a.fr.md)'
+# The name Cléa is not French; a French word beside it still is.
+case_ "the name Cléa in an English comment"    0 a.yaml  $'# Cléa reports the pins that drifted\nkind: X'
+case_ "French accent next to the name Cléa"    1 a.yaml  $'# Cléa a déployé le correctif\nkind: X'
 # A French file is fine only while it is listed AND still French.
 case_ "listed French file"                     0 a.md    $'# Titre\n\nCette brique est optionnelle.' a.md
 case_ "stale ignore entry (file is English)"   1 a.md    $'# Title\n\nThis brick is optional.' a.md

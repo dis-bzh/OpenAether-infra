@@ -115,6 +115,9 @@ code_files() {
 # em dashes and arrows.
 AWK_FRENCH='
 function french(text,    n, i, w, cap) {
+  # Cléa is the name of the dependency watcher (OpenAether-infra), not a French word. Only the name
+  # is neutralised: an accented French word beside it is still caught.
+  gsub(/Cléa/, "Clea", text)
   if (text ~ /(é|è|ê|ë|à|â|ç|î|ï|ô|ù|û|ü|œ|É|È|À|Ç)/) return 1
   # French elision (l-apostrophe-admin, d-apostrophe-un, n-apostrophe-est): a short
   # letter group, an apostrophe and a letter, after a non-word character. English
