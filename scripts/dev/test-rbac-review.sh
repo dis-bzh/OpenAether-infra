@@ -49,6 +49,12 @@ run
 list "$(CRB anon-view view '[{"kind":"User","name":"system:anonymous"}]')" >"$TMP/fx.json"
 run
 [ "$RC" = 1 ] && grep -q '\[ANON\]' <<<"$OUT" && ! grep -q HUMAN <<<"$OUT" && ok "system:anonymous bound to anything is ANON (and a system: name is not HUMAN)" || bad "anon: rc=$RC $OUT"
+list "$(CRB system:public-info-viewer system:public-info-viewer '[{"kind":"Group","name":"system:unauthenticated"}]')" >"$TMP/fx.json"
+run
+[ "$RC" = 0 ] && ok "the stock system:public-info-viewer binding to system:unauthenticated is not flagged (it is on every cluster)" || bad "stock public-info-viewer flagged: rc=$RC $OUT"
+list "$(CRB system:public-info-viewer cluster-admin '[{"kind":"Group","name":"system:unauthenticated"}]')" >"$TMP/fx.json"
+run
+[ "$RC" = 1 ] && grep -q '\[ANON' <<<"$OUT" && ok "...but the same binding name to another role is still flagged" || bad "disguised binding passed: rc=$RC $OUT"
 list "$(CRB sneaky cluster-admin "$SA")" >"$TMP/fx.json"
 run
 [ "$RC" = 1 ] && grep -q '\[ADMIN\].*sneaky' <<<"$OUT" && ok "a ServiceAccount with cluster-admin outside the allowlist is ADMIN" || bad "sa admin: rc=$RC $OUT"

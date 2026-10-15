@@ -12,7 +12,11 @@ def allowed($name): ($allow.exact | index($name)) != null or any($allow.prefixes
 | ((.subjects // [{"kind": "-", "name": "(no subject)"}])[])
 | . as $s
 | [ (if ($s.kind == "User" or $s.kind == "Group") and ($s.name | startswith("system:") | not) then "HUMAN" else empty end),
-    (if $s.name == "system:anonymous" or $s.name == "system:unauthenticated" then "ANON" else empty end),
+    # The stock Kubernetes binding that lets anyone read /healthz, /livez, /readyz and /version: present on every cluster (seen
+    # flagged on a real OVH and Scaleway cluster). Only that binding to that role is exempt; anything else bound to
+    # system:anonymous / system:unauthenticated stays flagged.
+    (if ($s.name == "system:anonymous" or $s.name == "system:unauthenticated")
+        and ($m.name == "system:public-info-viewer" and $role == "system:public-info-viewer" | not) then "ANON" else empty end),
     (if $role == "cluster-admin" and (allowed($m.name) | not) then "ADMIN" else empty end)
   ] as $flags
 | [$scope, ($m.namespace // "-"), $m.name, $role, $s.kind,
