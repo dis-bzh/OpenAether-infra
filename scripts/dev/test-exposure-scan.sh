@@ -80,8 +80,16 @@ sleep 1
 OA_SCAN_SENSITIVE="$PORT" run --bastion 127.0.0.1 --from denied
 [ "$RC" != 0 ] && grep -q "reachable but must not be: $PORT" <<<"$OUT" && ok "an open port is seen by the built-in /dev/tcp probe" || bad "real probe, open: rc=$RC $OUT"
 kill "$LPID"; wait "$LPID" 2>/dev/null; LPID=""
-OA_SCAN_SENSITIVE="$PORT" OA_SCAN_TIMEOUT=2 run --bastion 127.0.0.1 --api-lb 127.0.0.1 --from denied
-[ "$RC" = 0 ] && ok "…and a closed one is not" || bad "real probe, closed: rc=$RC $OUT"
+# The scan always probes 22, 80, 443 and 6443 as well: a runner with sshd or a web server on loopback would turn "closed" red for a
+# reason that has nothing to do with the scan (GitHub-hosted runners listen on 22). Say so and skip that one assertion.
+BUSY=""
+for p in 22 80 443 6443; do (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null && BUSY="$BUSY $p"; done
+if [ -n "$BUSY" ]; then
+  echo "  - skipped 'a closed port is not reported': something already listens on loopback port(s)$BUSY"
+else
+  OA_SCAN_SENSITIVE="$PORT" OA_SCAN_TIMEOUT=2 run --bastion 127.0.0.1 --api-lb 127.0.0.1 --from denied
+  [ "$RC" = 0 ] && ok "…and a closed one is not" || bad "real probe, closed: rc=$RC $OUT"
+fi
 
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$PASS" -gt 0 ] && [ "$FAIL" -eq 0 ]
