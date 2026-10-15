@@ -102,6 +102,17 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Validated
 
+- **The 0.2.1 candidate with the apps 0.2.0 candidate on three clouds, 2026-10-15** (the apps branches are not tags; see that repository's
+  CHANGELOG for what ran inside). Rung: real cloud, **once per cloud**, by hand; `cluster-up` ended 201 on `flux-system exists` only
+  (13 passed, 1 failed), as documented until the Day-1 seeding. **Scaleway** (infra `4ae2357`): `seed-openbao.sh` printed the shared-keys
+  warning, wrote five paths; Loki wrote to the new `…-logs-<env>` bucket created by `ensure-buckets.sh` and nothing of Loki's reached the
+  backups bucket; 35 of 35 Kustomizations; `cluster-security` 30 of 31; strict plan "No changes". **OVH** (infra `39df1b8`): same, and the
+  run that exposed the `BucketAlreadyOwnedByYou` defect (Fixed above) first; one worker was dead after boot (issue #49), hard-rebooted and
+  `up` re-run. **Outscale, reduced apps profile only** (infra `39df1b8`): up in 1020 s, seeding and the OpenBao snapshot job fine.
+  **Not run:** the dedicated Loki key pair (the lab used the shared keys), `task cluster-upgrade` with the new safeguards, a second
+  `cluster-up`, the OVH SNAT hint (its failure did not recur), Proxmox. All three labs torn down, `purge-orphans` clean, lab buckets and
+  images deleted (Outscale's image-lane buckets kept: state of the standing OMI).
+
 - **The Day-1 path of the OpenBao redesign, `deploy_flux = true`, Scaleway, 2026-10-13, on this branch (8d4a036 for the apply and the
   seeding; later commits touched the upgrade path and documentation only), with OpenAether-apps `claude/security-bootstrap`.**
   Management role, 3 control planes + 2 workers, replica store on OVH. `cluster-up` ended 201 after 570 s on
