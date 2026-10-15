@@ -57,14 +57,15 @@ output "bastion_egress_rules" {
   ]
 }
 
-# Test-only: a test cannot read a child module's resources. Each app LB frontend's ACLs as "action subnets".
+# Test-only: a test cannot read a child module's resources. Each app LB frontend's ACLs as "action subnets", in index order.
 output "app_lb_acls" {
   description = "The ACLs of the app LB http and https frontends as 'action subnet,subnet', in evaluation order, for tests"
   value = {
-    for k, fes in { http = scaleway_lb_frontend.http, https = scaleway_lb_frontend.https } : k => flatten([
-      # try(): on a real plan the sources include the NAT gateway address, which is unknown until apply, so the list
-      # is null there (a mocked provider knows it, which is why the tests never saw this).
-      for fe in fes : [for a in fe.acl : "${a.action[0].type} ${try(join(",", a.match[0].ip_subnet), "(known after apply)")}"]
-    ])
+    for k in ["http", "https"] : k => [
+      for a in concat(
+        [for x in [try(scaleway_lb_acl.app_allow[k], null)] : x if x != null],
+        [for x in [try(scaleway_lb_acl.app_deny[k], null)] : x if x != null],
+      ) : "${a.action[0].type} ${try(join(",", a.match[0].ip_subnet), "(known after apply)")}"
+    ]
   }
 }
