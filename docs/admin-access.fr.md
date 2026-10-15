@@ -146,6 +146,12 @@ pas d'authentification et n'est pas dans la kustomization par défaut).
 Gateway, sans filtre de source : chaque route répond alors à quiconque pose son en-tête Host, et la connexion propre à la route est sa seule protection
 (le registre est `OpenAether-apps/docs/public-exposure.md` ; le tableau du filtrage est [`network.fr.md`](network.fr.md), section 6). Désactivé par défaut.
 
+**Filtre de source optionnel, `app_lb_allowed_cidrs`** (une liste de CIDR IPv4, vide = pas de filtre = ce que faisait un cluster avant son existence). Renseignez-la dans les tfvars et lancez le `tofu plan` habituel :
+le plan doit montrer une **mise à jour en place** des frontaux Scaleway / listeners OVH (ou de nouvelles règles Outscale) et aucun `must be replaced` : un load balancer remplacé change l'IP publique.
+La liste doit contenir tous les clients publics à conserver (un bureau, un runner CI, une sonde de disponibilité) ; l'adresse de sortie du cluster est ajoutée pour vous, car les pods joignent
+`https://zitadel.openaether.local` par le load balancer. Déployez par étapes : vide, puis `["0.0.0.0/0"]` (mécanisme actif, encore ouvert : le plan montre la mise à jour en place),
+puis vos CIDR sur UN provider, vérification, puis les autres. Le retour arrière est la liste vide. Non exécuté sur un cloud : les contrôles sont dans la checklist de laboratoire ; il filtre des adresses et n'authentifie rien.
+
 ```bash
 # HTTPS (après l'étape 2)
 ssh -i <clé bastion> -L 8443:<IP gateway>:443 bastion@<IP bastion> -N

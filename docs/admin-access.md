@@ -141,6 +141,12 @@ not in the default kustomization).
 Gateway's NodePorts, with no source filter: every route then answers anyone who sets its Host header, and the route's own login is its only protection
 (the register is `OpenAether-apps/docs/public-exposure.md`; the filtering picture is [`network.md`](network.md), section 6). Off by default.
 
+**Optional source filter, `app_lb_allowed_cidrs`** (a list of IPv4 CIDRs, empty = no filter = what a cluster did before it existed). Set it in the tfvars and run the usual `tofu plan`:
+the plan must show an **update in place** of the Scaleway frontends / OVH listeners (or new Outscale rules) and no `must be replaced`: a replaced load balancer changes the public IP.
+The list must hold every public client you want to keep (an office, a CI runner, an uptime monitor); the cluster's own egress address is added for you, because pods reach
+`https://zitadel.openaether.local` through the load balancer. Roll it out in stages: empty, then `["0.0.0.0/0"]` (machinery on, still open: the plan shows the in-place update),
+then your CIDRs on ONE provider, check, then the others. Rollback is the empty list. Not run on a cloud: the checks are in the lab checklist; it filters addresses and authenticates nothing.
+
 ```bash
 # HTTPS (after step 2)
 ssh -i <bastion key> -L 8443:<gateway IP>:443 bastion@<bastion IP> -N
