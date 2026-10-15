@@ -26,48 +26,90 @@ resource "scaleway_instance_security_group" "bastion" {
 
   # Egress: private CIDR (cluster nodes), DNS, NTP, apt (80/443)
   # nftables in-VM is the hard enforcement; this SG provides defence-in-depth.
-  outbound_rule {
-    action   = "accept"
-    protocol = "ANY"
-    ip_range = local.scw_private_cidr
+  # bastion_internet_egress.mode = "closed" (the order of the legacy rules is kept, the provider compares a list):
+  # TCP 6443/50000 to the subnet in use instead of ANY to the whole /12, no 80/443, DNS/NTP to the pinned servers,
+  # and the instance metadata services on 80.
+  dynamic "outbound_rule" {
+    for_each = local.bastion_egress_closed ? [] : [1]
+    content {
+      action   = "accept"
+      protocol = "ANY"
+      ip_range = local.scw_private_cidr
+    }
   }
-  outbound_rule {
-    action   = "accept"
-    protocol = "UDP"
-    port     = 53
-    ip_range = "0.0.0.0/0"
+  dynamic "outbound_rule" {
+    for_each = local.bastion_egress_closed ? [6443, 50000] : []
+    content {
+      action   = "accept"
+      protocol = "TCP"
+      port     = outbound_rule.value
+      ip_range = local.scw_subnet_in_use
+    }
   }
-  outbound_rule {
-    action   = "accept"
-    protocol = "TCP"
-    port     = 53
-    ip_range = "0.0.0.0/0"
+  dynamic "outbound_rule" {
+    for_each = local.bastion_dns_cidrs
+    content {
+      action   = "accept"
+      protocol = "UDP"
+      port     = 53
+      ip_range = outbound_rule.value
+    }
   }
-  outbound_rule {
-    action   = "accept"
-    protocol = "UDP"
-    port     = 123
-    ip_range = "0.0.0.0/0"
+  dynamic "outbound_rule" {
+    for_each = local.bastion_dns_cidrs
+    content {
+      action   = "accept"
+      protocol = "TCP"
+      port     = 53
+      ip_range = outbound_rule.value
+    }
   }
-  outbound_rule {
-    action   = "accept"
-    protocol = "TCP"
-    port     = 80
-    ip_range = "0.0.0.0/0"
+  dynamic "outbound_rule" {
+    for_each = local.bastion_ntp_cidrs
+    content {
+      action   = "accept"
+      protocol = "UDP"
+      port     = 123
+      ip_range = outbound_rule.value
+    }
   }
-  outbound_rule {
-    action   = "accept"
-    protocol = "TCP"
-    port     = 443
-    ip_range = "0.0.0.0/0"
+  dynamic "outbound_rule" {
+    for_each = local.bastion_egress_closed ? ["169.254.42.42/32", "169.254.169.254/32"] : []
+    content {
+      action   = "accept"
+      protocol = "TCP"
+      port     = 80
+      ip_range = outbound_rule.value
+    }
+  }
+  dynamic "outbound_rule" {
+    for_each = local.bastion_egress_closed ? [] : [80, 443]
+    content {
+      action   = "accept"
+      protocol = "TCP"
+      port     = outbound_rule.value
+      ip_range = "0.0.0.0/0"
+    }
   }
 }
 
 locals {
+  bastion_egress_closed = var.bastion_internet_egress.mode == "closed"
+  # The IPv4 servers DNS/NTP are pinned to in the security group (the firewall in the VM also takes IPv6); anywhere when
+  # not pinned. Pinned with no IPv4 entry gives no rule, which is what the pin asks for.
+  bastion_dns_cidrs = local.bastion_egress_closed && length(var.bastion_internet_egress.dns_servers) > 0 ? [
+    for a in var.bastion_internet_egress.dns_servers : strcontains(a, "/") ? a : "${a}/32" if !strcontains(a, ":")
+  ] : ["0.0.0.0/0"]
+  bastion_ntp_cidrs = local.bastion_egress_closed && length(var.bastion_internet_egress.ntp_servers) > 0 ? [
+    for a in var.bastion_internet_egress.ntp_servers : strcontains(a, "/") ? a : "${a}/32" if !strcontains(a, ":")
+  ] : ["0.0.0.0/0"]
+
   # Scaleway uses IPAM for private IPs (dynamic 172.16.0.0/12 range).
   # nftables uses the full RFC1918 private range as the egress allow CIDR.
   # The route fix must run before nftables so the private NIC is stable first.
   scw_private_cidr = "172.16.0.0/12"
+  # closed: the subnet the network really uses (an adopted network keeps its own), not the whole /12
+  bastion_private_cidr = local.bastion_egress_closed ? local.scw_subnet_in_use : local.scw_private_cidr
 
   scw_bastion_extra_write_files = [
     {
@@ -131,7 +173,7 @@ resource "scaleway_instance_server" "bastion" {
     "cloud-init" = templatefile("${path.module}/../_shared/bastion-cloud-init.yaml.tftpl", {
       bastion_user      = "bastion"
       ssh_keys          = var.bastion_ssh_keys
-      private_cidr      = local.scw_private_cidr
+      private_cidr      = local.bastion_private_cidr
       extra_packages    = ["netplan.io"]
       extra_write_files = local.scw_bastion_extra_write_files
       extra_runcmd      = local.scw_bastion_extra_runcmd
@@ -139,6 +181,8 @@ resource "scaleway_instance_server" "bastion" {
       ssh_ca_principals = var.bastion_ssh_ca_principals
       baseline          = var.bastion_baseline
       admin_ip          = var.admin_ip
+      admins            = var.bastion_admins
+      egress            = var.bastion_internet_egress
     })
   }
 

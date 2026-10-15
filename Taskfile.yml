@@ -587,9 +587,11 @@ tasks:
       - ./scripts/dev/test-cluster-netcheck.sh
       - ./scripts/dev/test-exposure-scan.sh
       - ./scripts/dev/test-rbac-review.sh
-      # The bastion scripts: harden-check (egress probes, opt-in baseline section) and the log pull.
+      # The bastion scripts: harden-check (egress probes, opt-in baseline section, host key), the log pull (and its
+      # upload) and the fingerprint-to-person table.
       - ./scripts/dev/test-bastion-harden-check.sh
       - ./scripts/dev/test-bastion-logs-pull.sh
+      - ./scripts/dev/test-bastion-fingerprints.sh
       # grow-nodes.sh (#59): machines, then tunnels, then only the new nodes' configuration.
       - ./scripts/dev/test-grow-nodes.sh
       - ./scripts/dev/test-refuse-node-deletes.sh
@@ -2077,6 +2079,21 @@ tasks:
     cmds:
       - defer: *receipt
       - ./scripts/dev/bastion-baseline-check.sh
+
+  bastion-identity-check:
+    desc: >-
+      Bastion per-person accounts, SSH-CA certificates for them, RevokedKeys and the closed Internet egress
+      (bastion_admins, bastion_internet_egress), rung "local Docker": renders the shared cloud-init and runs the
+      exact bytes on Ubuntu 22.04 and 24.04 - one login per person and no other, principals, an expired 8 h
+      certificate refused, a revoked key refused, PermitOpen without 8200, and the closed nftables output chain
+      loaded in a container's own network namespace (80/443/8200 dropped, 6443/50000 kept). No cloud account,
+      nothing written to the host. Needs Docker.
+    preconditions:
+      - sh: command -v docker
+        msg: bastion-identity-check needs Docker; nothing ran and no receipt was written.
+    cmds:
+      - defer: *receipt
+      - ./scripts/dev/bastion-identity-check.sh
 
   feint-evidence:
     desc: >-

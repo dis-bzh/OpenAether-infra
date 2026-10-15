@@ -33,3 +33,19 @@ output "bastion_ip" {
   description = "Public IP of the bastion host (SSH access)"
   value       = openstack_networking_floatingip_v2.bastion.address
 }
+
+# Test-only: the bastion's egress rules as "protocol port destination", for the egress tests.
+output "bastion_egress_rules" {
+  description = "Every egress rule of the bastion security group as 'protocol port remote_ip_prefix', for tests"
+  value = concat(
+    [for r in openstack_networking_secgroup_rule_v2.bastion_egress_private : "all - ${r.remote_ip_prefix}"],
+    [for k, r in openstack_networking_secgroup_rule_v2.bastion_egress_cluster : "${r.protocol} ${r.port_range_min} ${r.remote_ip_prefix}"],
+    [for r in openstack_networking_secgroup_rule_v2.bastion_egress_dns : "${r.protocol} ${r.port_range_min} any"],
+    [for r in openstack_networking_secgroup_rule_v2.bastion_egress_dns_tcp : "${r.protocol} ${r.port_range_min} any"],
+    [for k, r in openstack_networking_secgroup_rule_v2.bastion_egress_dns_pinned : "${r.protocol} ${r.port_range_min} ${r.remote_ip_prefix}"],
+    [for k, r in openstack_networking_secgroup_rule_v2.bastion_egress_ntp_pinned : "${r.protocol} ${r.port_range_min} ${r.remote_ip_prefix}"],
+    [for r in openstack_networking_secgroup_rule_v2.bastion_egress_metadata : "${r.protocol} ${r.port_range_min} ${r.remote_ip_prefix}"],
+    [for r in openstack_networking_secgroup_rule_v2.bastion_egress_http : "${r.protocol} ${r.port_range_min} any"],
+    [for r in openstack_networking_secgroup_rule_v2.bastion_egress_https : "${r.protocol} ${r.port_range_min} any"],
+  )
+}

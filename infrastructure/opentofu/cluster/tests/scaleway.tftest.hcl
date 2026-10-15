@@ -444,3 +444,167 @@ run "verify_outscale_module_activation" {
     error_message = "SCW module should be inactive when only Outscale is configured."
   }
 }
+
+# ==============================================================================
+# Test 10: the bastion's security-group egress, legacy and closed (bastion_internet_egress)
+# ==============================================================================
+
+# The legacy list is today's, in today's order (the provider compares the rules as a list): a cluster that never sets
+# the variable must plan no change.
+run "verify_scw_bastion_egress_legacy_is_unchanged" {
+  command = plan
+
+  assert {
+    condition = module.scw[0].bastion_egress_rules == [
+      "any - 172.16.0.0/12", "udp 53 0.0.0.0/0", "tcp 53 0.0.0.0/0", "udp 123 0.0.0.0/0", "tcp 80 0.0.0.0/0", "tcp 443 0.0.0.0/0",
+    ]
+    error_message = "The legacy Scaleway bastion egress changed: ${jsonencode(module.scw[0].bastion_egress_rules)}. Existing clusters would see a security-group diff."
+  }
+}
+
+run "verify_scw_bastion_egress_closed" {
+  command = plan
+
+  variables {
+    bastion_internet_egress = { mode = "closed" }
+  }
+
+  # No 80/443 to the world, no ANY to the /12; the cluster ports go to the subnet in use (the plan cannot know the
+  # mocked network's subnet, so only the shape is pinned here).
+  assert {
+    condition = alltrue([
+      for r in module.scw[0].bastion_egress_rules : !contains(["tcp 80 0.0.0.0/0", "tcp 443 0.0.0.0/0", "any - 172.16.0.0/12"], r)
+    ]) && length([for r in module.scw[0].bastion_egress_rules : r if startswith(r, "tcp 6443 ")]) == 1 && length([for r in module.scw[0].bastion_egress_rules : r if startswith(r, "tcp 50000 ")]) == 1
+    error_message = "closed: the bastion SG keeps an Internet or /12 rule, or lacks the 6443/50000 rules: ${jsonencode(module.scw[0].bastion_egress_rules)}"
+  }
+
+  assert {
+    condition     = contains(module.scw[0].bastion_egress_rules, "tcp 80 169.254.42.42/32") && contains(module.scw[0].bastion_egress_rules, "tcp 80 169.254.169.254/32")
+    error_message = "closed: the instance metadata addresses must stay reachable on 80."
+  }
+
+  assert {
+    condition     = contains(module.scw[0].bastion_egress_rules, "udp 53 0.0.0.0/0") && contains(module.scw[0].bastion_egress_rules, "udp 123 0.0.0.0/0")
+    error_message = "closed with no server list leaves DNS and NTP as they were."
+  }
+}
+
+run "verify_scw_bastion_egress_closed_with_pinned_servers" {
+  command = plan
+
+  variables {
+    bastion_internet_egress = { mode = "closed", dns_servers = ["192.0.2.53", "198.51.100.0/24", "2001:db8::53"], ntp_servers = ["192.0.2.123"] }
+  }
+
+  assert {
+    condition = (
+      contains(module.scw[0].bastion_egress_rules, "udp 53 192.0.2.53/32") && contains(module.scw[0].bastion_egress_rules, "tcp 53 198.51.100.0/24")
+      && contains(module.scw[0].bastion_egress_rules, "udp 123 192.0.2.123/32")
+      && !contains(module.scw[0].bastion_egress_rules, "udp 53 0.0.0.0/0") && !contains(module.scw[0].bastion_egress_rules, "udp 123 0.0.0.0/0")
+      && length([for r in module.scw[0].bastion_egress_rules : r if strcontains(r, ":")]) == 0
+    )
+    error_message = "closed + pinned: DNS/NTP must go to the listed IPv4 servers only (the IPv6 one is for the in-VM firewall): ${jsonencode(module.scw[0].bastion_egress_rules)}"
+  }
+}
+
+run "verify_ovh_bastion_egress_legacy_is_unchanged" {
+  command = plan
+
+  variables {
+    node_distribution = {
+      ovh = {
+        control_planes     = 3
+        workers            = 1
+        region             = "EU-WEST-PAR"
+        flavor_name        = "b3-8"
+        image_id           = "dummy-talos-ovh-image"
+        network_name       = "Ext-Net"
+        availability_zones = ["eu-west-par-a"]
+      }
+    }
+  }
+
+  assert {
+    condition = sort(module.ovh[0].bastion_egress_rules) == sort([
+      "all - 10.0.0.0/24", "udp 53 any", "tcp 53 any", "tcp 80 any", "tcp 443 any",
+    ])
+    error_message = "The legacy OVH bastion egress changed: ${jsonencode(module.ovh[0].bastion_egress_rules)}."
+  }
+}
+
+run "verify_ovh_bastion_egress_closed_with_pinned_servers" {
+  command = plan
+
+  variables {
+    bastion_internet_egress = { mode = "closed", dns_servers = ["192.0.2.53"], ntp_servers = ["192.0.2.123"] }
+    node_distribution = {
+      ovh = {
+        control_planes     = 3
+        workers            = 1
+        region             = "EU-WEST-PAR"
+        flavor_name        = "b3-8"
+        image_id           = "dummy-talos-ovh-image"
+        network_name       = "Ext-Net"
+        availability_zones = ["eu-west-par-a"]
+      }
+    }
+  }
+
+  assert {
+    condition = sort(module.ovh[0].bastion_egress_rules) == sort([
+      "tcp 6443 10.0.0.0/24", "tcp 50000 10.0.0.0/24", "udp 53 192.0.2.53/32", "tcp 53 192.0.2.53/32", "udp 123 192.0.2.123/32", "tcp 80 169.254.169.254/32",
+    ])
+    error_message = "closed + pinned OVH bastion egress is not the reviewed list: ${jsonencode(module.ovh[0].bastion_egress_rules)}."
+  }
+}
+
+run "verify_outscale_bastion_egress_legacy_is_unchanged" {
+  command = plan
+
+  variables {
+    node_distribution = {
+      outscale = {
+        control_planes     = 3
+        workers            = 1
+        region             = "eu-west-2"
+        instance_type      = "tinav5.c2r4p1"
+        image_id           = "dummy-talos-osc-image"
+        availability_zones = ["eu-west-2a", "eu-west-2b", "eu-west-2c"]
+        bastion_image_id   = "ami-ubuntu-2204-mock"
+      }
+    }
+  }
+
+  assert {
+    condition = sort(module.outscale[0].bastion_egress_rules) == sort([
+      "tcp 0-65535 10.0.0.0/16", "udp 53-53 0.0.0.0/0", "tcp 53-53 0.0.0.0/0", "tcp 80-80 0.0.0.0/0", "tcp 443-443 0.0.0.0/0",
+    ])
+    error_message = "The legacy Outscale bastion egress changed: ${jsonencode(module.outscale[0].bastion_egress_rules)}."
+  }
+}
+
+run "verify_outscale_bastion_egress_closed" {
+  command = plan
+
+  variables {
+    bastion_internet_egress = { mode = "closed" }
+    node_distribution = {
+      outscale = {
+        control_planes     = 3
+        workers            = 1
+        region             = "eu-west-2"
+        instance_type      = "tinav5.c2r4p1"
+        image_id           = "dummy-talos-osc-image"
+        availability_zones = ["eu-west-2a", "eu-west-2b", "eu-west-2c"]
+        bastion_image_id   = "ami-ubuntu-2204-mock"
+      }
+    }
+  }
+
+  assert {
+    condition = sort(module.outscale[0].bastion_egress_rules) == sort([
+      "tcp 6443-6443 10.0.0.0/16", "tcp 50000-50000 10.0.0.0/16", "udp 53-53 0.0.0.0/0", "tcp 53-53 0.0.0.0/0", "tcp 80-80 169.254.169.254/32",
+    ])
+    error_message = "closed Outscale bastion egress is not the reviewed list: ${jsonencode(module.outscale[0].bastion_egress_rules)}."
+  }
+}

@@ -18,23 +18,34 @@ groups:
 users:
   - default
   - name: ${bastion_user}
-    groups: [bastion-admins, sudo]
+    groups: [bastion-admins%{ if !baseline.enabled }, sudo%{ endif }]
     shell: /bin/bash
     lock_passwd: true
     sudo: false
+%{ for name, a in admins ~}
+  - name: ${name}
+    groups: [bastion-admins]
+    shell: /bin/bash
+    lock_passwd: true
+    sudo: false
+%{ endfor ~}
 
 ssh_pwauth: false
 disable_root: true
 
 packages:
   - nftables
+%{ if egress.mode != "closed" ~}
   - unattended-upgrades
   - apt-listchanges
-%{ if !baseline.enabled ~}
+%{ endif ~}
+%{ if !baseline.enabled && egress.mode != "closed" ~}
   - netcat-openbsd
   - tcpdump
 %{ endif ~}
+%{ if egress.mode != "closed" ~}
   - curl
+%{ endif ~}
 %{ if baseline.enabled && baseline.audit_logging ~}
   - auditd
 %{ endif ~}
@@ -57,6 +68,24 @@ write_files:
 %{ for k in ssh_keys ~}
       ${k}
 %{ endfor ~}
+%{ for name, a in admins ~}
+
+  # One operator, one account: the login line of sshd names this file's owner.
+  - path: /etc/ssh/authorized_keys.d/${name}
+    permissions: '%{ if baseline.enabled }0644%{ else }0600%{ endif }'
+    content: |
+%{ for k in a.ssh_keys ~}
+      ${k}
+%{ endfor ~}
+%{ if ssh_ca_public_key != "" ~}
+
+  # SSH-CA: a certificate for this account must carry its name as principal, so a certificate cannot be used as another person.
+  - path: /etc/ssh/auth_principals/${name}
+    permissions: '0644'
+    content: |
+      ${name}
+%{ endif ~}
+%{ endfor ~}
 
   # --------------------------------------------------------------------------
   # sshd hardening — ANSSI/Mozilla 2025 crypto, tunnel-scoped forwarding
@@ -76,7 +105,7 @@ write_files:
       # restricts the destination CIDR. PermitOpen uses host:port patterns
       # (* = any host); CIDR notation is not supported across all OpenSSH versions.
       AllowTcpForwarding yes
-      PermitOpen *:6443 *:50000 *:8200
+      PermitOpen *:6443 *:50000%{ if egress.mode != "closed" } *:8200%{ endif }
       X11Forwarding no
       AllowAgentForwarding no
       PermitTunnel no
@@ -143,6 +172,38 @@ write_files:
           oif lo accept
           # Return traffic (SSH tunnel data)
           ct state established,related accept
+%{ if egress.mode == "closed" ~}
+          # DNS + NTP: the listed servers only when given, else any destination
+%{ if length(egress.dns_servers) > 0 ~}
+%{ if length([for c in egress.dns_servers : c if !strcontains(c, ":")]) > 0 ~}
+          ip daddr { ${join(", ", [for c in egress.dns_servers : c if !strcontains(c, ":")])} } udp dport 53 accept
+          ip daddr { ${join(", ", [for c in egress.dns_servers : c if !strcontains(c, ":")])} } tcp dport 53 accept
+%{ endif ~}
+%{ if length([for c in egress.dns_servers : c if strcontains(c, ":")]) > 0 ~}
+          ip6 daddr { ${join(", ", [for c in egress.dns_servers : c if strcontains(c, ":")])} } udp dport 53 accept
+          ip6 daddr { ${join(", ", [for c in egress.dns_servers : c if strcontains(c, ":")])} } tcp dport 53 accept
+%{ endif ~}
+%{ else ~}
+          udp dport 53 accept
+          tcp dport 53 accept
+%{ endif ~}
+%{ if length(egress.ntp_servers) > 0 ~}
+%{ if length([for c in egress.ntp_servers : c if !strcontains(c, ":")]) > 0 ~}
+          ip daddr { ${join(", ", [for c in egress.ntp_servers : c if !strcontains(c, ":")])} } udp dport 123 accept
+%{ endif ~}
+%{ if length([for c in egress.ntp_servers : c if strcontains(c, ":")]) > 0 ~}
+          ip6 daddr { ${join(", ", [for c in egress.ntp_servers : c if strcontains(c, ":")])} } udp dport 123 accept
+%{ endif ~}
+%{ else ~}
+          udp dport 123 accept
+%{ endif ~}
+          # Instance metadata (link-local, not the Internet): cloud-init and the provider agents ask it
+          ip daddr 169.254.169.254 tcp dport 80 accept
+          # Cluster nodes — Talos API + K8s API, on the cluster subnet only
+          ip daddr ${private_cidr} tcp dport { 6443, 50000 } accept
+          # ICMP outbound inside the cluster subnet only
+          ip daddr ${private_cidr} ip protocol icmp accept
+%{ else ~}
           # DNS + NTP
           udp dport 53 accept
           tcp dport 53 accept
@@ -153,6 +214,7 @@ write_files:
           ip daddr ${private_cidr} tcp dport { 6443, 50000, 8200 } accept
           # ICMP outbound (ping, path MTU)
           ip protocol icmp accept
+%{ endif ~}
 %{ if baseline.enabled ~}
           limit rate 5/minute log prefix "nft-drop-out " level info
 %{ endif ~}
@@ -185,6 +247,7 @@ write_files:
       export HISTFILE=/dev/null
       unset HISTFILE
 
+%{ if egress.mode != "closed" ~}
   # --------------------------------------------------------------------------
   # unattended-upgrades — security updates only, auto-reboot off-hours
   # --------------------------------------------------------------------------
@@ -197,6 +260,7 @@ write_files:
       Unattended-Upgrade::Automatic-Reboot "true";
       Unattended-Upgrade::Automatic-Reboot-Time "03:00";
       Unattended-Upgrade::Remove-Unused-Dependencies "true";
+%{ endif ~}
 
 %{ if baseline.enabled ~}
   # --------------------------------------------------------------------------
@@ -327,8 +391,14 @@ runcmd:
 %{ if baseline.enabled ~}
   # Root-owned, so a compromised login cannot add its own key; sshd reads it as the user, hence 0644.
   - chown root:root /etc/ssh/authorized_keys.d/${bastion_user} && chmod 0644 /etc/ssh/authorized_keys.d/${bastion_user}
+%{ for name, a in admins ~}
+  - chown root:root /etc/ssh/authorized_keys.d/${name} && chmod 0644 /etc/ssh/authorized_keys.d/${name}
+%{ endfor ~}
 %{ else ~}
   - chown ${bastion_user}:${bastion_user} /etc/ssh/authorized_keys.d/${bastion_user} 2>/dev/null || true
+%{ for name, a in admins ~}
+  - chown ${name}:${name} /etc/ssh/authorized_keys.d/${name} 2>/dev/null || true
+%{ endfor ~}
 %{ endif ~}
 %{ for cmd in extra_runcmd ~}
   - ${cmd}
@@ -365,5 +435,10 @@ runcmd:
   - systemctl restart nftables
   # sshd — reload hardened config
   - systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || true
+%{ if egress.mode == "closed" ~}
+  # No mirror is reachable any more: leave the update timers off instead of failing every day. Patching = replacing the bastion.
+  - systemctl disable --now apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service 2>/dev/null || true
+%{ else ~}
   # unattended-upgrades
   - systemctl enable --now unattended-upgrades
+%{ endif ~}

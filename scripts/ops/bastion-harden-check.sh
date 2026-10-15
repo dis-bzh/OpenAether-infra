@@ -9,7 +9,10 @@
 #   1. SSH tunnel non-regression: 6443 + 50000 reachable via bastion
 #   2. Root login rejected
 #   3. sshd: PermitRootLogin no + PasswordAuthentication no
-#   4. nftables egress DROP: nc to 1.1.1.1:80 must time out
+#   4. nftables egress DROP. BASTION_EGRESS=legacy (default, what is deployed unless bastion_internet_egress is set):
+#      an arbitrary port on the Internet must time out (80/443 are open by design there). BASTION_EGRESS=closed:
+#      80, 443 and a second public address must time out, 8200 to the node too, nc/curl/tcpdump must be absent and
+#      the update timers off
 #   5. nftables egress ALLOW: nc to cluster private on 6443 must pass (if node IP given)
 #   6. ss -tlnp: only :22 listening externally
 #   7. bastion-admins group exists and user is a member
@@ -18,9 +21,15 @@
 #      mounts, ownership of authorized_keys.d, sudo mode, umask, the key fingerprint in the login log
 #
 # Egress probes use bash's /dev/tcp, not nc: the baseline no longer installs netcat.
+#
+# Host key: never StrictHostKeyChecking=no. The pinned file (BASTION_KNOWN_HOSTS, default .talos-bastion-known-hosts,
+# the one talos-tunnels.sh keeps with OA_BASTION_PIN_HOSTKEY) is used strictly when it holds this bastion; otherwise
+# a private temporary file takes the first key (accept-new), its fingerprint is printed and, with
+# OA_BASTION_HOSTKEY_FP=SHA256:..., compared with the one read out of band: a mismatch FAILS the run.
 # ==============================================================================
 
 set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/bastion-hostkey.sh"
 
 # One TCP attempt from the bastion: prints exit:0 (open), exit:1 (refused) or exit:124 (timed out = dropped).
 # \$ and \" are for the REMOTE shell; the host and port are expanded here.
@@ -31,7 +40,11 @@ BASTION_USER="${2:?}"
 SSH_KEY="${3:?}"
 NODE_IP="${4:-}"
 
-SSH_OPTS="-i ${SSH_KEY} -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes"
+OA_KH_TEMP=""; oa_bastion_oneshot_opts "${BASTION_IP}"
+trap '[ "${OA_KH_TEMP:-}" = 1 ] && rm -f "${OA_KH}"' EXIT
+SSH_OPTS="-i ${SSH_KEY} -o UserKnownHostsFile=${OA_KH} -o StrictHostKeyChecking=${OA_SHKC} -o HashKnownHosts=no -o ConnectTimeout=10 -o BatchMode=yes"
+EGRESS_MODE="${BASTION_EGRESS:-legacy}"
+case "${EGRESS_MODE}" in legacy|closed) ;; *) echo "BASTION_EGRESS is legacy or closed (got '${EGRESS_MODE}')" >&2; exit 2 ;; esac
 SSH_CMD="ssh ${SSH_OPTS} ${BASTION_USER}@${BASTION_IP}"
 
 PASS=0
@@ -47,6 +60,11 @@ sep "1. SSH connectivity"
 # --------------------------------------------------------------------------
 if ${SSH_CMD} echo "ssh-ok" 2>/dev/null | grep -q "ssh-ok"; then
   ok "SSH login as ${BASTION_USER}@${BASTION_IP}"
+  if [ "${OA_KH_TEMP:-}" = 1 ]; then
+    if FPMSG=$(oa_bastion_check_fp "${BASTION_IP}" 2>&1); then info "${FPMSG:-host key recorded}"; else fail "${FPMSG}"; fi
+  else
+    ok "host key matches the pinned one (${OA_KH})"
+  fi
 else
   fail "SSH login failed — aborting further checks"
   echo ""
@@ -57,8 +75,7 @@ fi
 # --------------------------------------------------------------------------
 sep "2. Root login rejected"
 # --------------------------------------------------------------------------
-if ! ssh -i "${SSH_KEY}" -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes \
-     root@"${BASTION_IP}" echo "root-ok" 2>/dev/null | grep -q "root-ok"; then
+if ! ssh ${SSH_OPTS} root@"${BASTION_IP}" echo "root-ok" 2>/dev/null | grep -q "root-ok"; then
   ok "Root login rejected (expected)"
 else
   fail "Root login SUCCEEDED — PermitRootLogin not effective"
@@ -94,16 +111,25 @@ else
 fi
 
 # --------------------------------------------------------------------------
-sep "4. nftables egress DROP (internet)"
+sep "4. nftables egress DROP (internet) - mode ${EGRESS_MODE}"
 # --------------------------------------------------------------------------
-EGRESS_RESULT=$(${SSH_CMD} "$(probe_cmd 1.1.1.1 80 3)" || true)
-if echo "${EGRESS_RESULT}" | grep -q "exit:1$\|exit:124\|timed out\|refused"; then
-  ok "Egress to 1.1.1.1:80 blocked (nftables DROP working)"
+# blocked <host> <port>: the probe must not connect (exit:124 = dropped, exit:1 = refused); anything else is an open path.
+blocked() { # <label> <host> <port>
+  local res; res=$(${SSH_CMD} "$(probe_cmd "$2" "$3" 3)" || true)
+  if echo "${res}" | grep -q "exit:1$\|exit:124"; then ok "$1: egress to $2:$3 blocked"; else fail "$1: egress to $2:$3 NOT blocked (${res:-no answer})"; fi
+}
+if [ "${EGRESS_MODE}" = closed ]; then
+  blocked closed 1.1.1.1 80
+  blocked closed 1.1.1.1 443
+  blocked closed 9.9.9.9 443
+  [ -n "${NODE_IP}" ] && blocked closed "${NODE_IP}" 8200
+  TOOLS=$(${SSH_CMD} 'for c in nc ncat curl tcpdump; do command -v "$c" >/dev/null 2>&1 && echo "$c"; done; true' || true)
+  if [ -z "${TOOLS}" ]; then ok "closed: no nc, curl or tcpdump on the bastion"; else fail "closed: tools still installed: $(echo "${TOOLS}" | tr '\n' ' ')"; fi
+  TIMER=$(${SSH_CMD} 'systemctl is-enabled apt-daily-upgrade.timer 2>/dev/null; true' || true)
+  if echo "${TIMER}" | grep -q "^enabled"; then fail "closed: apt-daily-upgrade.timer is still enabled (no mirror is reachable: patching is replacing the bastion)"; else ok "closed: the update timer is off (${TIMER:-not present})"; fi
 else
-  # 443 is allowed (apt); 80 to arbitrary hosts should be blocked in nftables OUTPUT
-  # if the SG also restricts, this confirms the double-defence
-  info "probe: ${EGRESS_RESULT} — verify nftables OUTPUT chain allows only apt repos"
-  fail "Egress to 1.1.1.1:80 not blocked — check nftables OUTPUT chain"
+  blocked legacy 1.1.1.1 25
+  info "legacy mode: 80/443 to the Internet are open by design; bastion_internet_egress = { mode = \"closed\" } closes them (BASTION_EGRESS=closed checks that)"
 fi
 
 # --------------------------------------------------------------------------
@@ -202,6 +228,7 @@ want "/boot is mode 700" BOOT 700
 want "/usr/bin/sudo is mode 4750" SUDOMODE 4750
 want "login shells umask" UMASK 0077
 want "no passwordless sudo for ${BASTION_USER}" SUDON no
+if fact GROUPS | grep -qw sudo; then fail "${BASTION_USER} is in the sudo group"; else ok "${BASTION_USER} is not in the sudo group"; fi
 if fact VARTMP | grep -q noexec; then ok "/var/tmp is mounted noexec ($(fact VARTMP))"; else fail "/var/tmp is not mounted noexec"; fi
 want "auditd is active" AUDITD active
 want "the journal is persistent" JOURNAL persistent

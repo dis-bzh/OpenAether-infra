@@ -122,6 +122,24 @@ variable "bastion_baseline" {
   default = {}
 }
 
+# Per-person bastion accounts (see cluster/variables.tf). {} adds no user: the cloud-init stays byte for byte as before.
+variable "bastion_admins" {
+  description = "Named operators, one unix account each in bastion-admins with its own authorized_keys file. Default {} = only the shared bastion account."
+  type        = map(object({ ssh_keys = list(string) }))
+  default     = {}
+}
+
+# Internet egress of the bastion (see cluster/variables.tf). "legacy" keeps the 80/443 rules and the wide private rule.
+variable "bastion_internet_egress" {
+  description = "mode legacy (default: nothing changes) or closed (no 80/443, TCP 6443/50000 to the cluster subnet only, no 8200); dns_servers and ntp_servers pin DNS and NTP to those addresses when closed."
+  type = object({
+    mode        = optional(string, "legacy")
+    dns_servers = optional(list(string), [])
+    ntp_servers = optional(list(string), [])
+  })
+  default = {}
+}
+
 variable "bastion_image_id" {
   description = "Image ID for the bastion host"
   type        = string

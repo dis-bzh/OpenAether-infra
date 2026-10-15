@@ -47,3 +47,12 @@ output "inbound_rules" {
     ]
   }
 }
+
+# Test-only, like inbound_rules: the bastion's outbound rules as "protocol port destination", for the egress tests.
+output "bastion_egress_rules" {
+  description = "Every outbound_rule of the bastion security group as 'protocol port ip_range', for tests"
+  value = [
+    for r in scaleway_instance_security_group.bastion.outbound_rule :
+    "${lower(r.protocol)} ${r.port != null && r.port != 0 ? tostring(r.port) : "-"} ${r.ip_range}"
+  ]
+}

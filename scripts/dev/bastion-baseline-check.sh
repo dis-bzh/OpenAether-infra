@@ -53,7 +53,7 @@ output "r" {
   value = templatefile("$TEMPLATE", {
     bastion_user = "bastion", ssh_keys = ["$PUB"], private_cidr = "10.0.0.0/24",
     extra_packages = [], extra_write_files = [], extra_runcmd = [],
-    ssh_ca_public_key = "", ssh_ca_principals = "", baseline = $2, admin_ip = $3
+    ssh_ca_public_key = "", ssh_ca_principals = "", baseline = $2, admin_ip = $3, admins = {}, egress = { mode = "legacy", dns_servers = [], ntp_servers = [] }
   })
 }
 EOF
