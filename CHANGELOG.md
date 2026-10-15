@@ -51,11 +51,13 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
-- **The `git_ref` default and the twelve `envs/*.tfvars.example` pin OpenAether-apps `refs/tags/0.1.1`** (they pinned 0.1.0). The
-  pair is infra 0.2.1 with apps 0.1.1; infra 0.2.0 stays on apps 0.1.0 and cannot move. apps 0.1.1 initialises OpenBao with a
-  static seal: **a cluster built from infra 0.2.0 and apps 0.1.0 cannot be moved to this pair in place; build a new cluster, on
-  new buckets** (a rebuild on the old backup bucket meets the old WAL archive and CloudNativePG refuses to archive into it,
-  `OpenAether-apps/docs/traps.md`). Nothing here ran an upgrade.
+- **The `git_ref` default and the twelve `envs/*.tfvars.example` pin OpenAether-apps `refs/tags/0.2.0`** (they pinned 0.1.0). The pair
+  is infra 0.2.1 with apps 0.2.0, validated end to end with the pins as shipped (see Validated). Infra 0.2.1 with apps 0.1.1 was **not run**
+  (the only validated 0.1.1 pair is an infra commit on main, `f127a26`); infra 0.2.0 stays on apps 0.1.0 and cannot move. apps 0.1.1 and 0.2.0
+  initialise OpenBao with a static seal: **a cluster built from infra 0.2.0 and apps 0.1.0 cannot be moved to this pair in place; build a
+  new cluster, on new buckets** (a rebuild on the old backup bucket meets the old WAL archive and CloudNativePG refuses to archive into it,
+  `OpenAether-apps/docs/traps.md`). A cluster on apps 0.1.1 moving to 0.2.0 must recreate its VictoriaMetrics volumes and loses their metric
+  history (apps CHANGELOG, Upgrade notes). Nothing here ran an upgrade.
 - **`scripts/dev/check-language.sh` is the OpenAether-apps copy again** (`check-skill-parity.sh` compares them byte for byte and
   `task apps-validate` against the apps tag was red on it). It now reads inline comments, Python strings and accents, so it
   found eight genuinely French lines here, now English: the Cilium parity message, two preflight messages, the Flux bootstrap

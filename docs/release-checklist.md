@@ -460,7 +460,7 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       issues, not a backlog file. Not a pre-release (the owner's decision, 2026-10-12).
 - [ ] the examples and the default pin the apps tag, and it exists. OpenAether-apps
       is tagged and released first (`git ls-remote --tags
-      https://github.com/dis-bzh/OpenAether-apps refs/tags/0.1.1` prints it).
+      https://github.com/dis-bzh/OpenAether-apps refs/tags/0.2.0` prints it).
       The check is written down twice, because a tag is a snapshot and the skills
       are shared byte for byte. Against a checkout of **that tag** (what infra
       pins): `python3 scripts/ops/check-cilium-parity.py` here, `pick.py --validate`
@@ -468,7 +468,7 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       of `task apps-validate`, skill parity included; run on the tag it is red on
       the skills whenever they changed after the tag, by design. Then
       `grep -h git_ref infrastructure/opentofu/cluster/envs/*.example | sort -u`
-      prints one line, `refs/tags/0.1.1`, and so does the `default` of `git_ref` in
+      prints one line, `refs/tags/0.2.0`, and so does the `default` of `git_ref` in
       `variables.tf`. The two `feint-*` examples carry none.
 
 ## 9. Before communicating
