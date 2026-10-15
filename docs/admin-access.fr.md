@@ -36,12 +36,30 @@ Quatre choses hors du cluster, dans ton gestionnaire de mots de passe ou ton vau
 puis effacées des sorties locales. **Perdre la clé de seal fait perdre tous les secrets
 d'OpenBao** : c'est la clé maîtresse de ses données.
 
-| Quoi | Comment | Pourquoi |
+| Quoi | D'où cela vient | Pourquoi |
 |---|---|---|
-| Clé de seal | `kubectl -n foundation-vault get secret openbao-seal-key -o jsonpath='{.data.key}' \| base64 -d \| gpg --encrypt -r <toi> -o openbao-seal-key.gpg` | DR d'OpenBao : un snapshot raft est chiffré par elle |
-| Parts de recovery | `for i in 1 2 3; do kubectl -n foundation-vault get secret openbao-recovery-shares -o jsonpath="{.data.share-$i}" \| base64 -d > openbao-share-$i.b64; done` (chiffrées PGP : peuvent être rangées n'importe où) | root token de bris de glace et DR ; le Secret meurt avec le cluster |
-| Password restic | `bao_admin kv get -mount=secret -field=password backup/restic` | sans lui, backups indéchiffrables le jour où OpenBao est perdu |
-| `TF_VAR_encryption_passphrase` | déjà dans ton vault | tfstate (+ artefacts gpg + snapshots etcd, sauf si `TF_VAR_artifact_passphrase` est défini) |
+| Clé de seal | `openbao-seal-key.gpg`, chiffrée pour au moins deux dépositaires (`task escrow`, ci-dessous) | DR d'OpenBao : un snapshot raft est chiffré par elle |
+| Parts de recovery | `openbao-share-N.b64`, copiées par `task escrow` (chiffrées PGP : peuvent être rangées n'importe où) | root token de bris de glace et DR ; le Secret meurt avec le cluster |
+| Password restic | `restic-password.gpg`, lu par le chemin de `bao_admin` et chiffré pour les mêmes dépositaires | sans lui, backups indéchiffrables le jour où OpenBao est perdu |
+| `TF_VAR_encryption_passphrase` | déjà dans ton vault (deux endroits, `key-management.fr.md`) | tfstate (+ artefacts gpg + snapshots etcd, sauf si `TF_VAR_artifact_passphrase` est défini) |
+
+`task escrow` (`scripts/ops/escrow-openbao.sh`) fait les trois premières et les **prouve**. Il faut un kubeconfig, les tunnels et `gpg` :
+
+```bash
+task escrow -- export --out ~/oa-escrow-$(date +%F) -r <custodian-a> -r <custodian-b>   # or --recipients-from-tfvars envs/management-<p>.tfvars
+task escrow -- verify --from ~/oa-escrow-<date>      # each custodian, on their own machine, with their own key
+task escrow -- attest --from ~/oa-escrow-<date>      # only after the proof: writes openbao-escrow-ack and the annotation
+```
+
+`export` refuse moins de deux clés distinctes (l'ordinateur d'une seule personne est un seul point de perte et une seule fuite), un répertoire dans un arbre git, un
+répertoire non vide et un bootstrap de développement, et écrit à côté des fichiers un reçu de hachages (aucun secret). Avec plusieurs destinataires, **n'importe lequel**
+ouvre la clé : cela survit à la perte d'une personne, pas à une fuite. Pour « aucun dépositaire seul ne peut l'ouvrir », découper la clé à la main (apps `vault/README.md`,
+Day 0, étape 1 : ni `ssss` ni `gfsplit` n'ont été essayés sur cette plateforme) et la prouver avec `verify --key-file <les 32 octets bruts reconstitués des parts>` ;
+cet outil ne découpe pas. `verify` reconstitue la clé depuis l'escrow seul et compare son sha256 avec le reçu **et** avec le Secret vivant, et fait de même pour le
+password restic et les copies de parts ; une clé renouvelée est un MISMATCH, le cas que le CronJob apps ne voit pas. `attest` lance `verify`, puis écrit ce que le CronJob apps
+`openbao-escrow-check` et le contrôle 4.7 de `cluster-security` lisent (le ConfigMap `openbao-escrow-ack` et l'annotation `openaether.io/escrowed-at`). C'est la parole de l'opérateur
+appuyée sur un hachage : cela ne prouve pas que chaque dépositaire sait ouvrir sa copie, donc chacun lance `verify`. Refaire les trois après chaque rotation de la clé de seal (le runbook de rotation
+supprime les deux enregistrements). Travailler si possible dans un répertoire en RAM, copier le résultat à ses places, et le garder hors du cluster et de tout dépôt. Non exécuté sur un cluster : `LAB-CHECKLIST.md`.
 
 Un cluster sans `openbao_recovery_pgp_keys` est un bootstrap de **développement** : une
 part en clair dans `openbao-recovery-dev`, étiquetée comme telle, qui ne peut pas devenir un bootstrap de production (réinitialiser).
@@ -106,11 +124,11 @@ Un cluster semé avant ce changement garde une entrée Loki qui pointe sur le bu
 **Les sauvegardes peuvent aussi avoir leurs propres paires.** Exporter **les deux** `OA_BACKUP_S3_ACCESS_KEY_ID` / `OA_BACKUP_S3_SECRET_ACCESS_KEY` (pour `backup/s3-primary`) et, pour le
 jumeau `-backup` sur le store du réplica, `OA_BACKUP_REPLICA_S3_ACCESS_KEY_ID` / `OA_BACKUP_REPLICA_S3_SECRET_ACCESS_KEY`, chacune limitée à son bucket (la forme : `backup-policy.fr.md`,
 section 4). Sans elles, le cluster détient les clés de l'opérateur, qui ouvrent aussi les buckets d'état, d'artefacts et de journaux, et le script le dit. `scripts/ops/s3-isolation-check.sh <tfvars>`,
-avec les mêmes variables exportées, montre qui ouvre quoi. Pour changer une entrée qui existe, la poser par `bao_admin kv put`, puis relancer l'ExternalSecret.
+avec les mêmes variables exportées, montre qui ouvre quoi. Pour changer une entrée qui existe, `task rotate-secret -- <chemin> --apply` écrit une nouvelle version et relance les ExternalSecrets (`incident-response.fr.md`, section 7).
 
 Les clusters semés avant ce changement gardent ce qu'ils ont (create-only) : si
 `backup/s3-replica` porte les clés du primaire pour un réplica chez un autre cloud (#296),
-le corriger à la main avec `bao_admin kv put -mount=secret backup/s3-replica …`.
+le corriger avec `task rotate-secret -- backup/s3-replica --apply` (ou à la main : `bao_admin kv put -mount=secret backup/s3-replica …`).
 
 `s3-primary` alimente trois mécanismes d'un coup : restic, PITR CNPG et backups de volumes
 Longhorn. Tant que ce n'est pas semé, les ExternalSecrets restent NotReady, les CronJobs à
@@ -450,8 +468,8 @@ comme une régression.
 
 ## Checklist
 
-- [ ] Clé de seal OpenBao + parts de recovery escrowées
-- [ ] Password restic escrowé
+- [ ] Clé de seal OpenBao + parts de recovery escrowées pour deux dépositaires, prouvées et attestées (`task escrow`)
+- [ ] Password restic escrowé (la même commande)
 - [ ] Intermediate signé (HTTPS opérationnel)
 - [ ] Buckets créés + destinations semées
 - [ ] Premier snapshot testé sur les 2 destinations

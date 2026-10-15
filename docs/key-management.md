@@ -121,7 +121,7 @@ lifetime; this repository operates neither.
 
 Today `docs/admin-access.md` states that OpenAether has **one operator**. A single custodian is a single point of loss, and a single
 leak. For anything that matters: the seal key escrow has two custodians at minimum and is proved by a hash and attested in the cluster
-(apps `vault/README.md`, Day 0, steps 1 and 5); the recovery shares are one per operator; K5 and K6 belong in two different vaults, each with a
+(`task escrow`, `admin-access.md` section 1; apps `vault/README.md`, Day 0, steps 1 and 5); the recovery shares are one per operator; K5 and K6 belong in two different vaults, each with a
 second person able to open it. Where only one person exists, write that down in the incident register rather than leaving it implied.
 
 ## 4. End of use, erasure and archive

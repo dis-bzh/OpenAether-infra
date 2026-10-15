@@ -101,7 +101,7 @@ Une copie illisible après l'incident n'est pas une sauvegarde ; une copie que l
    `aws s3 ls` sur les buckets d'artefacts (endpoint et identifiants du détenteur), `restic snapshots` sur les deux dépôts. Noter les dates.
 2. **Copier le réplica ailleurs** (le bucket de l'autre provider, lu avec sa propre clé) sur un support que vous maîtrisez, avant de rien changer.
 3. **Remplacer les clés de stockage objet** (K7) : créer une nouvelle paire chez le provider, la mettre dans `.env.sh` et dans OpenBao (`secret/backup/s3-primary`, `s3-replica`), confirmer qu'une sauvegarde passe,
-   **puis** révoquer l'ancienne paire. L'ordre compte : révoquer en dernier, sinon les sauvegardes s'arrêtent. Les paires dédiées aussi (`OA_BACKUP_S3_*`, `OA_BACKUP_REPLICA_S3_*`, `OA_LOKI_S3_*`), de la même façon : nouvelle paire, `bao_admin kv put` sur l'entrée, rafraîchissement de l'ExternalSecret, puis révocation.
+   **puis** révoquer l'ancienne paire. L'ordre compte : révoquer en dernier, sinon les sauvegardes s'arrêtent. Les paires dédiées aussi (`OA_BACKUP_S3_*`, `OA_BACKUP_REPLICA_S3_*`, `OA_LOKI_S3_*`), de la même façon : nouvelle paire, `task rotate-secret -- <chemin> --apply` (nouvelle version de l'entrée, ExternalSecrets relancés), puis révocation.
 4. Si ce qui a fuité est le **mot de passe restic**, une copie du bucket a déjà les données ; voir le tableau de rotation (nouveau dépôt).
 5. Le verrou d'objet et le versionnement sont éteints sauf si `backup_immutability` a été positionné (`backup-policy.fr.md`, section 3). Sinon, une clé que l'attaquant détenait pouvait supprimer les copies ; l'activer avant le prochain incident, et **relire les buckets** : `scripts/ops/s3-isolation-check.sh <tfvars>`. L'activer pendant un incident ne protège pas ce qui est déjà supprimé.
 
@@ -127,7 +127,7 @@ Toutes les procédures sont écrites, **non exécutées** ; les objectifs de tem
 | `kubeconfig` / `talosconfig` admin (K2), PKI Talos (K1) | fichier fuité, ou nœud sous contrôle d'un attaquant | `key-management.fr.md` section 3 : nouveau cluster (chemin testé) ou `talosctl rotate-ca` (voie amont, non exécutée) | réémettre chaque fichier, effacer les anciennes générations d'état |
 | Passphrase d'état / d'artefacts (K5, K6) | fuitée, ou coffre qui la détient perdu | `key-management.fr.md` section 3 | supprimer les objets sous l'ancienne |
 | Clé des Secrets etcd (K3), passphrase des disques (K4) | fuitée avec un snapshot, un disque ou l'état | `key-management.fr.md` section 3 (reconstruction) | considérer chaque Secret comme fuité : renouveler ce qu'ils contiennent |
-| Clé de scellement OpenBao (K11) | fuitée avec un snapshot raft ou le PVC | apps `vault/README.md`, « Seal key rotation » (exécuté deux fois sur un cluster) | refaire le séquestre et son attestation |
+| Clé de scellement OpenBao (K11) | fuitée avec un snapshot raft ou le PVC | apps `vault/README.md`, « Seal key rotation » (exécuté deux fois sur un cluster) | refaire le séquestre et son attestation (`task escrow`, `admin-access.fr.md` section 1) |
 | Parts de récupération (K10) | un opérateur part, ou perd une clé | `OpenAether-apps/docs/key-inventory.md`, « Replacing a key » : générer un jeton root avec un quorum, `bao operator rekey` vers le nouvel ensemble PGP, révoquer le jeton | mettre à jour `openbao_recovery_pgp_keys` pour les futurs clusters |
 | Mot de passe restic | fuité, avec le bucket lisible | `restic key add` / `remove` ; ou un **nouveau dépôt** si l'ancien était lisible par l'attaquant | vider et supprimer l'ancien chemin (`backup-policy.fr.md`) |
 | Masterkey Zitadel, mots de passe de bases, passphrase Longhorn, mots de passe Grafana/MinIO | selon l'inventaire apps | `OpenAether-apps/docs/key-inventory.md`, « Replacing a key » | redémarrer les consommateurs ; noter que la masterkey n'a pas de rotation prise en charge et que celle de Longhorn ne doit pas changer sous des volumes chiffrés |
@@ -135,8 +135,11 @@ Toutes les procédures sont écrites, **non exécutées** ; les objectifs de tem
 | Tout ce qui a été publié (un jeton ou une adresse dans un commit) | gitleaks, ou vous l'avez remarqué | révoquer d'abord ; une purge d'historique limite la suite mais « une donnée publiée est publiée » (`CLAUDE.md`) | renouveler tout ce que le fichier fuité listait |
 | Comptes humains Zitadel | un compte est suspect | désactiver l'utilisateur dans la console ; le MFA est forcé par la politique apps sur une nouvelle instance | vérifier les rôles Grafana |
 
-`seed-openbao.sh` ne fait que créer (`cas=0`) : une valeur renouvelée est écrite par l'opérateur comme nouvelle version du chemin (inventaire apps), pas en relançant le script.
-Une tâche rotate-secret et un mode de remplacement relèvent de l'outillage, hors du périmètre de cette page.
+`seed-openbao.sh` ne fait que créer (`cas=0`) : le relancer ne renouvelle jamais rien. Le chemin de remplacement est `task rotate-secret -- <chemin> --apply`
+(`scripts/ops/rotate-secret.sh`) : une nouvelle version écrite en tant que `openaether-admin` avec un check-and-set, les valeurs prises dans `OA_ROTATE_*` de l'environnement, les ExternalSecrets relancés, et
+`--restart <ns>/<kind>/<nom>` redémarrant un consommateur une fois qu'ils se sont rafraîchis. Il gère les paires du stockage objet (`backup/s3-primary`, `backup/s3-replica`, `observability/loki-s3`), les deux URL d'alerte et
+`grafana/oidc` ; il **refuse** `backup/restic`, `zitadel/masterkey`, `longhorn/encryption`, les mots de passe de bases, `zitadel/admin`, `grafana/admin` et `minio/root` et dit pourquoi (chacun a une étape
+coordonnée que l'outil ne sait pas faire : `OpenAether-apps/docs/key-inventory.md`). Un essai à blanc est le défaut. Simulé seulement : `LAB-CHECKLIST.md`, B17.
 
 ## 8. Restaurer : choisir le point, corriger d'abord la cause
 

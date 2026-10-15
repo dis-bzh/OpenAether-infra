@@ -513,7 +513,7 @@ record the review as one row of `audit-register.md`. None of it has been run as 
 
 - [ ] every row of the key inventory still true: a new generated key, bucket or credential has a row; none is past its proposed period without a reason written in the row
 - [ ] the state and artifact passphrases (K5, K6) open from their escrow copies, held in two places: `task restore-artifacts PROVIDER=<p> FROM=replica` into a scratch directory succeeds, and a second person can open the vault entry
-- [ ] the OpenBao seal-key escrow is attested and younger than 400 days (`task cluster-security`, check 4.7) and names at least two custodians
+- [ ] the OpenBao seal-key escrow is attested and younger than 400 days (`OA_ESCROW_ANNOTATION_CHECK=1 ENVIRONMENT=prod task cluster-security`, check 4.7: it also fails when the attestation is of another key than the live one) and names at least two custodians; each custodian ran `task escrow -- verify --from <their copy>` this quarter
 - [ ] S3 keys (K7) and provider keys (K8): list them at each provider, match each to a use, revoke what has none; the CI `sandbox` keys are younger than 90 days
 
 **Accounts and access** (`security-architecture.md`, section 3)

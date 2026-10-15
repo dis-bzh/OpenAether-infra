@@ -118,7 +118,7 @@ maximale de 8 h ; ce dépôt n'exploite ni l'un ni l'autre.
 ### Séquestre : combien de dépositaires
 
 Aujourd'hui `docs/admin-access.fr.md` indique qu'OpenAether a **un opérateur**. Un seul dépositaire est un point unique de perte, et de fuite. Pour tout ce
-qui compte : le séquestre de la clé de scellement a deux dépositaires au minimum et est prouvé par un hachage et attesté dans le cluster (apps `vault/README.md`, Day 0, étapes
+qui compte : le séquestre de la clé de scellement a deux dépositaires au minimum et est prouvé par un hachage et attesté dans le cluster (`task escrow`, `admin-access.fr.md` section 1 ; apps `vault/README.md`, Day 0, étapes
 1 et 5) ; les parts de récupération sont une par opérateur ; K5 et K6 vont dans deux coffres différents, chacun avec une seconde personne capable de l'ouvrir. Là où il
 n'y a qu'une personne, l'écrire dans le registre d'incidents plutôt que de le laisser implicite.
 

@@ -33,12 +33,30 @@ bao_admin() {
 Four things off the cluster, in your password manager or vault, then wiped from local output.
 **Losing the seal key loses every secret in OpenBao**: it is the master key of its data.
 
-| What | How | Why |
+| What | Where it comes from | Why |
 |---|---|---|
-| Seal key | `kubectl -n foundation-vault get secret openbao-seal-key -o jsonpath='{.data.key}' \| base64 -d \| gpg --encrypt -r <you> -o openbao-seal-key.gpg` | OpenBao DR: a raft snapshot is encrypted by it |
-| Recovery shares | `for i in 1 2 3; do kubectl -n foundation-vault get secret openbao-recovery-shares -o jsonpath="{.data.share-$i}" \| base64 -d > openbao-share-$i.b64; done` (PGP-encrypted: safe to store anywhere) | break-glass root token and DR; the Secret dies with the cluster |
-| restic password | `bao_admin kv get -mount=secret -field=password backup/restic` | without it the backups are undecryptable the day OpenBao is lost |
-| `TF_VAR_encryption_passphrase` | already in your vault | tfstate (+ gpg artifacts + etcd snapshots unless `TF_VAR_artifact_passphrase` is set) |
+| Seal key | `openbao-seal-key.gpg`, encrypted to at least two custodians (`task escrow`, below) | OpenBao DR: a raft snapshot is encrypted by it |
+| Recovery shares | `openbao-share-N.b64`, copied by `task escrow` (PGP-encrypted: safe to store anywhere) | break-glass root token and DR; the Secret dies with the cluster |
+| restic password | `restic-password.gpg`, read through `bao_admin`'s path and encrypted to the same custodians | without it the backups are undecryptable the day OpenBao is lost |
+| `TF_VAR_encryption_passphrase` | already in your vault (two places, `key-management.md`) | tfstate (+ gpg artifacts + etcd snapshots unless `TF_VAR_artifact_passphrase` is set) |
+
+`task escrow` (`scripts/ops/escrow-openbao.sh`) does the first three and **proves** them. It needs a kubeconfig and the tunnels, and `gpg`:
+
+```bash
+task escrow -- export --out ~/oa-escrow-$(date +%F) -r <custodian-a> -r <custodian-b>   # or --recipients-from-tfvars envs/management-<p>.tfvars
+task escrow -- verify --from ~/oa-escrow-<date>      # each custodian, on their own machine, with their own key
+task escrow -- attest --from ~/oa-escrow-<date>      # only after the proof: writes openbao-escrow-ack and the annotation
+```
+
+`export` refuses fewer than two distinct keys (one person's laptop is one point of loss and one leak), a directory inside a git work tree, a
+non-empty directory and a development bootstrap, and writes a receipt of hashes (no secret) beside the files. With several recipients **any one**
+of them opens the key: it survives losing a person, not one leak. For "no single custodian can open it", split the key by hand (apps `vault/README.md`,
+Day 0, step 1: neither `ssss` nor `gfsplit` was tried on this platform) and prove it with `verify --key-file <the raw 32 bytes reconstructed from the shares>`;
+this tool does not split. `verify` reconstructs the key from the escrow alone and compares its sha256 with the receipt **and** with the live Secret, and does the same for
+the restic password and the share copies; a rotated key is a MISMATCH, which is the case the apps CronJob cannot see. `attest` runs `verify`, then writes what the apps
+CronJob `openbao-escrow-check` and `cluster-security` check 4.7 read (the ConfigMap `openbao-escrow-ack` and the annotation `openaether.io/escrowed-at`). It is the operator's word
+backed by a hash: it does not prove that every custodian can open their copy, so have each one run `verify`. Redo all three after every seal-key rotation (the rotation runbook deletes both
+records). Work in a RAM-backed directory where you can, copy the result to its places, and keep it out of the cluster and of every repository. Not run on a cluster: `LAB-CHECKLIST.md`.
 
 A cluster without `openbao_recovery_pgp_keys` is a **development** bootstrap: one plaintext share in
 `openbao-recovery-dev`, labelled as such, and it can not be turned into a production one (re-initialise it). Do not put anything that
@@ -102,11 +120,11 @@ so. Clusters seeded before this change keep a Loki entry that points at the back
 **The backups can have pairs of their own too.** Export **both** of `OA_BACKUP_S3_ACCESS_KEY_ID` / `OA_BACKUP_S3_SECRET_ACCESS_KEY` (for `backup/s3-primary`) and, for the
 `-backup` twin on the replica store, `OA_BACKUP_REPLICA_S3_ACCESS_KEY_ID` / `OA_BACKUP_REPLICA_S3_SECRET_ACCESS_KEY`, each limited to its bucket (the shape: `backup-policy.md`,
 section 4). Unset, the cluster holds the operator's keys, which open the state, artifact and logs buckets too, and the script says so. `scripts/ops/s3-isolation-check.sh <tfvars>`,
-with the same variables exported, shows who opens what. To change an entry that exists, `bao_admin kv put` it over, then nudge the ExternalSecret.
+with the same variables exported, shows who opens what. To change an entry that exists, `task rotate-secret -- <path> --apply` writes a new version and nudges the ExternalSecrets (`incident-response.md`, section 7).
 
 Clusters seeded before this change keep what they have (create-only): if `backup/s3-replica`
-holds the primary's keys for a replica on another cloud (#296), correct it by hand with
-`bao_admin kv put -mount=secret backup/s3-replica …`.
+holds the primary's keys for a replica on another cloud (#296), correct it with
+`task rotate-secret -- backup/s3-replica --apply` (or by hand: `bao_admin kv put -mount=secret backup/s3-replica …`).
 
 `s3-primary` feeds three mechanisms at once: restic, CNPG PITR and Longhorn volume backups.
 Until seeded, the ExternalSecrets stay NotReady, the CronJobs idle and Loki does not install:
@@ -429,8 +447,8 @@ regression.
 
 ## Checklist
 
-- [ ] OpenBao seal key + recovery shares escrowed
-- [ ] restic password escrowed
+- [ ] OpenBao seal key + recovery shares escrowed to two custodians, proved and attested (`task escrow`)
+- [ ] restic password escrowed (the same command)
 - [ ] Intermediate signed (HTTPS working)
 - [ ] Backup buckets created + destinations seeded
 - [ ] First snapshot tested against both destinations

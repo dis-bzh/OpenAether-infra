@@ -99,7 +99,7 @@ A copy that cannot be read after the incident is not a backup; a copy the attack
    `aws s3 ls` on the artifact buckets (endpoint and the holder's credentials), `restic snapshots` on the two repositories. Note the dates.
 2. **Copy the replica out** (the other provider's bucket, read with its own key) to media you control, before you change anything.
 3. **Replace the object-store keys** (K7): create a new pair at the provider, put it in `.env.sh` and in OpenBao (`secret/backup/s3-primary`, `s3-replica`), confirm a backup run succeeds,
-   **then** revoke the old pair. Order matters: revoke last, or backups stop. The dedicated pairs too (`OA_BACKUP_S3_*`, `OA_BACKUP_REPLICA_S3_*`, `OA_LOKI_S3_*`), the same way: new pair, `bao_admin kv put` over the entry, ExternalSecret refresh, then revoke.
+   **then** revoke the old pair. Order matters: revoke last, or backups stop. The dedicated pairs too (`OA_BACKUP_S3_*`, `OA_BACKUP_REPLICA_S3_*`, `OA_LOKI_S3_*`), the same way: new pair, `task rotate-secret -- <path> --apply` (a new version of the entry, ExternalSecrets nudged), then revoke.
 4. If the leaked thing is the **restic password**, a copy of the bucket already has the data; see the rotation table (new repository).
 5. Object lock and versioning are off unless `backup_immutability` was set (`backup-policy.md`, section 3). If they were not, a key the attacker held could delete the copies; turn it on before the next incident, and **read the buckets back**: `scripts/ops/s3-isolation-check.sh <tfvars>`. Turning it on during an incident does not protect what is already deleted.
 
@@ -125,7 +125,7 @@ All procedures are written, **not run**; time targets are not measured.
 | Admin `kubeconfig` / `talosconfig` (K2), Talos PKI (K1) | leaked file, or a node under attacker control | `key-management.md` section 3: new cluster (tested route) or `talosctl rotate-ca` (upstream route, not run) | reissue every file, erase old state generations |
 | State / artifact passphrase (K5, K6) | leaked, or the vault holding it lost | `key-management.md` section 3 | delete the objects under the old one |
 | etcd Secrets key (K3), disk passphrase (K4) | leaked with a snapshot, a disk or the state | `key-management.md` section 3 (rebuild) | treat every Secret as leaked: rotate what they contain |
-| OpenBao seal key (K11) | leaked with a raft snapshot or the PVC | apps `vault/README.md`, "Seal key rotation" (run on a cluster twice) | redo the escrow and its attestation |
+| OpenBao seal key (K11) | leaked with a raft snapshot or the PVC | apps `vault/README.md`, "Seal key rotation" (run on a cluster twice) | redo the escrow and its attestation (`task escrow`, `admin-access.md` section 1) |
 | Recovery shares (K10) | an operator leaves, or loses a key | `OpenAether-apps/docs/key-inventory.md`, "Replacing a key": generate a root token with a quorum, `bao operator rekey` to the new PGP set, revoke the token | update `openbao_recovery_pgp_keys` for future clusters |
 | restic password | leaked, with the bucket readable | `restic key add` / `remove`; or a **new repository** if the old one was readable by the attacker | empty and delete the old path (`backup-policy.md`) |
 | Zitadel masterkey, database passwords, Longhorn passphrase, Grafana/MinIO passwords | per the apps inventory | `OpenAether-apps/docs/key-inventory.md`, "Replacing a key" | restart the consumers; note that the masterkey has no supported rotation and the Longhorn one must not change under encrypted volumes |
@@ -133,8 +133,11 @@ All procedures are written, **not run**; time targets are not measured.
 | Anything published (a token or an address in a commit) | gitleaks, or you noticed | revoke first; a history purge limits the tail but "a published datum is published" (`CLAUDE.md`) | rotate everything the leaked file listed |
 | Zitadel human accounts | an account is suspect | disable the user in the console; MFA is forced by the apps policy on a new instance | check Grafana roles |
 
-`seed-openbao.sh` is create-only (`cas=0`): a rotated value is written by the operator as a new version of the path
-(apps inventory), not by re-running it. A rotate-secret task and a replace mode are tooling work, not in this page's scope.
+`seed-openbao.sh` is create-only (`cas=0`): re-running it never rotates. The replace path is `task rotate-secret -- <path> --apply`
+(`scripts/ops/rotate-secret.sh`): a new version written as `openaether-admin` with a check-and-set, values from `OA_ROTATE_*` in the environment, the ExternalSecrets nudged, and
+`--restart <ns>/<kind>/<name>` restarting a consumer once they have refreshed. It handles the object-store pairs (`backup/s3-primary`, `backup/s3-replica`, `observability/loki-s3`), the two alert URLs and
+`grafana/oidc`; it **refuses** `backup/restic`, `zitadel/masterkey`, `longhorn/encryption`, the database passwords, `zitadel/admin`, `grafana/admin` and `minio/root` and says why (each has a coordinated
+step the tool cannot do: `OpenAether-apps/docs/key-inventory.md`). A dry run is the default. Mocked only: `LAB-CHECKLIST.md`, B17.
 
 ## 8. Restore: choose the point, fix the cause first
 

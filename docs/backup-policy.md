@@ -88,8 +88,8 @@ The state and artifact buckets are written only from the operator's machine and 
 
 `DeleteObject` stays allowed: on a versioned bucket it writes a marker, and restic, Barman, Longhorn and Loki delete as part of their work (not tried against a key without `DeleteObjectVersion`).
 `scripts/ops/s3-isolation-check.sh <tfvars>` reads, with the pairs in the environment, which identity lists which bucket, whether each dedicated pair is refused `DeleteObjectVersion` (a version that does not exist is named:
-nothing is deleted), and whether the buckets carry the `backup_immutability` you set. Exit 0 held, 1 did not, 2 no dedicated pair in scope. The seed is create-only: to **rotate** a pair, create the new one at the provider, `bao_admin kv put` it
-over the entry (`admin-access.md`, section 3), let the ExternalSecret refresh, confirm a backup or a log flush, then revoke the old one.
+nothing is deleted), and whether the buckets carry the `backup_immutability` you set. Exit 0 held, 1 did not, 2 no dedicated pair in scope. The seed is create-only: to **rotate** a pair, create the new one at the provider, write it with `task rotate-secret -- <path> --apply`
+(`admin-access.md`, section 3), let the ExternalSecret refresh, confirm a backup or a log flush, then revoke the old one.
 
 ## 5. What is not done
 

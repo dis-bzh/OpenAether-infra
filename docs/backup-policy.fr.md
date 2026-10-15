@@ -88,8 +88,8 @@ Les buckets d'état et d'artefacts ne sont écrits que depuis la machine de l'op
 
 `DeleteObject` reste autorisé : sur un bucket versionné il écrit un marqueur, et restic, Barman, Longhorn et Loki suppriment dans leur travail normal (non essayé avec une clé sans `DeleteObjectVersion`).
 `scripts/ops/s3-isolation-check.sh <tfvars>` lit, avec les paires dans l'environnement, quelle identité liste quel bucket, si chaque paire dédiée se voit refuser `DeleteObjectVersion` (une version qui n'existe pas est nommée :
-rien n'est supprimé), et si les buckets portent le `backup_immutability` choisi. Sortie 0 : tenu, 1 : non tenu, 2 : aucune paire dédiée dans l'environnement. Le seed est en création seule : pour **renouveler** une paire, créer la nouvelle chez le provider, la poser par
-`bao_admin kv put` sur l'entrée (`admin-access.fr.md`, section 3), laisser l'ExternalSecret se rafraîchir, confirmer une sauvegarde ou un flush de journaux, puis révoquer l'ancienne.
+rien n'est supprimé), et si les buckets portent le `backup_immutability` choisi. Sortie 0 : tenu, 1 : non tenu, 2 : aucune paire dédiée dans l'environnement. Le seed est en création seule : pour **renouveler** une paire, créer la nouvelle chez le provider, l'écrire avec
+`task rotate-secret -- <chemin> --apply` (`admin-access.fr.md`, section 3), laisser l'ExternalSecret se rafraîchir, confirmer une sauvegarde ou un flush de journaux, puis révoquer l'ancienne.
 
 ## 5. Ce qui n'est pas fait
 
