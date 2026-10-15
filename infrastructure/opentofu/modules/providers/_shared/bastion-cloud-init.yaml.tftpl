@@ -269,7 +269,8 @@ write_files:
   # `sshd -t` rejects it, so a bad directive can never leave the proven config unusable.
   # --------------------------------------------------------------------------
   - path: /etc/ssh/sshd_config.d/98-bastion-baseline.conf
-    permissions: '0600'
+    # 0644: directives, no secret, and the account that has no sudo (by design) can then verify them (hardening check).
+    permissions: '0644'
     content: |
       LogLevel VERBOSE
       StrictModes yes
