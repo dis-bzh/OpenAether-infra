@@ -44,18 +44,15 @@ useDefault = true
 [[rules]]
 id = "openaether-public-ipv4"
 description = "A routable IPv4 — an example must use RFC 5737 or RFC 1918"
-regex = '''\b((?:[0-9]{1,3}\.){3}[0-9]{1,3})\b'''
+regex = '''\b((?:[0-9]{1,3}\.){3}[0-9]{1,3})(?:/[0-9]{1,2})?\b'''
 tags = ["environment-data"]
 
-  [rules.allowlist]
-  # Matched against the whole LINE, not the quad alone: a dotted quad and a
-  # four-part version are the same shape, and only the context tells them apart.
-  regexTarget = "line"
+  # Judged against the MATCH (the address and its /prefix), never the whole line: with the line as target one
+  # private range or one word in a comment excused a real address next to it
+  # (`["10.0.0.0/8", "<public>/32"]` passed, so did `<public> # shared`).
+  [[rules.allowlists]]
+  regexTarget = "match"
   regexes = [
-    # A four-part version reads as an address. Nothing else separates them.
-    # No \b around these: `_` is a word character, so \bversion\b never matched
-    # `chart_version` — the shape every one of these keys actually has.
-    '''(?i)(version|semver|revision|chart|checksum|sha)''',
     # Global anycast resolvers. These belong to Cloudflare, Google and Quad9 —
     # they are nobody's environment, and they are legitimate defaults in code.
     '''\b(1\.1\.1\.1|1\.0\.0\.1|8\.8\.8\.8|8\.8\.4\.4|9\.9\.9\.9|149\.112\.112\.112)\b''',
@@ -72,6 +69,12 @@ tags = ["environment-data"]
     '''\b169\.254\.[0-9]{1,3}\.[0-9]{1,3}\b''',
     '''\b0\.0\.0\.0\b''',
     '''\b(22[4-9]|23[0-9])\.([0-9]{1,3}\.){2}[0-9]{1,3}\b''',
+    # A network block of /16 or wider (a provider's published range) names no host.
+    # A /24 or a /32 can name one, so those stay caught.
+    '''^[0-9]{1,3}\.[0-9]{1,3}\.0\.0/([89]|1[0-6])$''',
+    # `1.2.3.4` is the universal example address. A leading zero in an octet (`09.9.9.9`) is no address this project accepts.
+    '''^1\.2\.3\.4(/[0-9]{1,2})?$''',
+    '''(^|\.)0[0-9]+(\.|$)''',
     # Any octet out of range is not an address at all.
     '''\b[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.(2[6-9][0-9]|[3-9][0-9]{2}|[0-9]{4,})\b''',
   ]
@@ -88,6 +91,14 @@ tags = ["environment-data"]
     '''\.gitleaks\.toml''',
   ]
 
+  # A four-part version reads as an address, and only the line says which it is. The word must stand alone between non-letters
+  # (`chart_version`, `talosVersion`, `sha256`): a bare substring let `# shared` and `charts` excuse any address on the line.
+  [[rules.allowlists]]
+  regexTarget = "line"
+  regexes = [
+    '''(?i)(^|[^a-z])([a-z]*version|semver|revision|chart|checksum|sha(256)?)([^a-z]|$)''',
+  ]
+
 # --- Cloud account / project / organisation identifiers ---------------------
 # The span between the key and the value is {1,24}, not {1,4}: `tofu fmt` aligns
 # `=` across a block, so nine spaces between `account_id` and its value is the
@@ -98,14 +109,19 @@ tags = ["environment-data"]
 [[rules]]
 id = "openaether-account-id"
 description = "A cloud account id (12+ digits) — use a placeholder"
-regex = '''(?i)\b(account|tenant|project|organi[sz]ation)[-_ ]?id\b["'\s:=]{1,24}["']?([0-9]{12,})'''
+regex = '''(?i)(account|tenant|project|organi[sz]ation)[-_ ]?id\b["'\s:=]{1,24}["']?([0-9]{12,})'''
 secretGroup = 2
 tags = ["environment-data"]
+
+  [rules.allowlist]
+  # An all-zero id is the placeholder (.env.example).
+  regexTarget = "secret"
+  regexes = ['''^0+$''']
 
 [[rules]]
 id = "openaether-account-uuid"
 description = "A real-looking UUID next to an account/project/organisation key"
-regex = '''(?i)\b(account|tenant|project|organi[sz]ation)[-_ ]?id\b["'\s:=]{1,24}["']?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})'''
+regex = '''(?i)(account|tenant|project|organi[sz]ation)[-_ ]?id\b["'\s:=]{1,24}["']?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})'''
 secretGroup = 2
 tags = ["environment-data"]
 
@@ -124,13 +140,16 @@ tags = ["environment-data"]
 [[rules]]
 id = "openaether-bucket-name"
 description = "A concrete S3 bucket name — parameterise it"
-regex = '''\bs3-[a-z0-9][a-z0-9-]{3,60}-(?:tfstate|backups?)(?:-[a-z0-9]+)?\b'''
+regex = '''\bs3-[a-z0-9][a-z0-9-]{3,60}-(?:tfstate|backups?|logs|management|workload|failover)(?:-[a-z0-9]+)?\b'''
 tags = ["environment-data"]
 
   [rules.allowlist]
   regexTarget = "match"
+  # A test fixture that names a bucket in the default, unsuffixed form.
+  paths = ['''scripts/dev/test-restore\.sh''']
   regexes = [
     # Anything carrying an obvious placeholder is the documented form.
-    '''(?i)(your|my|example|placeholder|change[-_]?me|<[a-z-]+>|\$\{)''',
+    '''(?i)((^|-)(your|my|example|placeholder|change-?me)(-|$)|<[a-z-]+>|\$\{)''',
+    '''\bs3-realname-backups\b''',  # the fixture of test-check-child-clusters.sh
     '''\bs3-openaether-(scw|ovh|outscale)-backups\b''',  # the README's illustrations
   ]

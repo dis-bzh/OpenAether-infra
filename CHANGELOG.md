@@ -63,6 +63,12 @@ in git. 0.1.0 is the first entry describing something proven.
   The name of the dependency watcher, Cléa, is no longer read as French (taught in both repositories at once).
 ### Added
 
+- **The environment-data rules of `.gitleaks-envdata.toml` judge the token, not the line, and know more names.** An independent review of the
+  copy added to OpenAether-apps showed that one private range or one word like `shared` on a line excused a real address next to it, that
+  `outscale_account_id` and `OSC_ACCOUNT_ID` (prefixed names) were not matched, and that the logs and artifact buckets were not covered. The same
+  file is fixed here; the probe now holds 16 values it must catch and 13 it must leave alone. Known limit: a line carrying a version word is
+  excused whole. Rung: the probe, run before the scan in CI.
+
 - **`explain-failure.sh` points at the OVH router's SNAT port** when a run says `time is not in sync` and touched `module.ovh`.
   Seen once on a real account: a router whose `network:router_centralized_snat` port stayed DOWN left every node without DNS or
   NTP, and a fresh router of the same code was ACTIVE. The message gives the read-only command and says a bad router does not
