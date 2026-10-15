@@ -28,9 +28,9 @@ account.
 
 ## Version
 
-**0.2.1** (a patch, not yet tagged) — no new scope. It is the infra half of the pair with OpenAether-apps 0.2.0: Day-1 seeding without a root
+**0.2.1** (a patch) — no new scope. It is the infra half of the pair with OpenAether-apps 0.2.0: Day-1 seeding without a root
 token, a bucket of its own for Loki, a language check shared with the apps, and the Day-1 documentation corrected. It was run on real clouds by
-hand once, with a branch of the apps; see `CHANGELOG.md` for what was and was not observed. A cluster built by 0.2.0 (apps 0.1.0) cannot be moved to
+hand once (Scaleway and OVH with the apps 0.2.0 tag as pinned, Outscale with the reduced apps profile on a branch); see `CHANGELOG.md` for what was and was not observed. A cluster built by 0.2.0 (apps 0.1.0) cannot be moved to
 it in place.
 
 **0.2.0** — the same scope as 0.1.0 and nothing above it: Talos and Cilium, Flux

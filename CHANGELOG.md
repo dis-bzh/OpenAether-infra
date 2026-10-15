@@ -14,6 +14,12 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-10-15
+
+**The infra half of the pair with OpenAether-apps 0.2.0: Day-1 seeding without a root token, a bucket of its own for Loki, a language check shared with the apps, and the Day-1 documentation corrected. A patch: no new scope.** It pins apps `refs/tags/0.2.0`. Read the entries below with their rung: real cloud means once, by hand, on the clouds named; nothing is repeated or unattended, and `cluster-up` with `deploy_flux = true` still ends 201 until the Day-1 seeding has run.
+
+**Not fixed, and not observed:** the dedicated Loki key pair was never run on a cloud; infra #302 stays open for it. `task cluster-upgrade`'s pre-upgrade safeguards (#270) have never run on a cloud. Outscale ran the reduced apps profile only. An OVH worker can stay `ACTIVE` while dead (#49): it happened once and was hard-rebooted. No disaster-recovery restore, no rolling upgrade with Flux, no Proxmox hardware.
+
 ### Security
 
 - **Loki writes to a bucket of its own (#302).** `seed-openbao.sh` seeded `observability/loki-s3` with the backups bucket and the
@@ -111,6 +117,16 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Validated
 
+- **The pair as shipped, 2026-10-15 (infra `dcd1ace`, no `git_ref` in the tfvars so the default `refs/tags/0.2.0` applied; apps tag 0.2.0 at
+  `22b00cc`).** Rung: real cloud, **once per cloud**, by hand. **Scaleway and OVH**, management role, 3 control planes + 2 workers,
+  `deploy_flux = true`, three throwaway PGP recovery keys: Flux followed `refs/tags/0.2.0` at `22b00cc`; `cluster-up` ended 201 on
+  `flux-system exists` only (13 passed, 1 failed); the seeding printed the shared-keys warning from OpenBao's answers; 35 of 35
+  Kustomizations, every pod Running; the Kyverno report held 2 results (the Istio-generated proxies, apps #70); `grafana-db` and
+  `zitadel-db` Ready with archiving True; Longhorn BackupTarget available; Loki's first objects in its own logs bucket after its 30-minute
+  idle flush, the backups bucket holding only `cnpg/`; `cluster-security` 30 of 31; strict plan "No changes". `task apps-validate` is green
+  against the tag. **Not run on the shipped pins:** Outscale (its quota only holds the reduced apps profile, which needs a branch, so the
+  Outscale run below is with a branch), an upgrade, the dedicated Loki key pair, Proxmox. Both clusters torn down, `purge-orphans` and
+  `verify-provider-clean` clean, lab buckets and images deleted.
 - **The 0.2.1 candidate with the apps 0.2.0 candidate on three clouds, 2026-10-15** (the apps branches are not tags; see that repository's
   CHANGELOG for what ran inside). Rung: real cloud, **once per cloud**, by hand; `cluster-up` ended 201 on `flux-system exists` only
   (13 passed, 1 failed), as documented until the Day-1 seeding. **Scaleway** (infra `4ae2357`): `seed-openbao.sh` printed the shared-keys
