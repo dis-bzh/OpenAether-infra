@@ -16,6 +16,14 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Security
 
+- **Loki writes to a bucket of its own (#302).** `seed-openbao.sh` seeded `observability/loki-s3` with the backups bucket and the
+  backup keys, so a compromised Loki could erase the backups, against what the docs and the ExternalSecret said. It now seeds
+  `s3-<project>-<provider>-logs-<env>` (`oa_logs_bucket`, created by `ensure-buckets.sh` beside the artifacts bucket) and, when
+  `OA_LOKI_S3_ACCESS_KEY_ID` and `OA_LOKI_S3_SECRET_ACCESS_KEY` are both set, that pair (half a pair is refused before any write).
+  **Without them Loki still gets the primary's keys, which are account-wide on the providers, and the script says that the
+  separate bucket then protects against a mistake and not against a compromise.** Scoped keys are the operator's to create; this
+  repository does not create them. A cluster seeded earlier keeps its entry (create-only). Rung: mocked (seed and name tests);
+  the real-cloud run is part of the 0.2.1 validation and is recorded under Validated when done.
 - **Day-1 seeding without a root token (#296, #297).** `scripts/ops/seed-openbao.sh` read the root token from the Secret
   `openbao-recovery` and passed it, with every value, on the `kubectl exec` command line. With OpenAether-apps 0.1.1 there is
   no such Secret (the bootstrap revokes the root token), and the script now uses the ServiceAccount `openbao-seeder`:

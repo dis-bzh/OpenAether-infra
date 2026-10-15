@@ -86,10 +86,17 @@ within about two minutes after). A deploy is not finished until this has run.
 ```text
 secret/backup/s3-primary                      endpoint bucket access_key secret_key
 secret/backup/s3-replica                      endpoint bucket access_key secret_key   (the replica cloud's keys)
-secret/observability/loki-s3                  endpoint bucket accessKey secretKey     (its own entry, so it can be pointed elsewhere; the seed gives it the backup bucket and keys today: #302)
+secret/observability/loki-s3                  endpoint bucket accessKey secretKey     (its own bucket, `s3-<project>-<provider>-logs-<env>`, created by `ensure-buckets.sh`; its own keys when you give them, see below)
 secret/observability/alertmanager-slack       webhook-url   (Alertmanager will not start without it; on a throwaway cluster any value works)
 secret/observability/alertmanager-deadmansswitch   url      (the only signal that survives this cluster dying; Slack-only? drop the Watchdog route from vm-customresources/vmalert.yaml, deliberately)
 ```
+
+**Loki has a bucket of its own (#302).** The seed points `observability/loki-s3` at `s3-<project>-<provider>-logs-<env>`, which
+`ensure-buckets.sh` creates beside the artifacts bucket (a pre-existing cluster creates it by hand). Loki gets the primary store's
+keys unless you export **both** `OA_LOKI_S3_ACCESS_KEY_ID` and `OA_LOKI_S3_SECRET_ACCESS_KEY`: a pair that reaches that bucket and
+nothing else, which you create with your provider's own tools (the providers' S3 keys are account-wide by default). With the
+shared keys the separate bucket protects the backups from a mistake in Loki, **not** from a compromised Loki, and the script says
+so. Clusters seeded before this change keep a Loki entry that points at the backups bucket (create-only).
 
 Clusters seeded before this change keep what they have (create-only): if `backup/s3-replica`
 holds the primary's keys for a replica on another cloud (#296), correct it by hand with

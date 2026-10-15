@@ -228,6 +228,7 @@ oa_project() { # <cluster_name> [bucket_suffix] — the bucket namespace
 oa_state_bucket() { printf 's3-%s-%s-tfstate-%s' "$1" "$2" "$3"; }            # project provider env
 oa_artifact_bucket() { printf 's3-%s-%s-%s-%s' "$1" "$2" "$3" "$4"; }         # project provider role env
 oa_backup_bucket() { printf 's3-%s-%s-backups-%s' "$1" "$2" "$3"; }           # project provider env (restic, Longhorn)
+oa_logs_bucket() { printf 's3-%s-%s-logs-%s' "$1" "$2" "$3"; }               # project provider env (Loki; never the backups bucket, #302)
 
 # --- Local port block for the per-node Talos API tunnels (CPs 50000+off+i,
 # workers 50100+off+i). The ports were fixed, which meant one cluster at a time

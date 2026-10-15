@@ -67,7 +67,21 @@ RSK="$("$ROOT/scripts/internal/resolve-s3-cred.sh" "$PROVIDER" sk backup "$REPLI
 [ -n "$RAK" ] && [ -n "$RSK" ] || fail "no S3 credentials in scope for the replica store $REPLICA_EP (source .env.sh? the replica's cloud has its own keys)"
 
 # Application-backup bucket, through the SAME derivation as cluster/backup.tf and every other shell caller (#166).
-BUCKET="$(oa_backup_bucket "$(oa_project "$(tfvar cluster_name)" "$(tfvar bucket_suffix || true)")" "$PROVIDER" "$(tfvar environment)")"
+PROJECT="$(oa_project "$(tfvar cluster_name)" "$(tfvar bucket_suffix || true)")"
+BUCKET="$(oa_backup_bucket "$PROJECT" "$PROVIDER" "$(tfvar environment)")"
+
+# Loki writes to ITS OWN bucket (#302): handing it the backups bucket let a compromised Loki erase the backups. Its keys
+# are the operator's, when given: both OA_LOKI_S3_ACCESS_KEY_ID and OA_LOKI_S3_SECRET_ACCESS_KEY, a pair that can reach
+# the logs bucket and nothing else (the providers' S3 keys are account-wide unless the operator scopes them). Without
+# them Loki gets the primary's keys, and the script says what that does and does not protect against.
+LOGS_BUCKET="$(oa_logs_bucket "$PROJECT" "$PROVIDER" "$(tfvar environment)")"
+LAK="${OA_LOKI_S3_ACCESS_KEY_ID:-}"; LSK="${OA_LOKI_S3_SECRET_ACCESS_KEY:-}"
+if [ -n "$LAK" ] || [ -n "$LSK" ]; then
+  [ -n "$LAK" ] && [ -n "$LSK" ] || fail "OA_LOKI_S3_ACCESS_KEY_ID and OA_LOKI_S3_SECRET_ACCESS_KEY go together: set both or neither"
+  LOKI_KEYS="dedicated"
+else
+  LAK="$AK"; LSK="$SK"; LOKI_KEYS="shared"
+fi
 
 # Alerting endpoints are real in production and arbitrary on a throwaway cluster. Say which of the two happened.
 SLACK_URL="${OA_SLACK_WEBHOOK_URL:-}"
@@ -92,11 +106,12 @@ doc() { # <path> <key=ENVVAR>... — values come from the named variables
 PAYLOAD="$(
   EP1="$PRIMARY_EP" B1="$BUCKET" A1="$AK" S1="$SK" \
   EP2="$REPLICA_EP" B2="${BUCKET}-backup" A2="$RAK" S2="$RSK" \
+  B3="$LOGS_BUCKET" A3="$LAK" S3="$LSK" \
   SL="$SLACK_URL" DM="$DMS_URL" \
   bash -c "$(declare -f doc)
     doc backup/s3-primary endpoint=EP1 bucket=B1 access_key=A1 secret_key=S1
     doc backup/s3-replica endpoint=EP2 bucket=B2 access_key=A2 secret_key=S2
-    doc observability/loki-s3 endpoint=EP1 bucket=B1 accessKey=A1 secretKey=S1
+    doc observability/loki-s3 endpoint=EP1 bucket=B3 accessKey=A3 secretKey=S3
     doc observability/alertmanager-slack webhook-url=SL
     doc observability/alertmanager-deadmansswitch url=DM"
 )"
@@ -126,7 +141,12 @@ done'
 OPENBAO_WAIT="${OPENBAO_WAIT:-1200}"
 POLL="${OA_SEED_POLL:-15}"   # seconds between attempts (a test knob)
 deadline=$((SECONDS + OPENBAO_WAIT))
-echo "▶ Seeding Day-1 secrets (${PROVIDER}/${ROLE}, bucket ${BUCKET})"
+echo "▶ Seeding Day-1 secrets (${PROVIDER}/${ROLE}, bucket ${BUCKET}, Loki bucket ${LOGS_BUCKET})"
+if [ "$LOKI_KEYS" = shared ]; then
+  echo "⚠ Loki gets the primary store's keys (OA_LOKI_S3_ACCESS_KEY_ID / OA_LOKI_S3_SECRET_ACCESS_KEY not set). Its bucket is"
+  echo "  its own, which protects the backups from a misconfigured Loki; it does NOT protect them from a compromised one,"
+  echo "  because these keys also reach the backups bucket. Give Loki a key pair limited to ${LOGS_BUCKET} for that."
+fi
 last_note=0; ERR=""
 while :; do
   OUT=""

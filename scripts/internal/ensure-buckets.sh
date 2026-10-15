@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # OpenAether — ensure the backup object stores exist (idempotent).
 #
-# Creates the four buckets a cluster needs, names derived from its tfvars (same
+# Creates the buckets a cluster needs (and Loki's logs bucket), names derived from its tfvars (same
 # convention as cluster/backup.tf): tfstate and artifacts, each with a -backup
 # replica.
 #
@@ -102,6 +102,11 @@ ensure_bucket "$STATE_PRIMARY" "$PRIMARY_EP" "$PRIMARY_REGION" "$PRIMARY_AK" "$P
 
 ensure_bucket "$ARTIFACT_PRIMARY" "$PRIMARY_EP" "$PRIMARY_REGION" "$PRIMARY_AK" "$PRIMARY_SK" ||
   echo "  ⚠ ${ARTIFACT_PRIMARY} not ready (will retry at backup time)"
+
+# Loki's own bucket (#302): seed-openbao.sh points Loki at it, and Loki does not create it. Best-effort, like the artifacts.
+LOGS_BUCKET="$(oa_logs_bucket "$PROJECT" "$PROVIDER" "$ENVN")"
+ensure_bucket "$LOGS_BUCKET" "$PRIMARY_EP" "$PRIMARY_REGION" "$PRIMARY_AK" "$PRIMARY_SK" ||
+  echo "  ⚠ ${LOGS_BUCKET} not ready: Loki stores nothing until it exists"
 
 # --- The two shapes, and neither of them silent -------------------------------
 #
