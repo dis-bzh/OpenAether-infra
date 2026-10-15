@@ -232,6 +232,17 @@ kubectl get externalsecrets -A -o jsonpath='{range .items[*]}{.metadata.namespac
       "seed-openbao/synced-at=$(date -u +%s)" --overwrite >/dev/null 2>&1 || true
   done
 
+# A CloudNativePG instance manager reads the S3 Secret of its barman archive when the pod starts: a Secret that appears later
+# is not seen ("failed to get envs: cache miss") and ContinuousArchiving stays False until the Cluster is reloaded. Seeding
+# after the databases are up is the normal order here (seen on a real Scaleway cluster seeded 30 minutes after its pods), so the
+# reload is part of seeding. Best effort: no CNPG CRD yet, or no Cluster, is not an error.
+echo "▶ Reloading the CloudNativePG clusters so that their archive picks the Secret up"
+kubectl get clusters.postgresql.cnpg.io -A -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' 2>/dev/null |
+  while read -r ns name; do
+    [ -n "$ns" ] && kubectl annotate clusters.postgresql.cnpg.io "$name" -n "$ns" \
+      "cnpg.io/reloadedAt=$(date -u +%Y-%m-%dT%H:%M:%SZ)" --overwrite >/dev/null 2>&1 || true
+  done
+
 echo "✓ Day-1 secrets seeded. Still manual, and neither blocks the DAG:"
 echo "    - sign the PKI intermediate offline (admin-access.md § 2)"
 echo "    - register the Grafana OIDC client in Zitadel (grafana/oidc)"
