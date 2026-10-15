@@ -116,7 +116,9 @@ in git. 0.1.0 is the first entry describing something proven.
   backups bucket; 35 of 35 Kustomizations; `cluster-security` 30 of 31; strict plan "No changes". **OVH** (infra `39df1b8`): same, and the
   run that exposed the `BucketAlreadyOwnedByYou` defect (Fixed above) first; one worker was dead after boot (issue #49), hard-rebooted and
   `up` re-run. **Outscale, reduced apps profile only** (infra `39df1b8`): up in 1020 s (13 passed, 1 failed: the same line), seeding and the OpenBao snapshot job fine; `cluster-security` 25 of 31, the four failures being the mesh checks (that profile has no Istio).
-  **Not run:** the dedicated Loki key pair (the lab used the shared keys), `task cluster-upgrade` with the new safeguards, a second
+  **Changed after the last lab run (mocked only):** the seed script's closing message (now built from OpenBao's answers), the wording of
+  the `ensure-buckets` retried-create message, the logs bucket in the teardown list and docs, the gitleaks rules, the release checklist and
+  status text. **Not run:** the dedicated Loki key pair (the lab used the shared keys), `task cluster-upgrade` with the new safeguards, a second
   `cluster-up`, the OVH SNAT hint (its failure did not recur), Proxmox. All three labs torn down; `purge-orphans` clean on Scaleway and OVH, and on
   Outscale it lists only the standing OMI, kept on purpose (deleting it is the owner's call); lab buckets and images deleted by hand (Outscale's
   image-lane buckets kept: state of that OMI).
