@@ -488,6 +488,9 @@ tasks:
       # backup_immutability: versioning, expiry and object lock on a fake store that refuses a lock on a bucket not
       # created with it; the read-back, the lifecycle rules someone else set, and the loud (not silent) refusal.
       - ./scripts/dev/test-bucket-protection.sh
+      # Which S3 identity opens which bucket (s3-isolation-check.sh), on a fake store: a dedicated pair that
+      # reaches the backups, a key the store refuses, and "nothing dedicated" must each fail, never pass.
+      - ./scripts/dev/test-s3-isolation.sh
       # `task state` promises it never writes a state. Real task + real tofu on
       # a local-backend fixture; the state's bytes are compared before and after.
       - ./scripts/dev/test-state-task.sh

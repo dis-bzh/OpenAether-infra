@@ -201,6 +201,16 @@ ANSSI hardening work, not released yet. **Nothing here is a claim of compliance 
   It does **not** stop a key that may call `DeleteObjectVersion` from removing an unlocked version (that is the key policy, below), does not touch an existing cluster unless its tfvars ask, and does not enable
   object lock on a bucket that already exists without it on providers that refuse it (reported, not forced).
 
+- **Key pairs of their own for the backup stores, and a check of who can open what (ANSSI RW-SAUV-2, GH-BKP-1, PA-012 R26/R26+, HYG-M37; the infra half of the audit's F-BKP-01, F-BKP-04, LOG-07, F05 and DP-05).**
+  Extends 0.2.1's Loki bucket and `OA_LOKI_S3_*`. `seed-openbao.sh` takes the same optional, both-or-neither pairs for the two backup stores: `OA_BACKUP_S3_ACCESS_KEY_ID` / `OA_BACKUP_S3_SECRET_ACCESS_KEY` for
+  `backup/s3-primary` and `OA_BACKUP_REPLICA_S3_*` for `backup/s3-replica`, each meant to be limited by the operator to its bucket. **Without them nothing changes** (the cluster still gets the operator's keys, which also open the
+  state, artifact and logs buckets and may delete in them) **and the script now says so, from OpenBao's answers**, for the backups as it already did for Loki; a pair set against an entry that exists is reported as not applied (the
+  seed is create-only). New `scripts/ops/s3-isolation-check.sh <tfvars>` reads, with the pairs in the environment, which identity lists which bucket and whether a dedicated pair may call DeleteObjectVersion (a version that does not
+  exist is named: nothing is deleted), and compares the buckets with `backup_immutability`; exit 0 held, 1 not, 2 nothing dedicated in scope. Rung: **mocked/static, not run on a cluster**: `test-seed-openbao.sh` (96 assertions) and
+  `test-s3-isolation.sh` (23, on the fake store). **Not proven**: that any provider lets a key be limited to one bucket, or to everything but DeleteObjectVersion (the policy is the operator's to write and is not shipped:
+  `docs/backup-policy.md` lists the actions each identity needs), or that restic prune, Barman, Longhorn and Loki run with such a key. It does **not** move `forget --prune` out of the cluster (that is apps and needs restic locking
+  checked against a reduced key), does not rotate a seeded key (create-only: `bao_admin kv put`, documented), and does not touch an existing cluster's entries.
+
 ## [0.2.1] — 2026-10-15
 
 **The infra half of the pair with OpenAether-apps 0.2.0: Day-1 seeding without a root token, a bucket of its own for Loki, a language check shared with the apps, and the Day-1 documentation corrected. A patch: no new scope.** It pins apps `refs/tags/0.2.0`. Read the entries below with their rung: real cloud means once, by hand, on the clouds named; nothing is repeated or unattended, and `cluster-up` with `deploy_flux = true` still ends 201 until the Day-1 seeding has run.
