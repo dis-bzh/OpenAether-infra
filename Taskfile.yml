@@ -596,7 +596,8 @@ tasks:
       # infra-verify.sh's worker data-volume check (#62): names from the tfvars, verdicts from the nodes.
       - ./scripts/dev/test-worker-volumes.sh
       - ./scripts/dev/test-encryption-at-rest.sh
-      # cluster-security-tests.sh: Cilium WireGuard (1.8), development OpenBao bootstrap (4.6), escrow record (4.7).
+      # cluster-security-tests.sh: Cilium WireGuard (1.8), development OpenBao bootstrap (4.6),
+      # escrow record (4.7), Loki bucket and keys (4.8, 4.9).
       - ./scripts/dev/test-security-tests-checks.sh
       # The read-only ops checks of the security pass: denied flows, exposed ports, RBAC subjects.
       - ./scripts/dev/test-cluster-netcheck.sh

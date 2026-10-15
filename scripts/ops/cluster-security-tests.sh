@@ -502,6 +502,31 @@ else
   fi
 fi
 
+# 4.8 / 4.9 Loki is a log pipeline that a compromised pod can reach: it must not write into the backups bucket
+# (a cluster seeded before infra 0.2.1 does), nor hold the backups' keys. Values are compared as the base64 the
+# API returns and never printed. Shared keys are a skip, not a failure: that is the seed's default without the
+# optional OA_LOKI_S3_* pair, and the pair is the operator's to create.
+LOKI_B=$(kubectl -n services-observability get secret loki-s3-credentials -o jsonpath='{.data.bucket}' 2>/dev/null || true)
+BKP_B=$(kubectl -n foundation-databases get secret backup-restic-env -o jsonpath='{.data.PRIMARY_BUCKET}' 2>/dev/null || true)
+if [ -z "$LOKI_B" ] || [ -z "$BKP_B" ]; then
+  skip "4.8 Loki writes to a bucket of its own" "loki-s3-credentials or backup-restic-env not found (Loki or the backups not deployed, or not seeded yet)"
+  skip "4.9 Loki does not hold the backups' keys" "same"
+elif [ "$LOKI_B" = "$BKP_B" ]; then
+  fail "4.8 Loki writes to a bucket of its own" "loki-s3-credentials names the backups bucket (seeded before infra 0.2.1): replace observability/loki-s3, docs/admin-access.md section 3"
+  skip "4.9 Loki does not hold the backups' keys" "not read: the bucket is the backups' bucket"
+else
+  pass "4.8 Loki writes to a bucket of its own (not the backups bucket)"
+  LOKI_K=$(kubectl -n services-observability get secret loki-s3-credentials -o jsonpath='{.data.accessKey}' 2>/dev/null || true)
+  BKP_K=$(kubectl -n foundation-databases get secret backup-restic-env -o jsonpath='{.data.PRIMARY_ACCESS_KEY}' 2>/dev/null || true)
+  if [ -z "$LOKI_K" ] || [ -z "$BKP_K" ]; then
+    skip "4.9 Loki does not hold the backups' keys" "an access key could not be read"
+  elif [ "$LOKI_K" = "$BKP_K" ]; then
+    skip "4.9 Loki does not hold the backups' keys" "same key pair: the separate bucket protects against a mistake in Loki, not a compromised Loki; give it OA_LOKI_S3_* (docs/backup-policy.md section 4)"
+  else
+    pass "4.9 Loki does not hold the backups' keys"
+  fi
+fi
+
 # ══════════════════════════════════════════════════════════════════════════════
 # 5. POD SECURITY
 # ══════════════════════════════════════════════════════════════════════════════

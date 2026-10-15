@@ -212,6 +212,12 @@ ANSSI hardening work, not released yet. **Nothing here is a claim of compliance 
   checked against a reduced key), does not rotate a seeded key (create-only: `bao_admin kv put`, documented), and does not touch an existing cluster's entries.
   Documented in `backup-policy.md`/`.fr.md` (section 3 the modes and their limits, new section 4 the identity-to-bucket table and the rotation order), `admin-access`, `incident-response` (step 5 no longer says "no object lock is configured" without the opt-in), `key-management`, `security-architecture`, `audit-register`, `.env.example` and the teardown message of `fleet-down.sh` (a locked bucket cannot be emptied).
 
+- **`task cluster-security` checks that Loki writes to a bucket of its own and does not hold the backups' keys (4.8, 4.9; ANSSI PA-012 R26, RW-SAUV-3; the live-cluster half of the audit's F-BKP-04 and F05).**
+  Reads `loki-s3-credentials` and `backup-restic-env`, compares the encoded values and prints none. 4.8 **fails** when Loki's bucket is the backups bucket (what a cluster seeded before 0.2.1 still has, create-only);
+  4.9 is a **skip**, not a failure, when the key pair is the same (the seed's default without `OA_LOKI_S3_*`), and says what that leaves open. A cluster that lacked a dedicated pair keeps its 0.2.1 count
+  of passes, with one more skip and one more pass. Rung: **mocked/static**, six cases in `test-security-tests-checks.sh` (21 in all); not run on a cluster. Already there and not repeated: the Cilium WireGuard
+  check (1.8) and `check-cilium-effective-config.py`, which answer the audit's cleartext Alloy-to-Loki hop (WireGuard, no application-layer TLS); the `insecure: true` of `loki.yaml` is the apps repository's.
+
 ## [0.2.1] — 2026-10-15
 
 **The infra half of the pair with OpenAether-apps 0.2.0: Day-1 seeding without a root token, a bucket of its own for Loki, a language check shared with the apps, and the Day-1 documentation corrected. A patch: no new scope.** It pins apps `refs/tags/0.2.0`. Read the entries below with their rung: real cloud means once, by hand, on the clouds named; nothing is repeated or unattended, and `cluster-up` with `deploy_flux = true` still ends 201 until the Day-1 seeding has run.
