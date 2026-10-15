@@ -88,7 +88,7 @@ sep "3. sshd config"
 # below fails there; under `set -e` that used to END THE WHOLE CHECK in silence after "=== 3" (seen on a real OVH bastion).
 SSHD_CONF=$(${SSH_CMD} "sudo sshd -T 2>/dev/null || cat /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null" || true)
 
-if [ -z "$(printf '%s' "${SSHD_CONF}" | tr -d '[:space:]')" ]; then
+if ! printf '%s' "${SSHD_CONF}" | grep -qi "permitrootlogin"; then
   # Judge by behaviour instead of by file: root was refused above, and a password must not be offered.
   info "sshd configuration is not readable without root (the baseline removes sudo by design): judged from outside"
   PWOUT=$(ssh ${SSH_OPTS} -o PreferredAuthentications=password -o PubkeyAuthentication=no -o NumberOfPasswordPrompts=0 "${BASTION_USER}@${BASTION_IP}" true 2>&1 || true)
@@ -163,7 +163,8 @@ fi
 sep "6. Only :22 listening externally"
 # --------------------------------------------------------------------------
 LISTENING=$(${SSH_CMD} "ss -tlnp 2>/dev/null | grep LISTEN || netstat -tlnp 2>/dev/null | grep LISTEN || true")
-NON_SSH=$(echo "${LISTENING}" | grep -v ":22 " | grep -v "127.0.0.1:" | grep -v "::1:" | grep LISTEN || true)
+# Loopback listeners (systemd-resolved's stub on 127.0.0.53%lo:53 among them) are not reachable from outside.
+NON_SSH=$(echo "${LISTENING}" | grep -v ":22 " | grep -vE "127\.[0-9]+\.[0-9]+\.[0-9]+(%lo)?:" | grep -v "::1:" | grep LISTEN || true)
 if [ -z "${NON_SSH}" ]; then
   ok "Only :22 listening on external interfaces"
 else
@@ -233,7 +234,7 @@ for d in "LogLevel VERBOSE" "StrictModes yes" "PermitUserEnvironment no" "Permit
 done
 want "kernel.yama.ptrace_scope" PTRACE 1
 want "fs.suid_dumpable" SUIDDUMP 0
-want "fs.protected_regular" PROTREG 2
+if [ -n "$(fact PROTREG)" ]; then want "fs.protected_regular" PROTREG 2; else info "fs.protected_regular is not readable without root (/proc/sys/fs is 0600): not asserted"; fi
 want "kernel.kptr_restrict" KPTR 2
 want "net.ipv4.conf.all.rp_filter" RPF 1
 want "net.ipv4.ip_forward" FWD 0
