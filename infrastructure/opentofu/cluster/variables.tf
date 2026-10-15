@@ -564,6 +564,16 @@ variable "bastion_internet_egress" {
     error_message = "bastion_internet_egress.dns_servers / ntp_servers: IP addresses or CIDRs (the firewall and the security group cannot filter by name)."
   }
 
+  # The security group is closed from the bastion's creation, so the first boot cannot reach a package mirror: auditd and chrony
+  # would never be installed and the bastion would come up "hardened" without them (seen on a real OVH run: cloud-init ends in
+  # error, auditd absent). Refused at plan time instead.
+  validation {
+    condition = var.bastion_internet_egress.mode != "closed" || !var.bastion_baseline.enabled || (
+      !var.bastion_baseline.audit_logging && length(var.bastion_baseline.time_servers) == 0
+    )
+    error_message = "bastion_internet_egress.mode = \"closed\" with bastion_baseline: the first boot cannot install packages (auditd, chrony) once the Internet is closed. Set bastion_baseline.audit_logging = false and leave time_servers empty, or keep the egress legacy (docs/admin-access.md)."
+  }
+
   validation {
     condition     = var.bastion_internet_egress.mode == "closed" || (length(var.bastion_internet_egress.dns_servers) == 0 && length(var.bastion_internet_egress.ntp_servers) == 0)
     error_message = "bastion_internet_egress: dns_servers and ntp_servers only apply with mode = \"closed\"; they would be silently ignored."

@@ -264,3 +264,37 @@ run "a_server_value_that_would_inject_a_firewall_rule_is_refused" {
   }
   expect_failures = [var.bastion_internet_egress]
 }
+
+# --- closed egress and the packages of the baseline ---
+# The security group is closed from the bastion's creation, so its first boot cannot install auditd or chrony.
+
+run "closed_egress_with_auditd_is_refused" {
+  command = plan
+
+  variables {
+    bastion_baseline        = { enabled = true }
+    bastion_internet_egress = { mode = "closed" }
+  }
+
+  expect_failures = [var.bastion_internet_egress]
+}
+
+run "closed_egress_with_a_time_server_is_refused" {
+  command = plan
+
+  variables {
+    bastion_baseline        = { enabled = true, audit_logging = false, time_servers = ["192.0.2.123"] }
+    bastion_internet_egress = { mode = "closed" }
+  }
+
+  expect_failures = [var.bastion_internet_egress]
+}
+
+run "closed_egress_with_the_baseline_but_no_package_is_accepted" {
+  command = plan
+
+  variables {
+    bastion_baseline        = { enabled = true, audit_logging = false }
+    bastion_internet_egress = { mode = "closed" }
+  }
+}
