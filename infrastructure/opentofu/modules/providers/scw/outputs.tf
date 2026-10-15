@@ -62,7 +62,9 @@ output "app_lb_acls" {
   description = "The ACLs of the app LB http and https frontends as 'action subnet,subnet', in evaluation order, for tests"
   value = {
     for k, fes in { http = scaleway_lb_frontend.http, https = scaleway_lb_frontend.https } : k => flatten([
-      for fe in fes : [for a in fe.acl : "${a.action[0].type} ${join(",", a.match[0].ip_subnet)}"]
+      # try(): on a real plan the sources include the NAT gateway address, which is unknown until apply, so the list
+      # is null there (a mocked provider knows it, which is why the tests never saw this).
+      for fe in fes : [for a in fe.acl : "${a.action[0].type} ${try(join(",", a.match[0].ip_subnet), "(known after apply)")}"]
     ])
   }
 }
