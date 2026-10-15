@@ -84,8 +84,21 @@ fi
 # --------------------------------------------------------------------------
 sep "3. sshd config"
 # --------------------------------------------------------------------------
-SSHD_CONF=$(${SSH_CMD} "sudo sshd -T 2>/dev/null || cat /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null")
+# `|| true`: a bastion with bastion_baseline has no sudo for this account and root-only (0600) sshd drop-ins, so the read
+# below fails there; under `set -e` that used to END THE WHOLE CHECK in silence after "=== 3" (seen on a real OVH bastion).
+SSHD_CONF=$(${SSH_CMD} "sudo sshd -T 2>/dev/null || cat /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null" || true)
 
+if [ -z "$(printf '%s' "${SSHD_CONF}" | tr -d '[:space:]')" ]; then
+  # Judge by behaviour instead of by file: root was refused above, and a password must not be offered.
+  info "sshd configuration is not readable without root (the baseline removes sudo by design): judged from outside"
+  PWOUT=$(ssh ${SSH_OPTS} -o PreferredAuthentications=password -o PubkeyAuthentication=no -o NumberOfPasswordPrompts=0 "${BASTION_USER}@${BASTION_IP}" true 2>&1 || true)
+  # sshd lists the methods that could still succeed: exactly "(publickey)" when no password or keyboard-interactive is on offer.
+  if echo "${PWOUT}" | grep -qiE "Permission denied \(publickey\)"; then
+    ok "password authentication is not offered (only publickey)"
+  else
+    fail "password authentication may be offered: ${PWOUT}"
+  fi
+else
 if echo "${SSHD_CONF}" | grep -qi "permitrootlogin.*no"; then
   ok "PermitRootLogin no"
 else
@@ -108,6 +121,7 @@ if echo "${SSHD_CONF}" | grep -qi "allowtcpforwarding.*yes"; then
   ok "AllowTcpForwarding yes"
 else
   fail "AllowTcpForwarding not 'yes'"
+fi
 fi
 
 # --------------------------------------------------------------------------

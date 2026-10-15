@@ -27,7 +27,8 @@ case "$cmd" in
     kh="$(grep -o 'UserKnownHostsFile=[^ ]*' <<<"$cmd" | head -1 | cut -d= -f2)"
     [ -n "${STUB_HOSTKEY:-}" ] && [ -n "$kh" ] && ! grep -q '^192.0.2.10 ' "$kh" 2>/dev/null && printf '192.0.2.10 %s\n' "$STUB_HOSTKEY" >>"$kh"
     echo ssh-ok ;;
-  *"sshd -T"*) printf 'permitrootlogin no\npasswordauthentication no\nallowgroups bastion-admins\nallowtcpforwarding yes\n' ;;
+  *"PreferredAuthentications=password"*) echo "bastion@192.0.2.10: Permission denied (${STUB_PWMETHODS:-publickey})."; exit 255 ;;
+  *"sshd -T"*) [ -n "${STUB_NOSSHD:-}" ] && exit 1; printf 'permitrootlogin no\npasswordauthentication no\nallowgroups bastion-admins\nallowtcpforwarding yes\n' ;;
   *"/dev/tcp/1.1.1.1/"*|*"/dev/tcp/9.9.9.9/"*) echo "exit:${STUB_EGRESS:-124}" ;;
   *"/dev/tcp/10.0.0.5/8200"*) echo "exit:${STUB_8200:-124}" ;;
   *"/dev/tcp/"*) echo "exit:${STUB_NODE:-0}" ;;
@@ -137,6 +138,11 @@ printf '%s\n' "$GOOD_FACTS" | sed 's/AllowStreamLocalForwarding no;//' >"$FACTS"
 [ "$RC" != 0 ] && grep -q "FAIL.*AllowStreamLocalForwarding no" <<<"$OUT" && ok "a missing sshd directive FAILS, named" || bad "missing directive: rc=$RC $(grep FAIL <<<"$OUT" | head -2)"
 : >"$FACTS"; run BASTION_BASELINE=1
 [ "$RC" != 0 ] && ok "no facts at all (ssh failed) FAILS rather than passes" || bad "empty facts passed"
+# A baseline bastion has no sudo for this account and root-only sshd drop-ins: the read fails, and the check used to end there in silence.
+printf '%s\n' "$GOOD_FACTS" >"$FACTS"; run BASTION_BASELINE=1 STUB_NOSSHD=1
+grep -q "not readable without root" <<<"$OUT" && grep -q "password authentication is not offered" <<<"$OUT" && ! sed -n "/=== 3/,/=== 4/p" <<<"$OUT" | grep -q "FAIL" && ok "an unreadable sshd configuration is judged from outside, and the run goes on" || bad "unreadable sshd config: rc=$RC $(sed -n "/=== 3/,/=== 4/p" <<<"$OUT" | head -8)"
+run BASTION_BASELINE=1 STUB_NOSSHD=1 STUB_PWMETHODS=publickey,password
+[ "$RC" != 0 ] && grep -q "FAIL.*password authentication may be offered" <<<"$OUT" && ok "...and a server that offers a password is a FAIL" || bad "password offered passed: rc=$RC"
 
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$PASS" -gt 0 ] && [ "$FAIL" -eq 0 ]
