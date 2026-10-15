@@ -1233,7 +1233,7 @@ if command -v tofu >/dev/null 2>&1; then
   # No stdin and a timeout: CI's tofu is wrapped, and `tofu console` waited on a stdin the wrapper never closes (15 min).
   mkdir -p "$STUB_DIR/bastion-render"
   cat >"$STUB_DIR/bastion-render/main.tf" <<TF
-output "sha" { value = sha256(templatefile("$BASTION_TPL", {ssh_keys = ["k"], bastion_user = "bastion", private_cidr = "10.0.0.0/24", extra_packages = [], extra_write_files = [], extra_runcmd = [], ssh_ca_public_key = "", ssh_ca_principals = ""})) }
+output "sha" { value = sha256(templatefile("$BASTION_TPL", {ssh_keys = ["k"], bastion_user = "bastion", private_cidr = "10.0.0.0/24", extra_packages = [], extra_write_files = [], extra_runcmd = [], ssh_ca_public_key = "", ssh_ca_principals = "", baseline = {enabled = false, audit_logging = true, restrict_ssh_source = false, time_servers = [], revoked_keys = []}, admin_ip = []})) }
 TF
   BASTION_SHA="$(cd "$STUB_DIR/bastion-render" && timeout 120 tofu apply -auto-approve -input=false -no-color </dev/null >/dev/null 2>&1 && tofu output -raw sha </dev/null 2>/dev/null)"
   [ "$BASTION_SHA" = 1f09a8566681c3e4f3e6c5dde34060a3c1509aa6e0b4db0ad7dc295479637c47 ] \
@@ -1242,6 +1242,21 @@ TF
 else
   skip "tofu not installed: the bastion render was not compared"
 fi
+
+echo "=== bastion_baseline reaches the cloud-init of all four providers ==="
+# A root-level tofu test cannot read a child module's user_data, so the wiring is pinned here: the root passes the variable
+# to each module, each module declares it with the same keys, and each templatefile call hands the template what it reads.
+for prov in scw:scaleway ovh:ovh outscale:outscale proxmox:proxmox; do
+  m="${prov%%:*}"; r="${prov##*:}"
+  MODDIR="$ROOT/infrastructure/opentofu/modules/providers/$m"
+  grep -qE '^[[:space:]]*baseline[[:space:]]*=[[:space:]]*var\.bastion_baseline$' "$MODDIR/bastion.tf" \
+    && grep -qE '^[[:space:]]*admin_ip[[:space:]]*=[[:space:]]*var\.admin_ip$' "$MODDIR/bastion.tf" \
+    && ok "$m: the template call passes baseline and admin_ip" || bad "$m: bastion.tf does not hand baseline/admin_ip to the template"
+  grep -q 'restrict_ssh_source' "$MODDIR/variables.tf" && grep -q 'revoked_keys' "$MODDIR/variables.tf" \
+    && ok "$m: declares bastion_baseline with its keys" || bad "$m: variables.tf lacks bastion_baseline"
+  awk -v want="\"$r\"" '/^module "/ {inmod = 0} $0 ~ "bastion_ssh_keys = lookup\\(var.bastion_ssh_keys, " want {found = 1; getline; if ($0 ~ /bastion_baseline = var.bastion_baseline/) ok = 1} END {exit !(found && ok)}' "$ROOT/infrastructure/opentofu/cluster/main.tf" \
+    && ok "$m: cluster/main.tf passes bastion_baseline" || bad "$m: cluster/main.tf does not pass bastion_baseline"
+done
 
 [ "$FAIL" -eq 0 ] || RC=1
   # Zero failures is also what a harness that never asserted reports.

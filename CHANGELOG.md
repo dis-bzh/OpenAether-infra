@@ -14,6 +14,115 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ## [Unreleased]
 
+ANSSI hardening work, not released yet. **Nothing here is a claim of compliance with any ANSSI document**: each entry names the requirements it addresses and the rung it reached.
+
+### Security
+
+- **Bastion OS baseline, opt-in: sysctl, auditd, journald, sshd directives, mounts, root-owned `authorized_keys.d`, in-VM nftables logging, key-type validation (ANSSI BP-028 R9/R11/R12/R14/R28/R29/R36/R38/R58/R73, NT-007 R14/R15/R23/R24/R26, NT-006 R3/R6, NT-SSH R8/R10; addresses the audit's F16, F04, F05, F07, F09, F03, TLS-15 and LOG-08).**
+  New variable `bastion_baseline` (`enabled` default **false**; `audit_logging` default true; `restrict_ssh_source`, `time_servers`, `revoked_keys` default off/empty). With it off the cloud-init is **byte for byte
+  what 0.1.0 shipped** (`test-cluster-checks.sh` pins the hash, now with the two extra template inputs), so no deployed bastion changes. **Turning `enabled` on changes `user_data`, which
+  REPLACES the bastion on OVH and Outscale** (new IP, new host key, the Talos tunnels die with it; the plan decides on Scaleway and Proxmox): apply it on a fresh cluster or in a planned window with a second session
+  open, never during a bootstrap or an upgrade, and read the plan first. `restrict_ssh_source` and `revoked_keys` put `admin_ip` / the revoked keys into `user_data`, so changing them replaces the bastion too.
+  On: a sysctl file (R9 minus modules_disabled, R11, R12 minus the ARP options, R14), auditd with execve/`/etc`/mount/module/ptrace rules and **no `-e 2`**, a persistent journald capped at 200 MB / 90 days, a second sshd drop-in
+  (`LogLevel VERBOSE`, `StrictModes`, `PermitUserEnvironment no`, `AllowStreamLocalForwarding no`, `GatewayPorts no`, `RevokedKeys`) that the runcmd deletes again if `sshd -t` rejects it, `AcceptEnv` commented out of the main file with a
+  copy kept, `authorized_keys.d/<user>` root:root 0644, `/var/tmp` tmpfs noexec, `/boot` 700, umask 0077, sudo 4750 root:sudo, snapd/ModemManager masked, no tcpdump/netcat on new VMs, chrony on `time_servers`, and nftables
+  rate-limited `nft-drop-in/out` log rules and ICMP in limited to echo-request and fragmentation-needed. Not changed: port 22, the user, the keys, `AllowTcpForwarding`/`PermitOpen`, the egress rules, `talos-tunnels.sh`.
+  Always on (no resource changes): `bastion_ssh_keys` refuses `ssh-dss`, unknown types, a line break inside an entry and an `ssh-rsa` under `bastion_ssh_rsa_min_bits` (default 2048 so a deployed key keeps planning; 3072 selectable),
+  checked on the type token (options prefixes and the truncated fixtures still pass). New: `scripts/ops/bastion-logs-pull.sh` (journal since a cursor + audit log off the VM, gpg-encrypted with `OA_LOGS_PASSPHRASE`; does not upload),
+  `bastion-harden-check.sh` probes with `/dev/tcp` instead of `nc` and gains section 9 (`BASTION_BASELINE=1`), and `task bastion-baseline-check`.
+  Rung: **local Docker for the rendered files only** - `bastion-baseline-check.sh` runs the exact bytes on Ubuntu 22.04 and 24.04 (sshd -t, a real key login, the fingerprint in the login line, tunnels through `PermitOpen`, a revoked key refused,
+  the guard removing a broken drop-in, `nft -c` and the ruleset loaded in a container network namespace accepting 22 from the admin source only, sysctl names in `/proc/sys`, audit rules parsed by libaudit, sudo mode, umask), `cloud-init schema`,
+  `tofu test` for the input rules, stub harnesses for the two scripts. **Nothing booted a cloud image**: not proven are cloud-init ordering on a real first boot, auditd loading the rules in a real kernel, `journalctl` match syntax of the pull script,
+  chrony taking the source file, `rp_filter=1` on a Scaleway bastion with its private NIC, that a provider keeps the admin source address, and the unattended-upgrades interaction (statoverride, masked units).
+  Measured on the way: OpenSSH 8.9 already refuses unix-socket forwarding while `PermitOpen` is set, so `AllowStreamLocalForwarding no` is defence in depth, and the `Accepted publickey ... SHA256:` line already carries the fingerprint at the default log level (what `LogLevel VERBOSE` adds is the `authorized_keys` line number of the key and the session start/close).
+  **Not done**: `restrict,port-forwarding` key options (they would change the interactive login path; `bastion-harden-check.sh` would need rewriting first), removing the `sudo` group from the login user (kept; sudo is restricted to the group instead),
+  client-side `Ciphers`/`KexAlgorithms` in `talos-tunnels.sh`, `ListenAddress`, an upload of the pulled logs, a cloud audit-trail export, and the documented Grafana tunnel `-L ...:443` that `PermitOpen` refuses (a documentation defect in `docs/admin-access.md`, untouched).
+  Also: the Feint lane renders the same template and now passes the two new inputs with the baseline off; `task test-scripts` runs the three 0.2.0 ops harnesses (netcheck, exposure scan, RBAC review) that `task lint`'s reachability check found unwired.
+
+- **Ops verification tooling: encryption at rest read back, an exposure scan, a behavioural network check, an RBAC review (ANSSI HYG M37/M38 evidence, NT-006 R14; NSA/CISA AUTH-03 and the Cilium encryption control).**
+  `infra-verify.sh` now reads `STATE` and `EPHEMERAL` back from each node's Talos API and fails unless they are `ready` and `luks2`, and
+  fails when the kube-apiserver has no `--encryption-provider-config` (the volume id is taken from Talos' source and has never been read on a
+  node: a node that does not know it is reported as unchecked, not as red). `cluster-security-tests.sh` gains 1.8 (Cilium WireGuard enabled in
+  `cilium-config` and reported by the agent), 4.6 (`openbao-recovery-dev` fails with `OA_ENVIRONMENT=prod`, is only reported otherwise) and
+  4.7 (the seal-key `openaether.io/escrowed-at` annotation; **opt-in** with `OA_ESCROW_ANNOTATION_CHECK=1` until the apps escrow step that sets it
+  exists, prod only). New: `task cluster-exposure` (`scripts/ops/exposure-scan.sh`: TCP probes of the bastion, API and app load balancers,
+  `FROM=denied` from an address outside `admin_ip`), `task cluster-netcheck` (`cluster-netcheck.sh`: a throwaway non-root pod in a temporary
+  namespace must be unable to reach a Service of each platform namespace, with an API-server reachability control; `CILIUM=1` adds
+  `cilium connectivity test`, never run here), `task rbac-review` (`rbac-review.sh` + `rbac-review.jq`, a dated `.tsv` flagging named User/Group
+  subjects, anonymous bindings and `cluster-admin` outside the allowlist) and a "review at staff change" paragraph in `docs/admin-access.md`.
+  The regression workflow runs the exposure scan and the netcheck after `cluster-verify`. Everything is read-only except the netcheck's temporary
+  namespace. Rung: mocked/static (stub `kubectl`/`talosctl`, loopback listener, failure and mutant cases; `shellcheck`), **not run on a cluster**.
+  It does **not** prove that a real node answers the way the stubs do, that the netcheck image can be pulled under the cluster's policies,
+  or that any of the new checks is green on a good cluster; it adds no OIDC and no named-human access (K8S/F13 steps 2-4 are not done), no etcd
+  or barman restore test and no backup-policy document (DP-16's apps and policy part), and no UDP probing.
+
+- **Supply chain: committed provider locks, a checksum lane for the Talos boot images, an SBOM, a protected environment for the cloud workflow, rulesets as code (ANSSI SSDLC CICD-AIP-01c/-03, PROV-REC03, CICD-IAM-03/-05, CIO-REC03, SCM-REC06/-07, SBOM25-1/-2/-3 in part).**
+  `.terraform.lock.hcl` of `cluster/` and `talos-image/` is committed (linux and macOS, amd64 and arm64); both roots' `>=` provider
+  constraints become `~>`; `task validate`/`test` and CI run `tofu init -lockfile=readonly` (shown to fail on a constraint bumped without
+  a refresh); `task lock-providers` refreshes by hand and Renovate looks providers up on registry.opentofu.org. `talos-image/images.lock`
+  records the sha256 of the Factory raw image per platform and arch for the pinned Talos version; `verify-image-checksum.sh` runs after
+  the download in the Scaleway, OVH and Outscale modules, driven by `image_checksum_mode` (**`warn` by default**: today's behaviour plus a
+  message; `enforce` stops the build; `off`), and Proxmox passes the provider's `checksum` under `enforce` only. `talos_tunnels` hands its
+  values to `local-exec` as environment variables (a key path with a space or `$(...)` stays data; it stays off by default). `real-cloud-regression.yml`
+  runs in an environment `sandbox`. `sbom.yml` (weekly and on release) attaches a CycloneDX 1.5 inventory (`gen-sbom.py`: tool pins, locked
+  providers, bootstrap images with digests, Factory images with hashes) and Trivy-scans the bootstrap images; `.vex/` holds an empty OpenVEX file.
+  `.github/rulesets/` holds the two rulesets as exported; `check-required-checks.sh` compares them with GitHub, requires a pull request,
+  no force-push and no deletion on main, and **warns** (fails under `--strict-main`) on 0 approving reviews, no required signatures and the
+  admin bypass on main; it also checks the `sandbox` environment. `docs/supply-chain.md` has the rotation table. Rung: mocked/static
+  (`tofu test` on the image root and the Proxmox module, stub harnesses, 79 offline cases for the settings check); the settings check was
+  also run once, read-only, against the live repository; the Factory was downloaded for real to write the lock. Nothing was run on a cloud or
+  a Proxmox host, Trivy and the Renovate validator were not run, and the new workflow has not run. It does **not**
+  prove the Factory serves stable bytes over months, that Proxmox's checksum covers the compressed file, that provider versions in the locks
+  are the ones the clusters ran on, or that the `sandbox` environment exists with reviewers (create it, then move the secrets); it adds no OIDC,
+  no bucket versioning, no image signature verification, and it covers none of what `OpenAether-apps` deploys.
+
+- **Patch policy and the signals behind it (ANSSI hygiene measure 34, audit ids HYG-M34, SSDLC CICD-AIP-01a/-03, NT-35 R2 in part).**
+  `docs/patching.md` states the rule (security fix merged or waived in writing within 30 days, 7 when exploited or internet-reachable)
+  and what feeds it. `renovate.json5` gains `vulnerabilityAlerts` (label only: Renovate's default for that block already skips the
+  schedule, the dashboard approval and `minimumReleaseAge`) and `osvVulnerabilityAlerts`. Cléa gets an optional
+  `[policy] max_minors_behind` (set to 2 in `clea.toml`): its report lists every pin more than that many minor releases, or a major,
+  behind upstream, held back or not; report only, 15 new assertions in `test-clea.sh`. `scripts/dev/check-image-pins.sh --enforce` runs in
+  `task lint` and fails on an `image:` pinned by tag with neither `@sha256` nor an entry in `flux-image-digests.lock` (none today);
+  `.github/workflows/image-digests.yml` runs `check-flux-image-digests.sh` weekly (anonymous ghcr.io, no credential, never on a PR).
+  Rung: mocked/static; the digest check was also run once against ghcr.io. Renovate's validator was not run (no Node here), and
+  the new Renovate keys are checked only against its published JSON schema. It does **not** upgrade Istio, cert-manager, Kyverno or
+  CNPG (those pins live in `OpenAether-apps`), does not move the bastion image off Ubuntu 22.04 (a replacement of a deployed
+  bastion, left to its own change), does not enable Renovate `pinDigests` (this repository has no manifest a Renovate manager would
+  rewrite: the Flux and Cilium manifests are generated), and the 30 days are a commitment of one maintainer, not a control.
+
+- **Passphrase hygiene for the state, the access artifacts and the etcd snapshots (ANSSI PG-083 weak-entropy rule, B2 one key / one use, PA-079 R4 and R14 in part).**
+  `scripts/ops/gen-passphrase.sh` prints `openssl rand -base64 48`. `task cluster-up` runs an entropy heuristic on the
+  passphrase after the existing placeholder check (distinct characters, repeated block, runs, common words; random base64 and hex
+  pass): **warn by default**, `OA_PASSPHRASE_CHECK=enforce` refuses, `=off` silences. New optional `artifact_passphrase`
+  (`TF_VAR_artifact_passphrase`, default null = unchanged behaviour and no plan diff) encrypts the gpg talosconfig/kubeconfig
+  backups and the etcd snapshots; `restore-artifacts.sh` tries it first and falls back to the state passphrase, so older objects
+  open. The pbkdf2 parameters of the state encryption are pinned to OpenTofu 1.12's defaults (600000 / sha512 / 32, read back
+  from a state's own metadata: existing states decrypt unchanged). `task kubeconfig` writes both files 0600, the snapshot cron
+  warns on a `.env.sh` readable by others, and the false "SSE-C" and "authenticated/OCB" wording is gone. Rung: mocked (`tofu
+  test`, the stub harnesses with real gpg, a real go-task), plus a local-backend decrypt check of the pbkdf2 defaults; nothing
+  run on a cluster or against a real store. It does **not** make gpg an AEAD (still CFB + SHA-1 MDC), does not add `enforced = true`
+  (an unencrypted state would stop planning), does not move artifacts to PGP public keys, and splitting the secrets is only as
+  good as the places they are kept.
+- **Secrets-at-rest cipher said as it is (ANSSI PA-079 R12).** The comments in `modules/talos/main.tf` called the etcd
+  encryption `AES-256-GCM`; Talos' `secretbox` is XSalsa20-Poly1305. `docs/upgrade.md` now records the deviation (not a
+  listed AEAD; Talos offers no AEAD alternative) and that the key has no verified in-place rotation. Docs and comments
+  only, nothing run; it does not add a rotation procedure, a KMS provider or a new cipher.
+- **Review fixes for the passphrase, supply-chain and ops-check changes above (ANSSI PG-083, SSDLC CICD-AIP-03, CICD-IAM-03; found by an independent review).**
+  `test-passphrase.sh` now greps that `backup.tf` hands the backup script `local.artifact_passphrase` (reverting it to the state
+  passphrase left every test green before; the line was changed and the new check went red). `artifact_passphrase_set` is
+  `nonsensitive()`: it derived from a sensitive variable and so hid the whole `triggers_replace` map in every plan, set or not (a
+  test asserts it is readable; no value changes, so no plan diff is expected, **not run against a real state**). `etcd-snapshot.sh` warns
+  when `artifact_passphrase` is in a tfvars file but not in `TF_VAR_artifact_passphrase`, the case where artifacts and snapshots would
+  silently end up under different passphrases (the variable's description now says environment only). The sandbox-environment
+  check fetches the deployment-branch patterns and fails on anything but `main` (a `*` policy passed before) and warns on
+  "protected branches" only (82 self-test cases, 3 new). `task kubeconfig` creates its two files with `touch` and `chmod 0600`
+  (BSD `install` on macOS may refuse `/dev/null`; **not run on macOS**). `test-talos-tunnels.sh` checks that `OA_TUNNEL_KEY` is
+  still `pathexpand()`ed. Docs and variable text now say that `checksum_mode = enforce` on a Proxmox root that already holds
+  the image plans its re-download (bpg 0.116 `checksum` forces replacement; the resource is deprecated there), that a Talos bump
+  needs `talos-image-lock.sh` run by hand (the Renovate PR body says so), and what `osvVulnerabilityAlerts` actually reaches.
+  Rung: mocked/static, nothing run on a cluster or a Proxmox host. It does **not** automate the lock update, and
+  does not replace the deprecated Proxmox resource.
+
 ## [0.2.1] — 2026-10-15
 
 **The infra half of the pair with OpenAether-apps 0.2.0: Day-1 seeding without a root token, a bucket of its own for Loki, a language check shared with the apps, and the Day-1 documentation corrected. A patch: no new scope.** It pins apps `refs/tags/0.2.0`. Read the entries below with their rung: real cloud means once, by hand, on the clouds named; nothing is repeated or unattended, and `cluster-up` with `deploy_flux = true` still ends 201 until the Day-1 seeding has run.

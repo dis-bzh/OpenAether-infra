@@ -25,7 +25,11 @@ resource "terraform_data" "build" {
 
   provisioner "local-exec" {
     interpreter = ["/usr/bin/env", "bash", "-c"]
-    command     = <<-EOT
+    environment = {
+      OA_IMAGE_SHA256 = var.expected_sha256
+      OA_IMAGE_CHECK  = var.checksum_mode
+    }
+    command = <<-EOT
       set -euo pipefail
       for bin in curl zstd qemu-img; do
         command -v "$bin" >/dev/null 2>&1 || {
@@ -34,6 +38,8 @@ resource "terraform_data" "build" {
       mkdir -p "${var.cache_dir}"
       echo "▶ Downloading Talos ${var.talos_version} (openstack-${var.arch}) from Image Factory..."
       curl -fL --retry 3 "${local.factory_url}" -o "${local.raw_zst}"
+      bash "${path.module}/../../../../../scripts/internal/verify-image-checksum.sh" \
+        "${local.raw_zst}" "$OA_IMAGE_SHA256" "$OA_IMAGE_CHECK" "openstack-${var.arch} ${var.talos_version}"
       echo "▶ Decompressing (zstd) + converting to QCOW2 (qemu-img)..."
       zstd -f -d "${local.raw_zst}" -o "${local.raw_path}"
       qemu-img convert -f raw -O qcow2 "${local.raw_path}" "${local.qcow2_path}"

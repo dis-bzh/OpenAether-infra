@@ -1,0 +1,6 @@
+# Written for the weekly image scan (sbom.yml) when .vex/openaether-infra.openvex.json holds at least one
+# statement: Trivy then drops the findings that file declares not_affected or fixed. Kept as a file so the
+# workflow and a local `trivy image --config .github/trivy-image-vex.yaml <ref>` read the same thing.
+vulnerability:
+  vex:
+    - .vex/openaether-infra.openvex.json

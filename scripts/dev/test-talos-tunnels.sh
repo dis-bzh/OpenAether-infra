@@ -193,5 +193,39 @@ WHY="$(args_ok "$N1" "$W/key2" "$P0=10.0.0.11:50000" "$P1=10.0.0.12:50000" "$PW=
   && ok "open-direct goes through the same spawn: 3 up asked for the right nodes and --key, its own pidfile and transcripts" \
   || bad "open-direct (up=$(up)): ${WHY:-$(tail -3 "$W/direct.out")}; $(ls -a "$W/cluster")"
 
+# The Terraform side (SCC/F17): the local-exec of terraform_data.talos_tunnels hands its values over as environment
+# variables. Its real command is cut out of cluster/main.tf and run against a stub script that records argv, with values a
+# shell would split or execute if they were spliced into the command line.
+MAIN="$ROOT/infrastructure/opentofu/cluster/main.tf"
+HCL_CMD="$(awk '/^resource "terraform_data" "talos_tunnels"/{r=1} r && /command = <<-EOT/{c=1; next} c && /^[[:space:]]*EOT$/{exit} c' "$MAIN")"
+STUBTUN="$W/stub-tunnels.sh"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" >"$ARGV_OUT"\n' >"$STUBTUN"; chmod +x "$STUBTUN"
+CMD="${HCL_CMD//\$\{path.module\}\/..\/..\/..\/scripts\/bootstrap\/talos-tunnels.sh/$STUBTUN}"
+CMD="${CMD//\$\$\{/\$\{}"
+tf_run() { # <workers csv> <user> <key>: the argv the script would receive, one per line
+  rm -f "$W/argv.out" "$W/pwned"
+  ARGV_OUT="$W/argv.out" OA_TUNNEL_BASTION=203.0.113.10 OA_TUNNEL_USER="$2" OA_TUNNEL_CPS=10.0.0.11,10.0.0.12 \
+    OA_TUNNEL_WORKERS="$1" OA_TUNNEL_KEY="$3" bash -c "$CMD" >/dev/null 2>&1
+  cat "$W/argv.out" 2>/dev/null
+}
+{ [ -n "$HCL_CMD" ] && grep -q 'OA_TUNNEL_KEY' <<<"$HCL_CMD" && [[ "$CMD" == *"$STUBTUN"* ]]; } \
+  && ok "the talos_tunnels local-exec command is found in cluster/main.tf and points at the stub" \
+  || bad "could not cut the local-exec command out of main.tf: ${HCL_CMD:-empty}"
+GOT="$(tf_run 10.0.0.21 ops "/home/u/my keys/id ed25519")"
+WANT="$(printf '%s\n' open-direct --bastion 203.0.113.10 --user ops --cps 10.0.0.11,10.0.0.12 --key "/home/u/my keys/id ed25519" --workers 10.0.0.21)"
+[ "$GOT" = "$WANT" ] && ok "a key path with a space stays one argument; workers are passed as --workers" \
+  || bad "argv differs: $(tr '\n' '|' <<<"$GOT")"
+GOT="$(tf_run "" ops /k)"
+{ [ -n "$GOT" ] && ! grep -q -- '--workers' <<<"$GOT"; } && ok "no workers: --workers is not passed" || bad "empty workers: $(tr '\n' '|' <<<"$GOT")"
+GOT="$(tf_run "" 'x; touch '"$W"'/pwned' '$(touch '"$W"'/pwned)')"
+{ [ ! -e "$W/pwned" ] && grep -qF 'x; touch' <<<"$GOT" && grep -qF '$(touch' <<<"$GOT"; } \
+  && ok "a user name and a key path full of shell syntax are data: nothing ran, both arrived verbatim" \
+  || bad "shell metacharacters were interpreted (pwned: $([ -e "$W/pwned" ] && echo yes || echo no)): $(tr '\n' '|' <<<"$GOT")"
+# The environment block is not part of the command and a mock plan does not run it: without pathexpand() the default
+# "~/.ssh/..." reaches the script unexpanded, since an env value is not tilde-expanded by the shell.
+grep -Eq '^[[:space:]]*OA_TUNNEL_KEY[[:space:]]*=[[:space:]]*pathexpand\(var\.ssh_key_path\)[[:space:]]*$' "$ROOT/infrastructure/opentofu/cluster/main.tf" \
+  && ok "OA_TUNNEL_KEY is pathexpand(var.ssh_key_path): the default ~/.ssh/... is expanded before the script sees it" \
+  || bad "main.tf no longer expands the key path with pathexpand()"
+
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$PASS" -gt 0 ] && [ "$FAIL" -eq 0 ]

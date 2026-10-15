@@ -29,6 +29,8 @@ export PATH="/usr/local/bin:/snap/bin:$HOME/.local/bin:$PATH"
 
 # 2. Environnement (credentials S3/provider + TF_VAR_encryption_passphrase).
 if [ -r "$ENV_FILE" ]; then
+  # Warn, never refuse: a cron that starts failing overnight is worse than a mode to fix. The file holds the cloud and S3 keys.
+  case "$(stat -c %a "$ENV_FILE" 2>/dev/null)" in ""|?00) ;; *) log "⚠ $ENV_FILE is readable by others (chmod 600 it)" ;; esac
   set -a
   # shellcheck disable=SC1090
   . "$ENV_FILE"

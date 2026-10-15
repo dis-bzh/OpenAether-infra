@@ -40,7 +40,7 @@ TARGETS = {
     **dict.fromkeys(("feint-plan", "feint-apply", "feint-apply-root", "feint-evidence",
                      "feint-evidence-verify"), ("emulated", "feint")),
     **dict.fromkeys(("local-up", "local-verify", "local-rbac", "local-test", "test-gates-local",
-                     "test-cnpg-gates-local", "ssh-ca-check"), ("local-docker", "docker")),
+                     "test-cnpg-gates-local", "ssh-ca-check", "bastion-baseline-check"), ("local-docker", "docker")),
     **dict.fromkeys(("infra-plan", "infra-apply", "infra-down-plan", "infra-down", "cluster-up",
                      "cluster-verify", "cluster-roll", "cluster-upgrade", "cluster-shrink",
                      "cluster-shrink-plan", "cluster-idempotency", "cluster-down", "teardown-all"),
@@ -53,6 +53,8 @@ PLANS = {"infra-plan", "infra-down-plan", "cluster-shrink-plan"}
 # rungs. The harness fails on a family member that is in neither list.
 EXCLUDED = {
     "cluster-security": "reads whatever KUBECONFIG names, local or cloud: no rung to record",
+    "cluster-exposure": "probes public addresses from wherever it runs: a check on a cluster, not a rung",
+    "cluster-netcheck": "sends traffic that must be denied, on whatever KUBECONFIG names: a check, not a rung",
     "feint-test": "its feint-plan and feint-apply children record for it",
     "feint-up": "starts the emulator, proves nothing about a change",
     "feint-down": "stops the emulator, proves nothing about a change",

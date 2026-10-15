@@ -135,6 +135,9 @@ for each old image the retention destroys (§7, image lane).
 - [ ] **`task cluster-verify`** green. A warning is a finding: it now reads each
       control plane's failure domain and each worker's data volume (the volume read
       needs `task tunnels-up`; without a tunnel it warns instead of passing).
+      It also reads STATE and EPHEMERAL back as LUKS2 and the apiserver's etcd-encryption flag.
+- [ ] **the network, asked of the network**: `task cluster-exposure` (and once with `FROM=denied`
+      from an address outside `admin_ip`), `task cluster-netcheck`, `task cluster-security`, `task rbac-review`.
 - [ ] **idempotency is three assertions, not one**: an empty plan, the *same*
       nodes (name and `creationTimestamp`), and a kubeconfig that still reaches
       the apiserver. Two of the three can pass while the cluster was rebuilt.
@@ -164,7 +167,8 @@ for each old image the retention destroys (§7, image lane).
       `OSC-work-ha`: all untested; worker volumes were read back on the management
       role only) and **bastion hardening**,
       `scripts/ops/bastion-harden-check.sh <bastion_ip> <bastion_user> <ssh_key>`
-      (never against the reference cluster).
+      (never against the reference cluster; `BASTION_BASELINE=1` adds the checks of the opt-in
+      `bastion_baseline`, and `task bastion-baseline-check` is the offline proof to run first).
 
 ## 5. Cloud — OVH
 
@@ -458,6 +462,10 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       items** list built from the open issue titles that day (`gh issue list
       --state open`): several known limits appear in no tracked file. Link the
       issues, not a backlog file. Not a pre-release (the owner's decision, 2026-10-12).
+- [ ] the release carries `openaether-infra-<tag>.cdx.json` (the `SBOM` workflow attaches it on
+      publish; `gh release view <tag> --json assets`) and the last `SBOM` run's image scans are green
+      or each red one is in `.vex/openaether-infra.openvex.json`. `docs/supply-chain.md` says what
+      the inventory covers and what it does not.
 - [ ] the examples and the default pin the apps tag, and it exists. OpenAether-apps
       is tagged and released first (`git ls-remote --tags
       https://github.com/dis-bzh/OpenAether-apps refs/tags/0.2.0` prints it).

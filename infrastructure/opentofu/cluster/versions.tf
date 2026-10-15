@@ -14,25 +14,25 @@ terraform {
     }
     openstack = {
       source  = "terraform-provider-openstack/openstack"
-      version = ">= 1.53.0"
+      version = "~> 3.4"
     }
     outscale = {
       source = "outscale/outscale"
       # 1.x for the api{} block (endpoint + region), which replaces the
       # deprecated top-level arguments and is what the emulator lane redirects.
-      version = ">= 1.7.0"
+      version = "~> 1.8"
     }
     proxmox = {
       source  = "bpg/proxmox"
-      version = ">= 0.66.0"
+      version = "~> 0.116.0"
     }
     local = {
       source  = "hashicorp/local"
-      version = ">= 2.5.0"
+      version = "~> 2.9"
     }
     random = {
       source  = "hashicorp/random"
-      version = ">= 3.6.0"
+      version = "~> 3.9"
     }
   }
 }

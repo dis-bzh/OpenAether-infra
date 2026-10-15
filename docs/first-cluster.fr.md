@@ -96,14 +96,32 @@ fournisseur et six paires à deviner.
 Et celle qui compte le plus :
 
 ```bash
-TF_VAR_encryption_passphrase="$(openssl rand -base64 48)"
+export TF_VAR_encryption_passphrase="$(scripts/ops/gen-passphrase.sh)"   # openssl rand -base64 48
 ```
 
 Minimum 32 caractères. `task cluster-up` refuse net si elle n'est pas définie, et refuse
 encore si elle contient toujours `change-me` : le texte d'exemple est publié dans
-ce dépôt, et ce contrôle est la seule chose entre toi et un déploiement sous un
-secret public. Perdre cette passphrase, c'est perdre l'état et les deux artefacts
-d'accès.
+ce dépôt. Au-delà, il ne fait que **prévenir** d'une valeur qui semble peu entropique (peu de
+caractères distincts, un bloc répété, un mot courant) : une heuristique, pas une preuve.
+`OA_PASSPHRASE_CHECK=enforce` transforme l'avertissement en refus ; à utiliser dès que ta passphrase
+passe. Perdre cette passphrase, c'est perdre l'état et les deux artefacts d'accès.
+
+Par défaut, la même passphrase protège aussi les sauvegardes gpg de talosconfig/kubeconfig et les
+snapshots etcd : une seule fuite ouvre les trois. Pour les séparer, définis-en une seconde, générée de
+la même façon :
+
+```bash
+export TF_VAR_artifact_passphrase="$(scripts/ops/gen-passphrase.sh)"   # à garder ailleurs que la première
+```
+
+La définir par l'environnement uniquement : `etcd-snapshot.sh` ne lit pas les fichiers tfvars, donc une valeur placée
+là chiffrerait les artefacts d'accès sous elle et les snapshots sous la passphrase d'état (le script avertit s'il le voit).
+
+Elle re-téléverse les artefacts sous ce secret au prochain apply. Les anciens objets restent lisibles
+(`restore-artifacts.sh` l'essaie d'abord, puis retombe sur la passphrase d'état), mais **un snapshot
+écrit sous elle ne s'ouvre pas sans elle** : sauvegarde-la comme la première. Gardée au même endroit que
+la passphrase d'état, la séparation est cosmétique. `.env.sh` contient toutes les clés en clair : `chmod 600`,
+ou garde les secrets dans un coffre et injecte-les (`op run`, `sops exec-env`, `pass`) plutôt que de sourcer un fichier.
 
 N'exporte pas `AWS_*` toi-même : le flux les dérive par provider à partir des
 variables préfixées ci-dessus.

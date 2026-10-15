@@ -94,14 +94,31 @@ between.
 And the one that matters most:
 
 ```bash
-TF_VAR_encryption_passphrase="$(openssl rand -base64 48)"
+export TF_VAR_encryption_passphrase="$(scripts/ops/gen-passphrase.sh)"   # openssl rand -base64 48
 ```
 
 Minimum 32 characters. `task cluster-up` refuses outright if it is unset, and refuses
 again if it still contains `change-me` — the shipped placeholder is published in
-this repository, and that check is the only thing between you and deploying
-under a public secret. Losing this passphrase means losing the state and both
-access artifacts.
+this repository. Beyond that it only **warns** about a value that looks low-entropy (few distinct
+characters, a repeated block, a common word): a heuristic, not a proof. `OA_PASSPHRASE_CHECK=enforce`
+turns the warning into a refusal; use it once your own passphrase passes. Losing this passphrase
+means losing the state and both access artifacts.
+
+By default the same passphrase also protects the gpg-encrypted talosconfig/kubeconfig backups and the etcd
+snapshots, so one leak opens all three. Set a second one, generated the same way, to split them:
+
+```bash
+export TF_VAR_artifact_passphrase="$(scripts/ops/gen-passphrase.sh)"   # keep it elsewhere than the first
+```
+
+Set it through the environment only: `etcd-snapshot.sh` does not read tfvars files, so a value put there would
+encrypt the access artifacts under it and the snapshots under the state passphrase (the script warns when it sees it).
+
+Setting it re-uploads the artifacts under it on the next apply. Older objects stay readable
+(`restore-artifacts.sh` tries it first and falls back to the state passphrase), but **a snapshot written under
+it cannot be opened without it**: back it up like the first one. Held in the same place as the state passphrase,
+the split is cosmetic. `.env.sh` holds every key in clear text: `chmod 600` it, or keep the secrets in a vault and
+inject them (`op run`, `sops exec-env`, `pass`) rather than sourcing a file.
 
 Do not export `AWS_*` yourself: the flow derives them per provider from the
 namespaced variables above.

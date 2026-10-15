@@ -38,7 +38,7 @@ Four things off the cluster, in your password manager or vault, then wiped from 
 | Seal key | `kubectl -n foundation-vault get secret openbao-seal-key -o jsonpath='{.data.key}' \| base64 -d \| gpg --encrypt -r <you> -o openbao-seal-key.gpg` | OpenBao DR: a raft snapshot is encrypted by it |
 | Recovery shares | `for i in 1 2 3; do kubectl -n foundation-vault get secret openbao-recovery-shares -o jsonpath="{.data.share-$i}" \| base64 -d > openbao-share-$i.b64; done` (PGP-encrypted: safe to store anywhere) | break-glass root token and DR; the Secret dies with the cluster |
 | restic password | `bao_admin kv get -mount=secret -field=password backup/restic` | without it the backups are undecryptable the day OpenBao is lost |
-| `TF_VAR_encryption_passphrase` | already in your vault | tfstate + gpg artifacts + etcd snapshots |
+| `TF_VAR_encryption_passphrase` | already in your vault | tfstate (+ gpg artifacts + etcd snapshots unless `TF_VAR_artifact_passphrase` is set) |
 
 A cluster without `openbao_recovery_pgp_keys` is a **development** bootstrap: one plaintext share in
 `openbao-recovery-dev`, labelled as such, and it can not be turned into a production one (re-initialise it). Do not put anything that
@@ -183,6 +183,54 @@ read-only work, carry less: `task talosconfig-new PROVIDER=… ` issues an
 with it, while `talosctl get machineconfig` is refused. Mint one and reuse it until it
 expires rather than one per run: minting is a write against the Talos API, and a read
 should not need one.
+
+**Review at staff change.** Whoever joins or leaves, run `task rbac-review` (a read-only `kubectl`, `KUBECONFIG` set):
+it lists every binding with its subjects in `rbac-review/rbac-review-<date>.tsv` and flags a named User/Group, an anonymous
+binding and a `cluster-admin` outside the allowlist (the one of `cluster-security-tests.sh` 3.7). Today the expected answer is
+"nothing flagged": human access is the shared certificate above, so a flagged line is a decision to record or a binding to
+delete. Revoking a person still means rotating the CA; the review only finds what else grants them access.
+Beyond RBAC, `task cluster-exposure PROVIDER=…` probes the public addresses (run it once from an address that is not in
+`admin_ip` with `FROM=denied`: 22 and 6443 must then be closed) and `task cluster-netcheck PROVIDER=…` sends traffic the
+policies must drop. `task cluster-security` takes `ENVIRONMENT=prod` to fail on an `openbao-recovery-dev` Secret.
+
+### Bastion OS baseline (opt-in, `bastion_baseline`)
+
+Off by default: the cloud-init is byte for byte what 0.1.0 shipped. Turn it on in the tfvars:
+
+```hcl
+bastion_baseline = { enabled = true }   # + audit_logging (default true), restrict_ssh_source, time_servers, revoked_keys
+```
+
+⚠️ **This changes the bastion's `user_data`, which replaces the VM on OVH and Outscale** (new public IP, new host key, the
+Talos tunnels die with it) and on Scaleway and Proxmox the plan decides (cloud-init only runs at first boot, so a running VM keeps its old one until it is
+recreated): read it. Apply it on a fresh cluster or in a planned window,
+never during a bootstrap or an upgrade, with a second session or the provider console open. Read the plan: the bastion must be
+the only thing replaced.
+
+What it adds, each item named by the ANSSI requirement it addresses (BP-028 is the GNU/Linux guide, NT-007 the SSH one, NT-006
+the filtering one; nothing here claims compliance): sysctl (R9, R11, R12 without the ARP options, R14), auditd with execve,
+`/etc`, mount, module and ptrace rules and no `-e 2` (R73), a persistent journald capped at 200 MB / 90 days, `LogLevel VERBOSE`
+and a second sshd drop-in with the directives NT-007 R14/R15/R23 ask for, `authorized_keys.d` owned by root (R50), `/var/tmp`
+noexec (R28), `/boot` 700 (R29), umask 0077 (R36), sudo restricted to its group (R38), no tcpdump/netcat (R58, new VMs only),
+and in the VM's own nftables: logged drops and ICMP limited to echo-request and fragmentation-needed (NT-006 R3/R6).
+`restrict_ssh_source = true` also limits port 22 to `admin_ip` inside the VM (Proxmox has no security group), but then
+`admin_ip` is part of the user_data: changing it replaces the bastion, and a running one keeps the old list - leave it off where
+that is not acceptable. Port 22 stays on 22 because the cloud security group is the real allowlist and the tunnels
+(`talos-tunnels.sh`) and this guide all use it; the key, the user and the `PermitOpen` forwards are untouched.
+
+`time_servers` swaps the image's time service for chrony on those servers. `revoked_keys` is **the offboarding procedure**:
+remove the key from `bastion_ssh_keys` AND list it there, so it is refused even on a bastion that is not rebuilt. Changing
+either replaces the bastion, as above. Map each key to a person in a file kept next to the tfvars (`ssh-keygen -lf <key>.pub`
+prints the fingerprint that the login line `Accepted publickey ... SHA256:<fingerprint>` carries).
+
+The logs die with the VM: `scripts/ops/bastion-logs-pull.sh <ip> bastion <key>` copies the journal (ssh, sudo, nft drops;
+incremental) and the audit log off it, encrypted when `OA_LOGS_PASSPHRASE` is set. It does not upload them. Cloud-side audit
+trails (Scaleway Audit Trail, OVH Activity logs, Outscale CloudTrail) and a Proxmox host's syslog are separate, outside this
+repository, and not exported by anything here.
+
+Check a deployed bastion with `BASTION_BASELINE=1 scripts/ops/bastion-harden-check.sh <ip> bastion <key> [<node ip>]`. Before
+spending anything, `task bastion-baseline-check` runs the rendered files on Ubuntu 22.04 and 24.04 in Docker (a real sshd
+login, tunnels through `PermitOpen`, revoked keys, the loaded firewall rules, sysctl names, audit-rule syntax).
 
 ## 7. Grafana SSO through Zitadel (OIDC)
 

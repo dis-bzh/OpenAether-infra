@@ -6,8 +6,9 @@
 # manifests and are derivable from the machine secrets, which already live in
 # the encrypted tfstate (the real DR artifact).
 #
-# Encryption: client-side gpg AES-256 with the SAME passphrase as the tfstate
-# (that is what protects the data), plus S3 SSE on top.
+# Encryption: client-side gpg AES-256 (CFB with a SHA-1 MDC, not an AEAD mode) under artifact_passphrase when set,
+# else the tfstate passphrase (that is what protects the data), plus S3 SSE on top (provider-managed, not a control we
+# can assess).
 #
 # ⚠️ Uses the AWS CLI rather than aws_s3_object: that resource hits a
 # "version_id known -> now unknown" plan-consistency bug on non-AWS S3 stores.
@@ -17,6 +18,11 @@
 # ==============================================================================
 
 locals {
+  # Unset or empty artifact_passphrase = the state passphrase, exactly as before the variable existed.
+  # nonsensitive(): that it is set is no secret, and the mark would hide the whole triggers_replace map in every plan.
+  artifact_passphrase_set = nonsensitive(var.artifact_passphrase != null && var.artifact_passphrase != "")
+  artifact_passphrase     = local.artifact_passphrase_set ? var.artifact_passphrase : var.encryption_passphrase
+
   # Bucket naming convention: s3-<project>-<provider>-{tfstate|<role>}-<env> (+ -backup).
   # The provider is explicit (not buried in cluster_name) so it's consistent across
   # management and workload clusters; project is cluster_name's first segment.
@@ -55,11 +61,13 @@ resource "terraform_data" "backup" {
   count = var.backup_enabled && var.talos_bootstrap && local.total_control_planes > 0 ? 1 : 0
 
   # Re-upload only when an artifact (or a target) actually changes.
-  triggers_replace = {
+  # The passphrase joins the triggers only when a separate one is set, so a cluster that does not set it sees no diff;
+  # setting it re-uploads the artifacts under the new secret.
+  triggers_replace = merge({
     talosconfig = sha256(module.talos.talosconfig)
     kubeconfig  = sha256(module.talos.kubeconfig_raw)
     targets     = "${local.artifact_bucket_primary}|${local.artifact_bucket_replica}|${var.s3_primary_endpoint}|${var.s3_replica_endpoint}"
-  }
+  }, local.artifact_passphrase_set ? { artifact_passphrase = sha256(var.artifact_passphrase) } : {})
 
   provisioner "local-exec" {
     interpreter = ["/usr/bin/env", "bash"]
@@ -70,7 +78,7 @@ resource "terraform_data" "backup" {
     environment = {
       TALOSCONFIG_B64 = base64encode(module.talos.talosconfig)
       KUBECONFIG_B64  = base64encode(module.talos.kubeconfig_raw)
-      PASSPHRASE      = var.encryption_passphrase
+      PASSPHRASE      = local.artifact_passphrase
       PROVIDER        = local.active_provider
       PRIMARY_BUCKET  = local.artifact_bucket_primary
       PRIMARY_EP      = var.s3_primary_endpoint

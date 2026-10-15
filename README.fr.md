@@ -319,6 +319,8 @@ task security            # contrôles de durcissement
 | [docs/clea.fr.md](docs/clea.fr.md) | Ce que le rapport de dépendances épingle, et ce qu'un rapport vert peut affirmer |
 | [docs/emulated-cloud.fr.md](docs/emulated-cloud.fr.md) | Tester Scaleway/Outscale contre un émulateur local — et les limites de l'exercice |
 | [docs/upgrade.fr.md](docs/upgrade.fr.md) | Faire bouger Kubernetes et Talos sur un cluster qui doit rester debout |
+| [docs/supply-chain.fr.md](docs/supply-chain.fr.md) | Providers et images de démarrage verrouillés, le SBOM, qui peut lancer le workflow cloud, rulesets en code |
+| [docs/patching.fr.md](docs/patching.fr.md) | Le délai des correctifs, ce qui est épinglé, et les signaux qui disent qu'un correctif existe |
 | [docs/release-checklist.md](docs/release-checklist.md) | Ce qu'il faut lancer avant de taguer, dans l'ordre qui échoue le moins cher (anglais seulement) |
 | [docs/status.md](docs/status.md) | **Source de vérité** : ce qui tourne, ce qui est mesuré sur un compte réel et depuis quand (anglais seulement ; le travail ouvert est dans les issues) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | **À lire avant une première pull request** : ce qui compte comme preuve, les quatre barreaux, les trailers de commit, les contributions assistées par IA |

@@ -374,6 +374,62 @@ else
 fi
 fi
 
+# --- Encryption at rest is EFFECTIVE, not just configured (ANSSI HYG M37/M38 evidence) -------
+#
+# The machine config asks for LUKS2 on STATE and EPHEMERAL and a secretbox key for the etcd
+# Secrets, and until now only the worker user volumes were read back. Each node's own Talos
+# API is the witness for the disks, the apiserver's own command line for etcd.
+system_volume_check() { # <node ips, one per line> — STATE and EPHEMERAL must be ready and luks2
+  local ip v out checked=0 failed=0 TUN="127.0.0.1:$((50000 + ${TF_VAR_talos_tunnel_port_offset:-0}))"
+  if [ -z "$1" ]; then
+    unk "no node answered — the encryption of STATE and EPHEMERAL is UNCHECKED"; return
+  fi
+  for ip in $1; do
+    if ! timeout 20 talosctl get nodename -e "$TUN" -n "$ip" >/dev/null 2>&1; then
+      warn "node ${ip}: not reachable through the Talos tunnel on ${TUN} — its STATE/EPHEMERAL encryption is unchecked (run 'task tunnels-up PROVIDER=${PROVIDER}')"
+      continue
+    fi
+    for v in STATE EPHEMERAL; do
+      out="$(timeout 20 talosctl get volumestatus "$v" -e "$TUN" -n "$ip" -o json 2>/dev/null |
+             jq -r '.spec | "\(.phase) \(.encryptionProvider // "none")"' 2>/dev/null)" || out=""
+      case "$out" in
+        "ready luks2") checked=$((checked + 1)) ;;
+        # No answer is not "unencrypted": the resource id is the partition label, taken from Talos' source, and
+        # this is the first time anything reads it. Unknown, never green and never a false red.
+        "") unk "node ${ip}: no volume status '${v}' — its encryption is UNCHECKED"; failed=$((failed + 1)) ;;
+        *) bad "node ${ip} volume ${v} is '${out}', expected 'ready luks2': the node's disk is not encrypted at rest as configured"
+           failed=$((failed + 1)) ;;
+      esac
+    done
+  done
+  if [ "$checked" -gt 0 ] && [ "$failed" -eq 0 ]; then
+    ok "STATE and EPHEMERAL are ready and LUKS2-encrypted (${checked} volume(s) read back from the nodes)"
+  fi
+}
+
+# The flag is how the apiserver is told to encrypt Secrets in etcd; Talos writes it from
+# cluster.secretboxEncryptionSecret. Its presence proves encryption is on, not which cipher.
+apiserver_encryption_check() {
+  local args
+  args="$(K -n kube-system get pods -l component=kube-apiserver \
+            -o jsonpath='{range .items[*]}{.spec.containers[0].command}{.spec.containers[0].args}{"\n"}{end}' 2>/dev/null)" || args=""
+  if [ -z "$args" ]; then
+    unk "could not read the kube-apiserver command line — Secrets encryption in etcd is UNCHECKED"
+  elif grep -q -- '--encryption-provider-config=' <<<"$args"; then
+    ok "kube-apiserver runs with --encryption-provider-config (Secrets encrypted in etcd)"
+  else
+    bad "kube-apiserver has no --encryption-provider-config: Secrets are stored in etcd in clear"
+  fi
+}
+
+# The Docker cluster has no disks and its apiserver is not a Talos static pod run from a machine
+# config in the same way; asserting either there would be a guard that cannot pass where it runs.
+if [ "$PROVIDER" != local ]; then
+info "Encryption at rest is effective"
+system_volume_check "$(K get nodes -o jsonpath='{range .items[*]}{.status.addresses[?(@.type=="InternalIP")].address}{"\n"}{end}' 2>/dev/null)"
+apiserver_encryption_check
+fi
+
 info "The state is backed up"
 
 if [ "$PROVIDER" = local ]; then

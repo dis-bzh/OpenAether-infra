@@ -1,0 +1,113 @@
+# Weekly and on every published release: an inventory of what this repository pins and ships (CycloneDX 1.5,
+# scripts/dev/gen-sbom.py), and a Trivy scan of the bootstrap container images (ANSSI SBOM25-1/-2/-3,
+# SSDLC CICD-AIP-01b).
+# The inventory is attached to the release as openaether-infra-<tag>.cdx.json. A CRITICAL finding with a fix upstream
+# fails the scan job; an accepted one is recorded in .vex/openaether-infra.openvex.json (docs/supply-chain.md).
+# Never on a pull request, so it joins no required check; no cloud credential, only anonymous registry reads.
+name: SBOM
+
+on:
+  schedule:
+    # Off the hour: a shared runner pool is busiest at :00.
+    - cron: "11 5 * * 2"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    name: Inventory
+    if: github.repository == 'dis-bzh/OpenAether-infra'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      images: ${{ steps.images.outputs.images }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
+
+      - name: Generate the CycloneDX inventory
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: python3 -I scripts/dev/gen-sbom.py --version "$REF_NAME" --output sbom.cdx.json
+
+      - name: Keep it as a run artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: sbom
+          path: sbom.cdx.json
+          if-no-files-found: error
+
+      - name: List the images to scan
+        id: images
+        run: |
+          set -euo pipefail
+          list="$(python3 -I scripts/dev/gen-sbom.py --images | jq -R . | jq -sc .)"
+          [ "$(jq length <<<"$list")" -gt 0 ] || { echo "::error::no image found: the extractor is broken"; exit 1; }
+          echo "images=${list}" >>"$GITHUB_OUTPUT"
+
+  release-asset:
+    name: Attach to the release
+    needs: inventory
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write  # upload one asset to the release being published, nothing else
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: sbom
+
+      - name: Upload, named by the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mv sbom.cdx.json "openaether-infra-${TAG}.cdx.json"
+          gh release upload "$TAG" "openaether-infra-${TAG}.cdx.json" --clobber --repo "$REPO"
+
+  scan-images:
+    name: Scan ${{ matrix.image }}
+    needs: inventory
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJSON(needs.inventory.outputs.images) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
+
+      # An empty VEX file makes Trivy's job harder, not easier: hand it over only once it says something.
+      - name: Apply the VEX file if it has statements
+        id: vex
+        run: |
+          if jq -e '.statements | length > 0' .vex/openaether-infra.openvex.json >/dev/null; then
+            echo "config=.github/trivy-image-vex.yaml" >>"$GITHUB_OUTPUT"
+          else
+            echo "config=" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Trivy image scan (CRITICAL with a fix upstream)
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # 0.35.0
+        with:
+          scan-type: image
+          image-ref: ${{ matrix.image }}
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: 1
+          format: table
+          trivy-config: ${{ steps.vex.outputs.config }}

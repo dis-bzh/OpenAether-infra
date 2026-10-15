@@ -41,7 +41,7 @@ d'OpenBao** : c'est la clé maîtresse de ses données.
 | Clé de seal | `kubectl -n foundation-vault get secret openbao-seal-key -o jsonpath='{.data.key}' \| base64 -d \| gpg --encrypt -r <toi> -o openbao-seal-key.gpg` | DR d'OpenBao : un snapshot raft est chiffré par elle |
 | Parts de recovery | `for i in 1 2 3; do kubectl -n foundation-vault get secret openbao-recovery-shares -o jsonpath="{.data.share-$i}" \| base64 -d > openbao-share-$i.b64; done` (chiffrées PGP : peuvent être rangées n'importe où) | root token de bris de glace et DR ; le Secret meurt avec le cluster |
 | Password restic | `bao_admin kv get -mount=secret -field=password backup/restic` | sans lui, backups indéchiffrables le jour où OpenBao est perdu |
-| `TF_VAR_encryption_passphrase` | déjà dans ton vault | tfstate + artefacts gpg + snapshots etcd |
+| `TF_VAR_encryption_passphrase` | déjà dans ton vault | tfstate (+ artefacts gpg + snapshots etcd, sauf si `TF_VAR_artifact_passphrase` est défini) |
 
 Un cluster sans `openbao_recovery_pgp_keys` est un bootstrap de **développement** : une
 part en clair dans `openbao-recovery-dev`, étiquetée comme telle, qui ne peut pas devenir un bootstrap de production (réinitialiser).
@@ -194,6 +194,57 @@ par `task local-rbac`). Aussi joué à travers les tunnels sur un vrai cluster O
 avec lui, alors que `talosctl get machineconfig` est refusé. En émettre un et le
 réutiliser jusqu'à son expiration plutôt qu'un par exécution : émettre est une
 écriture sur l'API Talos, et une lecture ne devrait pas en demander.
+
+**Revue à chaque changement de personnel.** Quand quelqu'un arrive ou part, lancer `task rbac-review` (un `kubectl` en
+lecture seule, `KUBECONFIG` posé) : il liste chaque binding et ses sujets dans `rbac-review/rbac-review-<date>.tsv` et signale
+un User/Group nommé, un binding anonyme et un `cluster-admin` hors liste d'autorisation (celle de `cluster-security-tests.sh`
+3.7). Aujourd'hui la réponse attendue est « rien de signalé » : l'accès humain est le certificat partagé ci-dessus, donc une
+ligne signalée est une décision à consigner ou un binding à supprimer. Révoquer une personne reste faire tourner la CA ; la
+revue ne fait que trouver ce qui d'autre lui donne accès.
+Côté réseau, `task cluster-exposure PROVIDER=…` sonde les adresses publiques (à lancer une fois depuis une adresse absente de
+`admin_ip` avec `FROM=denied` : 22 et 6443 doivent alors être fermés) et `task cluster-netcheck PROVIDER=…` envoie du trafic que
+les politiques doivent rejeter. `task cluster-security` accepte `ENVIRONMENT=prod` pour échouer sur un Secret `openbao-recovery-dev`.
+
+### Socle OS du bastion (optionnel, `bastion_baseline`)
+
+Désactivé par défaut : le cloud-init est identique à l'octet à celui de 0.1.0. Pour l'activer, dans le tfvars :
+
+```hcl
+bastion_baseline = { enabled = true }   # + audit_logging (défaut true), restrict_ssh_source, time_servers, revoked_keys
+```
+
+⚠️ **Cela change le `user_data` du bastion, ce qui remplace la VM sur OVH et Outscale** (nouvelle IP publique, nouvelle clé
+d'hôte, les tunnels Talos tombent avec) et sur Scaleway et Proxmox le plan tranche (cloud-init ne tourne qu'au premier démarrage : une VM en marche garde l'ancien jusqu'à
+sa recréation) : le lire. L'appliquer sur un cluster neuf ou
+dans une fenêtre prévue, jamais pendant un bootstrap ou une montée de version, avec une seconde session ou la console du
+provider ouverte. Lire le plan : le bastion doit être la seule chose remplacée.
+
+Ce qu'il ajoute, chaque point nommé par l'exigence ANSSI qu'il adresse (BP-028 est le guide GNU/Linux, NT-007 celui de SSH,
+NT-006 celui du filtrage ; rien ici ne revendique la conformité) : sysctl (R9, R11, R12 sans les options ARP, R14), auditd avec
+des règles execve, `/etc`, mount, modules et ptrace et sans `-e 2` (R73), un journald persistant plafonné à 200 Mo / 90 jours,
+`LogLevel VERBOSE` et un second fichier sshd avec les directives que demandent NT-007 R14/R15/R23, `authorized_keys.d`
+appartenant à root (R50), `/var/tmp` noexec (R28), `/boot` en 700 (R29), umask 0077 (R36), sudo réservé à son groupe (R38), ni
+tcpdump ni netcat (R58, nouvelles VM seulement), et dans le nftables de la VM : les rejets journalisés et l'ICMP limité à
+echo-request et fragmentation-needed (NT-006 R3/R6). `restrict_ssh_source = true` limite aussi le port 22 à `admin_ip` dans la VM
+(Proxmox n'a pas de security group), mais `admin_ip` entre alors dans le user_data : le changer remplace le bastion, et un
+bastion en marche garde l'ancienne liste - à laisser désactivé là où ce n'est pas acceptable. Le port 22 reste 22 : le security
+group du cloud est la vraie liste d'autorisation, et les tunnels (`talos-tunnels.sh`) comme ce guide l'utilisent ; la clé,
+l'utilisateur et les redirections `PermitOpen` ne bougent pas.
+
+`time_servers` remplace le service de temps de l'image par chrony sur ces serveurs. `revoked_keys` est **la procédure de
+départ** : retirer la clé de `bastion_ssh_keys` ET la lister ici, pour qu'elle soit refusée même sur un bastion non reconstruit.
+Changer l'un ou l'autre remplace le bastion, comme ci-dessus. Associer chaque clé à une personne dans un fichier tenu à côté du
+tfvars (`ssh-keygen -lf <clé>.pub` donne l'empreinte que porte la ligne de connexion `Accepted publickey ... SHA256:<empreinte>`).
+
+Les journaux meurent avec la VM : `scripts/ops/bastion-logs-pull.sh <ip> bastion <clé>` copie le journal (ssh, sudo, rejets nft ;
+incrémental) et le journal d'audit hors de la VM, chiffrés si `OA_LOGS_PASSPHRASE` est posée. Il ne les téléverse pas. Les
+pistes d'audit côté cloud (Scaleway Audit Trail, OVH Activity logs, Outscale CloudTrail) et le syslog d'un hôte Proxmox sont à
+part, hors de ce dépôt, et rien ici ne les exporte.
+
+Vérifier un bastion déployé avec `BASTION_BASELINE=1 scripts/ops/bastion-harden-check.sh <ip> bastion <clé> [<ip nœud>]`. Avant
+de dépenser quoi que ce soit, `task bastion-baseline-check` exécute les fichiers rendus sur Ubuntu 22.04 et 24.04 dans Docker
+(une vraie connexion sshd, les tunnels via `PermitOpen`, les clés révoquées, les règles de pare-feu chargées, les noms sysctl,
+la syntaxe des règles d'audit).
 
 ## 7. SSO Grafana via Zitadel (OIDC)
 

@@ -117,11 +117,11 @@ capped one (`config_contract` in `modules/talos/main.tf`, which says why). A bum
 the installer image in the config; offline renders under provider 0.12.0 show nothing else, but
 no `cluster-upgrade` has run under it yet.
 
-**After pulling the provider 0.12.0 pin**, run `tofu init -backend=false -upgrade` in
-`infrastructure/opentofu/cluster` (or `task validate`, which shares the lock). The lock file is
-local and gitignored, so every `infra-*` task stops at init until you do. `-upgrade` moves every
-provider within its constraint: read the next plan. To move only talos, delete its block from
-`.terraform.lock.hcl` and run a plain `tofu init`.
+**After pulling a provider pin**, the committed `.terraform.lock.hcl` of `cluster/` and `talos-image/` already
+names the version (docs/supply-chain.md): a plain `tofu init` in `infrastructure/opentofu/cluster` is enough, and
+an init that says the lock does not match the constraint means the PR forgot `task lock-providers`. That task
+moves every provider within its constraint: read the next plan. A clone that still has an older local lock
+(from before it was committed) is fixed by deleting that file and running `tofu init`.
 
 **On Outscale the image build dominates the whole upgrade.** The image is
 registered from a snapshot imported through a provider-side queue: 8 min on
@@ -509,3 +509,21 @@ healthy with two instances, both held the 1000 rows, and of 368 inserts 2 failed
 acknowledged one was on the new primary. The budget and the window were put back at the end.
 
 Not measured: Proxmox, and a removal that stops half-way on a real cloud.
+
+## The Secrets encryption key (etcd) — not rotatable in place
+
+Kubernetes Secrets are encrypted in etcd with the `secretbox` provider (XSalsa20-Poly1305), set through
+`cluster.secretboxEncryptionSecret`. It is Kubernetes' recommended local provider, but XSalsa20-Poly1305 is not among
+the AEAD modes ANSSI PA-079 R12 lists (GCM, CCM, EAX, ChaCha20-Poly1305). **Documented deviation:** Talos offers only
+`secretbox` and `aescbc` here, and `aescbc` is not an AEAD at all. A KMS v2 provider would replace it, but only with a
+KMS outside the cluster; OpenBao inside it would be circular.
+
+The key is one `random_bytes` (32 bytes) in the tfstate, which is encrypted client-side, and in every control-plane
+machine config. Losing it makes every Secret in an etcd snapshot unreadable.
+
+**There is no rotation procedure here, on purpose.** The machine config takes a single key, so replacing the value
+(or tainting `random_bytes.etcd_encryption_secret`) leaves the existing Secrets encrypted under a key the
+apiserver no longer holds. A two-key rotation (add the new key, re-write every Secret with
+`kubectl get secrets -A -o json | kubectl replace -f -`, drop the old one) is the usual Kubernetes sequence, but whether
+Talos can be given the second key has not been verified or run. Until it has, the only path known to be safe after a
+suspected key leak is a new cluster, re-seeded from OpenBao. Do not rehearse the sequence above on a cluster you need.

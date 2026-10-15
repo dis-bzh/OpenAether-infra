@@ -1,0 +1,138 @@
+{
+  "name": "main",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "exclude": [],
+      "include": [
+        "~DEFAULT_BRANCH"
+      ]
+    }
+  },
+  "rules": [
+    {
+      "type": "deletion"
+    },
+    {
+      "type": "non_fast_forward"
+    },
+    {
+      "type": "required_linear_history"
+    },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 0,
+        "dismiss_stale_reviews_on_push": true,
+        "required_reviewers": [],
+        "require_code_owner_review": false,
+        "dismissal_restriction": {
+          "enabled": false,
+          "allowed_actors": []
+        },
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": true,
+        "require_extra_approval_for_unattributed_changes": true,
+        "allowed_merge_methods": [
+          "merge",
+          "squash",
+          "rebase"
+        ]
+      }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": true,
+        "do_not_enforce_on_create": false,
+        "required_status_checks": [
+          {
+            "context": "Analyze (python)",
+            "integration_id": 15368
+          },
+          {
+            "context": "Commit messages",
+            "integration_id": 15368
+          },
+          {
+            "context": "Detect change scope",
+            "integration_id": 15368
+          },
+          {
+            "context": "Emulated Cloud (outscale)",
+            "integration_id": 15368
+          },
+          {
+            "context": "Emulated Cloud (scaleway)",
+            "integration_id": 15368
+          },
+          {
+            "context": "Environment data in new commits",
+            "integration_id": 15368
+          },
+          {
+            "context": "Feint Evidence (outscale)",
+            "integration_id": 15368
+          },
+          {
+            "context": "Feint Evidence (scaleway)",
+            "integration_id": 15368
+          },
+          {
+            "context": "Generated Manifests",
+            "integration_id": 15368
+          },
+          {
+            "context": "IaC Security Scan",
+            "integration_id": 15368
+          },
+          {
+            "context": "Lint & Format",
+            "integration_id": 15368
+          },
+          {
+            "context": "OpenTofu Tests",
+            "integration_id": 15368
+          },
+          {
+            "context": "Pipeline audit",
+            "integration_id": 15368
+          },
+          {
+            "context": "Secret Detection",
+            "integration_id": 15368
+          },
+          {
+            "context": "Talos Config Validation",
+            "integration_id": 15368
+          },
+          {
+            "context": "Validate (cluster)",
+            "integration_id": 15368
+          },
+          {
+            "context": "Validate (talos-image)",
+            "integration_id": 15368
+          },
+          {
+            "context": "Rung receipt",
+            "integration_id": 15368
+          }
+        ]
+      }
+    }
+  ],
+  "bypass_actors": [
+    {
+      "actor_id": null,
+      "actor_type": "OrganizationAdmin",
+      "bypass_mode": "always"
+    },
+    {
+      "actor_id": 5,
+      "actor_type": "RepositoryRole",
+      "bypass_mode": "always"
+    }
+  ]
+}

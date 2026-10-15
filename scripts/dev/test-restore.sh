@@ -29,7 +29,8 @@ trap 'rm -rf "$WORK" "$GNUPGHOME"' EXIT
 # assertion right after.
 eval "$(awk '/^enc\(\) \{/,/^\}/' "$ROOT/scripts/ops/backup-artifacts.sh")"
 eval "$(awk '/^dec\(\) \{/,/^\}/' "$ROOT/scripts/ops/restore-artifacts.sh")"
-if ! declare -F enc >/dev/null || ! declare -F dec >/dev/null; then
+eval "$(awk '/^dec_any\(\) \{/,/^\}/' "$ROOT/scripts/ops/restore-artifacts.sh")"
+if ! declare -F enc >/dev/null || ! declare -F dec >/dev/null || ! declare -F dec_any >/dev/null; then
   echo "✗ enc()/dec() could not be extracted — every check below would have passed on rc 127" >&2
   exit 1
 fi
@@ -82,6 +83,19 @@ echo "=== a wrong passphrase must FAIL, not return something ==="
   && ok "the wrong passphrase is refused" \
   || bad "the wrong passphrase decrypted the object"
 
+echo "=== a separate artifact passphrase: tried first, the state passphrase stays the fallback ==="
+STATEPP="the-state-passphrase-long-enough-to-be-accepted"; ARTPP="the-artifact-passphrase-long-enough-to-be-accepted"
+B64="$(printf '%s' "$PAYLOAD" | base64 -w0)"
+PASSPHRASE="$STATEPP" enc "$B64" "$WORK/old.gpg"      # written before the split
+PASSPHRASE="$ARTPP" enc "$B64" "$WORK/new.gpg"        # written under the artifact passphrase
+PASSPHRASES=("$ARTPP" "$STATEPP")
+dec_any "$WORK/new.gpg" "$WORK/o1" 2>/dev/null && cmp -s "$WORK/original" "$WORK/o1" && ok "an object under the artifact passphrase opens" || bad "artifact-sealed object did not open"
+dec_any "$WORK/old.gpg" "$WORK/o2" 2>/dev/null && cmp -s "$WORK/original" "$WORK/o2" && ok "an object written before the split still opens (fallback to the state passphrase)" || bad "old object did not open"
+PASSPHRASES=("$STATEPP")
+dec_any "$WORK/new.gpg" "$WORK/o3" 2>/dev/null && bad "the state passphrase opened an artifact-passphrase object" || ok "the state passphrase alone does NOT open an object sealed under the artifact passphrase"
+PASSPHRASES=("$ARTPP")
+dec_any "$WORK/old.gpg" "$WORK/o4" 2>/dev/null && bad "the artifact passphrase opened a state-passphrase object" || ok "and the reverse: separation is real"
+
 echo "=== restore-artifacts.sh refuses to start without the passphrase ==="
 # It is the ONLY thing that can decrypt; discovering it is unset after the
 # download turns a missing key into what looks like a corrupt backup.
@@ -91,6 +105,8 @@ if [ "$rc" -ne 0 ] && grep -q 'TF_VAR_encryption_passphrase' <<<"$out"; then
 else
   bad "it did not refuse a run with no passphrase (rc=${rc})"
 fi
+out="$(env -u TF_VAR_encryption_passphrase -u TF_VAR_artifact_passphrase "$ROOT/scripts/ops/restore-artifacts.sh" scaleway 2>&1)"; rc=$?
+[ "$rc" -ne 0 ] && grep -q 'nor TF_VAR_artifact_passphrase' <<<"$out" && ok "neither passphrase set: refused, naming both" || bad "no passphrase at all (rc=${rc}): ${out}"
 
 echo "=== a replica on ANOTHER cloud is read with that cloud's keys, region and bucket (the file's cluster_role) ==="
 # Runs the script against a stub aws on the shipped failover example, whose inline comments and cluster_role
@@ -139,6 +155,9 @@ got="$(run_restore primary "${REPLICA_KEYS[@]}")"
 got="$(run_restore primary SCW_AWS_ACCESS_KEY_ID=cluster-own SCW_AWS_SECRET_ACCESS_KEY=s)"
 case "$got" in cluster-own\|"s3 cp s3://${BUCKET}/backups/talosconfig.gpg "*" --endpoint-url ${PRIM_EP} --region ${PRIM_REGION}") ok "the primary read uses the cluster's own key, bucket, endpoint and region" ;;
   *) bad "the primary read is wrong: ${got:-no aws call at all}" ;; esac
+# State lost, only the artifact passphrase in hand: the early gate lets the run reach the store.
+got="$(run_restore replica "${REPLICA_KEYS[@]}" TF_VAR_encryption_passphrase= TF_VAR_artifact_passphrase=y)"
+case "$got" in replica-cloud\|*) ok "with only TF_VAR_artifact_passphrase set the restore still goes to the store" ;; *) bad "artifact-only run stopped early: ${got:-no aws call}" ;; esac
 # A refused read and a missing object are different repairs; each token a store may use for "missing" is its own case.
 for miss in 'An error occurred (404) when calling the HeadObject operation: Key "backups/talosconfig.gpg" does not exist' \
             'An error occurred (NoSuchKey) when calling the GetObject operation: gone' 'A client error: Not Found'; do

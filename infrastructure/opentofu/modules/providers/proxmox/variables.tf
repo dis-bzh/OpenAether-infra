@@ -222,6 +222,19 @@ variable "bastion_ssh_ca_principals" {
   default     = ""
 }
 
+# Opt-in OS baseline of the bastion (see cluster/variables.tf). {} keeps the cloud-init byte for byte as before.
+variable "bastion_baseline" {
+  description = "Bastion hardening baseline: enabled, audit_logging, restrict_ssh_source, time_servers, revoked_keys. Default = nothing changes; enabled changes user_data (replaces the bastion on OVH and Outscale)."
+  type = object({
+    enabled             = optional(bool, false)
+    audit_logging       = optional(bool, true)
+    restrict_ssh_source = optional(bool, false)
+    time_servers        = optional(list(string), [])
+    revoked_keys        = optional(list(string), [])
+  })
+  default = {}
+}
+
 # --- Worker storage (contract parity; consumed here to create data disks) -----
 
 variable "worker_storage" {

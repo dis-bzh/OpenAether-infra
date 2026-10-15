@@ -126,11 +126,11 @@ sous un contrat plafonné (`config_contract` dans `modules/talos/main.tf`, qui d
 bump vers 1.14 change l'image d'installation dans la configuration ; les rendus hors ligne sous
 le provider 0.12.0 ne montrent rien d'autre, mais aucun `cluster-upgrade` n'a encore tourné sous lui.
 
-**Après avoir tiré le pin du provider 0.12.0**, lancer `tofu init -backend=false -upgrade` dans
-`infrastructure/opentofu/cluster` (ou `task validate`, qui partage le lock). Le fichier de lock est
-local et ignoré par git : toutes les tâches `infra-*` s'arrêtent à l'init tant que ce n'est pas fait.
-`-upgrade` déplace chaque provider dans sa contrainte : lire le plan suivant. Pour ne déplacer que
-talos, supprimer son bloc de `.terraform.lock.hcl` et lancer un `tofu init` simple.
+**Après avoir tiré un pin de provider**, le `.terraform.lock.hcl` versionné de `cluster/` et `talos-image/` nomme
+déjà la version (docs/supply-chain.fr.md) : un `tofu init` simple dans `infrastructure/opentofu/cluster` suffit, et
+un init qui dit que le lock ne correspond pas à la contrainte signale une PR qui a oublié `task lock-providers`.
+Cette tâche déplace chaque provider dans sa contrainte : lire le plan suivant. Un clone qui garde un ancien lock
+local (d'avant son versionnement) se corrige en supprimant ce fichier puis en lançant `tofu init`.
 
 **Sur Outscale, la construction de l'image domine tout l'upgrade.** L'image est
 enregistrée depuis un snapshot importé via une file côté provider : 8 min le
@@ -452,3 +452,22 @@ sur le réplica de l'autre worker et recréé l'ancien primaire là comme répli
 celles qui ont été acquittées étaient sur le nouveau primaire. Le budget et la fenêtre ont été remis à la fin.
 
 Non mesuré : Proxmox, et un retrait interrompu en route sur un vrai cloud.
+
+## La clé de chiffrement des Secrets (etcd) — non rotatable sur place
+
+Les Secrets Kubernetes sont chiffrés dans etcd avec le fournisseur `secretbox` (XSalsa20-Poly1305), posé par
+`cluster.secretboxEncryptionSecret`. C'est le fournisseur local recommandé par Kubernetes, mais XSalsa20-Poly1305
+ne figure pas parmi les modes AEAD que liste ANSSI PA-079 R12 (GCM, CCM, EAX, ChaCha20-Poly1305). **Dérogation
+documentée :** Talos n'offre ici que `secretbox` et `aescbc`, et `aescbc` n'est pas un AEAD. Un fournisseur KMS v2 le
+remplacerait, mais seulement avec un KMS hors du cluster ; OpenBao dans le cluster serait circulaire.
+
+La clé est un `random_bytes` (32 octets) dans le tfstate, chiffré côté client, et dans la machine config de chaque
+control plane. La perdre rend illisibles tous les Secrets d'un snapshot etcd.
+
+**Il n'y a pas de procédure de rotation ici, volontairement.** La machine config ne prend qu'une clé : remplacer la
+valeur (ou faire un `taint` de `random_bytes.etcd_encryption_secret`) laisse les Secrets existants chiffrés avec une
+clé que l'apiserver n'a plus. Une rotation à deux clés (ajouter la nouvelle, réécrire tous les Secrets avec
+`kubectl get secrets -A -o json | kubectl replace -f -`, retirer l'ancienne) est la séquence Kubernetes habituelle, mais
+on n'a ni vérifié ni exécuté que Talos accepte la seconde clé. D'ici là, le seul chemin connu sûr après une fuite
+soupçonnée de la clé est un nouveau cluster, réamorcé depuis OpenBao. Ne pas répéter la séquence ci-dessus sur un
+cluster dont on a besoin.

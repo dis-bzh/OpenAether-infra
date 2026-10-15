@@ -460,7 +460,7 @@ echo "     (Scaleway: SCW_ACCESS_KEY / SCW_SECRET_KEY / SCW_DEFAULT_PROJECT_ID)"
 # newcomer reads.
 echo "     S3 credentials are derived from those — do NOT export AWS_* yourself."
 echo "     Cross-provider backup only: BACKUP_AWS_ACCESS_KEY_ID / BACKUP_AWS_SECRET_ACCESS_KEY"
-echo "  2. export TF_VAR_encryption_passphrase=<32+ chars>   # encrypts tfstate AND the backups"
+echo "  2. export TF_VAR_encryption_passphrase=\"\$(scripts/ops/gen-passphrase.sh)\"   # encrypts tfstate (and the backups, unless TF_VAR_artifact_passphrase is set)"
 echo "  3. cp infrastructure/opentofu/cluster/envs/management-scaleway.tfvars.example \\"
 echo "        infrastructure/opentofu/cluster/envs/management-scaleway.tfvars   # then edit it"
 echo "     Six fields have no default: environment, admin_ip, s3_primary_endpoint,"

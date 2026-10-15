@@ -54,6 +54,17 @@ data "http" "schematic" {
 locals {
   schematic_id = jsondecode(data.http.schematic.response_body).id
 
+  # images.lock: "<sha256>  <schematic>/<version>/<platform>-<arch>" per line, '#' comments allowed.
+  # A line that does not match is ignored here; test-talos-image-lock.sh holds the file to the format.
+  image_lock = {
+    for m in regexall("(?m)^([0-9a-f]{64})[ \t]+(\\S+)[ \t]*$", file("${path.module}/images.lock")) : m[1] => m[0]
+  }
+  # Factory platform name per target; arch is appended.
+  image_expected = {
+    for p, f in { scaleway = "scaleway", ovh = "openstack", outscale = "aws", proxmox = "nocloud" } :
+    p => lookup(local.image_lock, "${local.schematic_id}/${var.talos_version}/${f}-${var.arch}", "")
+  }
+
   # Must match the cluster envs/*.tfvars convention: talos-<platform>-<arch>-<version>
   image_name = "talos-${var.target_provider}-${var.arch}-${var.talos_version}"
   cache_dir  = abspath("${path.root}/.talos-image-cache")
@@ -66,15 +77,17 @@ module "scaleway" {
   source = "../modules/talos-image/scaleway"
   count  = var.target_provider == "scaleway" ? 1 : 0
 
-  talos_version = var.talos_version
-  arch          = var.arch
-  schematic_id  = local.schematic_id
-  image_name    = local.image_name
-  bucket_name   = var.import_bucket
-  region        = var.region
-  zones         = var.zones
-  s3_endpoint   = var.s3_endpoint
-  cache_dir     = local.cache_dir
+  expected_sha256 = local.image_expected["scaleway"]
+  checksum_mode   = var.image_checksum_mode
+  talos_version   = var.talos_version
+  arch            = var.arch
+  schematic_id    = local.schematic_id
+  image_name      = local.image_name
+  bucket_name     = var.import_bucket
+  region          = var.region
+  zones           = var.zones
+  s3_endpoint     = var.s3_endpoint
+  cache_dir       = local.cache_dir
 }
 
 # OVH: OpenStack Glance image, uploaded from the converted Factory artifact (no
@@ -83,11 +96,13 @@ module "ovh" {
   source = "../modules/talos-image/ovh"
   count  = var.target_provider == "ovh" ? 1 : 0
 
-  talos_version = var.talos_version
-  arch          = var.arch
-  schematic_id  = local.schematic_id
-  image_name    = local.image_name
-  cache_dir     = local.cache_dir
+  expected_sha256 = local.image_expected["ovh"]
+  checksum_mode   = var.image_checksum_mode
+  talos_version   = var.talos_version
+  arch            = var.arch
+  schematic_id    = local.schematic_id
+  image_name      = local.image_name
+  cache_dir       = local.cache_dir
 }
 
 # Outscale: OOS upload -> snapshot import -> OMI.
@@ -95,14 +110,16 @@ module "outscale" {
   source = "../modules/talos-image/outscale"
   count  = var.target_provider == "outscale" ? 1 : 0
 
-  talos_version = var.talos_version
-  arch          = var.arch
-  schematic_id  = local.schematic_id
-  image_name    = local.image_name
-  bucket_name   = var.import_bucket
-  region        = var.region
-  s3_endpoint   = var.s3_endpoint
-  cache_dir     = local.cache_dir
+  expected_sha256 = local.image_expected["outscale"]
+  checksum_mode   = var.image_checksum_mode
+  talos_version   = var.talos_version
+  arch            = var.arch
+  schematic_id    = local.schematic_id
+  image_name      = local.image_name
+  bucket_name     = var.import_bucket
+  region          = var.region
+  s3_endpoint     = var.s3_endpoint
+  cache_dir       = local.cache_dir
 }
 
 # Proxmox: server-side download straight onto each PVE host's datastore — no
@@ -112,6 +129,8 @@ module "proxmox" {
   source = "../modules/talos-image/proxmox"
   count  = var.target_provider == "proxmox" ? 1 : 0
 
+  expected_sha256  = local.image_expected["proxmox"]
+  checksum_mode    = var.image_checksum_mode
   talos_version    = var.talos_version
   arch             = var.arch
   schematic_id     = local.schematic_id

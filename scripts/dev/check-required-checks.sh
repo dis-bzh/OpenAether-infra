@@ -4,13 +4,20 @@
 #   - required checks: the rules on main vs. the check runs reported on the head
 #     of the last merged PR, read from the API (CodeQL has no workflow file);
 #   - tags: an active ruleset blocks moving or deleting every tag, no bypass;
-#   - private vulnerability reporting is on, as SECURITY.md tells reporters.
+#   - private vulnerability reporting is on, as SECURITY.md tells reporters;
+#   - main: pull request, no force-push and no deletion are required; signed commits, bypass
+#     actors and approving reviews are WARNINGS (a lone maintainer cannot approve their own
+#     PR; signatures wait for a signing key), failures under --strict-main;
+#   - rulesets as code: .github/rulesets/*.json is what GitHub enforces, field for field;
+#   - the `sandbox` environment real-cloud-regression.yml runs in has required reviewers
+#     and a branch restriction to `main` (absent = warning: the workflow is dormant).
 # Exit 0 matches, 1 differs, 2 not verifiable. An empty or unreadable answer is
 # 2, never "nothing is required". Run by .github/workflows/repo-settings.yml.
 #
 # Usage:
 #   check-required-checks.sh --self-test     # offline, task test-scripts
 #   check-required-checks.sh <owner> <repo> [--ref <commit>] [--tolerate-unreadable-bypass]
+#                            [--strict-main] [--rulesets-dir <dir>]
 #                                            # live, GITHUB_TOKEN/GH_TOKEN if set
 set -euo pipefail
 
@@ -23,6 +30,7 @@ BRANCH = "main"
 # check run or by a commit status, which is weaker than what main requires.
 ACTIONS_APP = 15368
 EVERY_TAG = {"~ALL", "refs/tags/**"}
+SANDBOX = "sandbox"  # the environment real-cloud-regression.yml runs in
 
 
 class NotVerifiable(Exception):
@@ -185,10 +193,121 @@ def check_pvr(api, repo):
     return [], "enabled, as SECURITY.md says"
 
 
-def run(api, repo, ref=None, tolerate_unreadable_bypass=False, out=print):
+def warn(out, text):
+    out(("::warning::" if os.environ.get("GITHUB_ACTIONS") == "true" else "") + "⚠ " + text)
+
+
+def check_main(api, repo, strict, tolerate_unreadable_bypass, out):
+    rules = [r for _, page in pages(api, f"/repos/{repo}/rules/branches/{BRANCH}?per_page=100") for r in page]
+    types = {r.get("type") for r in rules}
+    problems = [f"no {t} rule on {BRANCH}" for t in ("pull_request", "non_fast_forward", "deletion") if t not in types]
+
+    def soft(text):  # a warning, or a failure under --strict-main
+        if strict:
+            problems.append(text)
+        else:
+            warn(out, text)
+
+    counts = [(r.get("parameters") or {}).get("required_approving_review_count") for r in rules
+              if r.get("type") == "pull_request"]
+    need(all(isinstance(c, int) for c in counts), "a pull_request rule without a review count")
+    if counts and max(counts) < 1:
+        soft("pull requests need 0 approving reviews: one maintainer cannot approve their own, so this is "
+             "organisational until a second reviewer exists")
+    if "required_signatures" not in types:
+        soft(f"no required_signatures rule on {BRANCH}: commits are not required to be signed")
+    for rid in sorted({r.get("ruleset_id") for r in rules if r.get("ruleset_id") is not None}):
+        rs, _ = fetch(api, f"/repos/{repo}/rulesets/{rid}")
+        need(isinstance(rs, dict), f"ruleset {rid}: unexpected shape")
+        if "bypass_actors" not in rs:
+            need(tolerate_unreadable_bypass, f"ruleset {rs.get('name')}: this token cannot read its bypass actors")
+            warn(out, f"ruleset {rs.get('name')}: bypass actors not verified, this token cannot read them")
+        else:
+            need(isinstance(rs["bypass_actors"], list) and all(isinstance(a, dict) for a in rs["bypass_actors"]),
+                 f"ruleset {rid}: unexpected shape")
+            if rs["bypass_actors"]:
+                soft(f"ruleset {rs.get('name')} lets " + ", ".join(
+                    f"{a.get('actor_type')}({a.get('actor_id')}, {a.get('bypass_mode')})" for a in rs["bypass_actors"])
+                    + f" bypass it: {BRANCH} can be changed without a pull request")
+    return problems, f"{BRANCH} requires a pull request and blocks force-push and deletion"
+
+
+VOLATILE = {"id", "node_id", "source", "source_type", "created_at", "updated_at", "_links", "current_user_can_bypass"}
+
+
+def normalise(rs, with_bypass):
+    rs = {k: v for k, v in rs.items() if k not in VOLATILE and (with_bypass or k != "bypass_actors")}
+    rules = []
+    for r in rs.get("rules") or []:
+        r = copy.deepcopy(r)
+        params = r.get("parameters")
+        if isinstance(params, dict) and isinstance(params.get("required_status_checks"), list):
+            params["required_status_checks"] = sorted(params["required_status_checks"], key=json.dumps)
+        rules.append(r)
+    rs["rules"] = sorted(rules, key=json.dumps)
+    return rs
+
+
+def check_rulesets_as_code(api, repo, committed, out):
+    if committed is None:
+        out("no rulesets directory given: not compared")
+        return [], ""
+    live = {}
+    for s in (s for _, page in pages(api, f"/repos/{repo}/rulesets?per_page=100") for s in page):
+        rs, _ = fetch(api, f"/repos/{repo}/rulesets/{s.get('id')}")
+        need(isinstance(rs, dict) and isinstance(rs.get("name"), str), f"ruleset {s.get('id')}: unexpected shape")
+        live[rs["name"]] = rs
+    problems = []
+    for name in sorted(set(live) | set(committed)):
+        if name not in committed:
+            problems.append(f"ruleset {name} is enforced on GitHub and not committed under .github/rulesets/")
+        elif name not in live:
+            problems.append(f"ruleset {name} is committed and GitHub has no such ruleset")
+        else:
+            # bypass_actors come back only to an admin: when the live one lacks them, compare the rest.
+            with_bypass = "bypass_actors" in live[name]
+            a, b = normalise(committed[name], with_bypass), normalise(live[name], with_bypass)
+            if a != b:
+                keys = sorted(k for k in set(a) | set(b) if a.get(k) != b.get(k))
+                problems.append(f"ruleset {name} differs from .github/rulesets/: " + ", ".join(keys))
+    return problems, f"{len(live)} ruleset(s) match .github/rulesets/ field for field"
+
+
+def check_environment(api, repo, out):
+    status, text, _ = api.get(f"/repos/{repo}/environments/{SANDBOX}")
+    if status == 404:
+        warn(out, f"no environment '{SANDBOX}': real-cloud-regression.yml would create it unprotected on its first run")
+        return [], ""
+    need(status == 200, f"GET environment {SANDBOX} answered HTTP {status}")
+    try:
+        env = json.loads(text)
+    except ValueError:
+        raise NotVerifiable(f"environment {SANDBOX} did not answer JSON")
+    need(isinstance(env, dict) and isinstance(env.get("protection_rules", []), list), f"environment {SANDBOX}: unexpected shape")
+    problems = []
+    if not any(isinstance(p, dict) and p.get("type") == "required_reviewers" for p in env.get("protection_rules", [])):
+        problems.append(f"environment {SANDBOX} has no required reviewers: any run on it reads the provider keys unattended")
+    policy = env.get("deployment_branch_policy")
+    if not policy:
+        problems.append(f"environment {SANDBOX} accepts any branch: a user with write access can run their own branch with its secrets")
+    elif policy.get("custom_branch_policies"):
+        # A custom policy is only a restriction if the patterns are main: `*` is "any branch" with a policy attached.
+        names = [p.get("name") for _, page in pages(api, f"/repos/{repo}/environments/{SANDBOX}/deployment-branch-policies?per_page=100",
+                                                    "branch_policies") for p in page]
+        if not names or any(n != BRANCH for n in names):
+            problems.append(f"environment {SANDBOX} allows {names or 'no pattern'}, not only '{BRANCH}': a branch matching one of them runs with its secrets")
+    else:
+        warn(out, f"environment {SANDBOX} is limited to protected branches, not to '{BRANCH}': any branch with classic protection can run it")
+    return problems, f"environment {SANDBOX}: required reviewers and a branch restriction"
+
+
+def run(api, repo, ref=None, tolerate_unreadable_bypass=False, strict_main=False, committed=None, out=print):
     worst = 0
     for title, check in (("required checks", lambda: check_required(api, repo, ref, out)),
                          ("tag protection", lambda: check_tags(api, repo, tolerate_unreadable_bypass, out)),
+                         ("main branch", lambda: check_main(api, repo, strict_main, tolerate_unreadable_bypass, out)),
+                         ("rulesets as code", lambda: check_rulesets_as_code(api, repo, committed, out)),
+                         ("sandbox environment", lambda: check_environment(api, repo, out)),
                          ("private vulnerability reporting", lambda: check_pvr(api, repo))):
         out(f"--- {title}")
         try:
@@ -206,7 +325,7 @@ def run(api, repo, ref=None, tolerate_unreadable_bypass=False, out=print):
             out(f"✗ {p}")
         if problems:
             worst = max(worst, 1)
-        else:
+        elif ok:
             out(f"✓ {ok}")
     return worst
 
@@ -231,6 +350,13 @@ def self_test(fixture):
         for p in (RUNS, RUNS + "&page=2"):
             body(a, p)["total_count"] -= 1
         body(a, RUNS + "&page=2")["check_runs"].pop()
+
+    def sandbox_env(a, patterns):
+        return {R + "/environments/sandbox": {"status": 200, "body": {
+            "name": "sandbox", "protection_rules": [{"type": "required_reviewers"}, {"type": "branch_policy"}],
+            "deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True}}},
+                R + "/environments/sandbox/deployment-branch-policies?per_page=100": {"status": 200, "body": {
+                    "total_count": len(patterns), "branch_policies": [{"name": n, "type": "branch"} for n in patterns]}}}
 
     def tags(a):
         return body(a, TAGS)
@@ -314,8 +440,8 @@ def self_test(fixture):
          "no deletion rule"),
         ("the tag ruleset has no rules", lambda a: tags(a).pop("rules"), {}, 1, "no deletion rule"),
         ("the tag ruleset names every tag refs/tags/**",
-         lambda a: tags(a)["conditions"]["ref_name"].update(include=["refs/tags/**"]), {}, 0, "active on every tag"),
-        ("a gapped tag ruleset listed before a sound one", gapped_tag_ruleset_first, {}, 0,
+         lambda a: tags(a)["conditions"]["ref_name"].update(include=["refs/tags/**"]), {"committed": None}, 0, "active on every tag"),
+        ("a gapped tag ruleset listed before a sound one", gapped_tag_ruleset_first, {"committed": None}, 0,
          "ruleset tags: active on every tag"),
         ("bypass actors unreadable (not an admin token)", no_bypass_field, {}, 2, "cannot read its bypass actors"),
         ("... tolerated when asked, and said", no_bypass_field, {"tolerate_unreadable_bypass": True}, 0,
@@ -331,6 +457,63 @@ def self_test(fixture):
          "unexpected shape"),
         ("private vulnerability reporting answers a list", lambda a: a[R + PVR].update(body=[]), {}, 2,
          "private-vulnerability-reporting: unexpected shape"),
+        # main branch, rulesets as code, the sandbox environment (SCC/F16, SCC/F12)
+        ("main: a pull request, no force-push, no deletion are required; reviews and signatures only warn", None, {}, 0,
+         "main requires a pull request and blocks force-push and deletion"),
+        ("... and say so: 0 approving reviews, no required_signatures", None, {}, 0, "no required_signatures rule on main"),
+        ("... 0 reviews is named organisational", None, {}, 0, "organisational"),
+        ("main without a pull_request rule", lambda a: body(a, RULES).pop(3), {}, 1, "no pull_request rule on main"),
+        ("main without non_fast_forward", lambda a: body(a, RULES).pop(2), {}, 1, "no non_fast_forward rule on main"),
+        ("main without deletion", lambda a: body(a, RULES).pop(0), {}, 1, "no deletion rule on main"),
+        ("--strict-main: no signatures fails", None, {"strict_main": True}, 1, "✗ no required_signatures rule on main"),
+        ("--strict-main: 0 approving reviews fails", None, {"strict_main": True}, 1, "✗ pull requests need 0 approving reviews"),
+        ("--strict-main: all met passes",
+         lambda a: (body(a, RULES).append({"type": "required_signatures", "ruleset_id": 1}),
+                    body(a, RULES)[3]["parameters"].update(required_approving_review_count=1)),
+         {"strict_main": True, "committed": None}, 0, "main requires a pull request"),
+        ("a bypass actor on main is a warning", lambda a: (body(a, "/rulesets/1")["bypass_actors"].append(
+            {"actor_type": "RepositoryRole", "actor_id": 5, "bypass_mode": "always"})), {"committed": None}, 0,
+         "⚠ ruleset main lets RepositoryRole(5, always) bypass it"),
+        ("... and a failure under --strict-main", lambda a: body(a, "/rulesets/1")["bypass_actors"].append(
+            {"actor_type": "OrganizationAdmin", "actor_id": None, "bypass_mode": "always"}), {"strict_main": True, "committed": None}, 1,
+         "✗ ruleset main lets OrganizationAdmin"),
+        ("main's bypass actors unreadable without the flag", lambda a: body(a, "/rulesets/1").pop("bypass_actors"), {"committed": None}, 2,
+         "ruleset main: this token cannot read its bypass actors"),
+        ("a pull_request rule whose review count is a string", lambda a: body(a, RULES)[3]["parameters"].update(
+            required_approving_review_count="1"), {}, 2, "without a review count"),
+        ("rulesets as code: the committed files match", None, {}, 0, "2 ruleset(s) match .github/rulesets/ field for field"),
+        ("... a rule list in another order still matches", lambda a: body(a, "/rulesets/2")["rules"].reverse(), {}, 0,
+         "match .github/rulesets/"),
+        ("... a required check added on GitHub only", lambda a: body(a, "/rulesets/1")["rules"][3]["parameters"]
+         ["required_status_checks"].append({"context": "Extra", "integration_id": ACTIONS_APP}), {}, 1,
+         "ruleset main differs from .github/rulesets/: rules"),
+        ("... enforcement switched to evaluate on GitHub", lambda a: body(a, "/rulesets/1").update(enforcement="evaluate"), {}, 1,
+         "ruleset main differs from .github/rulesets/: enforcement"),
+        ("... a ruleset on GitHub with no file", lambda a: (body(a, RULESETS).append({"id": 9, "name": "extra", "target": "branch"}),
+                                                          a.update({R + "/rulesets/9": {"status": 200, "body": {"id": 9, "name": "extra", "rules": []}}})),
+         {}, 1, "ruleset extra is enforced on GitHub and not committed"),
+        ("... a committed file GitHub does not have", lambda a: a.pop(R + "/rulesets/2") and body(a, RULESETS).pop(), {}, 1,
+         "ruleset tags is committed and GitHub has no such ruleset"),
+        ("... bypass actors are compared only when the API returned them", lambda a: body(a, "/rulesets/1").pop("bypass_actors"),
+         {"tolerate_unreadable_bypass": True}, 0, "match .github/rulesets/"),
+        ("... no directory given: not compared, and said", None, {"committed": None}, 0, "no rulesets directory given"),
+        ("sandbox environment absent: a warning", None, {}, 0, "⚠ no environment 'sandbox'"),
+        ("... present with reviewers and a branch rule", lambda a: a.update(sandbox_env(a, ["main"])), {}, 0,
+         "environment sandbox: required reviewers and a branch restriction"),
+        ("... a custom branch policy that allows every branch (`*`)", lambda a: a.update(sandbox_env(a, ["main", "*"])), {}, 1,
+         "not only 'main'"),
+        ("... a custom branch policy with no pattern", lambda a: a.update(sandbox_env(a, [])), {}, 1, "allows no pattern"),
+        ("... limited to protected branches only: a warning", lambda a: a.update({R + "/environments/sandbox": {"status": 200, "body": {
+            "name": "sandbox", "protection_rules": [{"type": "required_reviewers"}],
+            "deployment_branch_policy": {"protected_branches": True, "custom_branch_policies": False}}}}), {}, 0,
+         "limited to protected branches"),
+        ("... present without required reviewers", lambda a: (a.update(sandbox_env(a, ["main"])),
+                                                              a[R + "/environments/sandbox"]["body"].update(protection_rules=[])), {}, 1,
+         "has no required reviewers"),
+        ("... present accepting any branch", lambda a: a.update({R + "/environments/sandbox": {"status": 200, "body": {
+            "name": "sandbox", "protection_rules": [{"type": "required_reviewers"}], "deployment_branch_policy": None}}}), {}, 1,
+         "accepts any branch"),
+        ("... unreadable (403)", lambda a: a.update({R + "/environments/sandbox": {"status": 403, "body": ""}}), {}, 2, "HTTP 403"),
         ("a field no guard covers, of another type: bypass actors as strings",
          lambda a: tags(a).update(bypass_actors=["OrganizationAdmin"]), {}, 2, "cannot read (AttributeError"),
         ("... a merge time as a number, and the later sections still run",
@@ -339,13 +522,14 @@ def self_test(fixture):
          "cannot read (KeyError"),
     ]
     failed = 0
+    committed = {n: copy.deepcopy(base[R + f"/rulesets/{i}"]["body"]) for n, i in (("main", 1), ("tags", 2))}
     for what, mutate, options, want, needle in cases:
         api = copy.deepcopy(base)
         os.environ.pop("GITHUB_ACTIONS", None)  # same output under task test-scripts in CI as locally
         if mutate:
             mutate(api)
         lines = []
-        got = run(FakeAPI(api), "example-org/example-repo", out=lines.append, **options)
+        got = run(FakeAPI(api), "example-org/example-repo", out=lines.append, **{"committed": copy.deepcopy(committed), **options})
         text = "\n".join(lines)
         if got == want and needle in text:
             print(f"✓ exit {got}: {what}")
@@ -368,11 +552,23 @@ def main(fixture, argv):
     p.add_argument("--ref", help="evaluate this commit instead of the last merged PR's head")
     p.add_argument("--tolerate-unreadable-bypass", action="store_true",
                    help="pass, with a warning, when the token cannot read the tag ruleset's bypass actors")
+    p.add_argument("--strict-main", action="store_true",
+                   help="fail, instead of warning, on main without required signatures, with fewer than one approving "
+                        "review, or with bypass actors")
+    p.add_argument("--rulesets-dir", default=".github/rulesets",
+                   help="the committed rulesets (<name>.json each) to compare with GitHub; skipped when absent")
     a = p.parse_args(argv)
+    committed = None
+    if os.path.isdir(a.rulesets_dir):
+        committed = {}
+        for f in sorted(os.listdir(a.rulesets_dir)):
+            if f.endswith(".json"):
+                doc = json.load(open(os.path.join(a.rulesets_dir, f)))
+                committed[doc.get("name") or f[:-5]] = doc
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     if not token:
         print("⚠ no GITHUB_TOKEN/GH_TOKEN: 60 requests an hour per IP", file=sys.stderr)
-    code = run(LiveAPI(token), f"{a.owner}/{a.repo}", a.ref, a.tolerate_unreadable_bypass)
+    code = run(LiveAPI(token), f"{a.owner}/{a.repo}", a.ref, a.tolerate_unreadable_bypass, a.strict_main, committed)
     print({0: "OK", 1: "DIFFERS from what GitHub enforces", 2: "NOT VERIFIABLE"}[code])
     return code
 

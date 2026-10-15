@@ -312,6 +312,8 @@ task security            # hardening checks
 | [docs/clea.md](docs/clea.md) | What the dependency report pins, and what a green report may claim |
 | [docs/emulated-cloud.md](docs/emulated-cloud.md) | Testing Scaleway/Outscale against a local emulator — and the limits of that |
 | [docs/upgrade.md](docs/upgrade.md) | Moving Kubernetes and Talos on a cluster that has to stay up |
+| [docs/supply-chain.md](docs/supply-chain.md) | Locked providers and boot images, the SBOM, who may run the cloud workflow, rulesets as code |
+| [docs/patching.md](docs/patching.md) | The patch deadline, what is pinned, and the signals that say a fix exists |
 | [docs/release-checklist.md](docs/release-checklist.md) | What to run before tagging a release, in the order that fails cheapest (English only) |
 | [docs/status.md](docs/status.md) | **Source of truth**: what runs, what is measured on a real account and since when (English only — living working document; open work is in the issues) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | **Read before a first pull request**: what counts as proof, the four rungs, commit trailers, AI-assisted contributions |

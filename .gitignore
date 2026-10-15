@@ -69,6 +69,10 @@ worker.yaml
 # backend pointer from each other.
 .terraform-*/
 .terraform.lock.hcl
+# The two roots an operator deploys with are the exception: their provider hashes are reviewed in a PR
+# (Renovate rewrites them on a provider bump; `task lock-providers` by hand).
+!infrastructure/opentofu/cluster/.terraform.lock.hcl
+!infrastructure/opentofu/talos-image/.terraform.lock.hcl
 *.tfstate
 *.tfstate.*
 *.tfvars
@@ -158,3 +162,6 @@ plumber-report.json
 # Rung receipts (scripts/dev/rung-receipt.py): written by the harness, pasted
 # into a pull request, never committed.
 .receipts/
+
+# Dated RBAC review output (task rbac-review): subject names of one cluster, a working file.
+/rbac-review/
