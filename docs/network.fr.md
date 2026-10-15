@@ -38,7 +38,7 @@ Les règles de sortie par composant, y compris les listes de FQDN S3 par provide
 
 | Provider | Réseau des nœuds | Autre | Source |
 |---|---|---|---|
-| Scaleway | `172.16.0.0/22`, épinglé sur un nouveau réseau privé ; un réseau créé avant l'épinglage garde le sous-réseau reçu (`scw_subnet_in_use` le suit) | LB-IPAM et la VIP de l'apiserver sont des adresses de ce sous-réseau | `scw/network.tf` |
+| Scaleway | `172.16.0.0/22`, épinglé sur un nouveau réseau privé ; un réseau créé avant l'épinglage garde le sous-réseau reçu (`scw_subnet_in_use` le suit) | la VIP de l'apiserver (`k8s_vip`, une réservation IPAM) est une adresse de ce sous-réseau | `scw/network.tf` |
 | OVH | `10.0.0.0/24`, un sous-réseau pour tous les rôles | routeur vers Ext-Net pour le SNAT sortant ; le LB de l'API Kubernetes prend une adresse flottante | `ovh/network.tf` |
 | Outscale | Net `10.0.0.0/16` ; un sous-réseau privé par zone de disponibilité (`10.0.0.0/24`, puis `10.0.2.0/24`, `10.0.3.0/24`...) | sous-réseau public `10.0.1.0/24` (bastion, service NAT, load balancers) | `outscale/network.tf` |
 | Proxmox | `network_cidr` (défaut `10.0.0.0/24`), adresses statiques par décalage | pas de groupe de sécurité : les règles dans la VM et le pare-feu de l'hôte Proxmox sont ceux de l'opérateur | `proxmox/network.tf` |

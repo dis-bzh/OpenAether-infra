@@ -38,7 +38,7 @@ Per-component egress rules, including the per-provider S3 FQDN lists, are in `Op
 
 | Provider | Node network | Other | Source |
 |---|---|---|---|
-| Scaleway | `172.16.0.0/22`, pinned on a new private network; a network created before the pin keeps the subnet it got (`scw_subnet_in_use` follows it) | LB-IPAM and the apiserver VIP are addresses of this subnet | `scw/network.tf` |
+| Scaleway | `172.16.0.0/22`, pinned on a new private network; a network created before the pin keeps the subnet it got (`scw_subnet_in_use` follows it) | the apiserver VIP (`k8s_vip`, an IPAM reservation) is an address of this subnet | `scw/network.tf` |
 | OVH | `10.0.0.0/24`, one subnet for every role | router to Ext-Net for outbound SNAT; the Kubernetes API LB takes a floating address | `ovh/network.tf` |
 | Outscale | Net `10.0.0.0/16`; one private subnet per availability zone (`10.0.0.0/24`, then `10.0.2.0/24`, `10.0.3.0/24`...) | public subnet `10.0.1.0/24` (bastion, NAT service, load balancers) | `outscale/network.tf` |
 | Proxmox | `network_cidr` (default `10.0.0.0/24`), static addresses by offset | no security group: the in-VM rules and the Proxmox host firewall are the operator's | `proxmox/network.tf` |
