@@ -247,6 +247,10 @@ grep -q 'the bastion changed under the tunnels' <<<"$OUT" && grep -q 'LANDED' <<
 OUT="$(run)"
 grep -q 'the bastion changed under the tunnels' <<<"$OUT" \
   && ok "…and so is a replaced one" || bad "a replaced bastion was not explained"
+{ printf 'module.ovh[0].openstack_compute_instance_v2.bastion: Destroying... [id=x]\n'; box 'cluster health check failed' 'module.talos.data.talos_cluster_health.this[0]'; } >"$LOG"
+OUT="$(run)"
+grep -q 'the bastion changed under the tunnels' <<<"$OUT" \
+  && ok "a replaced bastion followed by the 15-minute cluster health check failure is explained too" || bad "health-check shape not explained"
 printf '%s\n' "$REFUSED" >"$LOG"
 OUT="$(run)"
 grep -q 'the bastion changed under the tunnels' <<<"$OUT" \
