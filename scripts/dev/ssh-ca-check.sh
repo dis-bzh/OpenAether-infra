@@ -74,6 +74,10 @@ output "rendered" {
     extra_runcmd      = []
     ssh_ca_public_key = "$1"
     ssh_ca_principals = "$2"
+    baseline          = { enabled = false, audit_logging = true, restrict_ssh_source = false, time_servers = [], revoked_keys = [] }
+    admin_ip          = []
+    admins            = {}
+    egress            = { mode = "legacy", dns_servers = [], ntp_servers = [] }
   })
 }
 EOF

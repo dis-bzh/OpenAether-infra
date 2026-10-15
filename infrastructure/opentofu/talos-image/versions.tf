@@ -8,19 +8,19 @@ terraform {
     }
     openstack = {
       source  = "terraform-provider-openstack/openstack"
-      version = ">= 1.53.0"
+      version = "~> 3.4"
     }
     outscale = {
       source  = "outscale/outscale"
-      version = ">= 0.12.0"
+      version = "~> 1.8"
     }
     proxmox = {
       source  = "bpg/proxmox"
-      version = ">= 0.66.0"
+      version = "~> 0.116.0"
     }
     http = {
       source  = "hashicorp/http"
-      version = ">= 3.4.0"
+      version = "~> 3.6"
     }
   }
 }

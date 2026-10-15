@@ -68,6 +68,36 @@ resource "outscale_security_group_rule" "https" {
   ip_range          = outscale_subnet.public.ip_range
 }
 
+# Public clients of the app LB, only when app_lb_allowed_cidrs is set. Outscale has no
+# source ACL on a load balancer: its filter is the LB's security group, which here is
+# this cluster group. Keys are known at plan time (the NAT address is not), as for_each needs.
+locals {
+  app_lb_sources = var.deploy_app_lb && length(var.app_lb_allowed_cidrs) > 0 ? merge(
+    { for c in var.app_lb_allowed_cidrs : c => c },
+    { "cluster-egress" = "${outscale_public_ip.nat.public_ip}/32" },
+  ) : {}
+}
+
+resource "outscale_security_group_rule" "app_lb_http" {
+  for_each          = local.app_lb_sources
+  flow              = "Inbound"
+  security_group_id = outscale_security_group.this.security_group_id
+  from_port_range   = 80
+  to_port_range     = 80
+  ip_protocol       = "tcp"
+  ip_range          = each.value
+}
+
+resource "outscale_security_group_rule" "app_lb_https" {
+  for_each          = local.app_lb_sources
+  flow              = "Inbound"
+  security_group_id = outscale_security_group.this.security_group_id
+  from_port_range   = 443
+  to_port_range     = 443
+  ip_protocol       = "tcp"
+  ip_range          = each.value
+}
+
 # WireGuard — Cilium inter-node encryption (UDP 51820)
 resource "outscale_security_group_rule" "wireguard" {
   flow              = "Inbound"

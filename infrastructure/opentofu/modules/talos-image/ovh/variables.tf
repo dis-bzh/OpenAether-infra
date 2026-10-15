@@ -35,3 +35,25 @@ variable "cache_dir" {
   description = "Local directory used to stage the downloaded/converted image."
   type        = string
 }
+
+variable "expected_sha256" {
+  description = "sha256 of the Factory raw.zst this module downloads, from talos-image/images.lock. Empty = none recorded."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.expected_sha256 == "" || can(regex("^[0-9a-f]{64}$", var.expected_sha256))
+    error_message = "expected_sha256 must be empty or 64 lowercase hex characters."
+  }
+}
+
+variable "checksum_mode" {
+  description = "off | warn | enforce: what to do when the downloaded image does not match expected_sha256 (or none is recorded). See scripts/internal/verify-image-checksum.sh."
+  type        = string
+  default     = "warn"
+
+  validation {
+    condition     = contains(["off", "warn", "enforce"], var.checksum_mode)
+    error_message = "checksum_mode must be off, warn or enforce."
+  }
+}

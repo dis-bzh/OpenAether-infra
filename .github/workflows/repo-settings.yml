@@ -1,6 +1,7 @@
-# Repository settings no diff can show: the required checks on main, tag
-# protection, private vulnerability reporting. Never on pull_request: a PR cannot
-# fix a setting, and a job running on PRs would join the very set it checks.
+# Repository settings no diff can show: the required checks on main, the main and tag
+# rulesets (compared with .github/rulesets/), the sandbox environment, private vulnerability
+# reporting. Never on pull_request: a PR cannot fix a setting, and a job running on PRs would
+# join the very set it checks.
 name: Repository settings
 
 on:
@@ -19,6 +20,7 @@ permissions:
   contents: read
   checks: read
   pull-requests: read
+  actions: read  # the sandbox environment's protection rules
 
 jobs:
   settings:

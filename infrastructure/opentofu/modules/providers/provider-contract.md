@@ -36,6 +36,16 @@ this contract to be consumed by the Talos module and the root `main.tf`.
 > modules had always declared `bastion_ssh_keys` / `list(string)` — a contract with
 > zero implementers, pointed at by CLAUDE.md as the authority.
 
+Optional bastion inputs, all with a default that changes nothing (not rows above: the checker would read them as required):
+`bastion_baseline`, `bastion_admins`, `bastion_internet_egress`, `bastion_ssh_ca_public_key`, `bastion_ssh_ca_principals`. A module that has
+a bastion declares them with the cluster root's types and hands them to `_shared/bastion-cloud-init.yaml.tftpl` (`admins` and `egress` are
+template inputs: forget one and the render fails). A module with a security group applies `bastion_internet_egress` to its egress rules
+as well, with `moved` blocks so the default plans no change. Wiring is pinned in `scripts/dev/test-cluster-checks.sh`.
+
+Optional app-LB input, default `[]` (no filter, nothing changes): `app_lb_allowed_cidrs`. A module with a cloud application load balancer
+filters its public 80/443 to that list plus the cluster's own egress address, as an in-place update of the load balancer (a replacement
+would change the public IP); a module without one (Proxmox, local) does not declare it, and the root only hands it to `scw`, `ovh`, `outscale`.
+
 ## Rules
 
 1. **No Talos logic** — Provider modules MUST NOT contain `data.talos_machine_configuration`,

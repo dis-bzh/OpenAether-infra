@@ -117,6 +117,33 @@ is "…before any write" 0 "$(puts | wc -l)"
 ENV_EXTRA="$BASE"
 OUT="$(run)"
 
+echo "--- the backups with key pairs of their own: seeded per store, Loki and the operator's keys untouched ---"
+grep -q "backup/s3-primary holds the operator's keys" <<<"$OUT" && ok "shared keys: the seed says what the cluster then holds, and that it can delete elsewhere" || bad "silent shared backup keys: $OUT"
+grep -q "backup/s3-replica holds" <<<"$OUT" && ok "…for the replica store too" || bad "no replica warning: $OUT"
+ENV_EXTRA="$BASE OA_BACKUP_S3_ACCESS_KEY_ID=STUB-BKP-AK OA_BACKUP_S3_SECRET_ACCESS_KEY=STUB-BKP-SK OA_BACKUP_REPLICA_S3_ACCESS_KEY_ID=STUB-BKR-AK OA_BACKUP_REPLICA_S3_SECRET_ACCESS_KEY=STUB-BKR-SK"
+OUT2="$(run)"; RC=$?
+is "the script completes" 0 "$RC"
+is "s3-primary carries the dedicated access key" "STUB-BKP-AK" "$(field backup/s3-primary access_key)"
+is "…and secret key" "STUB-BKP-SK" "$(field backup/s3-primary secret_key)"
+is "s3-replica carries ITS dedicated pair" "STUB-BKR-AK" "$(field backup/s3-replica access_key)"
+is "…and secret key" "STUB-BKR-SK" "$(field backup/s3-replica secret_key)"
+is "…in the same buckets as before" "s3-example-scaleway-backups-test-backup" "$(field backup/s3-replica bucket)"
+is "Loki keeps the primary's keys (it never gets a backup pair)" "STUB-PRIMARY-AK" "$(field observability/loki-s3 accessKey)"
+grep -q "holds the operator's keys\|holds the keys the replica" <<<"$OUT2" && bad "the shared-keys warning is printed for dedicated pairs" || ok "no shared-keys warning for dedicated pairs"
+grep -q "STUB-BK" <<<"$OUT2" && bad "a backup key was printed" || ok "the backup keys are not printed"
+ENV_EXTRA="$BASE OA_BACKUP_S3_ACCESS_KEY_ID=STUB-BKP-AK"
+OUT2="$(run)"; RC=$?
+[ "$RC" -ne 0 ] && ok "half a primary pair is refused (rc=$RC)" || bad "seeded with half a backup pair"
+is "…before any write" 0 "$(puts | wc -l)"
+ENV_EXTRA="$BASE OA_BACKUP_REPLICA_S3_SECRET_ACCESS_KEY=STUB-BKR-SK"
+OUT2="$(run)"; RC=$?
+[ "$RC" -ne 0 ] && ok "half a replica pair is refused (rc=$RC)" || bad "seeded with half a replica pair"
+ENV_EXTRA="$BASE OA_STUB_EXISTING=backup/s3-primary OA_BACKUP_S3_ACCESS_KEY_ID=STUB-BKP-AK OA_BACKUP_S3_SECRET_ACCESS_KEY=STUB-BKP-SK"
+OUT2="$(run)"
+grep -q "backup/s3-primary already existed and was left alone: the OA_BACKUP_S3_\* pair you set was not applied" <<<"$OUT2" && ok "a pair set against an existing entry is reported as NOT applied" || bad "$OUT2"
+ENV_EXTRA="$BASE"
+OUT="$(run)"
+
 echo "--- Loki entry already there (re-run, or a cluster seeded before the dedicated bucket): the script does not claim what it did not do ---"
 ENV_EXTRA="$BASE OA_STUB_EXISTING=observability/loki-s3"
 OUT2="$(run)"; RC=$?

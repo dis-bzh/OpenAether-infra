@@ -38,6 +38,40 @@ variable "bucket_suffix" {
   }
 }
 
+variable "backup_immutability" {
+  description = <<-EOT
+    What scripts/internal/ensure-buckets.sh does to the buckets that hold copies and logs (state and artifact replicas,
+    application backups and their replica, Loki's logs), read back from the store afterwards:
+
+      off         (default) nothing: a deployed cluster changes in no way.
+      versioned   versioning plus expiry of non-current versions after backup_retention_days; a delete leaves a version.
+      governance  versioned, plus an object lock with that default retention (a key with the bypass permission can
+                  still remove a version).
+      compliance  as governance, but nobody can remove a locked version before the retention ends, the account owner
+                  included, and a bucket cannot be emptied or deleted until then.
+
+    Read by the script from the tfvars file, not by any resource: the buckets exist before OpenTofu runs. Object lock
+    usually has to be set when a bucket is created, so on a bucket that already exists it may be refused (reported, not
+    forced). Provider support is not verified here: docs/backup-policy.md, section 3.
+  EOT
+  type        = string
+  default     = "off"
+  validation {
+    condition     = contains(["off", "versioned", "governance", "compliance"], var.backup_immutability)
+    error_message = "backup_immutability must be off, versioned, governance or compliance."
+  }
+}
+
+variable "backup_retention_days" {
+  description = "Days before a non-current object version expires, and the default object-lock retention, when backup_immutability is not off (read by scripts/internal/ensure-buckets.sh)."
+  type        = number
+  default     = 60
+  validation {
+    condition     = var.backup_retention_days >= 1 && var.backup_retention_days <= 3650 && floor(var.backup_retention_days) == var.backup_retention_days
+    error_message = "backup_retention_days must be a whole number of days from 1 to 3650."
+  }
+}
+
 variable "environment" {
   description = "Deployment environment (e.g., dev, prod)"
   type        = string
@@ -329,9 +363,211 @@ variable "admin_ip" {
 }
 
 variable "bastion_ssh_keys" {
-  description = "SSH public keys per provider. Key = provider name (scaleway/ovh/outscale), value = list of SSH public keys. Add a key to grant multi-admin access without changing the list structure."
+  description = "SSH public keys per provider. Key = provider name (scaleway/ovh/outscale), value = list of SSH public keys. Add a key to grant multi-admin access without changing the list structure. Accepted types: ssh-ed25519, sk-ssh-ed25519@openssh.com, ecdsa-sha2-nistp256/384/521, sk-ecdsa-sha2-nistp256@openssh.com and ssh-rsa of at least bastion_ssh_rsa_min_bits; one key per list entry."
   type        = map(list(string))
   default     = {}
+
+  # The key lines are written verbatim to authorized_keys. Checked on the type token, not on the blob
+  # (the test fixtures and the examples carry truncated blobs), and an options prefix is allowed.
+  validation {
+    condition     = alltrue([for k in flatten(values(var.bastion_ssh_keys)) : !strcontains(k, "\n") && !strcontains(k, "\r")])
+    error_message = "bastion_ssh_keys: one key per list entry, no line break inside an entry (a second line would be a second, unreviewed authorized_keys line)."
+  }
+
+  validation {
+    condition = alltrue([for k in flatten(values(var.bastion_ssh_keys)) :
+      can(regex("(^|\\s)(ssh-ed25519|sk-ssh-ed25519@openssh\\.com|ecdsa-sha2-nistp(256|384|521)|sk-ecdsa-sha2-nistp256@openssh\\.com|ssh-rsa)\\s+[^\\s]", k))
+    ])
+    error_message = "bastion_ssh_keys: only ssh-ed25519, sk-ssh-ed25519@openssh.com, ecdsa-sha2-nistp256/384/521, sk-ecdsa-sha2-nistp256@openssh.com and ssh-rsa keys are accepted (ssh-dss and anything unrecognised are refused)."
+  }
+
+  # RSA size from the base64 blob length (a 2048-bit key is about 372 characters, 3072 bits about 544): the blob
+  # cannot be decoded here, so the floor sits just below the nominal length.
+  validation {
+    condition = alltrue([for k in flatten(values(var.bastion_ssh_keys)) :
+      !can(regex("(^|\\s)ssh-rsa\\s", k)) || length(regex("(?:^|\\s)ssh-rsa\\s+([^\\s]+)", k)[0]) >= (var.bastion_ssh_rsa_min_bits >= 3072 ? 540 : 370)
+    ])
+    error_message = "bastion_ssh_keys: an ssh-rsa key is shorter than bastion_ssh_rsa_min_bits. Use ssh-ed25519, or a longer RSA key."
+  }
+}
+
+variable "bastion_ssh_rsa_min_bits" {
+  description = "Smallest ssh-rsa key accepted in bastion_ssh_keys: 2048 (default, so a key already deployed keeps planning) or 3072 (ANSSI-preferred). Only checks; it changes no resource."
+  type        = number
+  default     = 2048
+
+  validation {
+    condition     = contains([2048, 3072], var.bastion_ssh_rsa_min_bits)
+    error_message = "bastion_ssh_rsa_min_bits is 2048 or 3072."
+  }
+}
+
+# The bastion's OS baseline (sysctl, auditd, journald, sshd directives, mounts, in-VM nftables logging and
+# source filter). OFF by default: turning `enabled` on changes the cloud-init user_data, which REPLACES the
+# bastion on OVH and Outscale (new IP, new host key) and is ignored by a running instance elsewhere - apply it
+# on a fresh cluster or in a planned window, never during a bootstrap (CHANGELOG).
+variable "bastion_baseline" {
+  description = <<-EOT
+    Opt-in bastion hardening baseline (default: nothing changes).
+      enabled             - master switch. false renders the cloud-init byte for byte as before.
+      audit_logging       - with enabled: auditd (execve, /etc, mount, modules, ptrace), persistent size-capped journald, bastion user in adm and systemd-journal.
+      restrict_ssh_source - with enabled: the in-VM firewall accepts port 22 from admin_ip only (Proxmox has no security group). admin_ip is then part of the user_data: changing it replaces the bastion, and a running bastion keeps the OLD source list - use it where a replacement is acceptable.
+      time_servers        - with enabled: chrony with these NTP servers (empty: the image's time service stays).
+      revoked_keys        - with enabled: public keys (authorized_keys lines) written to sshd's RevokedKeys file; changing the list replaces the bastion.
+  EOT
+  type = object({
+    enabled             = optional(bool, false)
+    audit_logging       = optional(bool, true)
+    restrict_ssh_source = optional(bool, false)
+    time_servers        = optional(list(string), [])
+    revoked_keys        = optional(list(string), [])
+  })
+  default = {}
+
+  validation {
+    condition     = alltrue([for t in var.bastion_baseline.time_servers : can(regex("^[A-Za-z0-9.:-]+$", t))])
+    error_message = "bastion_baseline.time_servers: host names or addresses only."
+  }
+
+  validation {
+    condition     = alltrue([for k in var.bastion_baseline.revoked_keys : !strcontains(k, "\n") && !strcontains(k, "\r") && length(trimspace(k)) > 0])
+    error_message = "bastion_baseline.revoked_keys: one public key per entry, no line break, no empty entry."
+  }
+
+  validation {
+    condition     = var.bastion_baseline.enabled || (length(var.bastion_baseline.revoked_keys) == 0 && length(var.bastion_baseline.time_servers) == 0 && !var.bastion_baseline.restrict_ssh_source)
+    error_message = "bastion_baseline: restrict_ssh_source, time_servers and revoked_keys only apply with enabled = true; they would be silently ignored."
+  }
+}
+
+# Per-person accounts (ANSSI NT-SSH R21/R30, PA-022 R30, HYG-M8), ADDITIVE: bastion_ssh_keys and the shared "bastion"
+# account stay as the automation and break-glass path. Each entry here becomes its own unix account in bastion-admins with
+# its own authorized_keys file, so the sshd login line (LogLevel VERBOSE with the baseline) names a person, not a pool.
+# {} adds no user: the cloud-init is byte for byte the one without this variable.
+variable "bastion_admins" {
+  description = <<-EOT
+    Named bastion operators: map of unix account name => { ssh_keys = [public key lines] }. One account each, in the
+    group bastion-admins, no sudo. ssh_keys = [] makes a certificate-only account (needs bastion_ssh_ca_public_key; the
+    certificate must carry the account name as principal). Default {}: only the shared bastion account (bastion_ssh_keys) exists.
+    Adding, removing or changing an entry changes the cloud-init user_data, which replaces the bastion on OVH and
+    Outscale and is ignored by a running instance elsewhere: offboard with the SSH CA (docs/admin-access.md), not by
+    editing this map on a running bastion.
+  EOT
+  type        = map(object({ ssh_keys = list(string) }))
+  default     = {}
+
+  validation {
+    condition = alltrue([for n in keys(var.bastion_admins) :
+      can(regex("^[a-z][a-z0-9_-]{0,31}$", n)) && !contains(["root", "bastion", "ubuntu", "debian", "admin", "outscale", "sshd", "nobody", "daemon", "sys", "adm", "sudo", "bastion-admins"], n)
+    ])
+    error_message = "bastion_admins: an account name is lowercase letters, digits, '_' or '-', starts with a letter, at most 32 characters, and is not root, bastion, ubuntu, debian, admin, outscale, sshd, nobody, daemon, sys, adm, sudo or bastion-admins (an image's default user would never join the group)."
+  }
+
+  # A certificate-only operator (ssh_keys = []) is the point of the SSH CA: the login stops when the 8 h certificate does.
+  # Without a CA such an account could never log in, so it is refused as a mistake.
+  validation {
+    condition     = alltrue([for a in values(var.bastion_admins) : length(a.ssh_keys) > 0 || var.bastion_ssh_ca_public_key != ""])
+    error_message = "bastion_admins: an operator without a public key needs bastion_ssh_ca_public_key (a certificate-only account); with no CA it could never log in."
+  }
+
+  validation {
+    condition     = alltrue([for k in flatten([for a in values(var.bastion_admins) : a.ssh_keys]) : !strcontains(k, "\n") && !strcontains(k, "\r")])
+    error_message = "bastion_admins: one key per list entry, no line break inside an entry."
+  }
+
+  validation {
+    condition = alltrue([for k in flatten([for a in values(var.bastion_admins) : a.ssh_keys]) :
+      can(regex("(^|\\s)(ssh-ed25519|sk-ssh-ed25519@openssh\\.com|ecdsa-sha2-nistp(256|384|521)|sk-ecdsa-sha2-nistp256@openssh\\.com|ssh-rsa)\\s+[^\\s]", k))
+    ])
+    error_message = "bastion_admins: only ssh-ed25519, sk-ssh-ed25519@openssh.com, ecdsa-sha2-nistp256/384/521, sk-ecdsa-sha2-nistp256@openssh.com and ssh-rsa keys are accepted."
+  }
+
+  validation {
+    condition = alltrue([for k in flatten([for a in values(var.bastion_admins) : a.ssh_keys]) :
+      !can(regex("(^|\\s)ssh-rsa\\s", k)) || length(regex("(?:^|\\s)ssh-rsa\\s+([^\\s]+)", k)[0]) >= (var.bastion_ssh_rsa_min_bits >= 3072 ? 540 : 370)
+    ])
+    error_message = "bastion_admins: an ssh-rsa key is shorter than bastion_ssh_rsa_min_bits."
+  }
+}
+
+# The SSH CA the bastion trusts (ANSSI NT-SSH R30: revocation by short-lived certificates). The modules always had these two
+# variables; the root now hands them over. Both "" keeps the cloud-init byte for byte as before.
+variable "bastion_ssh_ca_public_key" {
+  description = "Public key of the SSH CA the bastion trusts for user certificates (one line, as in ca.pub). Empty (default) = no CA. Certificates for named operators must carry the account name as principal; set a short validity when signing (`ssh-keygen -s ca -n <account> -V +8h`). Changes user_data: replaces the bastion on OVH and Outscale, ignored by a running instance elsewhere."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.bastion_ssh_ca_public_key == "" || can(regex("^(ssh-ed25519|sk-ssh-ed25519@openssh\\.com|ecdsa-sha2-nistp(256|384|521)|ssh-rsa) [A-Za-z0-9+/=]+( [A-Za-z0-9@._ -]*)?$", var.bastion_ssh_ca_public_key))
+    error_message = "bastion_ssh_ca_public_key: one public key line (type, base64, optional plain comment) - no quote, backslash or line break, since it is written inside a double-quoted YAML string."
+  }
+}
+
+variable "bastion_ssh_ca_principals" {
+  description = "Principals (one per line) a certificate may carry to log in on the SHARED bastion account (AuthorizedPrincipalsFile for it). Named operators in bastion_admins always get their own account name as the only principal. Empty (default) = no certificate logs in on the shared account."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = alltrue([for l in split("\n", trimspace(var.bastion_ssh_ca_principals)) : l == "" || can(regex("^[A-Za-z0-9@._-]+$", l))])
+    error_message = "bastion_ssh_ca_principals: one principal per line, letters, digits and @ . _ - only."
+  }
+}
+
+variable "bastion_require_hardware_key" {
+  description = "Plan-time check: every key in bastion_admins must be a FIDO/U2F hardware-backed key (sk-*). It does NOT cover bastion_ssh_keys, the shared automation and break-glass account (a CI or tunnel key cannot touch a token): restrict who holds that key. For a PIN on each use, the operator generates the key with `ssh-keygen -O verify-required` and puts the `verify-required` option in front of the key line. Changes no resource."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.bastion_require_hardware_key || length(var.bastion_admins) > 0
+    error_message = "bastion_require_hardware_key = true checks bastion_admins, which is empty: it would be silently ignored."
+  }
+
+  validation {
+    condition = !var.bastion_require_hardware_key || alltrue([for k in flatten([for a in values(var.bastion_admins) : a.ssh_keys]) :
+      can(regex("(^|\\s)(sk-ssh-ed25519@openssh\\.com|sk-ecdsa-sha2-nistp256@openssh\\.com)\\s+[^\\s]", k))
+    ])
+    error_message = "bastion_require_hardware_key is true, so every key in bastion_admins must be a FIDO key (sk-ssh-ed25519@openssh.com or sk-ecdsa-sha2-nistp256@openssh.com)."
+  }
+}
+
+# Closing the bastion's Internet egress (ANSSI PA-022 R10/R19, HYG-M27, NT-006 R2): the in-VM firewall and the cloud security
+# group stop allowing 80/443 to anywhere, the cluster rule narrows to TCP 6443/50000 on the real cluster subnet (8200 is
+# gone from the firewall and from PermitOpen), and unattended-upgrades is switched off because it can no longer reach a
+# mirror: the bastion is patched by REPLACING it (docs/admin-access.md). "legacy" is today's behaviour, byte for byte.
+variable "bastion_internet_egress" {
+  description = <<-EOT
+    mode        - "legacy" (default, nothing changes) or "closed".
+    dns_servers - with closed: DNS goes to these addresses only (the provider resolver); empty keeps DNS open to any destination.
+    ntp_servers - with closed: NTP goes to these addresses only; empty keeps it open. A chrony source by NAME resolves to
+                  addresses this list cannot know: pin NTP only with address-literal bastion_baseline.time_servers.
+    closed changes the cloud-init user_data (replaces the bastion on OVH and Outscale; a running Scaleway or Proxmox VM
+    keeps its old firewall) and edits the security group in place. Never apply it during a bootstrap or an upgrade.
+  EOT
+  type = object({
+    mode        = optional(string, "legacy")
+    dns_servers = optional(list(string), [])
+    ntp_servers = optional(list(string), [])
+  })
+  default = {}
+
+  validation {
+    condition     = contains(["legacy", "closed"], var.bastion_internet_egress.mode)
+    error_message = "bastion_internet_egress.mode is \"legacy\" or \"closed\"."
+  }
+
+  validation {
+    condition = alltrue([for a in concat(var.bastion_internet_egress.dns_servers, var.bastion_internet_egress.ntp_servers) :
+      can(cidrhost(strcontains(a, "/") ? a : "${a}/${strcontains(a, ":") ? 128 : 32}", 0))
+    ])
+    error_message = "bastion_internet_egress.dns_servers / ntp_servers: IP addresses or CIDRs (the firewall and the security group cannot filter by name)."
+  }
+
+  validation {
+    condition     = var.bastion_internet_egress.mode == "closed" || (length(var.bastion_internet_egress.dns_servers) == 0 && length(var.bastion_internet_egress.ntp_servers) == 0)
+    error_message = "bastion_internet_egress: dns_servers and ntp_servers only apply with mode = \"closed\"; they would be silently ignored."
+  }
 }
 
 # ==============================================================================
@@ -414,6 +650,34 @@ variable "deploy_app_lb" {
   EOT
   type        = bool
   default     = false
+}
+
+variable "app_lb_allowed_cidrs" {
+  description = <<-EOT
+    Source CIDRs allowed to reach the application load balancer (80/443). EMPTY
+    by default = no filter, exactly the behaviour before this variable existed:
+    every route on the Gateway (Zitadel, OpenBao UI, Grafana) then answers anyone
+    who sets its Host header.
+
+    When set, Scaleway gets allow-then-deny ACLs on both frontends, OVH
+    `allowed_cidrs` on both Octavia listeners, Outscale security-group rules on
+    the LB's group. Proxmox and local have no cloud LB and ignore it. Each module
+    also admits the cluster's own egress address (pods reach
+    https://zitadel.openaether.local through the LB) and, on Scaleway and OVH, the
+    private range; YOUR other public clients (an office, a CI runner, a monitor)
+    must be listed here or they lose access. `["0.0.0.0/0"]` is accepted: it turns
+    the machinery on while staying open, to prove the in-place update first.
+
+    Roll out empty, then open, then one provider (docs/network.md, section 6).
+    Enforcement is untested on a real cloud: docs/admin-access.md, section 6.
+  EOT
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for c in var.app_lb_allowed_cidrs : can(cidrhost(c, 0)) && !strcontains(c, ":")])
+    error_message = "Every app_lb_allowed_cidrs entry must be an IPv4 CIDR with its prefix, e.g. 203.0.113.4/32 — not a bare address."
+  }
 }
 
 variable "deploy_flux" {

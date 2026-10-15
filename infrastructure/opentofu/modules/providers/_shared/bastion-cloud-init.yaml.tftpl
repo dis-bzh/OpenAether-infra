@@ -18,21 +18,40 @@ groups:
 users:
   - default
   - name: ${bastion_user}
-    groups: [bastion-admins, sudo]
+    groups: [bastion-admins%{ if !baseline.enabled }, sudo%{ endif }]
     shell: /bin/bash
     lock_passwd: true
     sudo: false
+%{ for name, a in admins ~}
+  - name: ${name}
+    groups: [bastion-admins]
+    shell: /bin/bash
+    lock_passwd: true
+    sudo: false
+%{ endfor ~}
 
 ssh_pwauth: false
 disable_root: true
 
 packages:
   - nftables
+%{ if egress.mode != "closed" ~}
   - unattended-upgrades
   - apt-listchanges
+%{ endif ~}
+%{ if !baseline.enabled && egress.mode != "closed" ~}
   - netcat-openbsd
   - tcpdump
+%{ endif ~}
+%{ if egress.mode != "closed" ~}
   - curl
+%{ endif ~}
+%{ if baseline.enabled && baseline.audit_logging ~}
+  - auditd
+%{ endif ~}
+%{ if baseline.enabled && length(baseline.time_servers) > 0 ~}
+  - chrony
+%{ endif ~}
 %{ for p in extra_packages ~}
   - ${p}
 %{ endfor ~}
@@ -44,10 +63,28 @@ write_files:
   # sshd is pointed here via AuthorizedKeysFile below.
   # --------------------------------------------------------------------------
   - path: /etc/ssh/authorized_keys.d/${bastion_user}
-    permissions: '0600'
+    permissions: '%{ if baseline.enabled }0644%{ else }0600%{ endif }'
     content: |
 %{ for k in ssh_keys ~}
       ${k}
+%{ endfor ~}
+%{ for name, a in admins ~}
+
+  # One operator, one account: the login line of sshd names this file's owner.
+  - path: /etc/ssh/authorized_keys.d/${name}
+    permissions: '%{ if baseline.enabled }0644%{ else }0600%{ endif }'
+    content: |
+%{ for k in a.ssh_keys ~}
+      ${k}
+%{ endfor ~}
+%{ if ssh_ca_public_key != "" ~}
+
+  # SSH-CA: a certificate for this account must carry its name as principal, so a certificate cannot be used as another person.
+  - path: /etc/ssh/auth_principals/${name}
+    permissions: '0644'
+    content: |
+      ${name}
+%{ endif ~}
 %{ endfor ~}
 
   # --------------------------------------------------------------------------
@@ -68,7 +105,7 @@ write_files:
       # restricts the destination CIDR. PermitOpen uses host:port patterns
       # (* = any host); CIDR notation is not supported across all OpenSSH versions.
       AllowTcpForwarding yes
-      PermitOpen *:6443 *:50000 *:8200
+      PermitOpen *:6443 *:50000%{ if egress.mode != "closed" } *:8200%{ endif }
       X11Forwarding no
       AllowAgentForwarding no
       PermitTunnel no
@@ -104,9 +141,26 @@ write_files:
           type filter hook input priority 0; policy drop;
           iif lo accept
           ct state established,related accept
+%{ if baseline.enabled && baseline.restrict_ssh_source && length(admin_ip) > 0 ~}
+%{ if length([for c in admin_ip : c if !strcontains(c, ":")]) > 0 ~}
+          ip saddr { ${join(", ", [for c in admin_ip : c if !strcontains(c, ":")])} } tcp dport 22 accept
+%{ endif ~}
+%{ if length([for c in admin_ip : c if strcontains(c, ":")]) > 0 ~}
+          ip6 saddr { ${join(", ", [for c in admin_ip : c if strcontains(c, ":")])} } tcp dport 22 accept
+%{ endif ~}
+%{ else ~}
           tcp dport 22 accept
+%{ endif ~}
+%{ if baseline.enabled ~}
+          icmp type echo-request accept
+          icmp type destination-unreachable icmp code frag-needed accept
+%{ else ~}
           ip protocol icmp accept
+%{ endif ~}
           ip6 nexthdr ipv6-icmp accept
+%{ if baseline.enabled ~}
+          limit rate 5/minute log prefix "nft-drop-in " level info
+%{ endif ~}
         }
 
         chain forward {
@@ -118,6 +172,38 @@ write_files:
           oif lo accept
           # Return traffic (SSH tunnel data)
           ct state established,related accept
+%{ if egress.mode == "closed" ~}
+          # DNS + NTP: the listed servers only when given, else any destination
+%{ if length(egress.dns_servers) > 0 ~}
+%{ if length([for c in egress.dns_servers : c if !strcontains(c, ":")]) > 0 ~}
+          ip daddr { ${join(", ", [for c in egress.dns_servers : c if !strcontains(c, ":")])} } udp dport 53 accept
+          ip daddr { ${join(", ", [for c in egress.dns_servers : c if !strcontains(c, ":")])} } tcp dport 53 accept
+%{ endif ~}
+%{ if length([for c in egress.dns_servers : c if strcontains(c, ":")]) > 0 ~}
+          ip6 daddr { ${join(", ", [for c in egress.dns_servers : c if strcontains(c, ":")])} } udp dport 53 accept
+          ip6 daddr { ${join(", ", [for c in egress.dns_servers : c if strcontains(c, ":")])} } tcp dport 53 accept
+%{ endif ~}
+%{ else ~}
+          udp dport 53 accept
+          tcp dport 53 accept
+%{ endif ~}
+%{ if length(egress.ntp_servers) > 0 ~}
+%{ if length([for c in egress.ntp_servers : c if !strcontains(c, ":")]) > 0 ~}
+          ip daddr { ${join(", ", [for c in egress.ntp_servers : c if !strcontains(c, ":")])} } udp dport 123 accept
+%{ endif ~}
+%{ if length([for c in egress.ntp_servers : c if strcontains(c, ":")]) > 0 ~}
+          ip6 daddr { ${join(", ", [for c in egress.ntp_servers : c if strcontains(c, ":")])} } udp dport 123 accept
+%{ endif ~}
+%{ else ~}
+          udp dport 123 accept
+%{ endif ~}
+          # Instance metadata (link-local, not the Internet): cloud-init and the provider agents ask it
+          ip daddr 169.254.169.254 tcp dport 80 accept
+          # Cluster nodes — Talos API + K8s API, on the cluster subnet only
+          ip daddr ${private_cidr} tcp dport { 6443, 50000 } accept
+          # ICMP outbound inside the cluster subnet only
+          ip daddr ${private_cidr} ip protocol icmp accept
+%{ else ~}
           # DNS + NTP
           udp dport 53 accept
           tcp dport 53 accept
@@ -128,6 +214,10 @@ write_files:
           ip daddr ${private_cidr} tcp dport { 6443, 50000, 8200 } accept
           # ICMP outbound (ping, path MTU)
           ip protocol icmp accept
+%{ endif ~}
+%{ if baseline.enabled ~}
+          limit rate 5/minute log prefix "nft-drop-out " level info
+%{ endif ~}
         }
       }
 
@@ -157,6 +247,7 @@ write_files:
       export HISTFILE=/dev/null
       unset HISTFILE
 
+%{ if egress.mode != "closed" ~}
   # --------------------------------------------------------------------------
   # unattended-upgrades — security updates only, auto-reboot off-hours
   # --------------------------------------------------------------------------
@@ -169,7 +260,115 @@ write_files:
       Unattended-Upgrade::Automatic-Reboot "true";
       Unattended-Upgrade::Automatic-Reboot-Time "03:00";
       Unattended-Upgrade::Remove-Unused-Dependencies "true";
+%{ endif ~}
 
+%{ if baseline.enabled ~}
+  # --------------------------------------------------------------------------
+  # OS baseline (bastion_baseline.enabled) — ANSSI BP-028 R9/R12/R14/R36/R73, NT-007 R14/R15/R23-R27.
+  # Its own sshd drop-in, sorted BEFORE 99-bastion-hardening.conf and removed again by runcmd when
+  # `sshd -t` rejects it, so a bad directive can never leave the proven config unusable.
+  # --------------------------------------------------------------------------
+  - path: /etc/ssh/sshd_config.d/98-bastion-baseline.conf
+    permissions: '0600'
+    content: |
+      LogLevel VERBOSE
+      StrictModes yes
+      PermitUserEnvironment no
+      PermitEmptyPasswords no
+      AllowStreamLocalForwarding no
+      GatewayPorts no
+      RevokedKeys /etc/ssh/revoked_keys
+
+  - path: /etc/ssh/revoked_keys
+    permissions: '0644'
+    content: ${jsonencode(join("\n", baseline.revoked_keys))}
+
+  - path: /etc/sysctl.d/99-bastion-hardening.conf
+    permissions: '0644'
+    content: |
+      # BP-028 R9 kernel
+      kernel.dmesg_restrict = 1
+      kernel.kptr_restrict = 2
+      kernel.perf_event_paranoid = 2
+      kernel.randomize_va_space = 2
+      kernel.sysrq = 0
+      kernel.unprivileged_bpf_disabled = 1
+      # R9 asks for panic_on_oops; without a timeout a panicked VM hangs instead of rebooting.
+      kernel.panic_on_oops = 1
+      kernel.panic = 30
+      # R11 Yama
+      kernel.yama.ptrace_scope = 1
+      # R12 IPv4 for a host that does not route. arp_filter/arp_ignore/drop_gratuitous_arp are left out:
+      # R12 itself says to study them per use case, and a wrong value cuts a cloud gateway's ARP.
+      net.core.bpf_jit_harden = 2
+      net.ipv4.ip_forward = 0
+      net.ipv4.conf.all.accept_local = 0
+      net.ipv4.conf.all.accept_redirects = 0
+      net.ipv4.conf.default.accept_redirects = 0
+      net.ipv4.conf.all.secure_redirects = 0
+      net.ipv4.conf.default.secure_redirects = 0
+      net.ipv4.conf.all.shared_media = 0
+      net.ipv4.conf.default.shared_media = 0
+      net.ipv4.conf.all.accept_source_route = 0
+      net.ipv4.conf.default.accept_source_route = 0
+      net.ipv4.conf.all.route_localnet = 0
+      net.ipv4.conf.all.rp_filter = 1
+      net.ipv4.conf.default.rp_filter = 1
+      net.ipv4.conf.all.send_redirects = 0
+      net.ipv4.conf.default.send_redirects = 0
+      net.ipv4.icmp_ignore_bogus_error_responses = 1
+      net.ipv4.tcp_rfc1337 = 1
+      net.ipv4.tcp_syncookies = 1
+      # R14 file system
+      fs.suid_dumpable = 0
+      fs.protected_fifos = 2
+      fs.protected_regular = 2
+      fs.protected_symlinks = 1
+      fs.protected_hardlinks = 1
+
+  # R36: a login shell's umask. Services keep their own.
+  - path: /etc/profile.d/umask.sh
+    permissions: '0644'
+    content: |
+      umask 0077
+%{ if baseline.audit_logging ~}
+
+  # R73 / R33: who ran what (interactive sessions only: auid set, not the boot-time units), what
+  # changed in /etc, mounts, module loads, ptrace. No `-e 2`: locking the rules needs a reboot to undo.
+  - path: /etc/audit/rules.d/50-bastion.rules
+    permissions: '0640'
+    content: |
+      -a always,exit -F arch=b64 -S execve -F auid>=1000 -F auid!=unset -k bastion-exec
+      -a always,exit -F arch=b32 -S execve -F auid>=1000 -F auid!=unset -k bastion-exec
+      -w /etc/ -p wa -k bastion-etc
+      -a always,exit -F arch=b64 -S mount -S umount2 -k bastion-mount
+      -a always,exit -F arch=b32 -S mount -S umount2 -k bastion-mount
+      -a always,exit -F arch=b64 -S init_module -S finit_module -S delete_module -k bastion-modules
+      -a always,exit -F arch=b32 -S init_module -S finit_module -S delete_module -k bastion-modules
+      -a always,exit -F arch=b64 -S ptrace -k bastion-ptrace
+      -a always,exit -F arch=b32 -S ptrace -k bastion-ptrace
+
+  # The sshd login line carries the key fingerprint (LogLevel VERBOSE): keep it, capped, across reboots.
+  - path: /etc/systemd/journald.conf.d/50-bastion.conf
+    permissions: '0644'
+    content: |
+      [Journal]
+      Storage=persistent
+      SystemMaxUse=200M
+      MaxRetentionSec=90day
+%{ endif ~}
+%{ if length(baseline.time_servers) > 0 ~}
+
+  # Same time sources as the nodes: a chrony source file; the image's default pools are commented out by runcmd.
+  - path: /etc/chrony/sources.d/bastion.sources
+    permissions: '0644'
+    content: |
+%{ for t in baseline.time_servers ~}
+      server ${t} iburst
+%{ endfor ~}
+%{ endif ~}
+
+%{ endif ~}
 %{ for f in extra_write_files ~}
   - path: ${f.path}
     permissions: '${f.permissions}'
@@ -180,20 +379,66 @@ write_files:
 
 mounts:
   - [tmpfs, /tmp, tmpfs, "size=64m,mode=1777,nosuid,nodev,noexec", "0", "0"]
+%{ if baseline.enabled ~}
+  - [tmpfs, /var/tmp, tmpfs, "size=64m,mode=1777,nosuid,nodev,noexec", "0", "0"]
+%{ endif ~}
 
 runcmd:
   # SSH-CA principals directory (no-op placeholder)
   - mkdir -p /etc/ssh/auth_principals && chmod 755 /etc/ssh/auth_principals
   # Ensure authorized_keys.d has correct ownership
   - chown root:root /etc/ssh/authorized_keys.d && chmod 755 /etc/ssh/authorized_keys.d
+%{ if baseline.enabled ~}
+  # Root-owned, so a compromised login cannot add its own key; sshd reads it as the user, hence 0644.
+  - chown root:root /etc/ssh/authorized_keys.d/${bastion_user} && chmod 0644 /etc/ssh/authorized_keys.d/${bastion_user}
+%{ for name, a in admins ~}
+  - chown root:root /etc/ssh/authorized_keys.d/${name} && chmod 0644 /etc/ssh/authorized_keys.d/${name}
+%{ endfor ~}
+%{ else ~}
   - chown ${bastion_user}:${bastion_user} /etc/ssh/authorized_keys.d/${bastion_user} 2>/dev/null || true
+%{ for name, a in admins ~}
+  - chown ${name}:${name} /etc/ssh/authorized_keys.d/${name} 2>/dev/null || true
+%{ endfor ~}
+%{ endif ~}
 %{ for cmd in extra_runcmd ~}
   - ${cmd}
 %{ endfor ~}
+%{ if baseline.enabled ~}
+  # OS baseline. Every line tolerates a missing piece (|| true): the access path comes first.
+  - sysctl --system || true
+  - chmod 700 /boot || true
+  - systemctl mask snapd.service snapd.socket ModemManager.service || true
+  # R38: only the sudo group may run sudo.
+  - dpkg-statoverride --list /usr/bin/sudo >/dev/null 2>&1 || dpkg-statoverride --update --add root sudo 4750 /usr/bin/sudo || true
+  # The drop-in cannot unset the image's AcceptEnv (it accumulates), so comment it out, with a way back.
+  - cp -p /etc/ssh/sshd_config /etc/ssh/sshd_config.pre-baseline && sed -i 's/^AcceptEnv/#AcceptEnv/' /etc/ssh/sshd_config || true
+  - |
+    if ! sshd -t || [ ! -f /etc/ssh/revoked_keys ]; then
+      echo "bastion baseline: sshd rejects it, falling back to the proven config" >&2
+      rm -f /etc/ssh/sshd_config.d/98-bastion-baseline.conf
+      [ -f /etc/ssh/sshd_config.pre-baseline ] && cp -p /etc/ssh/sshd_config.pre-baseline /etc/ssh/sshd_config
+    fi
+%{ if baseline.audit_logging ~}
+  - usermod -aG adm,systemd-journal ${bastion_user} || usermod -aG adm ${bastion_user} || true
+  - mkdir -p /var/log/journal && systemd-tmpfiles --create --prefix /var/log/journal || true
+  - systemctl restart systemd-journald || true
+  - sed -i -e 's/^log_group.*/log_group = adm/' -e 's/^max_log_file .*/max_log_file = 8/' -e 's/^num_logs.*/num_logs = 5/' /etc/audit/auditd.conf || true
+  - augenrules --load || true
+  - systemctl enable --now auditd || true
+%{ endif ~}
+%{ if length(baseline.time_servers) > 0 ~}
+  - sed -i 's/^pool /#pool /' /etc/chrony/chrony.conf && systemctl restart chrony || true
+%{ endif ~}
+%{ endif ~}
   # nftables — load rules after any provider route fixes
   - systemctl enable nftables
   - systemctl restart nftables
   # sshd — reload hardened config
   - systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || true
+%{ if egress.mode == "closed" ~}
+  # No mirror is reachable any more: leave the update timers off instead of failing every day. Patching = replacing the bastion.
+  - systemctl disable --now apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service 2>/dev/null || true
+%{ else ~}
   # unattended-upgrades
   - systemctl enable --now unattended-upgrades
+%{ endif ~}

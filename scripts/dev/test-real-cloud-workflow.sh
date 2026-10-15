@@ -217,5 +217,10 @@ STUB_PY_FAIL="verify-provider-clean.py oa-ci-dev outscale" STUB_PY_RC=1 go outsc
 printf 'environment = "dev"\n' >"$T/repo/infrastructure/opentofu/cluster/envs/management-scaleway.tfvars"; : >"$T/stub.log"; STUB_PY_FAIL= go scaleway
 grep -q 'verify-provider-clean.py openaether-dev scaleway' "$T/stub.log" && ok "no cluster_name in the tfvars: the default name (openaether) is the one asked about" || bad "default name: $(cat "$T/stub.log")"
 
+# The job that holds every provider key runs in a protected environment (SCC/F12): a regression that drops the line
+# gives any writer on the repository the secrets, and nothing else here would notice.
+ENVNAME="$(python3 -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))["jobs"]["regression"].get("environment", ""))' "$WF")"
+[ "$ENVNAME" = sandbox ] && ok "the regression job runs in the protected environment 'sandbox'" || bad "the regression job's environment is '${ENVNAME}', not 'sandbox'"
+
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$PASS" -gt 0 ] && [ "$FAIL" -eq 0 ]

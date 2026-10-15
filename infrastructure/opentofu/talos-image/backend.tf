@@ -14,6 +14,11 @@ terraform {
   encryption {
     key_provider "pbkdf2" "migration_key" {
       passphrase = var.encryption_passphrase
+      # Pinned to what OpenTofu 1.12 defaults to (read back from a state's metadata), so a future default
+      # never changes the derivation silently. A state records its own parameters: this only governs new writes.
+      iterations    = 600000
+      hash_function = "sha512"
+      key_length    = 32
     }
 
     method "aes_gcm" "migration_method" {

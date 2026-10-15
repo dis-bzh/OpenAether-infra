@@ -4,6 +4,15 @@
 # forwarding to NodePorts where nothing listens.
 # ==============================================================================
 
+locals {
+  # Caller list + the cluster's own egress (pods reach the Gateway through this LB's
+  # public address) + the VPC ranges, as the k8s API ACL below. Empty = no ACL.
+  app_lb_acl_sources = length(var.app_lb_allowed_cidrs) == 0 ? [] : concat(
+    distinct(concat(var.app_lb_allowed_cidrs, ["172.16.0.0/12", "10.0.0.0/8"])),
+    ["${scaleway_vpc_public_gateway_ip.this.address}/32"],
+  )
+}
+
 resource "scaleway_lb_ip" "app" {
   count      = var.deploy_app_lb ? 1 : 0
   zone       = var.zone
@@ -52,6 +61,32 @@ resource "scaleway_lb_frontend" "http" {
   backend_id   = scaleway_lb_backend.http[0].id
   name         = "http-frontend"
   inbound_port = 80
+
+  # Inline, like the k8s API frontend: an in-place update, never a new LB (that would change the public IP).
+  dynamic "acl" {
+    for_each = length(var.app_lb_allowed_cidrs) > 0 ? [1] : []
+    content {
+      name = "app-allow"
+      action {
+        type = "allow"
+      }
+      match {
+        ip_subnet = local.app_lb_acl_sources
+      }
+    }
+  }
+  dynamic "acl" {
+    for_each = length(var.app_lb_allowed_cidrs) > 0 ? [1] : []
+    content {
+      name = "app-deny"
+      action {
+        type = "deny"
+      }
+      match {
+        ip_subnet = ["0.0.0.0/0"]
+      }
+    }
+  }
 }
 
 resource "scaleway_lb_backend" "https" {
@@ -70,6 +105,32 @@ resource "scaleway_lb_frontend" "https" {
   backend_id   = scaleway_lb_backend.https[0].id
   name         = "https-frontend"
   inbound_port = 443
+
+  # Inline, like the k8s API frontend: an in-place update, never a new LB (that would change the public IP).
+  dynamic "acl" {
+    for_each = length(var.app_lb_allowed_cidrs) > 0 ? [1] : []
+    content {
+      name = "app-allow"
+      action {
+        type = "allow"
+      }
+      match {
+        ip_subnet = local.app_lb_acl_sources
+      }
+    }
+  }
+  dynamic "acl" {
+    for_each = length(var.app_lb_allowed_cidrs) > 0 ? [1] : []
+    content {
+      name = "app-deny"
+      action {
+        type = "deny"
+      }
+      match {
+        ip_subnet = ["0.0.0.0/0"]
+      }
+    }
+  }
 }
 
 # ==============================================================================

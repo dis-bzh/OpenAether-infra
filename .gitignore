@@ -69,6 +69,10 @@ worker.yaml
 # backend pointer from each other.
 .terraform-*/
 .terraform.lock.hcl
+# The two roots an operator deploys with are the exception: their provider hashes are reviewed in a PR
+# (Renovate rewrites them on a provider bump; `task lock-providers` by hand).
+!infrastructure/opentofu/cluster/.terraform.lock.hcl
+!infrastructure/opentofu/talos-image/.terraform.lock.hcl
 *.tfstate
 *.tfstate.*
 *.tfvars
@@ -123,6 +127,10 @@ infrastructure/opentofu/cluster/.talos-tunnels.pids
 .talos-tunnel-*
 infrastructure/opentofu/.talos-bastion-known-hosts
 infrastructure/opentofu/cluster/.talos-bastion-known-hosts
+# The pinned bastion host key, wherever the script ran from (BASTION_KNOWN_HOSTS, scripts/lib/bastion-hostkey.sh)
+.talos-bastion-known-hosts
+# Pulled bastion logs (scripts/ops/bastion-logs-pull.sh, default directory): account names, source addresses, key fingerprints
+bastion-logs/
 
 # Claude Code session artifacts (local state, not project content)
 # … except the shared SessionStart hook, which has to be versioned so it applies
@@ -158,3 +166,6 @@ plumber-report.json
 # Rung receipts (scripts/dev/rung-receipt.py): written by the harness, pasted
 # into a pull request, never committed.
 .receipts/
+
+# Dated RBAC review output (task rbac-review): subject names of one cluster, a working file.
+/rbac-review/

@@ -26,6 +26,7 @@ cleanup() {
 trap cleanup EXIT
 mkdir -p "$W/scripts/bootstrap" "$W/scripts/lib" "$W/bin" "$W/cluster" "$W/blind"
 cp "$SUT" "$TUN"
+cp "$ROOT/scripts/lib/bastion-hostkey.sh" "$W/scripts/lib/"
 # Only what the script sources. A port named in $BLIND is refused once: a listener nothing answers behind.
 cat >"$W/scripts/lib/common.sh" <<'STUB'
 oa_tunnel_offset() { printf '%s' "${TALOS_TUNNEL_OFFSET:-0}"; }
@@ -46,12 +47,32 @@ cat >"$W/bin/ssh-stub.py" <<'STUB'
 # key. Its whole argv goes to $IDENT after its pid and port: what it was asked to do is what the tests read.
 import os, signal, socket, sys
 a = sys.argv[1:]
+def say(s):
+    sys.stderr.write(s + "\n"); sys.stderr.flush()
+# With STUB_HOSTKEY ("ssh-ed25519 AAAA..." = the key the server presents) the stub checks the host key like ssh does:
+# a known host with another key is refused, an unknown one is refused under StrictHostKeyChecking=yes and recorded
+# under accept-new. Without it the stub trusts everything, as before.
+key = os.environ.get("STUB_HOSTKEY")
+if key:
+    opt = lambda n, d=None: next((x.split("=", 1)[1] for x in a if x.startswith(n + "=")), d)
+    kh, shkc = opt("UserKnownHostsFile"), opt("StrictHostKeyChecking", "ask")
+    host = [x for x in a if "@" in x][-1].split("@")[-1]
+    known = {}
+    if kh and os.path.exists(kh):
+        for line in open(kh):
+            f = line.split()
+            if len(f) >= 3: known[f[0]] = " ".join(f[1:3])
+    if host in known:
+        if known[host] != key:
+            say("WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!"); say("Host key verification failed."); sys.exit(255)
+    elif shkc == "yes":
+        say(f"No ED25519 host key is known for {host} and you have requested strict checking."); say("Host key verification failed."); sys.exit(255)
+    elif kh:
+        open(kh, "a").write(f"{host} {key}\n")
 if "true" in a:
     sys.exit(0)
 port = int(a[a.index("-L") + 1].split(":")[0])
 signal.alarm(180)
-def say(s):
-    sys.stderr.write(s + "\n"); sys.stderr.flush()
 if str(port) in os.environ.get("STUB_FAIL_PORT", "").split():
     say("ops@203.0.113.10: Permission denied (publickey)."); sys.exit(255)
 if "LogLevel=VERBOSE" in a:
@@ -192,6 +213,103 @@ WHY="$(args_ok "$N1" "$W/key2" "$P0=10.0.0.11:50000" "$P1=10.0.0.12:50000" "$PW=
   && grep -q 'Authenticated to stub' "$W/cluster/.talos-tunnel-direct-$PW.log"; } \
   && ok "open-direct goes through the same spawn: 3 up asked for the right nodes and --key, its own pidfile and transcripts" \
   || bad "open-direct (up=$(up)): ${WHY:-$(tail -3 "$W/direct.out")}; $(ls -a "$W/cluster")"
+
+echo "=== OA_BASTION_PIN_HOSTKEY: the bastion's key is kept and a different one is refused ==="
+(cd "$W/cluster" && "$TUN" close . >/dev/null 2>&1); sleep 1
+ssh-keygen -q -t ed25519 -N '' -f "$W/hk1"; ssh-keygen -q -t ed25519 -N '' -f "$W/hk2"
+K1="$(cut -d' ' -f1,2 "$W/hk1.pub")"; K2="$(cut -d' ' -f1,2 "$W/hk2.pub")"
+FP1="$(ssh-keygen -lf "$W/hk1.pub" | awk '{ print $2 }')"; FP2="$(ssh-keygen -lf "$W/hk2.pub" | awk '{ print $2 }')"
+KH="$W/cluster/.talos-bastion-known-hosts"
+open_pin() { K="$1"; shift; OUT="$(cd "$W/cluster" && env STUB_HOSTKEY="$K" "$@" env --default-signal=HUP "$TUN" open . 2>&1)"; RC=$?; }
+close_all() { (cd "$W/cluster" && "$TUN" close . >/dev/null 2>&1); sleep 1; }
+
+: >"$KH"; N2=$(wc -l <"$W/ident")
+open_pin "$K1" OA_BASTION_PIN_HOSTKEY=1
+{ [ "$RC" = 0 ] && [ "$(up)" = 4 ] && grep -q "^203.0.113.10 $K1\$" "$KH" && grep -q 'NOT verified out of band' <<<"$OUT" && grep -q "$FP1" <<<"$OUT"; } \
+  && ok "pin=1, first contact: the key is kept in known_hosts, its fingerprint is printed with the warning, 4/4 up" \
+  || bad "first pinned contact (rc ${RC}, up=$(up)): $OUT; kh: $(cat "$KH")"
+{ asked "$N2" "$P0" "-o StrictHostKeyChecking=yes" "-o UserKnownHostsFile=.talos-bastion-known-hosts" && asked "$N2" "$PA" "-o StrictHostKeyChecking=yes"; } \
+  && ok "…and the tunnels run with StrictHostKeyChecking=yes" || bad "tunnels not strict after pinning: $(asked "$N2" "$P0" "-o StrictHostKeyChecking=yes")"
+close_all; BEFORE="$(cat "$KH")"
+open_pin "$K1" OA_BASTION_PIN_HOSTKEY=1
+{ [ "$RC" = 0 ] && [ "$(up)" = 4 ] && [ "$(cat "$KH")" = "$BEFORE" ] && ! grep -q 'NOT verified' <<<"$OUT"; } \
+  && ok "a later run keeps the file as it is, accepts the same key, 4/4 up, no first-contact warning" || bad "repeat run (rc ${RC}, up=$(up)): $OUT"
+close_all
+open_pin "$K2" OA_BASTION_PIN_HOSTKEY=1
+{ [ "$RC" = 1 ] && [ "$(up)" = 0 ] && grep -q 'NOT the one pinned' <<<"$OUT" && [ "$(cat "$KH")" = "$BEFORE" ]; } \
+  && ok "the same address answering with ANOTHER key is refused: no tunnel, the pinned key untouched, the way out is named" \
+  || bad "changed key was not refused (rc ${RC}, up=$(up)): $OUT"
+grep -q 'OA_BASTION_FORGET=1' <<<"$OUT" && ok "…and the refusal says how to re-pin on purpose" || bad "no hint in the refusal"
+open_pin "$K2" OA_BASTION_PIN_HOSTKEY=1 OA_BASTION_FORGET=1 OA_BASTION_HOSTKEY_FP="SHA256:notthekeyyouchecked"
+{ [ "$RC" != 0 ] && [ "$(up)" = 0 ] && grep -q 'NOT pinned' <<<"$OUT" && ! grep -q "$K2" "$KH"; } \
+  && ok "forgetting with a fingerprint that does not match the new key pins nothing" || bad "wrong fingerprint accepted (rc ${RC}, up=$(up)): $OUT; kh: $(cat "$KH")"
+open_pin "$K2" OA_BASTION_PIN_HOSTKEY=1 OA_BASTION_FORGET=1 OA_BASTION_HOSTKEY_FP="$FP2"
+{ [ "$RC" = 0 ] && [ "$(up)" = 4 ] && grep -q "^203.0.113.10 $K2\$" "$KH" && ! grep -q "$K1" "$KH" && grep -q 'matches the fingerprint given out of band' <<<"$OUT"; } \
+  && ok "FORGET with the new key's fingerprint re-pins it (the old key is gone), 4/4 up" || bad "deliberate re-pin (rc ${RC}, up=$(up)): $OUT; kh: $(cat "$KH")"
+close_all; : >"$KH"
+open_pin "$K1" OA_BASTION_PIN_HOSTKEY=verify
+{ [ "$RC" = 1 ] && [ "$(up)" = 0 ] && grep -q 'refusing a first contact nobody checked' <<<"$OUT" && [ ! -s "$KH" ]; } \
+  && ok "verify, no fingerprint: a first contact is refused before any connection and nothing is written" || bad "verify without fingerprint (rc ${RC}, up=$(up)): $OUT"
+open_pin "$K1" OA_BASTION_PIN_HOSTKEY=verify OA_BASTION_HOSTKEY_FP="$FP1"
+{ [ "$RC" = 0 ] && [ "$(up)" = 4 ] && grep -q "^203.0.113.10 $K1\$" "$KH"; } && ok "verify with the right fingerprint pins and opens 4/4" || bad "verify with fingerprint (rc ${RC}, up=$(up)): $OUT"
+close_all
+open_pin "$K1" OA_BASTION_PIN_HOSTKEY=1 OA_BASTION_HOSTKEY_FP=notafingerprint
+[ "$RC" != 0 ] && grep -q 'must look like SHA256' <<<"$OUT" && ok "a malformed OA_BASTION_HOSTKEY_FP is refused" || bad "malformed fingerprint accepted (rc ${RC}): $OUT"
+# Without the opt-in, nothing of this exists: the file is emptied, the key is not checked, accept-new as always.
+printf '203.0.113.10 %s\n' "$K1" >"$KH"; N3=$(wc -l <"$W/ident")
+open_pin "$K2"
+{ [ "$RC" = 0 ] && [ "$(up)" = 4 ] && ! grep -q "$K1" "$KH" && args_ok "$N3" "$W/key" "$P0=10.0.0.11:50000" >/dev/null; } \
+  && ok "(control) without OA_BASTION_PIN_HOSTKEY a changed key is accepted and the file is emptied, as before" || bad "default behaviour changed (rc ${RC}, up=$(up)): $OUT"
+close_all
+
+N4=$(wc -l <"$W/ident")
+OUT="$(SSH_USER=alice STUB_HOSTKEY= "$TUN" open "$W/cluster" 2>&1)"; RC=$?
+{ [ "$RC" = 0 ] && asked "$N4" "$P0" "alice@203.0.113.10" && asked "$N4" "$PA" "alice@203.0.113.10"; } \
+  && ok "SSH_USER=alice: every tunnel logs in as alice instead of the state's bastion_user" || bad "SSH_USER ignored (rc ${RC}): $(asked "$N4" "$P0" "alice@203.0.113.10") $OUT"
+close_all
+
+: >"$KH"; rm -f "$W/cluster/.talos-tunnels-direct.pids"; N5=$(wc -l <"$W/ident")
+OUT="$(cd "$W/cluster" && STUB_HOSTKEY="$K1" OA_BASTION_PIN_HOSTKEY=1 env --default-signal=HUP "$TUN" open-direct --bastion 203.0.113.10 --user ops --cps 10.0.0.11,10.0.0.12 --workers 10.0.0.21 --key "$W/key" 2>&1)"; RC=$?
+{ [ "$RC" = 0 ] && [ "$(up)" = 3 ] && grep -q "^203.0.113.10 $K1\$" "$KH" && asked "$N5" "$P0" "-o StrictHostKeyChecking=yes"; } \
+  && ok "open-direct pins the same way (the single-apply path), strict once pinned" || bad "open-direct pinned (rc ${RC}, up=$(up)): $OUT"
+close_all
+OUT="$(cd "$W/cluster" && STUB_HOSTKEY="$K2" OA_BASTION_PIN_HOSTKEY=1 "$TUN" open-direct --bastion 203.0.113.10 --user ops --cps 10.0.0.11 --key "$W/key" 2>&1)"; RC=$?
+{ [ "$RC" = 1 ] && [ "$(up)" = 0 ] && grep -q 'NOT the one pinned' <<<"$OUT"; } && ok "open-direct refuses a changed key too" || bad "open-direct changed key (rc ${RC}, up=$(up)): $OUT"
+rm -f "$KH"
+
+# The Terraform side (SCC/F17): the local-exec of terraform_data.talos_tunnels hands its values over as environment
+# variables. Its real command is cut out of cluster/main.tf and run against a stub script that records argv, with values a
+# shell would split or execute if they were spliced into the command line.
+MAIN="$ROOT/infrastructure/opentofu/cluster/main.tf"
+HCL_CMD="$(awk '/^resource "terraform_data" "talos_tunnels"/{r=1} r && /command = <<-EOT/{c=1; next} c && /^[[:space:]]*EOT$/{exit} c' "$MAIN")"
+STUBTUN="$W/stub-tunnels.sh"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" >"$ARGV_OUT"\n' >"$STUBTUN"; chmod +x "$STUBTUN"
+CMD="${HCL_CMD//\$\{path.module\}\/..\/..\/..\/scripts\/bootstrap\/talos-tunnels.sh/$STUBTUN}"
+CMD="${CMD//\$\$\{/\$\{}"
+tf_run() { # <workers csv> <user> <key>: the argv the script would receive, one per line
+  rm -f "$W/argv.out" "$W/pwned"
+  ARGV_OUT="$W/argv.out" OA_TUNNEL_BASTION=203.0.113.10 OA_TUNNEL_USER="$2" OA_TUNNEL_CPS=10.0.0.11,10.0.0.12 \
+    OA_TUNNEL_WORKERS="$1" OA_TUNNEL_KEY="$3" bash -c "$CMD" >/dev/null 2>&1
+  cat "$W/argv.out" 2>/dev/null
+}
+{ [ -n "$HCL_CMD" ] && grep -q 'OA_TUNNEL_KEY' <<<"$HCL_CMD" && [[ "$CMD" == *"$STUBTUN"* ]]; } \
+  && ok "the talos_tunnels local-exec command is found in cluster/main.tf and points at the stub" \
+  || bad "could not cut the local-exec command out of main.tf: ${HCL_CMD:-empty}"
+GOT="$(tf_run 10.0.0.21 ops "/home/u/my keys/id ed25519")"
+WANT="$(printf '%s\n' open-direct --bastion 203.0.113.10 --user ops --cps 10.0.0.11,10.0.0.12 --key "/home/u/my keys/id ed25519" --workers 10.0.0.21)"
+[ "$GOT" = "$WANT" ] && ok "a key path with a space stays one argument; workers are passed as --workers" \
+  || bad "argv differs: $(tr '\n' '|' <<<"$GOT")"
+GOT="$(tf_run "" ops /k)"
+{ [ -n "$GOT" ] && ! grep -q -- '--workers' <<<"$GOT"; } && ok "no workers: --workers is not passed" || bad "empty workers: $(tr '\n' '|' <<<"$GOT")"
+GOT="$(tf_run "" 'x; touch '"$W"'/pwned' '$(touch '"$W"'/pwned)')"
+{ [ ! -e "$W/pwned" ] && grep -qF 'x; touch' <<<"$GOT" && grep -qF '$(touch' <<<"$GOT"; } \
+  && ok "a user name and a key path full of shell syntax are data: nothing ran, both arrived verbatim" \
+  || bad "shell metacharacters were interpreted (pwned: $([ -e "$W/pwned" ] && echo yes || echo no)): $(tr '\n' '|' <<<"$GOT")"
+# The environment block is not part of the command and a mock plan does not run it: without pathexpand() the default
+# "~/.ssh/..." reaches the script unexpanded, since an env value is not tilde-expanded by the shell.
+grep -Eq '^[[:space:]]*OA_TUNNEL_KEY[[:space:]]*=[[:space:]]*pathexpand\(var\.ssh_key_path\)[[:space:]]*$' "$ROOT/infrastructure/opentofu/cluster/main.tf" \
+  && ok "OA_TUNNEL_KEY is pathexpand(var.ssh_key_path): the default ~/.ssh/... is expanded before the script sees it" \
+  || bad "main.tf no longer expands the key path with pathexpand()"
 
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$PASS" -gt 0 ] && [ "$FAIL" -eq 0 ]

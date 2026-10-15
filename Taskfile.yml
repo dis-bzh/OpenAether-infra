@@ -193,6 +193,9 @@ tasks:
       # A path stops resolving and nothing notices — in a comment, read once,
       # or a printed string, read (and copy-pasted) on every run (#118).
       - ./scripts/dev/check-dead-references.sh
+      # The docs/ pairs (EN canonical, FR twin): both open with a link to the other, the security set has the same
+      # sections on both sides, and no relative link points nowhere.
+      - ./scripts/dev/check-doc-twins.sh
       # ci.yml installed yamllint/shellcheck/renovate-config-validator with no
       # version pin, between a comment arguing against exactly that (#113).
       - ./scripts/dev/check-tool-pins.sh
@@ -204,6 +207,9 @@ tasks:
       # force-moved upstream changes no committed byte, so this compares
       # against the sha256 recorded the last time either was rendered (#119).
       - ./scripts/dev/check-upstream-artifacts-lock.sh
+      # An `image:` pinned by tag alone, with no digest in the tree or in
+      # flux-image-digests.lock, is a tag upstream can re-push unseen. Offline.
+      - ./scripts/dev/check-image-pins.sh --enforce
 
   fmt:
     desc: Format OpenTofu code
@@ -232,11 +238,29 @@ tasks:
     env:
       TF_DATA_DIR: .terraform-validate
     cmds:
-      # -upgrade because .terraform.lock.hcl is gitignored — a pure local cache,
-      # yet shared with the deploy lane. Without it, every existing clone breaks
-      # the moment a version constraint moves, naming a command this never runs.
-      - tofu init -backend=false -upgrade
+      # The lock is committed (reviewed hashes). readonly: a constraint bumped
+      # without `task lock-providers` fails here, in CI too, instead of resolving
+      # a fresh provider binary nobody reviewed.
+      - tofu init -backend=false -lockfile=readonly
       - tofu validate
+
+  lock-providers:
+    desc: >-
+      Re-resolve the provider versions of the cluster and talos-image roots within
+      their constraints and rewrite their committed .terraform.lock.hcl for the four
+      platforms operators use. Needs the network, ~1 GB of TMPDIR; no credential.
+    cmds:
+      - |
+        set -e
+        # tofu unpacks every provider for every platform in TMPDIR; /tmp is a small tmpfs on some hosts.
+        for root in cluster talos-image; do
+          ( cd infrastructure/opentofu/$root
+            export TF_DATA_DIR=.terraform-validate
+            tofu init -backend=false -upgrade >/dev/null
+            tofu providers lock -platform=linux_amd64 -platform=linux_arm64 \
+              -platform=darwin_arm64 -platform=darwin_amd64 )
+        done
+        git diff --stat -- 'infrastructure/opentofu/*/.terraform.lock.hcl'
 
   apps-validate:
     desc: "Validate the OpenAether-apps Flux DAG, the generated pick.py profiles and the children's Cilium"
@@ -440,9 +464,17 @@ tasks:
       # Six places build a bucket name, in two languages that cannot import each
       # other. Nothing but this compares them.
       - ./scripts/dev/test-bucket-names.sh
+      # The classifier behind `task lint`'s image-pin check, on fixtures.
+      - ./scripts/dev/test-image-pins.sh
+      # images.lock: the verifier, the lock writer against a fake Factory, the committed lock's format.
+      - ./scripts/dev/test-image-checksum.sh
+      # The CycloneDX inventory behind the weekly/release SBOM workflow, on a fixture and on the real tree.
+      - ./scripts/dev/test-sbom.sh
       # The backup path had no inverse until 0.5.0. This is the round trip —
       # the real enc() against the real dec(), offline.
       - ./scripts/dev/test-restore.sh
+      # The entropy heuristic behind cluster-up's passphrase preflight: the generators never trip it, weak shapes do.
+      - ./scripts/dev/test-passphrase.sh
       # The failover seeds a cluster from the OTHER provider's replica; what it untracks is the
       # difference between a PKI carried over and a destroy plan against a cloud that is gone.
       - ./scripts/dev/test-restore-state.sh
@@ -453,6 +485,12 @@ tasks:
       # with the first provider's. Only the ENDPOINTS can say a backup was meant
       # to be elsewhere, which is what these assert.
       - ./scripts/dev/test-backup-creds.sh
+      # backup_immutability: versioning, expiry and object lock on a fake store that refuses a lock on a bucket not
+      # created with it; the read-back, the lifecycle rules someone else set, and the loud (not silent) refusal.
+      - ./scripts/dev/test-bucket-protection.sh
+      # Which S3 identity opens which bucket (s3-isolation-check.sh), on a fake store: a dedicated pair that
+      # reaches the backups, a key the store refuses, and "nothing dedicated" must each fail, never pass.
+      - ./scripts/dev/test-s3-isolation.sh
       # `task state` promises it never writes a state. Real task + real tofu on
       # a local-backend fixture; the state's bytes are compared before and after.
       - ./scripts/dev/test-state-task.sh
@@ -470,6 +508,10 @@ tasks:
       # scripts that died silently on an absent optional key.
       - ./scripts/dev/test-state-backups.sh
       - ./scripts/dev/test-seed-openbao.sh
+      # The escrow of the seal key, recovery shares and restic password (real gpg keys, stub cluster), and the one
+      # replace path for operator-supplied secrets (create-only seeding has none).
+      - ./scripts/dev/test-escrow-openbao.sh
+      - ./scripts/dev/test-rotate-secret.sh
       # The recovery-share keys, checked for an encryption subkey before anything bills (sys/init commits, then fails).
       - ./scripts/dev/test-check-openbao-keys.sh
       # The language check (inline comments, Python strings, accents): its own cases.
@@ -514,6 +556,12 @@ tasks:
       # and fixture-writing redirects are not, and .deadreferencesignore
       # scopes to the one file:candidate pair it names.
       - ./scripts/dev/test-dead-references.sh
+      # check-doc-twins.sh against throwaway repos: a missing twin, a missing back-link, a section on one side only,
+      # a dead link, and what it must leave alone (anchors, external links, fenced text).
+      - ./scripts/dev/test-check-doc-twins.sh
+      # docs/network.md carries the node-inbound rules of each provider as a table generated from the Terraform:
+      # this fails when a table differs from the code or a rule has no justification row (both languages).
+      - ./scripts/dev/test-flow-matrix.sh
       # A host missing CAP_SYS_RESOURCE looked healthy for 90s before this,
       # then died on an unrelated-looking timeout (#54). Against a stubbed
       # capsh, and also against this host's real one where reachable.
@@ -551,6 +599,19 @@ tasks:
       - ./scripts/dev/test-kube-proxy-disabled.sh
       # infra-verify.sh's worker data-volume check (#62): names from the tfvars, verdicts from the nodes.
       - ./scripts/dev/test-worker-volumes.sh
+      - ./scripts/dev/test-encryption-at-rest.sh
+      # cluster-security-tests.sh: Cilium WireGuard (1.8), development OpenBao bootstrap (4.6),
+      # escrow record (4.7), Loki bucket and keys (4.8, 4.9).
+      - ./scripts/dev/test-security-tests-checks.sh
+      # The read-only ops checks of the security pass: denied flows, exposed ports, RBAC subjects.
+      - ./scripts/dev/test-cluster-netcheck.sh
+      - ./scripts/dev/test-exposure-scan.sh
+      - ./scripts/dev/test-rbac-review.sh
+      # The bastion scripts: harden-check (egress probes, opt-in baseline section, host key), the log pull (and its
+      # upload) and the fingerprint-to-person table.
+      - ./scripts/dev/test-bastion-harden-check.sh
+      - ./scripts/dev/test-bastion-logs-pull.sh
+      - ./scripts/dev/test-bastion-fingerprints.sh
       # grow-nodes.sh (#59): machines, then tunnels, then only the new nodes' configuration.
       - ./scripts/dev/test-grow-nodes.sh
       - ./scripts/dev/test-refuse-node-deletes.sh
@@ -581,14 +642,18 @@ tasks:
     cmds:
       - defer: *receipt
       # Self-sufficient from a cold shell/CI runner — `tofu test` needs the
-      # providers and modules resolved first. -upgrade: see `validate`.
-      - tofu init -backend=false -upgrade
+      # providers and modules resolved first, from the committed lock (see `validate`).
+      - tofu init -backend=false -lockfile=readonly
       - tofu test
       # Module-level tests: the root's tests above never run a module's own logic.
+      # modules/talos is not a deployed root and has no committed lock: -upgrade, as before.
       - tofu -chdir=../modules/talos init -backend=false -upgrade
       - tofu -chdir=../modules/talos test
+      # The Proxmox image module's checksum switch (images.lock): same shape, same reason.
+      - tofu -chdir=../modules/talos-image/proxmox init -backend=false -upgrade
+      - tofu -chdir=../modules/talos-image/proxmox test
       # The image root's mocked test, with the same data dir (relative, so it resolves there).
-      - cd ../talos-image && tofu init -backend=false -upgrade && tofu test
+      - cd ../talos-image && tofu init -backend=false -lockfile=readonly && tofu test
 
   clea-scan:
     desc: >-
@@ -601,7 +666,12 @@ tasks:
       - python3 scripts/clea/clea.py report --state clea-state.json
 
   cluster-security:
-    desc: "Run runtime security validation tests on the cluster"
+    desc: >-
+      Run runtime security validation tests on the cluster. ENVIRONMENT=prod makes the OpenBao bootstrap
+      checks strict (no openbao-recovery-dev); OA_ESCROW_ANNOTATION_CHECK=1 adds the seal-key escrow
+      record (annotation, hash of the live key, two holders).
+    env:
+      OA_ENVIRONMENT: '{{.ENVIRONMENT | default ""}}'
     cmds:
       - ./scripts/ops/cluster-security-tests.sh
 
@@ -733,7 +803,7 @@ tasks:
           echo "  else in this shell will tell you it is missing until it costs time." >&2
           exit 1
         fi
-        # The passphrase encrypts the state and both access artifacts, and NOTHING
+        # The passphrase encrypts the state and, unless an artifact passphrase is set, both access artifacts; NOTHING
         # else checks it: without it `tofu` stops to prompt, and with the shipped
         # placeholder — long enough to pass the only validation there is — it
         # deploys happily under a secret published in this repository.
@@ -742,6 +812,8 @@ tasks:
           *change-me*) echo "✗ TF_VAR_encryption_passphrase is still the example from .env.example." >&2
                        echo "  It is public. Replace it: openssl rand -base64 48" >&2; exit 1 ;;
         esac
+        # Beyond the placeholder: a weak or reused secret. Warns by default; OA_PASSPHRASE_CHECK=enforce refuses.
+        ./scripts/internal/check-passphrase.sh || exit 1
         # --preflight adds prod's replica-on-another-cloud rule, for a cluster
         # with no state object yet. Only here: infra-apply, which cluster-upgrade
         # and converge-versions call, must keep working on a deployed cluster.
@@ -1572,9 +1644,9 @@ tasks:
 
   etcd-snapshot:
     desc: >-
-      Encrypted etcd snapshot → primary + replica buckets (client-side gpg AES-256, same passphrase as the
-      tfstate; retention KEEP=30). GitOps makes etcd reconstructible — this is an RTO shortcut. Usage: task
-      etcd-snapshot PROVIDER=scaleway|ovh|outscale|proxmox [KEY=~/.ssh/key] [KEEP=30]
+      Encrypted etcd snapshot → primary + replica buckets (client-side gpg AES-256, under TF_VAR_artifact_passphrase
+      when set, else the tfstate passphrase; retention KEEP=30). GitOps makes etcd reconstructible — this is an RTO
+      shortcut. Usage: task etcd-snapshot PROVIDER=scaleway|ovh|outscale|proxmox [KEY=~/.ssh/key] [KEEP=30]
     dir: infrastructure/opentofu/cluster
     # PROVIDER is REQUIRED, not defaulted. Twenty targets used to fall back to
     # scaleway in silence — including destroy and down — so a command typed
@@ -1672,6 +1744,10 @@ tasks:
       - |
         BACKEND="$(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)" || exit 1
         tofu init -reconfigure $BACKEND
+      # Admin credentials: created empty then chmod 0600 (also tightens an existing file), not the umask's 0644.
+      # touch + chmod, not `install /dev/null`: BSD install on macOS refuses a non-regular source.
+      - touch kubeconfig talosconfig
+      - chmod 0600 kubeconfig talosconfig
       - tofu output -raw kubeconfig > kubeconfig
       - tofu output -raw talosconfig > talosconfig
       - echo "KUBECONFIG and TALOSCONFIG written to infrastructure/opentofu/cluster/"
@@ -1855,6 +1931,72 @@ tasks:
         vars: {ROLE: '{{.ROLE}}', PROVIDER: '{{.PROVIDER}}'}
       - ../../../scripts/dev/infra-verify.sh {{.PROVIDER}} {{.ROLE}}
 
+  cluster-exposure:
+    desc: >-
+      Probe the bastion, the API load balancer and the app load balancer from HERE over TCP: only 22, 6443
+      and 80+443 may answer, from the right source. Usage: task cluster-exposure PROVIDER=scaleway
+      [ROLE=management] [FROM=denied] — FROM=denied is run from an address NOT in admin_ip and expects 22 and
+      6443 closed too. Read-only. See scripts/ops/exposure-scan.sh.
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+      FROM: '{{.FROM | default "allowed"}}'
+    env: *provider-env
+    cmds:
+      - |
+        BACKEND="$(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)" || exit 1
+        tofu init -reconfigure $BACKEND
+      - ../../../scripts/ops/exposure-scan.sh --from {{.FROM}} {{.PROVIDER}} {{.ROLE}}
+
+  cluster-netcheck:
+    desc: >-
+      Send traffic that must be DENIED (a throwaway pod in an unlisted namespace to a Service of each platform
+      namespace) and fail if it is answered. Writes a temporary namespace, deleted on exit. Usage:
+      task cluster-netcheck PROVIDER=scaleway [ROLE=management] [CILIUM=1 to add `cilium connectivity test`].
+      See scripts/ops/cluster-netcheck.sh.
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+    env: *provider-env
+    cmds:
+      - task: kubeconfig
+        vars: {ROLE: '{{.ROLE}}', PROVIDER: '{{.PROVIDER}}'}
+      - ../../../scripts/ops/cluster-netcheck.sh {{if .CILIUM}}--cilium{{end}}
+
+  escrow:
+    desc: >-
+      Escrow the OpenBao seal key, recovery shares and restic password off the cluster, to at least TWO
+      custodians, prove the escrow opens to the LIVE key, then attest it (the record `cluster-security` 4.7 and
+      the apps CronJob read). Usage: task escrow -- export --out DIR -r KEYID -r KEYID
+      | verify --from DIR [--key-file F] | attest --from DIR (KUBECONFIG set, tunnels up;
+      docs/admin-access.md section 1). Writes secrets to DIR: keep it outside any repository.
+    cmds:
+      - ./scripts/ops/escrow-openbao.sh {{.CLI_ARGS}}
+
+  rotate-secret:
+    desc: >-
+      Replace one operator-supplied OpenBao secret with a new version (S3 key pairs, alert URLs, the Grafana
+      OIDC secret) and nudge the ExternalSecrets; paths that would break their consumers are refused with the
+      reason. Dry run unless --apply. Values come from OA_ROTATE_* in the environment. Usage: task rotate-secret
+      -- backup/s3-primary [--apply] [--restart ns/statefulset/name]. Create the new key at the provider
+      first, revoke the old one last (docs/incident-response.md section 7).
+    cmds:
+      - ./scripts/ops/rotate-secret.sh {{.CLI_ARGS}}
+
+  rbac-review:
+    desc: >-
+      List every (Cluster)RoleBinding with its subjects into a dated rbac-review/rbac-review-<date>.tsv and
+      flag named User/Group subjects, anonymous bindings and cluster-admin outside the allowlist. Read-only.
+      Run it at every staff change (docs/admin-access.md). Usage: task rbac-review (KUBECONFIG set).
+    cmds:
+      - ./scripts/ops/rbac-review.sh {{.CLI_ARGS}}
+
   # ===========================================================================
   # Emulated cloud (Feint) — no account, no credentials. docs/emulated-cloud.md
   # ===========================================================================
@@ -1965,6 +2107,34 @@ tasks:
     cmds:
       - defer: *receipt
       - ./scripts/dev/ssh-ca-check.sh
+
+  bastion-baseline-check:
+    desc: >-
+      Bastion OS baseline (bastion_baseline), rung "local Docker": renders the shared cloud-init with and without
+      it and runs the exact bytes on Ubuntu 22.04 and 24.04 in Docker - sshd -t and a real login, the key
+      fingerprint in the log, tunnels through PermitOpen, RevokedKeys, nft -c and the loaded ruleset, sysctl
+      names, audit-rule syntax, sudo mode. No cloud account, nothing written to the host. Needs Docker.
+    preconditions:
+      - sh: command -v docker
+        msg: bastion-baseline-check needs Docker; nothing ran and no receipt was written.
+    cmds:
+      - defer: *receipt
+      - ./scripts/dev/bastion-baseline-check.sh
+
+  bastion-identity-check:
+    desc: >-
+      Bastion per-person accounts, SSH-CA certificates for them, RevokedKeys and the closed Internet egress
+      (bastion_admins, bastion_internet_egress), rung "local Docker": renders the shared cloud-init and runs the
+      exact bytes on Ubuntu 22.04 and 24.04 - one login per person and no other, principals, an expired 8 h
+      certificate refused, a revoked key refused, PermitOpen without 8200, and the closed nftables output chain
+      loaded in a container's own network namespace (80/443/8200 dropped, 6443/50000 kept). No cloud account,
+      nothing written to the host. Needs Docker.
+    preconditions:
+      - sh: command -v docker
+        msg: bastion-identity-check needs Docker; nothing ran and no receipt was written.
+    cmds:
+      - defer: *receipt
+      - ./scripts/dev/bastion-identity-check.sh
 
   feint-evidence:
     desc: >-

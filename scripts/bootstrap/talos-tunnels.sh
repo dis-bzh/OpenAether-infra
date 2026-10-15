@@ -15,11 +15,18 @@
 # Usage:
 #   SSH_KEY=~/.ssh/mykey ./scripts/bootstrap/talos-tunnels.sh open|close [tofu_dir]
 #
+# SSH_USER=<name> logs in as that operator account (bastion_admins) instead of the shared one named by the state's
+# bastion_user output; the automation path (var.auto_tunnels) keeps the shared account.
+#
+# OA_BASTION_PIN_HOSTKEY=1|verify keeps the bastion's host key between runs and refuses any other key on its address
+# (scripts/lib/bastion-hostkey.sh); unset, the known_hosts file is emptied at every run and the first key is accepted.
+#
 #   open-direct --bastion <ip> --user <user> --cps <ip,…> [--workers <ip,…>]
 #     EXPERIMENTAL, for the single-apply path (var.auto_tunnels): takes IPs as
 #     arguments because there is no state to read yet. Never exercised for real.
 
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/bastion-hostkey.sh"
 
 ACTION="${1:-open}"
 # Absolute path to this script: `ensure` re-execs it after cd-ing elsewhere.
@@ -34,11 +41,11 @@ API_PORT=$((6443 + OFFSET))
 
 # The one place a tunnel is started. Its ssh output is APPENDED to a per-port log (never truncated: concurrent
 # opens share it), because the last lines are the only record of how a tunnel ended (#65); the marker line tells
-# one generation from the next. Uses KEY BASTION BUSER BASTION_KH LOG_PREFIX.
+# one generation from the next. Uses KEY BASTION BUSER BASTION_KH LOG_PREFIX and OA_BASTION_SHKC (set once pinned).
 spawn_tunnel() { # <pidfile> <local-port> <host:port behind the bastion>
   local log="${LOG_PREFIX}${2}.log"
   printf '%s spawn :%s\n' "$(date '+%F %T')" "$2" >>"$log"
-  nohup ssh -o LogLevel=VERBOSE -o UserKnownHostsFile="$BASTION_KH" -o StrictHostKeyChecking=accept-new \
+  nohup ssh -o LogLevel=VERBOSE -o UserKnownHostsFile="$BASTION_KH" -o StrictHostKeyChecking="${OA_BASTION_SHKC:-accept-new}" \
     -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=20 -o TCPKeepAlive=yes \
     -i "$KEY" -N -L "$2:$3" "${BUSER}@${BASTION}" >>"$log" 2>&1 &
   echo $! >>"$1"
@@ -55,7 +62,7 @@ quote_down() { local p; for p in "$@"; do echo "    :${p}  $(log_tail "$p")"; do
 
 if [[ "$ACTION" == "open-direct" ]]; then
   shift
-  BASTION=""; BUSER="root"; CPS_CSV=""; WKS_CSV=""
+  BASTION=""; BUSER="${SSH_USER:-root}"; CPS_CSV=""; WKS_CSV=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --bastion) BASTION="$2"; shift 2 ;;
@@ -81,9 +88,13 @@ if [[ "$ACTION" == "open-direct" ]]; then
   : >"$DIRECT_PIDFILE"
 
   # Dedicated known_hosts, reset per run — see the state-driven path below for why
-  # ssh-keygen -R is not enough (reused bastion IP + hashed entries).
+  # ssh-keygen -R is not enough (reused bastion IP + hashed entries). Pinned instead, when asked to.
   BASTION_KH=".talos-bastion-known-hosts"
-  : >"$BASTION_KH"
+  if [[ -n "$(oa_bastion_pin_mode)" ]]; then
+    oa_bastion_pin "$BASTION_KH" "$BASTION" "$BUSER" "$KEY" "${BASTION_WAIT:-300}" || exit 1
+  else
+    : >"$BASTION_KH"
+  fi
 
   IFS=',' read -ra CPS <<<"$CPS_CSV"
   IFS=',' read -ra WKS <<<"${WKS_CSV:-}"
@@ -166,7 +177,7 @@ if [[ -z "$BASTION" || "$BASTION" == "<bastion-ip>" ]]; then
   echo "    task infra-apply ROLE=management PROVIDER=... APPROVE=auto   (or ROLE=workload)"
   exit 1
 fi
-BUSER="$(jq -r '.bastion_user.value // "root"' <<<"$OUTPUTS")"
+BUSER="${SSH_USER:-$(jq -r '.bastion_user.value // "root"' <<<"$OUTPUTS")}"
 mapfile -t CPS < <(jq -r '.control_plane_private_ips.value[]? // empty' <<<"$OUTPUTS")
 mapfile -t WKS < <(jq -r '.worker_private_ips.value[]? // empty' <<<"$OUTPUTS")
 K8S_LB_IP="$(jq -r '.k8s_lb_ip.value // empty' <<<"$OUTPUTS")"
@@ -223,7 +234,10 @@ close_tunnels # drop any stale tunnels (old IPs) before reopening
 # the bastion in a DEDICATED known_hosts file, reset each run: this keeps
 # in-session host-key pinning without ever carrying a stale key across redeploys.
 BASTION_KH=".talos-bastion-known-hosts"
-: >"$BASTION_KH"
+PIN_MODE="$(oa_bastion_pin_mode)"
+if [[ -z "$PIN_MODE" ]]; then
+  : >"$BASTION_KH"
+fi
 
 open_one() { spawn_tunnel "$PIDFILE" "$1" "$2:50000"; } # localport nodeip
 
@@ -233,17 +247,22 @@ open_one() { spawn_tunnel "$PIDFILE" "$1" "$2:50000"; } # localport nodeip
 # — seen on all three providers. So we wait for the bastion to accept the key.
 echo "▶ Waiting for bastion ${BUSER}@${BASTION} to accept SSH (cloud-init)…"
 BASTION_WAIT="${BASTION_WAIT:-300}"
-__deadline=$(( SECONDS + BASTION_WAIT ))
-until ssh -o UserKnownHostsFile="$BASTION_KH" -o StrictHostKeyChecking=accept-new \
-          -o BatchMode=yes -o ConnectTimeout=8 -i "$KEY" \
-          "${BUSER}@${BASTION}" true 2>/dev/null; do
-  if (( SECONDS >= __deadline )); then
-    echo "⚠ bastion still unreachable after ${BASTION_WAIT}s — trying anyway."
-    echo "  (check: cloud-init finished? right key? admin_ip up to date?)"
-    break
-  fi
-  sleep 10
-done
+if [[ -n "$PIN_MODE" ]]; then
+  # Pinned: the key kept from the last run, or checked (and kept) now; a different key on this address stops here.
+  oa_bastion_pin "$BASTION_KH" "$BASTION" "$BUSER" "$KEY" "$BASTION_WAIT" || exit 1
+else
+  __deadline=$(( SECONDS + BASTION_WAIT ))
+  until ssh -o UserKnownHostsFile="$BASTION_KH" -o StrictHostKeyChecking=accept-new \
+            -o BatchMode=yes -o ConnectTimeout=8 -i "$KEY" \
+            "${BUSER}@${BASTION}" true 2>/dev/null; do
+    if (( SECONDS >= __deadline )); then
+      echo "⚠ bastion still unreachable after ${BASTION_WAIT}s — trying anyway."
+      echo "  (check: cloud-init finished? right key? admin_ip up to date?)"
+      break
+    fi
+    sleep 10
+  done
+fi
 
 # WAIT for the ports close_tunnels just freed. `kill` is asynchronous: the old
 # ssh has not released its listener when the new one tries to bind, so the new

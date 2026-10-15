@@ -1694,6 +1694,50 @@ for bad in ("-1", '"7"', "true", "7.5", str(clea.MAX_MIN_AGE_DAYS + 1), "3000000
     check(f"scan: min_release_age_days = {bad} is refused, naming the key", rc == 1 and "min_release_age_days" in err.getvalue())
 write_toml(5)
 
+# the lag rule: report-only, off unless clea.toml sets it, validated like the age policy
+def with_minors(n):
+    write_toml(5)
+    t = open(work + "/clea.toml").read()
+    open(work + "/clea.toml", "w").write(t.replace("min_release_age_days = 5\n", f"min_release_age_days = 5\nmax_minors_behind = {n}\n", 1))
+rc, st_off, rep_off, *_ = scan()
+check("scan: without max_minors_behind the policy carries no such key and the report no such section",
+      "max_minors_behind" not in st_off["policy"] and "minor release" not in rep_off)
+with_minors(1)
+rc, st_on, rep_on, *_ = scan()
+check("scan: max_minors_behind is recorded in the state when set", rc == 0 and st_on["policy"].get("max_minors_behind") == 1)
+for bad in ("-1", '"2"', "true", "1.5", str(clea.MAX_MINORS_BEHIND + 1)):
+    with_minors(bad)
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+        rc = clea.main(["--root", work, "scan", "--state", work + "/x.json"])
+    check(f"scan: max_minors_behind = {bad} is refused, naming the key", rc == 1 and "max_minors_behind" in err.getvalue())
+write_toml(5)
+mb = clea.minors_behind
+check("minors_behind: same major counts minors, patch releases do not count",
+      mb("1.15.3", "1.15.9") == 0 and mb("v1.15.3", "v1.21.2") == 6 and mb("1.24.2", "1.26.0") == 2)
+check("minors_behind: a newer major is unbounded, an older or equal one is 0",
+      mb("1.9.0", "2.0.0") >= 10 ** 6 and mb("2.0.0", "1.9.0") == 0 and mb("3.4.5", "3.4.5") == 0)
+check("minors_behind: a sha, a date or a bare number cannot be measured (None, never 0)",
+      mb("abc1234", "1.2.3") is None and mb("1.2.3", "latest") is None and mb("7", "8") is None)
+lag_state = lambda n, *deps: dict(state(*deps), policy={"min_release_age_days": 7, **({"max_minors_behind": n} if n is not None else {})})
+d_far = dep("a/far", current="1.15.3", latest="1.21.2", released_at=ago(days=2))
+d_near = dep("a/near", current="1.15.3", latest="1.17.0")
+d_major = dep("a/major", current="1.9.0", latest="2.0.0")
+d_sha = dep("a/sha", current="abc1234", latest="1.2.3")
+check("lagging: more than the limit is listed, exactly the limit is not, a new major always is",
+      [d["dep"] for d in clea.lagging(lag_state(2, d_far, d_near, d_major))[1]] == ["a/far", "a/major"]
+      and [d["dep"] for d in clea.lagging(lag_state(1, d_far, d_near, d_major))[1]] == ["a/far", "a/near", "a/major"])
+check("lagging: off when unset or 0, and an invalid value is off rather than a crash",
+      all(clea.lagging(lag_state(n, d_far, d_major))[1] == [] for n in (None, 0, -3, True, "2")))
+check("lagging: a pin that is not behind, or one that cannot be measured, is not listed",
+      clea.lagging(lag_state(2, d_sha, dict(d_far, behind=False)))[1] == [])
+check("report: the section names the dependency, the lag and the limit; a young release does not hide it",
+      all(t in clea.render_report(lag_state(2, d_far, d_major)) for t in
+          ("## Behind by more than 2 minor release(s)", "`a/far`", "6 minors", "a newer major")))
+check("report: no section when nothing is that far behind, or the rule is off",
+      "minor release(s)" not in clea.render_report(lag_state(2, d_near))
+      and "minor release(s)" not in clea.render_report(lag_state(None, d_far)))
+
 # --- Renovate and Cléa read one number ---------------------------------------
 import tomllib  # the file itself, not load_config: a deleted knob must not hide behind the default
 def renovate_days(cfg):

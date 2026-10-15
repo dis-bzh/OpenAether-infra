@@ -8,6 +8,8 @@
 # Usage:
 #   ./cluster-security-tests.sh
 #   KUBECONFIG=/path/to/kubeconfig ./cluster-security-tests.sh
+#   OA_ENVIRONMENT=prod ./cluster-security-tests.sh      # the OpenBao bootstrap checks (4.6, 4.7) are strict on prod
+#   OA_ESCROW_ANNOTATION_CHECK=1 ./cluster-security-tests.sh   # also require the seal-key escrow record (4.7: annotation, hash of the live key, two holders)
 # ══════════════════════════════════════════════════════════════════════════════
 
 set -euo pipefail
@@ -160,6 +162,23 @@ elif [ "$NS_WITH_CNP" -ge 3 ]; then
   pass "1.7 Foundation out of mesh: $NS_WITH_CNP/6 namespaces with CNP (partial)"
 else
   fail "1.7 Foundation out of mesh (Cilium)" "Only $NS_WITH_CNP/6 namespaces with CNP"
+fi
+
+# 1.8 Cilium node-to-node encryption (WireGuard) is ON, in the config and in the running agent.
+# It is the compensating control for in-cluster hops that are not mTLS (Alloy to Loki): a cluster
+# whose agent says "Disabled" carries those hops in clear on the node network.
+WG_CFG=$(kubectl -n kube-system get configmap cilium-config -o jsonpath='{.data.enable-wireguard}' 2>/dev/null || echo "")
+if [ "$WG_CFG" != "true" ]; then
+  fail "1.8 Cilium WireGuard encryption" "cilium-config enable-wireguard='$WG_CFG' (expected true)"
+else
+  WG_STATUS=$(kubectl -n kube-system exec ds/cilium -c cilium-agent -- cilium-dbg status 2>/dev/null | grep -i '^Encryption' || true)
+  if [ -z "$WG_STATUS" ]; then
+    skip "1.8 Cilium WireGuard encryption" "enabled in cilium-config, but the agent status could not be read (exec refused?)"
+  elif grep -qi 'wireguard' <<<"$WG_STATUS"; then
+    pass "1.8 Cilium WireGuard encryption active: $(tr -s ' ' <<<"$WG_STATUS" | cut -c1-60)"
+  else
+    fail "1.8 Cilium WireGuard encryption" "enabled in cilium-config but the agent reports: $WG_STATUS"
+  fi
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -447,6 +466,85 @@ if [ "$LEFTOVER" -eq 0 ]; then
   pass "4.5 No Shamir shares or root token in a Secret of foundation-vault"
 else
   fail "4.5 Unseal shares / root token at rest" "$LEFTOVER of openbao-unseal-keys, openbao-recovery still exist (apps 0.1.0 bootstrap: build a new cluster on apps >= 0.1.1)"
+fi
+
+# 4.6 A production cluster holds no development OpenBao bootstrap. openbao-recovery-dev is the single
+# plaintext recovery share of a cluster created without operator PGP keys; it cannot become a production
+# one. OA_ENVIRONMENT tells the script what it is looking at (unset or dev: reported, not failed).
+OA_ENV="${OA_ENVIRONMENT:-}"
+if kubectl -n foundation-vault get secret openbao-recovery-dev &>/dev/null; then
+  if [ "$OA_ENV" = "prod" ]; then
+    fail "4.6 No development OpenBao bootstrap on prod" "Secret openbao-recovery-dev exists: this cluster's recovery share is in clear; re-initialise it with openbao_recovery_pgp_keys"
+  else
+    skip "4.6 No development OpenBao bootstrap on prod" "development bootstrap (openbao-recovery-dev); strict only with OA_ENVIRONMENT=prod"
+  fi
+elif kubectl -n foundation-vault get secret openbao-recovery-shares &>/dev/null; then
+  pass "4.6 OpenBao recovery shares are the PGP-encrypted ones (no openbao-recovery-dev)"
+else
+  skip "4.6 No development OpenBao bootstrap on prod" "no OpenBao recovery Secret found (not bootstrapped, or apps < 0.2.0)"
+fi
+
+# 4.7 The seal key leaves a record that it was escrowed, and the record is of THIS key. Losing it loses every OpenBao
+# secret and nothing else can tell whether the operator did the Day-0 step. The annotation and the ConfigMap
+# openbao-escrow-ack are written by that step (`task escrow`, or the apps README Day 0, step 5); until it exists in your apps
+# ref the check is opt-in, and it never applies to a dev bootstrap. The apps CronJob cannot compare the hash (it never
+# reads the key); this check can, and so catches an escrow of a key that was rotated since. The key is hashed in a pipe, never printed.
+if [ "${OA_ESCROW_ANNOTATION_CHECK:-}" != "1" ]; then
+  skip "4.7 Seal-key escrow recorded" "opt-in (OA_ESCROW_ANNOTATION_CHECK=1) until the escrow step that sets openaether.io/escrowed-at is in your apps ref"
+elif [ "$OA_ENV" != "prod" ]; then
+  skip "4.7 Seal-key escrow recorded" "strict only with OA_ENVIRONMENT=prod"
+elif ! kubectl -n foundation-vault get secret openbao-seal-key &>/dev/null; then
+  skip "4.7 Seal-key escrow recorded" "no openbao-seal-key Secret (static seal not in use)"
+else
+  ESCROWED=$(kubectl -n foundation-vault get secret openbao-seal-key -o jsonpath='{.metadata.annotations.openaether\.io/escrowed-at}' 2>/dev/null || echo "")
+  ACK_AT=$(kubectl -n foundation-vault get configmap openbao-escrow-ack -o jsonpath='{.data.escrowed-at}' 2>/dev/null || echo "")
+  ACK_SHA=$(kubectl -n foundation-vault get configmap openbao-escrow-ack -o jsonpath='{.data.seal-key-sha256}' 2>/dev/null || echo "")
+  ACK_N=$(kubectl -n foundation-vault get configmap openbao-escrow-ack -o jsonpath='{.data.holders}' 2>/dev/null || echo "")
+  SEAL_B64=$(kubectl -n foundation-vault get secret openbao-seal-key -o jsonpath='{.data.key}' 2>/dev/null || echo "")
+  LIVE_SHA=""; [ -z "$SEAL_B64" ] || LIVE_SHA=$(printf '%s' "$SEAL_B64" | base64 -d 2>/dev/null | sha256sum | cut -d' ' -f1)
+  ACK_AGE=$(python3 -c 'import datetime,sys
+try: print((datetime.date.today() - datetime.date.fromisoformat(sys.argv[1])).days)
+except Exception: print("x")' "$ACK_AT" 2>/dev/null || echo x)
+  if [ -z "$ESCROWED" ]; then
+    fail "4.7 Seal-key escrow recorded" "openbao-seal-key has no openaether.io/escrowed-at annotation: escrow it (task escrow, docs/admin-access.md section 1) and attest it"
+  elif [ -z "$ACK_AT" ]; then
+    fail "4.7 Seal-key escrow recorded" "annotated, but there is no ConfigMap openbao-escrow-ack: the hash and the custodians are not recorded (task escrow -- attest)"
+  elif [ -z "$LIVE_SHA" ]; then
+    fail "4.7 Seal-key escrow recorded" "cannot read the live seal key to compare it with the attestation (RBAC on Secrets?)"
+  elif [ "$ACK_SHA" != "$LIVE_SHA" ]; then
+    fail "4.7 Seal-key escrow recorded" "the attestation names another key than the live one (seal key rotated since?): escrow the new key and attest it again (task escrow)"
+  elif ! [[ "$ACK_N" =~ ^[0-9]+$ ]] || [ "$ACK_N" -lt 2 ]; then
+    fail "4.7 Seal-key escrow recorded" "the attestation names '$ACK_N' holder(s): an escrow needs at least two custodians"
+  elif ! [[ "$ACK_AGE" =~ ^[0-9]+$ ]] || [ "$ACK_AGE" -gt 400 ]; then
+    fail "4.7 Seal-key escrow recorded" "the attestation is $ACK_AGE days old or undated (limit 400): redo the escrow and its proof"
+  else
+    pass "4.7 Seal-key escrow recorded and proven for the live key ($ESCROWED, $ACK_N holders)"
+  fi
+fi
+
+# 4.8 / 4.9 Loki is a log pipeline that a compromised pod can reach: it must not write into the backups bucket
+# (a cluster seeded before infra 0.2.1 does), nor hold the backups' keys. Values are compared as the base64 the
+# API returns and never printed. Shared keys are a skip, not a failure: that is the seed's default without the
+# optional OA_LOKI_S3_* pair, and the pair is the operator's to create.
+LOKI_B=$(kubectl -n services-observability get secret loki-s3-credentials -o jsonpath='{.data.bucket}' 2>/dev/null || true)
+BKP_B=$(kubectl -n foundation-databases get secret backup-restic-env -o jsonpath='{.data.PRIMARY_BUCKET}' 2>/dev/null || true)
+if [ -z "$LOKI_B" ] || [ -z "$BKP_B" ]; then
+  skip "4.8 Loki writes to a bucket of its own" "loki-s3-credentials or backup-restic-env not found (Loki or the backups not deployed, or not seeded yet)"
+  skip "4.9 Loki does not hold the backups' keys" "same"
+elif [ "$LOKI_B" = "$BKP_B" ]; then
+  fail "4.8 Loki writes to a bucket of its own" "loki-s3-credentials names the backups bucket (seeded before infra 0.2.1): replace observability/loki-s3, docs/admin-access.md section 3"
+  skip "4.9 Loki does not hold the backups' keys" "not read: the bucket is the backups' bucket"
+else
+  pass "4.8 Loki writes to a bucket of its own (not the backups bucket)"
+  LOKI_K=$(kubectl -n services-observability get secret loki-s3-credentials -o jsonpath='{.data.accessKey}' 2>/dev/null || true)
+  BKP_K=$(kubectl -n foundation-databases get secret backup-restic-env -o jsonpath='{.data.PRIMARY_ACCESS_KEY}' 2>/dev/null || true)
+  if [ -z "$LOKI_K" ] || [ -z "$BKP_K" ]; then
+    skip "4.9 Loki does not hold the backups' keys" "an access key could not be read"
+  elif [ "$LOKI_K" = "$BKP_K" ]; then
+    skip "4.9 Loki does not hold the backups' keys" "same key pair: the separate bucket protects against a mistake in Loki, not a compromised Loki; give it OA_LOKI_S3_* (docs/backup-policy.md section 4)"
+  else
+    pass "4.9 Loki does not hold the backups' keys"
+  fi
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════

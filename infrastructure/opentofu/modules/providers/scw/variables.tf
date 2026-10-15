@@ -104,6 +104,37 @@ variable "bastion_ssh_ca_principals" {
   default     = ""
 }
 
+# Opt-in OS baseline of the bastion (see cluster/variables.tf). {} keeps the cloud-init byte for byte as before.
+variable "bastion_baseline" {
+  description = "Bastion hardening baseline: enabled, audit_logging, restrict_ssh_source, time_servers, revoked_keys. Default = nothing changes; enabled changes user_data (replaces the bastion on OVH and Outscale)."
+  type = object({
+    enabled             = optional(bool, false)
+    audit_logging       = optional(bool, true)
+    restrict_ssh_source = optional(bool, false)
+    time_servers        = optional(list(string), [])
+    revoked_keys        = optional(list(string), [])
+  })
+  default = {}
+}
+
+# Per-person bastion accounts (see cluster/variables.tf). {} adds no user: the cloud-init stays byte for byte as before.
+variable "bastion_admins" {
+  description = "Named operators, one unix account each in bastion-admins with its own authorized_keys file. Default {} = only the shared bastion account."
+  type        = map(object({ ssh_keys = list(string) }))
+  default     = {}
+}
+
+# Internet egress of the bastion (see cluster/variables.tf). "legacy" keeps the 80/443 rules and the wide private rule.
+variable "bastion_internet_egress" {
+  description = "mode legacy (default: nothing changes) or closed (no 80/443, TCP 6443/50000 to the cluster subnet only, no 8200); dns_servers and ntp_servers pin DNS and NTP to those addresses when closed."
+  type = object({
+    mode        = optional(string, "legacy")
+    dns_servers = optional(list(string), [])
+    ntp_servers = optional(list(string), [])
+  })
+  default = {}
+}
+
 variable "bastion_image_id" {
   description = "Image ID for the bastion host"
   type        = string
@@ -171,4 +202,10 @@ variable "app_lb_node_ports" {
     http  = 30080
     https = 30443
   }
+}
+
+variable "app_lb_allowed_cidrs" {
+  description = "Source CIDRs allowed to reach the application LB (80/443). Empty = no filter (the historical behaviour). Non-empty = only these, plus the cluster's own egress address; see the root variable of the same name."
+  type        = list(string)
+  default     = []
 }
