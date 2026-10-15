@@ -99,9 +99,9 @@ A copy that cannot be read after the incident is not a backup; a copy the attack
    `aws s3 ls` on the artifact buckets (endpoint and the holder's credentials), `restic snapshots` on the two repositories. Note the dates.
 2. **Copy the replica out** (the other provider's bucket, read with its own key) to media you control, before you change anything.
 3. **Replace the object-store keys** (K7): create a new pair at the provider, put it in `.env.sh` and in OpenBao (`secret/backup/s3-primary`, `s3-replica`), confirm a backup run succeeds,
-   **then** revoke the old pair. Order matters: revoke last, or backups stop. The Loki pair too (`OA_LOKI_S3_*`).
+   **then** revoke the old pair. Order matters: revoke last, or backups stop. The dedicated pairs too (`OA_BACKUP_S3_*`, `OA_BACKUP_REPLICA_S3_*`, `OA_LOKI_S3_*`), the same way: new pair, `bao_admin kv put` over the entry, ExternalSecret refresh, then revoke.
 4. If the leaked thing is the **restic password**, a copy of the bucket already has the data; see the rotation table (new repository).
-5. No object lock is configured. Turning on versioning or an object-lock retention at the provider before the next incident is a decision recorded in `backup-policy.md` ("What is not done").
+5. Object lock and versioning are off unless `backup_immutability` was set (`backup-policy.md`, section 3). If they were not, a key the attacker held could delete the copies; turn it on before the next incident, and **read the buckets back**: `scripts/ops/s3-isolation-check.sh <tfvars>`. Turning it on during an incident does not protect what is already deleted.
 
 ## 6. Contain
 

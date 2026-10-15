@@ -210,6 +210,7 @@ ANSSI hardening work, not released yet. **Nothing here is a claim of compliance 
   `test-s3-isolation.sh` (23, on the fake store). **Not proven**: that any provider lets a key be limited to one bucket, or to everything but DeleteObjectVersion (the policy is the operator's to write and is not shipped:
   `docs/backup-policy.md` lists the actions each identity needs), or that restic prune, Barman, Longhorn and Loki run with such a key. It does **not** move `forget --prune` out of the cluster (that is apps and needs restic locking
   checked against a reduced key), does not rotate a seeded key (create-only: `bao_admin kv put`, documented), and does not touch an existing cluster's entries.
+  Documented in `backup-policy.md`/`.fr.md` (section 3 the modes and their limits, new section 4 the identity-to-bucket table and the rotation order), `admin-access`, `incident-response` (step 5 no longer says "no object lock is configured" without the opt-in), `key-management`, `security-architecture`, `audit-register`, `.env.example` and the teardown message of `fleet-down.sh` (a locked bucket cannot be emptied).
 
 ## [0.2.1] — 2026-10-15
 

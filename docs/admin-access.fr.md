@@ -72,6 +72,7 @@ et il lit `OA_SLACK_WEBHOOK_URL` / `OA_DEADMANSSWITCH_URL` (des placeholders son
 avec un avertissement, s'ils manquent). Les buckets doivent **préexister** (restic ne les
 crée pas), sur des providers différents en production : le bucket des backups applicatifs
 `s3-<projet>-<provider>-backups-<env>` et son jumeau `-backup` ; le script annonce le premier.
+Avec `backup_immutability` dans le tfvars, `ensure-buckets.sh` crée aussi cette paire (et versionne ou verrouille les buckets : `backup-policy.fr.md`, section 3).
 
 Il est **create-only** : chaque secret est écrit avec `cas=0`, donc un re-run ne peut en
 écraser aucun (une valeur changée n'échoue pas, elle casse ce qui tient l'ancienne). Son
@@ -101,6 +102,11 @@ primaire, sauf si tu exportes **les deux** `OA_LOKI_S3_ACCESS_KEY_ID` et `OA_LOK
 bucket et rien d'autre, créée avec les outils de ton fournisseur (ses clés S3 sont par défaut valables pour tout le compte). Avec les
 clés partagées, le bucket séparé protège les sauvegardes d'une erreur de Loki, **pas** d'un Loki compromis, et le script le dit.
 Un cluster semé avant ce changement garde une entrée Loki qui pointe sur le bucket des sauvegardes (create-only).
+
+**Les sauvegardes peuvent aussi avoir leurs propres paires.** Exporter **les deux** `OA_BACKUP_S3_ACCESS_KEY_ID` / `OA_BACKUP_S3_SECRET_ACCESS_KEY` (pour `backup/s3-primary`) et, pour le
+jumeau `-backup` sur le store du réplica, `OA_BACKUP_REPLICA_S3_ACCESS_KEY_ID` / `OA_BACKUP_REPLICA_S3_SECRET_ACCESS_KEY`, chacune limitée à son bucket (la forme : `backup-policy.fr.md`,
+section 4). Sans elles, le cluster détient les clés de l'opérateur, qui ouvrent aussi les buckets d'état, d'artefacts et de journaux, et le script le dit. `scripts/ops/s3-isolation-check.sh <tfvars>`,
+avec les mêmes variables exportées, montre qui ouvre quoi. Pour changer une entrée qui existe, la poser par `bao_admin kv put`, puis relancer l'ExternalSecret.
 
 Les clusters semés avant ce changement gardent ce qu'ils ont (create-only) : si
 `backup/s3-replica` porte les clés du primaire pour un réplica chez un autre cloud (#296),

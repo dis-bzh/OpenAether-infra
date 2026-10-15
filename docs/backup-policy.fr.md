@@ -37,7 +37,7 @@ chronométrée depuis un compte vide ; la somme des morceaux mesurés ci-dessus 
 | Donnée | Pourquoi |
 |---|---|
 | Métriques (VictoriaMetrics, local-path, 30 jours) | Télémétrie reproductible ; sa perte coûte de l'historique, pas du service |
-| Journaux (chunks Loki) | Bucket propre `s3-<project>-<provider>-logs-<env>`, sans réplica, rétention d'un an chez Loki : un **stockage de journaux, pas une sauvegarde** |
+| Journaux (chunks Loki) | Bucket propre `s3-<project>-<provider>-logs-<env>`, sans réplica, rétention d'un an chez Loki : un **stockage de journaux, pas une sauvegarde**. Sa propre paire de clés si vous en donnez une (section 4), versionné ou verrouillé avec `backup_immutability` |
 | Volumes `local-path` et silences Alertmanager | Éphémères par décision ; la configuration d'Alertmanager vient de Git, les silences sont perdus |
 | Volumes Longhorn hors du groupe de sauvegarde | Aucun composant de la plateforme n'utilise Longhorn aujourd'hui |
 | Disques des nœuds et image Talos | Les nœuds se remplacent, ils ne se restaurent pas ; l'image est reconstruite depuis l'Image Factory (le verrou sha256 épingle ce qu'elle doit être) |
@@ -46,26 +46,58 @@ chronométrée depuis un compte vide ; la somme des morceaux mesurés ci-dessus 
 
 ## 3. Destruction, expiration et mise hors service
 
-**Il n'y a pas d'expiration automatique au-delà des nombres ci-dessus.** Aucun bucket n'a de versionnement, de règle de cycle de vie ni de verrou d'objet posé par ce dépôt : un
-objet sorti du nombre de rétention est supprimé, mais une **version** de lui, si le bucket du provider est versionné, ne l'est pas ; et un attaquant qui détient K7 peut tout supprimer.
-C'est une lacune connue, consignée ici ; activer le versionnement et un verrou de rétention est une décision par provider (support et coût diffèrent, rien de vérifié ici) et n'est pas prise.
+**Il n'y a pas d'expiration automatique au-delà des nombres ci-dessus, sauf si `backup_immutability` est positionné.** Par défaut (`off`), aucun bucket n'a de versionnement, de règle de cycle de vie ni de verrou d'objet posé par ce dépôt : un
+objet sorti du nombre de rétention est supprimé, mais une **version** de lui, si le bucket du provider est versionné, ne l'est pas ; et un attaquant qui détient K7 peut tout supprimer. Activer la protection est optionnel
+et **non vérifié chez aucun provider** (support et coût diffèrent ; la liste de contrôle de labo du travail de durcissement dit quoi essayer) :
+
+| `backup_immutability` | Ce que `ensure-buckets.sh` pose, puis relit | Ce que ça donne | Ce que ça ne donne pas |
+|---|---|---|---|
+| `off` (défaut) | rien | rien ne change sur un cluster déployé | une clé S3 volée supprime les copies |
+| `versioned` | versionnement sur sept buckets ; une règle `oa-noncurrent-expiry` fait expirer les versions non courantes après `backup_retention_days` (60) | une suppression ou un prune restic par une clé du cluster laisse une version derrière elle | une clé autorisée à faire `DeleteObjectVersion`, `PutBucketVersioning` ou `PutLifecycleConfiguration` le défait : c'est la politique de clés de la section 4 |
+| `governance` | comme `versioned`, et un verrou d'objet avec une rétention par défaut de `backup_retention_days` sur les cinq buckets qui portent des copies ou des journaux, créés avec | une clé ordinaire ne peut pas retirer une version avant la fin de la rétention | une clé autorisée au contournement le peut ; le bucket ne peut pas être vidé entre-temps |
+| `compliance` | comme `governance` | personne ne peut retirer une version verrouillée avant la fin de la rétention, le propriétaire du compte compris | ça ne se défait pas non plus : le bucket ne peut être ni vidé ni supprimé d'ici là, et le coût des versions est dû |
+
+- **Quels buckets.** Verrouillés (créés avec le verrou) : les sauvegardes applicatives et leur jumeau `-backup`, les réplicas d'état et d'artefacts, les journaux de Loki. Seulement versionnés : les primaires d'état et d'artefacts, qu'écrit tofu.
+  La paire des sauvegardes applicatives, jusqu'ici créée à la main, est créée par le script dans tout mode sauf `off`. Le verrou d'objet doit en général être posé à la **création** du bucket : sur un bucket qui existe sans lui,
+  l'appel est refusé, signalé, et le bucket n'est ni supprimé ni remplacé (en créer un nouveau, ou se contenter de `versioned` ; changer `bucket_suffix` les renomme tous).
+- **Règle pour la rétention.** Loki supprime ses chunks à 365 jours (apps) et une suppression sous versionnement laisse un marqueur et une version pendant `backup_retention_days` de plus ; le prune restic fait de même pour les
+  dépôts. Le stockage grossit d'environ le renouvellement de ce nombre de jours. Un journal ou une sauvegarde supprimés restent donc physiquement présents pendant la rétention : ça ne convient pas à une donnée qui doit disparaître sur-le-champ.
+- **Une restauration depuis les versions n'est pas répétée.** Après un prune malveillant, le dépôt se récupère en restaurant les versions précédentes de ses objets, ce qui n'est pas une restauration restic et n'a pas été exécuté.
 
 - **Expiration** : les générations et snapshots sont élagués par les scripts. Après un **changement de clé**, supprimer soi-même les anciens objets
   (`key-management.fr.md`, section 4) : l'ancienne passphrase ouvre tout ce qui a été écrit sous elle.
 - **Remplacer un dépôt ou un bucket** (un mot de passe restic fuité, un provider quitté) : confirmer que l'autre copie se restaure, révoquer la clé d'accès chez le provider, supprimer **chaque version
   d'objet et marqueur de suppression**, supprimer le bucket, et vérifier chez le provider qu'il a disparu. Un snapshot qu'on ne sait plus lire n'est pas effacé ; seule la suppression de l'objet l'efface.
 - **Mettre un cluster définitivement hors service** : `cluster-down` laisse exprès les buckets et l'image. Après la dernière restauration dont vous pourriez avoir besoin : vider (versions comprises) et supprimer les quatre
-  buckets du cluster chez les deux providers et le bucket de journaux, supprimer l'image Talos et ses snapshots (`purge-orphans`, la rétention d'images), révoquer K7 et K8,
+  buckets du cluster chez les deux providers et le bucket de journaux (un bucket verrouillé ne se vide pas avant la fin de sa rétention), supprimer l'image Talos et ses snapshots (`purge-orphans`, la rétention d'images), révoquer K7 et K8,
   détruire K5 et K6, et retirer les fichiers du cluster de la machine de l'opérateur et des secrets CI `sandbox`. Lister ce qui reste en interrogeant le provider, pas le fichier d'état.
 - **Supports** : un disque, un portable ou une clé USB qui a contenu une clé s'efface en le détruisant ou en détruisant sa clé de volume, pas par `shred` (`key-management.fr.md`, section 4).
 
-## 4. Ce qui n'est pas fait
+## 4. Qui peut ouvrir quel bucket
 
-- Ni verrou d'objet ni versionnement (ci-dessus) : une clé S3 volée peut supprimer des sauvegardes.
+Une identité par store, limitée à son bucket par l'**opérateur** (les clés S3 des providers couvrent tout le compte par défaut, et ce dépôt ne fournit aucune politique : la forme ci-dessous est ce que le contrôle attend, pas
+quelque chose de vérifié chez Scaleway, OVH ou Outscale). Sans les paires, le cluster tourne avec les clés de l'opérateur, qui ouvrent tous les buckets du cluster et peuvent y supprimer ; `seed-openbao.sh` le dit.
+
+| Identité (variable du seed, chemin OpenBao) | Peut ouvrir | A besoin de | Doit être refusé |
+|---|---|---|---|
+| Opérateur K7 (`<PU>_AWS_*`, `<PU>_BACKUP_AWS_*` ; jamais dans le cluster) | tous les buckets de son store | tout | n/a |
+| Sauvegardes applicatives, primaire (`OA_BACKUP_S3_*`, `backup/s3-primary` : restic, Longhorn, CNPG) | `s3-<project>-<provider>-backups-<env>` | list, get, put, `DeleteObject`, dépôt multipart et son abandon | `DeleteObjectVersion`, versionnement, cycle de vie, verrou d'objet ou rétention, suppression du bucket, tout autre bucket |
+| Sauvegardes applicatives, réplica (`OA_BACKUP_REPLICA_S3_*`, `backup/s3-replica`) | le même nom avec `-backup`, sur le store du réplica | idem | idem |
+| Loki (`OA_LOKI_S3_*`, `observability/loki-s3`) | `s3-<project>-<provider>-logs-<env>` | idem | idem, et le bucket de sauvegardes |
+
+`DeleteObject` reste autorisé : sur un bucket versionné il écrit un marqueur, et restic, Barman, Longhorn et Loki suppriment dans leur travail normal (non essayé avec une clé sans `DeleteObjectVersion`).
+`scripts/ops/s3-isolation-check.sh <tfvars>` lit, avec les paires dans l'environnement, quelle identité liste quel bucket, si chaque paire dédiée se voit refuser `DeleteObjectVersion` (une version qui n'existe pas est nommée :
+rien n'est supprimé), et si les buckets portent le `backup_immutability` choisi. Sortie 0 : tenu, 1 : non tenu, 2 : aucune paire dédiée dans l'environnement. Le seed est en création seule : pour **renouveler** une paire, créer la nouvelle chez le provider, la poser par
+`bao_admin kv put` sur l'entrée (`admin-access.fr.md`, section 3), laisser l'ExternalSecret se rafraîchir, confirmer une sauvegarde ou un flush de journaux, puis révoquer l'ancienne.
+
+## 5. Ce qui n'est pas fait
+
+- Le verrou d'objet et le versionnement sont optionnels, et non vérifiés chez aucun provider ; le défaut laisse une clé S3 volée capable de supprimer des sauvegardes. Aucune politique pour les paires limitées n'est fournie.
+- Aucune copie que les clés du cluster ne peuvent jamais atteindre : une synchronisation côté opérateur vers un troisième bucket verrouillé n'a pas été construite, et `forget --prune` tourne encore dans le cluster, avec une clé qui doit garder `DeleteObject`. Les journaux n'ont pas de copie chez un second provider.
 - Pas de test de restauration planifié de la couche infrastructure ; les tests mensuels de la couche applicative lisent des dumps et déballent des snapshots mais ne chargent rien dans une base vivante.
 - Le snapshot etcd, la réplication de l'état et l'extraction des journaux du bastion dépendent de l'opérateur qui pense à les planifier. `task check-alerts` et les alertes de sauvegarde apps ne surveillent que la couche applicative.
 - Le RPO et le RTO sont des objectifs. Le premier exercice chronométré (`disaster-recovery.fr.md`, section 5) les transforme en chiffres.
 
-## 5. Revue
+## 6. Revue
 
 Relire cette page à chaque changement d'un script de sauvegarde, d'un bucket, d'un calendrier ou d'un nombre de rétention, après chaque restauration (pour corriger les objectifs) et au moins une fois par an.

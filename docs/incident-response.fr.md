@@ -101,9 +101,9 @@ Une copie illisible après l'incident n'est pas une sauvegarde ; une copie que l
    `aws s3 ls` sur les buckets d'artefacts (endpoint et identifiants du détenteur), `restic snapshots` sur les deux dépôts. Noter les dates.
 2. **Copier le réplica ailleurs** (le bucket de l'autre provider, lu avec sa propre clé) sur un support que vous maîtrisez, avant de rien changer.
 3. **Remplacer les clés de stockage objet** (K7) : créer une nouvelle paire chez le provider, la mettre dans `.env.sh` et dans OpenBao (`secret/backup/s3-primary`, `s3-replica`), confirmer qu'une sauvegarde passe,
-   **puis** révoquer l'ancienne paire. L'ordre compte : révoquer en dernier, sinon les sauvegardes s'arrêtent. La paire Loki aussi (`OA_LOKI_S3_*`).
+   **puis** révoquer l'ancienne paire. L'ordre compte : révoquer en dernier, sinon les sauvegardes s'arrêtent. Les paires dédiées aussi (`OA_BACKUP_S3_*`, `OA_BACKUP_REPLICA_S3_*`, `OA_LOKI_S3_*`), de la même façon : nouvelle paire, `bao_admin kv put` sur l'entrée, rafraîchissement de l'ExternalSecret, puis révocation.
 4. Si ce qui a fuité est le **mot de passe restic**, une copie du bucket a déjà les données ; voir le tableau de rotation (nouveau dépôt).
-5. Aucun verrou d'objet n'est configuré. Activer le versionnement ou une rétention verrouillée chez le provider avant le prochain incident est une décision consignée dans `backup-policy.fr.md` (« Ce qui n'est pas fait »).
+5. Le verrou d'objet et le versionnement sont éteints sauf si `backup_immutability` a été positionné (`backup-policy.fr.md`, section 3). Sinon, une clé que l'attaquant détenait pouvait supprimer les copies ; l'activer avant le prochain incident, et **relire les buckets** : `scripts/ops/s3-isolation-check.sh <tfvars>`. L'activer pendant un incident ne protège pas ce qui est déjà supprimé.
 
 ## 6. Contenir
 

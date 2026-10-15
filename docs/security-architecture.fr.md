@@ -81,7 +81,7 @@ L'audit a trouvé deux affirmations que le code contredit ; les deux sont corrig
 | Opérateur unique : pas de séparation des tâches, pas de second dépositaire | Le projet a un mainteneur | `key-management.fr.md`, section 3 |
 | Secrets machine livrés par l'API de maintenance de Talos | Conception amont | `first-cluster.fr.md`, « Risque résiduel » |
 | Compte SSH de secours partagé à côté des nominatifs | Automatisation et secours | `key-management.fr.md` |
-| Ni verrou d'objet ni versionnement sur les buckets | Non décidé par provider | `backup-policy.fr.md` |
+| Verrou d'objet et versionnement des buckets optionnels (`backup_immutability`), non vérifiés chez aucun provider ; les clés S3 du cluster sont celles de l'opérateur sauf si des paires dédiées sont données | Le support des providers et la politique de clés ne sont pas décidés | `backup-policy.fr.md`, sections 3 et 4 |
 
 ## 6. Revue
 

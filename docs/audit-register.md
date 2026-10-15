@@ -40,7 +40,7 @@ One row per action that is **decided**, with the audit id it answers when there 
 | Passphrase hygiene for state, artifacts, snapshots | PG-083, PA-079 | done | mocked | `first-cluster.md` |
 | Security documentation set: keys, incidents, backup, recovery, network, architecture, hardening, threat model, components, this register | DP-06/07/17, TLS-12/19/20, F-BKP-07/10/16, LOG-17, ADM/F11/F13, NET/F07/F09, OSN/F13 (stage 0)/F18, SCC/F11 | **done (documents)**: nothing in them was run on a cluster | read against the code; flow tables checked by a test | this set |
 | A first disaster-recovery drill and a first incident drill | F-BKP-16, LOG-17 | **open** | n/a | `LAB-CHECKLIST` of the hardening work (B13) |
-| Object lock or versioning on the state, artifact and snapshot buckets | F-BKP-10 | **open**, decision per provider | n/a | `backup-policy.md` |
+| Object lock or versioning on the state, artifact, snapshot, backup and log buckets; a bucket and a key pair of their own for each store | F-BKP-10, F-BKP-01, F-BKP-04, LOG-07, F05, DP-05 | **partly done, opt-in**: `backup_immutability` and the `OA_*_S3_*` pairs exist; no provider verified, no key policy shipped, no operator-side locked copy | mocked/static | `backup-policy.md` sections 3 and 4 |
 | Named, short-lived Kubernetes identities in place of the shared `system:masters` kubeconfig | OSN/F20 | **open** | n/a | `security-architecture.md` |
 | Node network filtering: explicit inter-node lists, then an opt-in host firewall | OSN/F13 | **open** (stage 0 is `network.md`) | n/a | `network.md` section 6 |
 | Talos node baseline: sysctls, kernel arguments, SELinux, secure boot | OSN/F01, F02, F03 | **open** | n/a | `hardening.md` section 3 |

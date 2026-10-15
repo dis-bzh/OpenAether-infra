@@ -81,7 +81,7 @@ The audit found two statements that the code contradicts; both are fixed in the 
 | Single operator: no separation of duties, no second custodian | The project has one maintainer | `key-management.md`, section 3 |
 | Machine secrets delivered over the Talos maintenance API | Upstream design | `first-cluster.md`, "Residual risk" |
 | Shared break-glass SSH account beside named ones | Automation and break-glass | `key-management.md` |
-| No object lock, no versioning on the buckets | Not decided per provider | `backup-policy.md` |
+| Object lock and versioning on the buckets are opt-in (`backup_immutability`), unverified on any provider; the in-cluster S3 keys are the operator's unless dedicated pairs are given | Provider support and the key policy are not decided | `backup-policy.md`, sections 3 and 4 |
 
 ## 6. Review
 

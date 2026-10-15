@@ -69,6 +69,7 @@ reads `OA_SLACK_WEBHOOK_URL` / `OA_DEADMANSSWITCH_URL` (placeholders are seeded,
 warning, when unset). The buckets must **pre-exist** (restic does not create them), on
 different providers in production: the application backups bucket
 `s3-<project>-<provider>-backups-<env>` and its `-backup` twin; the script announces the first.
+With `backup_immutability` set in the tfvars, `ensure-buckets.sh` creates that pair too (and versions or locks the buckets: `backup-policy.md`, section 3).
 
 It is **create-only**: every secret is written with `cas=0`, so a re-run cannot overwrite
 one (a rotated value does not fail, it breaks whatever holds the old one). Its identity is
@@ -97,6 +98,11 @@ keys unless you export **both** `OA_LOKI_S3_ACCESS_KEY_ID` and `OA_LOKI_S3_SECRE
 nothing else, which you create with your provider's own tools (the providers' S3 keys are account-wide by default). With the
 shared keys the separate bucket protects the backups from a mistake in Loki, **not** from a compromised Loki, and the script says
 so. Clusters seeded before this change keep a Loki entry that points at the backups bucket (create-only).
+
+**The backups can have pairs of their own too.** Export **both** of `OA_BACKUP_S3_ACCESS_KEY_ID` / `OA_BACKUP_S3_SECRET_ACCESS_KEY` (for `backup/s3-primary`) and, for the
+`-backup` twin on the replica store, `OA_BACKUP_REPLICA_S3_ACCESS_KEY_ID` / `OA_BACKUP_REPLICA_S3_SECRET_ACCESS_KEY`, each limited to its bucket (the shape: `backup-policy.md`,
+section 4). Unset, the cluster holds the operator's keys, which open the state, artifact and logs buckets too, and the script says so. `scripts/ops/s3-isolation-check.sh <tfvars>`,
+with the same variables exported, shows who opens what. To change an entry that exists, `bao_admin kv put` it over, then nudge the ExternalSecret.
 
 Clusters seeded before this change keep what they have (create-only): if `backup/s3-replica`
 holds the primary's keys for a replica on another cloud (#296), correct it by hand with
