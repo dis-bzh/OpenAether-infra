@@ -127,6 +127,10 @@ infrastructure/opentofu/cluster/.talos-tunnels.pids
 .talos-tunnel-*
 infrastructure/opentofu/.talos-bastion-known-hosts
 infrastructure/opentofu/cluster/.talos-bastion-known-hosts
+# The pinned bastion host key, wherever the script ran from (BASTION_KNOWN_HOSTS, scripts/lib/bastion-hostkey.sh)
+.talos-bastion-known-hosts
+# Pulled bastion logs (scripts/ops/bastion-logs-pull.sh, default directory): account names, source addresses, key fingerprints
+bastion-logs/
 
 # Claude Code session artifacts (local state, not project content)
 # … except the shared SessionStart hook, which has to be versioned so it applies

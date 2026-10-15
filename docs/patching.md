@@ -29,6 +29,11 @@ Components that run on the cluster (Istio, cert-manager, Kyverno, CNPG, Longhorn
 are pinned in `OpenAether-apps`, which carries its own pins and review; this page does
 not cover them.
 
+The bastion's own OS is not pinned: it takes security updates itself (`unattended-upgrades`), or, with
+`bastion_internet_egress = { mode = "closed" }`, none at all, and is **replaced** instead
+([`admin-access.md`](admin-access.md#bastion-identity-host-key-and-internet-egress-opt-in)). In the closed
+mode the 30-day rule above is met by replacing it; nothing schedules that.
+
 ## How a fix is noticed
 
 1. **Renovate `vulnerabilityAlerts`** opens a PR for a pin with a published advisory,

@@ -169,7 +169,8 @@ for the apiserver, an SSH CA or a WireGuard control plane would each need an alw
 host outside every cluster. OpenAether has one operator today, and no restore tested
 end to end on a real cloud yet (#57), so that host would be one more thing to keep
 alive for nothing. The four `bastion.tf` and `admin_ip` stay in the provider contract.
-Revisit with two or more operators, or a stateful service whose restore has been run.
+Revisit with two or more operators, or a stateful service whose restore has been run. (Opt-ins for several operators, an SSH CA
+the bastion trusts and a closed Internet egress came after; none of them operates a CA or makes the bastion ephemeral.)
 
 ⚠️ **The kubeconfig cannot be revoked.** `talosctl kubeconfig` issues a client
 certificate for `O=system:masters`, which bypasses RBAC, and Kubernetes has no
@@ -211,7 +212,7 @@ What it adds, each item named by the ANSSI requirement it addresses (BP-028 is t
 the filtering one; nothing here claims compliance): sysctl (R9, R11, R12 without the ARP options, R14), auditd with execve,
 `/etc`, mount, module and ptrace rules and no `-e 2` (R73), a persistent journald capped at 200 MB / 90 days, `LogLevel VERBOSE`
 and a second sshd drop-in with the directives NT-007 R14/R15/R23 ask for, `authorized_keys.d` owned by root (R50), `/var/tmp`
-noexec (R28), `/boot` 700 (R29), umask 0077 (R36), sudo restricted to its group (R38), no tcpdump/netcat (R58, new VMs only),
+noexec (R28), `/boot` 700 (R29), umask 0077 (R36), sudo restricted to its group and the bastion user out of it (R38), no tcpdump/netcat (R58, new VMs only),
 and in the VM's own nftables: logged drops and ICMP limited to echo-request and fragmentation-needed (NT-006 R3/R6).
 `restrict_ssh_source = true` also limits port 22 to `admin_ip` inside the VM (Proxmox has no security group), but then
 `admin_ip` is part of the user_data: changing it replaces the bastion, and a running one keeps the old list - leave it off where
@@ -224,13 +225,119 @@ either replaces the bastion, as above. Map each key to a person in a file kept n
 prints the fingerprint that the login line `Accepted publickey ... SHA256:<fingerprint>` carries).
 
 The logs die with the VM: `scripts/ops/bastion-logs-pull.sh <ip> bastion <key>` copies the journal (ssh, sudo, nft drops;
-incremental) and the audit log off it, encrypted when `OA_LOGS_PASSPHRASE` is set. It does not upload them. Cloud-side audit
-trails (Scaleway Audit Trail, OVH Activity logs, Outscale CloudTrail) and a Proxmox host's syslog are separate, outside this
-repository, and not exported by anything here.
+incremental) and the audit log off it, encrypted when `OA_LOGS_PASSPHRASE` is set, and with `OA_LOGS_UPLOAD=1` stored in the artifacts bucket of both object stores
+(next section). Cloud-side audit trails and a Proxmox host's syslog are separate and not exported by anything here.
 
 Check a deployed bastion with `BASTION_BASELINE=1 scripts/ops/bastion-harden-check.sh <ip> bastion <key> [<node ip>]`. Before
 spending anything, `task bastion-baseline-check` runs the rendered files on Ubuntu 22.04 and 24.04 in Docker (a real sshd
 login, tunnels through `PermitOpen`, revoked keys, the loaded firewall rules, sysctl names, audit-rule syntax).
+
+### Bastion identity, host key and Internet egress (opt-in)
+
+Four independent opt-ins, all off by default: a cluster that sets none gets the cloud-init byte for byte (hash pinned in
+`test-cluster-checks.sh`). Rung reached: mocked (`task test`, the stub harnesses) and local Docker (`task bastion-identity-check`: a
+real sshd and a real nftables on Ubuntu 22.04 and 24.04). **None of it has run on a cloud image yet.** Like the baseline, each
+one that changes `user_data` replaces the bastion on OVH and Outscale (new host key) and is ignored by a running instance
+elsewhere: apply in a planned window, never during a bootstrap or an upgrade. On Proxmox they reach only the bastion VM
+(`enable_bastion = true`); the default host-as-bastion path is untouched.
+
+**Named operators (`bastion_admins`).** `bastion_ssh_keys` and the shared `bastion` account stay: they are the automation and
+break-glass path (CI, `auto_tunnels`, the `bootstrap-phase2` key). Each entry below is one more unix account in `bastion-admins`
+(no sudo, no password, its own `/etc/ssh/authorized_keys.d/<name>`), so the sshd login line names a person:
+
+```hcl
+bastion_admins = {
+  alice = { ssh_keys = ["sk-ssh-ed25519@openssh.com AAAA… alice-token"] }
+  dave  = { ssh_keys = [] }          # certificate-only: needs bastion_ssh_ca_public_key
+}
+bastion_require_hardware_key = true  # every key in bastion_admins must be sk-*; bastion_ssh_keys is NOT checked
+```
+
+Log in as a person with `SSH_USER=alice task tunnels-up PROVIDER=… KEY=…` (`talos-tunnels.sh` reads `SSH_USER`; the state's
+`bastion_user` stays the shared account, and the single-apply tunnels keep it). `bastion_require_hardware_key` is a plan-time
+check only: it cannot make the shared account hardware-backed (a CI key cannot touch a token), so restrict who holds that key. For
+a PIN on every use, generate the key with `ssh-keygen -O verify-required` and put the option `verify-required` in front of the key
+line (the key validation accepts an options prefix); no FIDO token was available to test that. `scripts/ops/bastion-fingerprints.sh`
+prints `account / fingerprint / type / comment` for every key in the state (`tofu output bastion_access_keys`): `--find SHA256:…`
+answers "whose key was that login". SSH-CA principals: a certificate for a named operator must carry **the account name** as its
+only principal, so it cannot be used as another person (proven on a real sshd).
+
+**Offboarding.** `user_data` is read once, at first boot, so removing a person from the tfvars changes nothing on a running bastion.
+In order of preference:
+
+1. **Short-lived certificates.** Set `bastion_ssh_ca_public_key` (the CA's `.pub`, one line) and give the operators no key
+   (`ssh_keys = []`). Sign for a working day: `ssh-keygen -s <ca> -I alice-$(date +%F) -n alice -V +8h -O permit-port-forwarding alice.pub`
+   (keep `permit-port-forwarding`: without it the login works and every `-L` tunnel is refused). Offboarding is *not signing any more*;
+   the access ends within 8 hours and no bastion has to change. The CA private key is the new crown jewel: keep it offline or in
+   OpenBao's SSH secrets engine with the same 8 h maximum TTL. Nothing here operates the CA.
+2. **Replace the bastion** (`tofu apply -replace=<address>`, see the patching paragraph) with the person removed from the map and, with
+   `bastion_baseline`, their key listed in `revoked_keys`. Measured: a key in `revoked_keys` is refused AND so is every certificate
+   issued for that key; revoking one person leaves the others in.
+3. A compromised operator key is the second case plus a look at `bastion-logs-pull.sh` output for what it did.
+
+The drill run offline (`task bastion-identity-check`): a key in `revoked_keys` is refused while the other operators still log in, and an
+expired 8 h certificate (`-V -2h:-1h`) is refused. On a real bastion it has not been run.
+
+**Bastion host key (`OA_BASTION_PIN_HOSTKEY`).** The host key is born on the VM, so it cannot be known before the first contact.
+Private host keys are deliberately **not** injected through cloud-init (they would sit in the state and the user_data). What the
+scripts can do is keep the key once seen and refuse any other:
+
+```bash
+OA_BASTION_PIN_HOSTKEY=1      task tunnels-up PROVIDER=… KEY=…   # first contact accepted ONCE, its fingerprint printed; later runs strict
+OA_BASTION_PIN_HOSTKEY=verify OA_BASTION_HOSTKEY_FP=SHA256:… task tunnels-up …       # a first contact is refused unless this fingerprint matches
+```
+
+Read the fingerprint out of band: cloud-init prints the host keys of the new VM (a `-----BEGIN SSH HOST KEY FINGERPRINTS-----`
+block) to the instance console, which a provider shows as a console or serial log where it has one (whether each of the four does,
+and when in the boot it appears, is a lab check). The key is kept in `.talos-bastion-known-hosts` (gitignored), one entry per
+bastion address, written only after a successful login, so after cloud-init is done. A replaced bastion that **reuses its public
+address** (the usual case: the IP is its own resource) presents a new key and is **refused**; once the new fingerprint is checked,
+`OA_BASTION_FORGET=1 OA_BASTION_HOSTKEY_FP=SHA256:… task tunnels-up …` re-pins it. Without the variable nothing changes: the file is
+emptied at every run and the first key accepted, as before. `bastion-harden-check.sh` and `bastion-logs-pull.sh` no longer take a key
+blindly either (the check used `StrictHostKeyChecking=no`): they use the pinned file when it holds the bastion and otherwise print the
+fingerprint, and `OA_BASTION_HOSTKEY_FP` makes the check fail on a mismatch. A host *certificate* from the SSH CA would remove the
+first-contact step; it is not done.
+
+**Closing the Internet egress (`bastion_internet_egress`).** The bastion's nftables and security group allow 80/443 to any address
+(`unattended-upgrades` needed them). Opt in:
+
+```hcl
+bastion_internet_egress = {
+  mode        = "closed"
+  dns_servers = ["<provider resolver IP>"]   # optional: DNS only to these; empty = DNS stays open to any address
+  ntp_servers = ["<NTP server IP>"]          # optional, addresses only: a chrony source by NAME resolves to addresses this cannot list
+}
+```
+
+Closed means: no 80/443 in the VM's firewall or the security group (Scaleway, OVH, Outscale), the cluster rule narrows to TCP
+6443 and 50000 on the real cluster subnet (Scaleway: the subnet the private network actually uses, not the whole 172.16.0.0/12;
+OVH: the subnet resource's CIDR, not a literal; Outscale: the Net), ICMP only inside that subnet, **8200 is gone** from the firewall
+and from `PermitOpen` (nothing in this repository or in OpenAether-apps forwards 8200 through the bastion; OpenBao is reached with
+`bao_admin` and port-forwards), the instance metadata addresses stay reachable on port 80 (cloud-init and the provider agents need
+them), and `curl`, `netcat`, `tcpdump`, `unattended-upgrades` are neither installed nor enabled. First boot is unaffected: packages
+are installed before the firewall is enabled. The Proxmox bastion has no security group: only the in-VM rules apply there.
+
+**This is the trade-off: a closed bastion is not patched in place.** Patch by replacing it, on a schedule or on a security notice:
+close the tunnels (`scripts/bootstrap/talos-tunnels.sh close`), then `tofu apply -replace=<address>` with the address of the
+`…bastion` instance resource of the provider module (`module.scw[0].scaleway_instance_server.bastion`,
+`module.ovh[0].openstack_compute_instance_v2.bastion`, `module.outscale[0].outscale_vm.bastion`,
+`module.proxmox[0].proxmox_virtual_environment_vm.bastion[0]`), never during a bootstrap or upgrade (the tunnels die with it). The
+public IP is its own resource and survives; the host key does not (see above). A bake-and-replace image pipeline or an ephemeral jump
+host is not built. To open the egress again for a window, set the mode back to `legacy` and replace the bastion. `BASTION_EGRESS=closed
+scripts/ops/bastion-harden-check.sh …` asserts the result (80, 443, another public address and 8200 refused, tools absent, update timers
+off); without it the check expects the legacy state, where 80/443 are open by design (it used to expect port 80 blocked, which the
+shipped rules never did).
+
+**Logs off the VM and who is behind a login.** `scripts/ops/bastion-logs-pull.sh <ip> <user> <key>` pulls the journal (ssh, sudo, nft
+drops) and the audit log, encrypted with `OA_LOGS_PASSPHRASE`. With `OA_LOGS_UPLOAD=1` it also stores them in the artifacts bucket of
+both object stores under `backups/bastion-logs/`, with the journal cursor as a watermark kept there too (a pull from another machine
+resumes where the last stopped; a store that was down is retried, not skipped). Run it from cron or CI, daily; between pulls the logs
+live on the VM and are not tamper-proof. Read one back: `gpg -d journal-<ts>.export.gpg | systemd-journal-remote -o r.journal -` then
+`journalctl --file r.journal` (checked on a hand-built export; the first real one is a lab step). Keep
+`scripts/ops/bastion-fingerprints.sh` output with the logs: the login line carries the key fingerprint, the table says whose it is.
+Cloud-side audit trails (Scaleway Audit Trail, OVH Activity logs, Outscale's API logs) and a Proxmox host's syslog are not exported by
+anything here: until someone owns that, export them by hand for the retention period you need and store them encrypted next to the
+bastion logs; who may change IAM and security groups is part of the same question.
 
 ## 7. Grafana SSO through Zitadel (OIDC)
 

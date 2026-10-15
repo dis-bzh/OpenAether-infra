@@ -31,6 +31,11 @@ Les composants qui tournent sur le cluster (Istio, cert-manager, Kyverno, CNPG, 
 sont épinglés dans `OpenAether-apps`, qui a ses propres épingles et sa relecture ; cette
 page ne les couvre pas.
 
+L'OS du bastion n'est pas épinglé : il prend lui-même les mises à jour de sécurité (`unattended-upgrades`) ou, avec
+`bastion_internet_egress = { mode = "closed" }`, aucune, et il est **remplacé**
+([`admin-access.fr.md`](admin-access.fr.md#identité-clé-dhôte-et-sortie-internet-du-bastion-optionnel)). En mode fermé la règle
+des 30 jours ci-dessus se tient en le remplaçant ; rien ne le planifie.
+
 ## Comment un correctif est repéré
 
 1. **`vulnerabilityAlerts` de Renovate** ouvre une PR pour une épingle visée par un avis
