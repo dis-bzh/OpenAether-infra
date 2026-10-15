@@ -61,11 +61,13 @@ fi
 
 # The bastion carries the Talos tunnels: an apply that modifies, replaces or stops it kills them mid-run, and every
 # config apply after that dials a closed local port (OVH replaced it, Outscale modified it in place, 2026-10-06).
-# Transcript only: both lines must be there, a refused port alone is not this.
+# Transcript only: both lines must be there, a refused port alone is not this. The same change also ends as a 15-minute
+# "cluster health check failed" (the health data source dials through the tunnels that died with the bastion; seen twice on a
+# real OVH run with bastion_baseline), so that second symptom counts as well.
 if [ -f "$LOG" ]; then
   CLEAN="$(sed -E 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null)"
   if grep -Eq '\.bastion: (Modifying|Destroying|Creating)\.\.\.' <<<"$CLEAN" &&
-     grep -Eq 'dial tcp 127\.0\.0\.1:[0-9]+: connect: connection refused' <<<"$CLEAN"; then
+     grep -Eq 'dial tcp 127\.0\.0\.1:[0-9]+: connect: connection refused|Error: cluster health check failed' <<<"$CLEAN"; then
     printf '\n\033[33m─── the bastion changed under the tunnels ───\033[0m\n' >&2
     cat >&2 <<'TXT'
 This apply modified, replaced or stopped the bastion, and the Talos tunnels run through it: they died with the
