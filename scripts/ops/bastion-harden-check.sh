@@ -88,7 +88,7 @@ sep "3. sshd config"
 # below fails there; under `set -e` that used to END THE WHOLE CHECK in silence after "=== 3" (seen on a real OVH bastion).
 SSHD_CONF=$(${SSH_CMD} "sudo sshd -T 2>/dev/null || cat /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null" || true)
 
-if ! printf '%s' "${SSHD_CONF}" | grep -qi "permitrootlogin"; then
+if ! printf '%s' "${SSHD_CONF}" | grep -qiE "^[[:space:]]*permitrootlogin"; then
   # Judge by behaviour instead of by file: root was refused above, and a password must not be offered.
   info "sshd configuration is not readable without root (the baseline removes sudo by design): judged from outside"
   PWOUT=$(ssh ${SSH_OPTS} -o PreferredAuthentications=password -o PubkeyAuthentication=no -o NumberOfPasswordPrompts=0 "${BASTION_USER}@${BASTION_IP}" true 2>&1 || true)
@@ -245,7 +245,7 @@ want "login shells umask" UMASK 0077
 want "no passwordless sudo for ${BASTION_USER}" SUDON no
 if fact GROUPS | grep -qw sudo; then fail "${BASTION_USER} is in the sudo group"; else ok "${BASTION_USER} is not in the sudo group"; fi
 if fact VARTMP | grep -q noexec; then ok "/var/tmp is mounted noexec ($(fact VARTMP))"; else fail "/var/tmp is not mounted noexec"; fi
-want "auditd is active" AUDITD active
+if [ "${BASTION_AUDIT:-1}" = 0 ]; then info "auditd not asserted (BASTION_AUDIT=0: bastion_baseline.audit_logging is off)"; else want "auditd is active" AUDITD active; fi
 want "the journal is persistent" JOURNAL persistent
 if fact GROUPS | grep -qw adm && fact GROUPS | grep -qw systemd-journal; then ok "${BASTION_USER} can read the audit and journal logs (adm, systemd-journal)"
 else fail "${BASTION_USER} is missing adm or systemd-journal: $(fact GROUPS)"; fi

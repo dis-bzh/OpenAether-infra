@@ -439,6 +439,9 @@ runcmd:
 %{ if egress.mode == "closed" ~}
   # No mirror is reachable any more: leave the update timers off instead of failing every day. Patching = replacing the bastion.
   - systemctl disable --now apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service 2>/dev/null || true
+  # The image ships these; with the Internet closed they are only tools for someone already on the host. Purging is a dpkg
+  # operation: it needs no mirror.
+  - DEBIAN_FRONTEND=noninteractive apt-get purge -y netcat-openbsd netcat-traditional tcpdump curl 2>/dev/null || true
 %{ else ~}
   # unattended-upgrades
   - systemctl enable --now unattended-upgrades
