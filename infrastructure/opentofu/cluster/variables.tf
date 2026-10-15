@@ -38,6 +38,40 @@ variable "bucket_suffix" {
   }
 }
 
+variable "backup_immutability" {
+  description = <<-EOT
+    What scripts/internal/ensure-buckets.sh does to the buckets that hold copies and logs (state and artifact replicas,
+    application backups and their replica, Loki's logs), read back from the store afterwards:
+
+      off         (default) nothing: a deployed cluster changes in no way.
+      versioned   versioning plus expiry of non-current versions after backup_retention_days; a delete leaves a version.
+      governance  versioned, plus an object lock with that default retention (a key with the bypass permission can
+                  still remove a version).
+      compliance  as governance, but nobody can remove a locked version before the retention ends, the account owner
+                  included, and a bucket cannot be emptied or deleted until then.
+
+    Read by the script from the tfvars file, not by any resource: the buckets exist before OpenTofu runs. Object lock
+    usually has to be set when a bucket is created, so on a bucket that already exists it may be refused (reported, not
+    forced). Provider support is not verified here: docs/backup-policy.md, section 3.
+  EOT
+  type        = string
+  default     = "off"
+  validation {
+    condition     = contains(["off", "versioned", "governance", "compliance"], var.backup_immutability)
+    error_message = "backup_immutability must be off, versioned, governance or compliance."
+  }
+}
+
+variable "backup_retention_days" {
+  description = "Days before a non-current object version expires, and the default object-lock retention, when backup_immutability is not off (read by scripts/internal/ensure-buckets.sh)."
+  type        = number
+  default     = 60
+  validation {
+    condition     = var.backup_retention_days >= 1 && var.backup_retention_days <= 3650 && floor(var.backup_retention_days) == var.backup_retention_days
+    error_message = "backup_retention_days must be a whole number of days from 1 to 3650."
+  }
+}
+
 variable "environment" {
   description = "Deployment environment (e.g., dev, prod)"
   type        = string

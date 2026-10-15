@@ -22,6 +22,11 @@ cluster_name    = "openaether"
 # inherit whichever names are still free. `task bucket-suffix` prints one.
 # Pick it ONCE — changing it later orphans every bucket you already have.
 # bucket_suffix = "a1b2c3"
+# Protection of the buckets that hold copies and logs (read by scripts/internal/ensure-buckets.sh): off | versioned |
+# governance | compliance. Default off changes nothing. Whether your provider supports each is not verified here, and
+# object lock usually has to be set when a bucket is CREATED: docs/backup-policy.md, section 3.
+# backup_immutability   = "versioned"
+# backup_retention_days = 60
 # dev, not prod: `task cluster-up` refuses, before spending, a prod cluster with
 # no state object yet whose s3_replica_endpoint is on the primary's endpoint or
 # cloud, and every example below ships them equal. Switch to "prod" in the same edit as pointing

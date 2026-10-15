@@ -485,6 +485,9 @@ tasks:
       # with the first provider's. Only the ENDPOINTS can say a backup was meant
       # to be elsewhere, which is what these assert.
       - ./scripts/dev/test-backup-creds.sh
+      # backup_immutability: versioning, expiry and object lock on a fake store that refuses a lock on a bucket not
+      # created with it; the read-back, the lifecycle rules someone else set, and the loud (not silent) refusal.
+      - ./scripts/dev/test-bucket-protection.sh
       # `task state` promises it never writes a state. Real task + real tofu on
       # a local-backend fixture; the state's bytes are compared before and after.
       - ./scripts/dev/test-state-task.sh

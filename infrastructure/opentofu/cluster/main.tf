@@ -208,6 +208,15 @@ check "app_lb_allowed_cidrs_applies" {
   }
 }
 
+# A warning, not a failure: a compliance lock cannot be undone before it ends, and on a dev cluster that means buckets
+# nobody can delete for backup_retention_days.
+check "compliance_lock_on_dev" {
+  assert {
+    condition     = !(var.backup_immutability == "compliance" && var.environment == "dev" && var.backup_retention_days > 7)
+    error_message = "backup_immutability = compliance on a dev cluster: the locked buckets cannot be emptied or deleted for backup_retention_days (${var.backup_retention_days}). Use governance, or a retention of 7 days or less, for a cluster you will tear down."
+  }
+}
+
 # ==============================================================================
 # Scaleway Infrastructure
 # ==============================================================================

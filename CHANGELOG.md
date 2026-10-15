@@ -188,6 +188,19 @@ ANSSI hardening work, not released yet. **Nothing here is a claim of compliance 
   reach Zitadel, that health checks and the client source address survive the NodePort path, and, on Outscale, whether the load balancer is filtered by its group at all (the group has had no 80/443 rule until now). It does
   **not** authenticate anyone (a listed address still reaches every route's own login), does not remove any route (the apps half is another change), does not change the default to `admin_ip`, and does not cover Proxmox.
 
+- **Opt-in versioning, expiry and object lock on the buckets that hold copies and logs, `backup_immutability` (ANSSI RW-SAUV-2/-3, GH-BKP-1, HYG-M37; the infra half of the audit's F-BKP-01, LOG-07 and DP-05).**
+  New variables `backup_immutability` (`off` default | `versioned` | `governance` | `compliance`) and `backup_retention_days` (default 60), read from the tfvars by `scripts/internal/ensure-buckets.sh`
+  (no resource reads them: the buckets exist before OpenTofu runs). **`off` changes nothing**: no call is made, no bucket is created. Otherwise the script creates the application-backups bucket and its `-backup`
+  twin (until now the operator's to create by hand; the seed and the apps need them) and, on all seven buckets, turns on versioning and a lifecycle rule `oa-noncurrent-expiry` (non-current versions expire after
+  `backup_retention_days`); with `governance`/`compliance` the five buckets that hold copies or logs (application backups and their replica, the state and artifact replicas, Loki's logs) are CREATED with object lock
+  and get a default retention of the same length (the primary state and artifact buckets are versioned, never locked: tofu writes them). Everything is read back from the store and a refusal is a loud warning naming the
+  bucket and the provider's words, never a silent pass (`OA_BUCKET_PROTECTION_STRICT=1` makes it exit 1). Lifecycle rules someone else set are merged, not replaced, and nothing is written when they cannot be read.
+  A check warns for `compliance` on a dev cluster with more than 7 days: such a bucket cannot be emptied or deleted before the retention ends. Rung: **mocked/static, not run on a cluster**: a fake store
+  (`testdata/fake-aws-s3.sh`) that refuses object lock on a bucket not created with it, 56 assertions in `test-bucket-protection.sh`, seven `tofu test` cases. **Not proven**: that Scaleway, OVH or Outscale accept any of
+  these calls (versioning, a lifecycle on non-current versions, create-with-lock, a default retention), that restic, Barman, Longhorn and Loki keep working against a versioned or locked bucket, or that the expiry fires.
+  It does **not** stop a key that may call `DeleteObjectVersion` from removing an unlocked version (that is the key policy, below), does not touch an existing cluster unless its tfvars ask, and does not enable
+  object lock on a bucket that already exists without it on providers that refuse it (reported, not forced).
+
 ## [0.2.1] — 2026-10-15
 
 **The infra half of the pair with OpenAether-apps 0.2.0: Day-1 seeding without a root token, a bucket of its own for Loki, a language check shared with the apps, and the Day-1 documentation corrected. A patch: no new scope.** It pins apps `refs/tags/0.2.0`. Read the entries below with their rung: real cloud means once, by hand, on the clouds named; nothing is repeated or unattended, and `cluster-up` with `deploy_flux = true` still ends 201 until the Day-1 seeding has run.

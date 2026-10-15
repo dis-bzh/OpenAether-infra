@@ -5,6 +5,11 @@
 # convention as cluster/backup.tf): tfstate and artifacts, each with a -backup
 # replica, plus Loki's own logs bucket (no replica; seed-openbao.sh points Loki at it).
 #
+# backup_immutability (tfvars, default off = nothing below changes): versioned | governance | compliance also creates
+# the application-backups bucket pair and turns on versioning, noncurrent-version expiry and, for governance/compliance,
+# an object lock with a default retention on the buckets that hold copies and logs. Read back, never assumed.
+# A refusal by the provider is a loud warning (exit 1 with OA_BUCKET_PROTECTION_STRICT=1).
+#
 # Only the STATE PRIMARY must exist before `tofu init` (the S3 backend does not
 # create its own bucket) — that one is FATAL. The others are used later and
 # may live on another provider, so they are best-effort and never block a deploy.
@@ -16,6 +21,7 @@
 # Usage: ensure-buckets.sh <path/to/cluster.tfvars> [--preflight]
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/bucket-protection.sh"
 
 TFVARS="${1:?usage: ensure-buckets.sh <cluster.tfvars> [--preflight]}"
 case "${2:-}" in
@@ -58,14 +64,32 @@ if [ -n "$RPROV" ]; then RPU="$(provider_pu "$RPROV")"; fi
 STATE_PRIMARY="$(oa_state_bucket "$PROJECT" "$PROVIDER" "$ENVN")"
 ARTIFACT_PRIMARY="$(oa_artifact_bucket "$PROJECT" "$PROVIDER" "$ROLE" "$ENVN")"
 
-ensure_bucket() { # name  endpoint  region  access_key  secret_key
+BACKUPS_PRIMARY="$(oa_backup_bucket "$PROJECT" "$PROVIDER" "$ENVN")"
+IMMUT="$(oa_immutability "$TFVARS")" || exit 1
+RETENTION="$(oa_retention_days "$TFVARS")" || exit 1
+LOCKING=no; case "$IMMUT" in governance | compliance) LOCKING=yes ;; esac
+
+# shellcheck disable=SC2069  # the CLI's stderr is the point, its stdout is not
+create_bucket() { # name  endpoint  region  access_key  secret_key  [lock] — prints the CLI's stderr
+  # Object lock can only be switched on at creation on most S3 stores, hence a different call for the buckets that get it.
+  if [ "${6:-}" = lock ] && [ "$LOCKING" = yes ]; then
+    local extra=(); [ "$3" = us-east-1 ] || extra=(--create-bucket-configuration "LocationConstraint=$3")
+    AWS_ACCESS_KEY_ID="$4" AWS_SECRET_ACCESS_KEY="$5" \
+      aws s3api create-bucket --bucket "$1" --object-lock-enabled-for-bucket ${extra[@]+"${extra[@]}"} \
+        --endpoint-url "$2" --region "$3" 2>&1 >/dev/null
+  else
+    AWS_ACCESS_KEY_ID="$4" AWS_SECRET_ACCESS_KEY="$5" \
+      aws s3 mb "s3://$1" --endpoint-url "$2" --region "$3" 2>&1 >/dev/null
+  fi
+}
+
+ensure_bucket() { # name  endpoint  region  access_key  secret_key  [lock]
   if AWS_ACCESS_KEY_ID="$4" AWS_SECRET_ACCESS_KEY="$5" \
        aws s3api head-bucket --bucket "$1" --endpoint-url "$2" --region "$3" >/dev/null 2>&1; then
     echo "  ✓ $1 (exists)"
   else
     local err
-    if err="$(AWS_ACCESS_KEY_ID="$4" AWS_SECRET_ACCESS_KEY="$5" \
-         aws s3 mb "s3://$1" --endpoint-url "$2" --region "$3" 2>&1 >/dev/null)"; then
+    if err="$(create_bucket "$@")"; then
       echo "  + $1 (created)"
     # The CLI retries a request whose answer was lost: the first attempt created the bucket, the retry is told it is ours.
     # Seen on Scaleway for a bucket that did not exist a second earlier; refusing the deploy for it helps nobody.
@@ -114,7 +138,7 @@ ensure_bucket "$ARTIFACT_PRIMARY" "$PRIMARY_EP" "$PRIMARY_REGION" "$PRIMARY_AK" 
 
 # Loki's own bucket (#302): seed-openbao.sh points Loki at it, and Loki does not create it. Best-effort, like the artifacts.
 LOGS_BUCKET="$(oa_logs_bucket "$PROJECT" "$PROVIDER" "$ENVN")"
-ensure_bucket "$LOGS_BUCKET" "$PRIMARY_EP" "$PRIMARY_REGION" "$PRIMARY_AK" "$PRIMARY_SK" ||
+ensure_bucket "$LOGS_BUCKET" "$PRIMARY_EP" "$PRIMARY_REGION" "$PRIMARY_AK" "$PRIMARY_SK" lock ||
   echo "  ⚠ ${LOGS_BUCKET} not ready: Loki stores nothing until it exists"
 
 # --- The two shapes, and neither of them silent -------------------------------
@@ -130,8 +154,8 @@ CROSS=no
 [ "$REPLICA_EP" != "$PRIMARY_EP" ] && CROSS=yes
 
 REPL_OK=yes
-ensure_bucket "${STATE_PRIMARY}-backup"    "$REPLICA_EP" "$REPLICA_REGION" "$BACKUP_AK" "$BACKUP_SK" || REPL_OK=no
-ensure_bucket "${ARTIFACT_PRIMARY}-backup" "$REPLICA_EP" "$REPLICA_REGION" "$BACKUP_AK" "$BACKUP_SK" || REPL_OK=no
+ensure_bucket "${STATE_PRIMARY}-backup"    "$REPLICA_EP" "$REPLICA_REGION" "$BACKUP_AK" "$BACKUP_SK" lock || REPL_OK=no
+ensure_bucket "${ARTIFACT_PRIMARY}-backup" "$REPLICA_EP" "$REPLICA_REGION" "$BACKUP_AK" "$BACKUP_SK" lock || REPL_OK=no
 
 if [ "$CROSS" = no ]; then
   echo "  ~ backup store is the SAME endpoint as the primary (${PRIMARY_EP})"
@@ -169,6 +193,39 @@ else
     echo "  Or point s3_replica_endpoint back at ${PRIMARY_EP} to keep one cloud." >&2
   fi
   exit 1
+fi
+
+# --- Protection (backup_immutability) -----------------------------------------
+#
+# Opt-in. A versioned bucket turns a delete into a marker; an object lock keeps the version itself until the retention
+# ends. Neither stops a key that is allowed DeleteObjectVersion from removing an UNLOCKED version: the in-cluster keys need
+# a policy for that (docs/backup-policy.md, section 4), and s3-isolation-check.sh is what proves it.
+PROT_FAIL=()
+protect() { # name endpoint region ak sk lock|nolock
+  oa_protect_bucket "$1" "$2" "$3" "$4" "$5" "$IMMUT" "$RETENTION" "$6" || PROT_FAIL+=("$1")
+}
+if [ "$IMMUT" != off ]; then
+  echo "▶ Protecting the buckets that hold copies (backup_immutability = ${IMMUT}, ${RETENTION} days)"
+  # Application backups (restic, Longhorn, CNPG): the seed and the apps need them, and they used to be created by hand.
+  ensure_bucket "$BACKUPS_PRIMARY" "$PRIMARY_EP" "$PRIMARY_REGION" "$PRIMARY_AK" "$PRIMARY_SK" lock ||
+    echo "  ⚠ ${BACKUPS_PRIMARY} not ready: restic, Longhorn and CNPG have no destination"
+  ensure_bucket "${BACKUPS_PRIMARY}-backup" "$REPLICA_EP" "$REPLICA_REGION" "$BACKUP_AK" "$BACKUP_SK" lock ||
+    echo "  ⚠ ${BACKUPS_PRIMARY}-backup not ready: the second copy of the application backups has no destination"
+  protect "$STATE_PRIMARY"             "$PRIMARY_EP" "$PRIMARY_REGION" "$PRIMARY_AK" "$PRIMARY_SK" nolock
+  protect "$ARTIFACT_PRIMARY"          "$PRIMARY_EP" "$PRIMARY_REGION" "$PRIMARY_AK" "$PRIMARY_SK" nolock
+  protect "$BACKUPS_PRIMARY"           "$PRIMARY_EP" "$PRIMARY_REGION" "$PRIMARY_AK" "$PRIMARY_SK" lock
+  protect "$LOGS_BUCKET"               "$PRIMARY_EP" "$PRIMARY_REGION" "$PRIMARY_AK" "$PRIMARY_SK" lock
+  protect "${STATE_PRIMARY}-backup"    "$REPLICA_EP" "$REPLICA_REGION" "$BACKUP_AK"  "$BACKUP_SK"  lock
+  protect "${ARTIFACT_PRIMARY}-backup" "$REPLICA_EP" "$REPLICA_REGION" "$BACKUP_AK"  "$BACKUP_SK"  lock
+  protect "${BACKUPS_PRIMARY}-backup"  "$REPLICA_EP" "$REPLICA_REGION" "$BACKUP_AK"  "$BACKUP_SK"  lock
+  if [ "${#PROT_FAIL[@]}" -gt 0 ]; then
+    echo "⚠ NOT protected as asked: ${PROT_FAIL[*]}"
+    echo "  The provider refused or did not confirm (above). Nothing was deleted or loosened. Lower backup_immutability, or fix the"
+    echo "  bucket, and run this again; OA_BUCKET_PROTECTION_STRICT=1 makes this a failure."
+    [ "${OA_BUCKET_PROTECTION_STRICT:-0}" != 1 ] || exit 1
+  fi
+elif [ "$ENVN" = prod ]; then
+  echo "  ~ backup_immutability = off: nothing here stops a stolen S3 key from deleting the copies (docs/backup-policy.md, section 3)"
 fi
 
 echo "✓ buckets ready"
