@@ -63,9 +63,18 @@ ensure_bucket() { # name  endpoint  region  access_key  secret_key
        aws s3api head-bucket --bucket "$1" --endpoint-url "$2" --region "$3" >/dev/null 2>&1; then
     echo "  ✓ $1 (exists)"
   else
-    AWS_ACCESS_KEY_ID="$4" AWS_SECRET_ACCESS_KEY="$5" \
-      aws s3 mb "s3://$1" --endpoint-url "$2" --region "$3" >/dev/null \
-      && echo "  + $1 (created)"
+    local err
+    if err="$(AWS_ACCESS_KEY_ID="$4" AWS_SECRET_ACCESS_KEY="$5" \
+         aws s3 mb "s3://$1" --endpoint-url "$2" --region "$3" 2>&1 >/dev/null)"; then
+      echo "  + $1 (created)"
+    # The CLI retries a request whose answer was lost: the first attempt created the bucket, the retry is told it is ours.
+    # Seen on Scaleway for a bucket that did not exist a second earlier; refusing the deploy for it helps nobody.
+    elif grep -q 'BucketAlreadyOwnedByYou' <<<"$err"; then
+      echo "  ✓ $1 (exists: created by a request the CLI retried)"
+    else
+      echo "$err" >&2
+      return 1
+    fi
   fi
 }
 

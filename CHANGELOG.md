@@ -79,6 +79,11 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- **`ensure-buckets.sh` refused a deploy over a bucket it had itself created.** On a real OVH run with the replica on Scaleway, the
+  AWS CLI retried a create whose answer was lost, and the retry was told `BucketAlreadyOwnedByYou`; the script counted that as a
+  failure of the replica store and stopped `cluster-up` before anything billed. That answer now counts as the bucket existing; any
+  other refusal still stops it and is printed. Rung: mocked (two cases in `test-backup-creds.sh`); the defect was seen once, on a real cloud.
+
 - `docs/admin-access.md` (and its French twin) read the PKI CSR from KV (`bao_admin kv get -field=csr secret/pki/intermediate-csr`),
   not from the bootstrap Job's log, which is removed an hour after the Job ends; the page and the seed script say apps 0.1.1,
   not 0.2.0, and tell a 0.1.0 cluster to be rebuilt.

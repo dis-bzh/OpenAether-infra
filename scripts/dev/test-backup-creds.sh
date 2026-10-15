@@ -114,6 +114,23 @@ run_ensure() { env -u SCW_BACKUP_AWS_ACCESS_KEY_ID -u SCW_BACKUP_AWS_SECRET_ACCE
   PATH="$SB:$PATH" SCW_AWS_ACCESS_KEY_ID=A SCW_AWS_SECRET_ACCESS_KEY=A \
   ./scripts/internal/ensure-buckets.sh "$@" 2>&1; }
 
+# A request whose answer was lost and which the CLI retried: the bucket exists and the second answer says it is ours.
+mk_owned_stub() { # <error text of `s3 mb`>
+  { printf '#!/usr/bin/env bash\necho "$*" >>%q\n' "$SB/aws.log"
+    printf 'case " $* " in *" head-bucket "*) exit 254 ;; *" mb "*) echo %q >&2; exit 1 ;; esac\nexit 0\n' "$1"
+  } >"$SB/aws"; chmod +x "$SB/aws"; : >"$SB/aws.log"
+}
+mk_owned_stub "make_bucket failed: An error occurred (BucketAlreadyOwnedByYou) when calling the CreateBucket operation"
+TF="$(mk_tfvars https://primary.example https://primary.example)"
+OUT="$(run_ensure "$TF")"; RC=$?
+[ "$RC" -eq 0 ] && grep -q 'created by a request the CLI retried' <<<"$OUT" \
+  && ok "BucketAlreadyOwnedByYou after a retried create is a success, not a refused deploy" \
+  || bad "a retried create that the store says is ours stopped the deploy (rc=$RC): $OUT"
+mk_owned_stub "make_bucket failed: An error occurred (AccessDenied) when calling the CreateBucket operation"
+OUT="$(run_ensure "$TF")"; RC=$?
+[ "$RC" -ne 0 ] && grep -q 'AccessDenied' <<<"$OUT" \
+  && ok "any other refusal still stops it, and says what the store answered" \
+  || bad "an AccessDenied on create no longer stops the deploy (rc=$RC)"
 mk_stub "https://primary.example"; TF="$(mk_tfvars https://replica.example)"
 OUT="$(run_ensure "$TF")"; RC=$?
 [ "$RC" -ne 0 ] && grep -q 'Refusing to continue' <<<"$OUT" \
