@@ -88,6 +88,7 @@ git_ref          = "refs/tags/0.1.1"
 # and each has a "-backup" twin:
 #   state            -> s3-<cluster_name>-scaleway-tfstate-<environment>
 #   kube/talosconfig -> s3-<cluster_name>-scaleway-management-<environment>
+#   Loki logs        -> s3-<cluster_name>-scaleway-logs-<environment>   (no replica twin)
 # PRIMARY = this cluster's own object store. REPLICA = its "-backup" twin.
 # Each is opened with the credentials of the cloud that HOLDS it: the replica
 # uses the keys of whatever s3_replica_endpoint points at. So a Scaleway cluster

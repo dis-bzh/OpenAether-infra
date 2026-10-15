@@ -142,11 +142,6 @@ OPENBAO_WAIT="${OPENBAO_WAIT:-1200}"
 POLL="${OA_SEED_POLL:-15}"   # seconds between attempts (a test knob)
 deadline=$((SECONDS + OPENBAO_WAIT))
 echo "▶ Seeding Day-1 secrets (${PROVIDER}/${ROLE}, bucket ${BUCKET}, Loki bucket ${LOGS_BUCKET})"
-if [ "$LOKI_KEYS" = shared ]; then
-  echo "⚠ Loki gets the primary store's keys (OA_LOKI_S3_ACCESS_KEY_ID / OA_LOKI_S3_SECRET_ACCESS_KEY not set). Its bucket is"
-  echo "  its own, which protects the backups from a misconfigured Loki; it does NOT protect them from a compromised one,"
-  echo "  because these keys also reach the backups bucket. Give Loki a key pair limited to ${LOGS_BUCKET} for that."
-fi
 last_note=0; ERR=""
 while :; do
   OUT=""
@@ -179,6 +174,22 @@ while IFS= read -r line; do
   esac
 done <<<"$OUT"
 [ "$FAILED" -eq 0 ] || fail "could not write $FAILED secret(s) (see above)"
+
+# What Loki really got, said from the answers of OpenBao and not from what this run intended: the entry is create-only, so a re-run
+# or a cluster seeded before the dedicated bucket keeps whatever it holds.
+if grep -q '^+ observability/loki-s3' <<<"$OUT"; then
+  if [ "$LOKI_KEYS" = shared ]; then
+    echo "⚠ Loki got the primary store's keys (OA_LOKI_S3_ACCESS_KEY_ID / OA_LOKI_S3_SECRET_ACCESS_KEY not set) and its own bucket."
+    echo "  That protects the backups from a misconfigured Loki; it does NOT protect them from a compromised one, because these"
+    echo "  keys reach the backups, state and artifact buckets too. Give Loki a key pair limited to ${LOGS_BUCKET} for that."
+  else
+    echo "  Loki got the key pair you gave (OA_LOKI_S3_*) and bucket ${LOGS_BUCKET}."
+  fi
+elif grep -q '^= observability/loki-s3' <<<"$OUT"; then
+  echo "⚠ observability/loki-s3 already existed and was left alone: Loki keeps the bucket and keys it holds. A cluster seeded before the"
+  echo "  dedicated logs bucket points at the BACKUPS bucket with the primary keys; ${LOGS_BUCKET}$([ "$LOKI_KEYS" = dedicated ] && echo " and the OA_LOKI_S3_* pair you set were") not applied."
+  echo "  Replace the entry by hand to change it (docs/admin-access.md, section 3)."
+fi
 [ $((WROTE + KEPT)) -eq "$EXPECTED" ] || fail "expected $EXPECTED answers from OpenBao, got $((WROTE + KEPT)): $(tr '\n' ' ' <<<"$OUT" | cut -c1-300)"
 
 # ExternalSecrets refresh hourly. Nudge them, or the cluster spends up to an hour looking broken for secrets that are

@@ -7,6 +7,8 @@ to pick up.
 Open work is **not** here — it is in the GitHub issues, each naming what closes it
 and the rung it needs. This file answers "what is true today", not "what is left".
 
+**0.2.1 (a patch, not yet tagged) is the infra half of the pair with OpenAether-apps 0.2.0; its real-cloud runs are in `CHANGELOG.md` under `[Unreleased]`
+(Scaleway, OVH, Outscale reduced profile, 2026-10-15, once by hand, with apps branches). The rest of this file still describes 0.2.0, which 0.2.1 does not change.**
 **0.2.0 is the release this file describes; 0.1.0, published 2026-08-20 as a pre-release, was the first to ship something proven.** Every 1.x tag was
 deleted on both repositories; the versions they named never worked. Scope:
 **one Talos cluster on one supported provider, floor = Cilium**. Flux is disabled

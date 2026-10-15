@@ -123,7 +123,7 @@ mk_owned_stub() { # <error text of `s3 mb`>
 mk_owned_stub "make_bucket failed: An error occurred (BucketAlreadyOwnedByYou) when calling the CreateBucket operation"
 TF="$(mk_tfvars https://primary.example https://primary.example)"
 OUT="$(run_ensure "$TF")"; RC=$?
-[ "$RC" -eq 0 ] && grep -q 'created by a request the CLI retried' <<<"$OUT" \
+[ "$RC" -eq 0 ] && grep -q 'already ours' <<<"$OUT" \
   && ok "BucketAlreadyOwnedByYou after a retried create is a success, not a refused deploy" \
   || bad "a retried create that the store says is ours stopped the deploy (rc=$RC): $OUT"
 mk_owned_stub "make_bucket failed: An error occurred (AccessDenied) when calling the CreateBucket operation"

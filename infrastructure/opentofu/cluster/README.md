@@ -275,6 +275,7 @@ by its endpoint. Bucket names are derived from the cluster:
 |----------|---------|---------|-------------------|
 | tfstate | `s3-<project>-<provider>-tfstate-<env>` | `…-backup` | OpenTofu `encryption{}` (AES-GCM + PBKDF2) |
 | talosconfig / kubeconfig | `s3-<project>-<provider>-<role>-<env>` | `…-backup` | gpg `--symmetric` AES-256 (authenticated) |
+| Loki logs (not an artifact; created by `ensure-buckets.sh`, seeded by `seed-openbao.sh`) | `s3-<project>-<provider>-logs-<env>` | none | none |
 
 where `<project>` is `cluster_name`'s first segment (`openaether`) and `<provider>`
 is the cluster's active provider (`scaleway`/`ovh`/`outscale`).

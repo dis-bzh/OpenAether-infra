@@ -86,6 +86,7 @@ git_ref          = "refs/tags/0.1.1"
 # twin):
 #   state            -> s3-<cluster_name>-ovh-tfstate-<environment>
 #   kube/talosconfig -> s3-<cluster_name>-ovh-management-<environment>
+#   Loki logs        -> s3-<cluster_name>-ovh-logs-<environment>   (no replica twin)
 s3_primary_endpoint = "https://s3.gra.io.cloud.ovh.net" # failover state on OVH (your primary is down)
 s3_primary_region   = "gra"
 s3_replica_endpoint = "https://s3.fr-par.scw.cloud"     # replicate back to Scaleway on recovery

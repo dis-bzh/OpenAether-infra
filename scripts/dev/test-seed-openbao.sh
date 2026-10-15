@@ -117,6 +117,18 @@ is "…before any write" 0 "$(puts | wc -l)"
 ENV_EXTRA="$BASE"
 OUT="$(run)"
 
+echo "--- Loki entry already there (re-run, or a cluster seeded before the dedicated bucket): the script does not claim what it did not do ---"
+ENV_EXTRA="$BASE OA_STUB_EXISTING=observability/loki-s3"
+OUT2="$(run)"; RC=$?
+is "the script completes" 0 "$RC"
+grep -q "already existed and was left alone" <<<"$OUT2" && ok "it says the Loki entry was left alone" || bad "$OUT2"
+grep -q "does NOT protect" <<<"$OUT2" && bad "the shared-keys warning is printed for an entry that was not written" || ok "…and does not describe keys it did not write"
+ENV_EXTRA="$BASE OA_STUB_EXISTING=observability/loki-s3 OA_LOKI_S3_ACCESS_KEY_ID=STUB-LOKI-AK OA_LOKI_S3_SECRET_ACCESS_KEY=STUB-LOKI-SK"
+OUT2="$(run)"
+grep -q "pair you set were not applied" <<<"$OUT2" && ok "a dedicated pair set against an existing entry is reported as NOT applied" || bad "$OUT2"
+ENV_EXTRA="$BASE"
+OUT="$(run)"
+
 echo "--- the promise: which path, never what; no root token; nothing on a command line ---"
 for v in STUB-PRIMARY-SK STUB-PRIMARY-AK jwt-STUB-SA-TOKEN; do
   grep -q "$v" <<<"$OUT" && bad "$v was printed" || ok "$v is not in the output"

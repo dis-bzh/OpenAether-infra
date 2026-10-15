@@ -79,6 +79,7 @@ git_ref          = "refs/tags/0.1.1"
 # and each has a "-backup" twin:
 #   state            -> s3-<cluster_name>-outscale-tfstate-<environment>
 #   kube/talosconfig -> s3-<cluster_name>-outscale-management-<environment>
+#   Loki logs        -> s3-<cluster_name>-outscale-logs-<environment>   (no replica twin)
 # Replicate BACK to your primary provider once it recovers: that store is opened
 # with ITS OWN keys, the cloud named by s3_replica_endpoint below.
 s3_primary_endpoint = "https://oos.eu-west-2.outscale.com"

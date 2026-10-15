@@ -55,6 +55,7 @@ git_ref          = "refs/tags/0.1.1"
 # and each has a "-backup" twin:
 #   state            -> s3-<cluster_name>-scaleway-tfstate-<environment>
 #   kube/talosconfig -> s3-<cluster_name>-scaleway-workload-<environment>
+#   Loki logs        -> s3-<cluster_name>-scaleway-logs-<environment>   (no replica twin)
 # PRIMARY = this cluster's own store. REPLICA = its "-backup" twin, opened with
 # the keys of the cloud s3_replica_endpoint names (an Outscale replica needs
 # OUTSCALE_AWS_* in .env.sh) — never with this cluster's own keys.
