@@ -319,6 +319,16 @@ task security            # contrôles de durcissement
 | [docs/clea.fr.md](docs/clea.fr.md) | Ce que le rapport de dépendances épingle, et ce qu'un rapport vert peut affirmer |
 | [docs/emulated-cloud.fr.md](docs/emulated-cloud.fr.md) | Tester Scaleway/Outscale contre un émulateur local — et les limites de l'exercice |
 | [docs/upgrade.fr.md](docs/upgrade.fr.md) | Faire bouger Kubernetes et Talos sur un cluster qui doit rester debout |
+| [docs/supply-chain.fr.md](docs/supply-chain.fr.md) | Providers et images de démarrage verrouillés, le SBOM, qui peut lancer le workflow cloud, rulesets en code |
+| [docs/patching.fr.md](docs/patching.fr.md) | Le délai des correctifs, ce qui est épinglé, et les signaux qui disent qu'un correctif existe |
+| [docs/key-management.fr.md](docs/key-management.fr.md) | Chaque clé : période, impact si perdue ou fuitée, remplacement, effacement, écarts consignés (TLS-12, TLS-19) |
+| [docs/incident-response.fr.md](docs/incident-response.fr.md) | Compromission suspectée, dans l'ordre : preuves, sauvegardes, confinement, tableau de rotation, point de restauration, registre |
+| [docs/backup-policy.fr.md](docs/backup-policy.fr.md) | Par jeu de données : mécanisme, objectif RPO/RTO, rétention, destination, détenteur de clé, test de restauration, destruction ; ce qui n'est pas sauvegardé |
+| [docs/disaster-recovery.fr.md](docs/disaster-recovery.fr.md) | La chaîne de reprise ordonnée (OpenBao avant la base de Zitadel), prérequis, objectifs de temps, l'exercice annuel |
+| [docs/security-architecture.fr.md](docs/security-architecture.fr.md) | Actifs, chemins d'administration et authentification de chacun, comptes privilégiés, écarts acceptés |
+| [docs/network.fr.md](docs/network.fr.md) | Zones de confiance, plan d'adressage, les deux couches d'application, la matrice de flux (générée depuis le Terraform), lacunes connues |
+| [docs/hardening.fr.md](docs/hardening.fr.md) | Talos par conception vs contrôles vs écarts écrits (BP-028, NT-007), et la routine de veille de vulnérabilités |
+| [docs/threat-model.fr.md](docs/threat-model.fr.md), [docs/component-selection.fr.md](docs/component-selection.fr.md), [docs/audit-register.fr.md](docs/audit-register.fr.md) | Les menaces de la chaîne de livraison ; pourquoi chaque composant et le registre VEX ; audits et actions correctives |
 | [docs/release-checklist.md](docs/release-checklist.md) | Ce qu'il faut lancer avant de taguer, dans l'ordre qui échoue le moins cher (anglais seulement) |
 | [docs/status.md](docs/status.md) | **Source de vérité** : ce qui tourne, ce qui est mesuré sur un compte réel et depuis quand (anglais seulement ; le travail ouvert est dans les issues) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | **À lire avant une première pull request** : ce qui compte comme preuve, les quatre barreaux, les trailers de commit, les contributions assistées par IA |
