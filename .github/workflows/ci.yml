@@ -235,7 +235,7 @@ jobs:
       - name: Validate Renovate config
         env:
           # renovate: datasource=npm depName=renovate
-          RENOVATE_VERSION: "44.52.1"
+          RENOVATE_VERSION: "44.148.4"
         run: npx --yes -p "renovate@${RENOVATE_VERSION}" -- renovate-config-validator renovate.json5
 
       # flux-bootstrap.yaml.tftpl is read by nothing else here (#114) —
