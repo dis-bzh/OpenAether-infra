@@ -43,4 +43,18 @@ locals {
     node-exporter    = ["nodes", "pods"]
     dhcp             = ["nodes"]
   }
+
+  # The Talos rules are per-port ALLOW-LISTS (a source outside the list is dropped), so they are cut finer
+  # than the security groups: etcd's metrics port 2381 is scraped by vmagent, a pod, which on the node it
+  # shares with a control plane arrives with its pod address (not masqueraded; the same-node probes of lab
+  # 11 show a pod address dropped by a nodes-only rule). Splitting it keeps 2379-2380 (client, peer) nodes
+  # only. The security groups keep the single 2379-2381 entry of `inbound`: they do not change.
+  talos_ports = merge(
+    { for k, r in local.inbound : k => r if !contains(local.not_between_members, k) && k != "etcd" },
+    {
+      etcd         = { protocol = "TCP", ports = "2379-2380" }
+      etcd-metrics = { protocol = "TCP", ports = "2381" }
+    },
+  )
+  talos_scope = merge(local.scope, { etcd-metrics = ["nodes", "pods"] })
 }

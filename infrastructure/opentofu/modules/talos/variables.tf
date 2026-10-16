@@ -447,18 +447,20 @@ variable "node_baseline" {
 
 variable "node_firewall_mode" {
   description = <<-EOT
-    "off" (default): no firewall document, every node config byte-identical. "rules_only": one
+    "off" (default): no firewall document, every node config byte-identical. "port_allowlist": one
     NetworkRuleConfig per flow of node_firewall_ports plus NetworkDefaultActionConfig ingress: accept.
-    That default action is Talos's own, so the rules are on the node but nothing is blocked; they
-    only matter the day a later mode blocks by default. No "enforce" exists yet (needs a soaked
-    rules_only and a rehearsed way out; LAB-CHECKLIST B24). A change is applied without a reboot.
+    A NetworkRuleConfig is an allow-list for its port even with that default action: each listed port
+    ACCEPTS ONLY THE LISTED SOURCES and DROPS the others (live nft chain, lab 11); ports that are not
+    listed stay open. A source that is missing from node_firewall (a new subnet, a load balancer or
+    health-check range, a wrong pod range) is cut off: the cluster breaks. Not inert, not a monitor.
+    No mode with a blocking default action exists. LAB-CHECKLIST B24. A change is applied without a reboot.
   EOT
   type        = string
   default     = "off"
 
   validation {
-    condition     = contains(["off", "rules_only"], var.node_firewall_mode)
-    error_message = "node_firewall_mode must be \"off\" or \"rules_only\" (enforce is not implemented yet)."
+    condition     = contains(["off", "port_allowlist"], var.node_firewall_mode)
+    error_message = "node_firewall_mode must be \"off\" or \"port_allowlist\" (no mode with a blocking default action exists)."
   }
 }
 
@@ -497,6 +499,18 @@ variable "node_firewall_scope" {
   validation {
     condition     = alltrue([for k, v in var.node_firewall_scope : alltrue([for g in v : contains(["nodes", "bastion", "pods", "lb"], g)])])
     error_message = "node_firewall_scope: groups are nodes, bastion, pods, lb."
+  }
+  # An empty source list on a rule would drop every source of that port: a broken cluster, caught at plan.
+  validation {
+    condition = var.node_firewall_mode == "off" || alltrue([for k, v in var.node_firewall_scope :
+      length(distinct(flatten([for g in v : lookup({
+        nodes   = var.node_firewall.node_cidrs
+        bastion = var.node_firewall.bastion_cidrs
+        pods    = var.node_firewall.pod_cidrs
+        lb      = var.node_firewall.lb_cidrs
+      }, g, [])]))) > 0
+    ])
+    error_message = "node_firewall_scope: a rule would have no source at all (its groups are all empty in node_firewall); that rule would cut every source off its port."
   }
 }
 

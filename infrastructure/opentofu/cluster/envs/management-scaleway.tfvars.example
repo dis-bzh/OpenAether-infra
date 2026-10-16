@@ -74,11 +74,13 @@ node_distribution = {
 # node_baseline     = { sysctls = true, worker_default_seccomp = true, pod_pids_limit = 4096 }
 # node_time_servers = ["YOUR_NTP_1", "YOUR_NTP_2", "YOUR_NTP_3"]   # also in bastion_baseline.time_servers
 
-# Node network filtering (optional, ANSSI PA-022 R17/R20; both off by default, neither enforces anything yet).
+# Node network filtering (optional, ANSSI PA-022 R17/R20; both off by default).
 # restrict_inter_node has no effect here (OVH and Outscale only; no security-group layer to swap), so it is not offered.
-# node_firewall_mode = "rules_only" writes Talos ingress rules with a default action of accept (nothing blocked).
+# node_firewall_mode = "port_allowlist" is NOT inert: each listed port (apid, kube-apiserver, kubelet, etcd, ...) accepts
+# ONLY the listed sources and drops the rest (ports that are not listed stay open). A source missing from node_firewall
+# (the load balancer range, a second subnet, a wrong pod range) breaks the cluster. Per-rule sources: docs/network.md 6.
 # Read docs/network.md section 6 and LAB-CHECKLIST B24 first; a throwaway cluster first.
-# node_firewall_mode  = "rules_only"
+# node_firewall_mode  = "port_allowlist"
 # node_firewall       = { node_cidrs = ["YOUR_NODE_SUBNET"], bastion_cidrs = ["YOUR_BASTION_SUBNET"] }
 
 admin_ip = ["YOUR_IP/32"]

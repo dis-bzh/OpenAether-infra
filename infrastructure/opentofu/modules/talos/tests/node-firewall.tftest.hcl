@@ -1,6 +1,7 @@
-# node_firewall_mode: off renders nothing; rules_only appends NetworkDefaultActionConfig accept plus one
-# NetworkRuleConfig per flow. Mocked: this proves the documents and the replace trigger, not that Talos
-# accepts them or that traffic still flows (LAB-CHECKLIST B24).
+# node_firewall_mode: off renders nothing; port_allowlist appends NetworkDefaultActionConfig accept plus one
+# NetworkRuleConfig per flow. Each rule is a per-port ALLOW-LIST (a live node drops the other sources of a
+# listed port even with the accept default, lab 11), so this mode is not inert. Mocked: this proves the
+# documents and the replace trigger, not that Talos accepts them or that traffic still flows (LAB-CHECKLIST B24).
 
 mock_provider "talos" {}
 mock_provider "random" {}
@@ -35,10 +36,10 @@ run "off_changes_nothing" {
   }
 }
 
-run "rules_only_renders_inert_rules" {
+run "port_allowlist_renders_the_allow_list" {
   command = apply
   variables {
-    node_firewall_mode = "rules_only"
+    node_firewall_mode = "port_allowlist"
     node_firewall = {
       node_cidrs    = ["10.0.0.0/24"]
       bastion_cidrs = ["10.0.1.0/24"]
@@ -59,7 +60,7 @@ run "rules_only_renders_inert_rules" {
 
   assert {
     condition     = length(output.appended_documents) == 4 && yamldecode(output.appended_documents[0]).kind == "NetworkDefaultActionConfig" && yamldecode(output.appended_documents[0]).ingress == "accept"
-    error_message = "rules_only must write the default action as accept (inert) first, then one rule per TCP/UDP flow (ICMP has none)"
+    error_message = "port_allowlist must write the default action as accept first (it keeps unlisted ports open), then one rule per TCP/UDP flow (ICMP has none)"
   }
   assert {
     condition     = alltrue([for d in slice(output.appended_documents, 1, 4) : yamldecode(d).kind == "NetworkRuleConfig" && !contains(["block"], try(yamldecode(d).ingress, ""))])
@@ -83,12 +84,34 @@ run "rules_only_renders_inert_rules" {
   }
 }
 
-run "rules_only_needs_node_cidrs" {
+run "port_allowlist_needs_node_cidrs" {
+  command = plan
+  variables {
+    node_firewall_mode = "port_allowlist"
+  }
+  expect_failures = [var.node_firewall]
+}
+
+# The value was first called "rules_only", which promised a rule that drops nothing; a live node dropped.
+run "the_old_inert_sounding_name_is_refused" {
   command = plan
   variables {
     node_firewall_mode = "rules_only"
+    node_firewall      = { node_cidrs = ["10.0.0.0/24"] }
   }
-  expect_failures = [var.node_firewall]
+  expect_failures = [var.node_firewall_mode]
+}
+
+# A rule whose source groups resolve to nothing would be a rule that cuts every source on its port.
+run "a_rule_without_any_source_is_refused" {
+  command = plan
+  variables {
+    node_firewall_mode  = "port_allowlist"
+    node_firewall       = { node_cidrs = ["10.0.0.0/24"] }
+    node_firewall_ports = { talos-apid = { protocol = "TCP", ports = "50000" } }
+    node_firewall_scope = { talos-apid = ["bastion"] }
+  }
+  expect_failures = [var.node_firewall_scope]
 }
 
 run "enforce_is_refused" {

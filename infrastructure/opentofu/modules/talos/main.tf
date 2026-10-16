@@ -285,11 +285,14 @@ locals {
 }
 
 # ==============================================================================
-# node_firewall_mode (batch B24): Talos ingress firewall, rules only. "off" renders nothing. With
-# "rules_only" every flow of the shared port list becomes a NetworkRuleConfig and the default action is
-# written down as accept (Talos's own), so no packet is dropped; the rules are there to be reviewed on
-# the node (`talosctl get networkrules`) before a blocking mode exists. Sources are subnets, never
-# node addresses. Appended like the other documents, so they also change machine_config_version.
+# node_firewall_mode (batch B24): Talos ingress firewall, per-port allow-list. "off" renders nothing. With
+# "port_allowlist" every flow of the shared port list becomes a NetworkRuleConfig. A NetworkRuleConfig is
+# an ALLOW-LIST FOR ITS PORT even when the default action is accept (measured on a live node, lab 11: the
+# nft ingress chain holds one `drop ... dport N if saddr not in {listed subnets}` per rule). So packets ARE
+# dropped: the listed ports accept only the listed sources, ports that are not listed stay open, and a
+# source that is missing from a list is cut off (a broken cluster). Inspect it with
+# `talosctl -n <node> get nftableschain ingress -o yaml`. Sources are subnets, never node addresses.
+# Appended like the other documents, so they also change machine_config_version.
 # ==============================================================================
 
 locals {
@@ -301,6 +304,7 @@ locals {
   }
 
   node_firewall_documents = var.node_firewall_mode == "off" ? [] : concat(
+    # The default action stays Talos's own (accept): it is what keeps every port that is NOT listed open.
     [yamlencode({
       apiVersion = "v1alpha1"
       kind       = "NetworkDefaultActionConfig"

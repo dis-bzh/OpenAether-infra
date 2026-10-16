@@ -640,11 +640,11 @@ module "talos" {
 
   disk_encryption_passphrase_length = var.disk_encryption_passphrase_length
 
-  # Talos ingress firewall, rules only (batch B24): off by default, nothing is rendered.
+  # Talos ingress firewall, per-port allow-list (batch B24): off by default, nothing is rendered.
   node_firewall_mode  = var.node_firewall_mode
   node_firewall       = var.node_firewall
-  node_firewall_ports = module.node_ports.between_members
-  node_firewall_scope = module.node_ports.scope
+  node_firewall_ports = module.node_ports.talos_ports
+  node_firewall_scope = module.node_ports.talos_scope
 
   # The provider modules are DELIBERATELY not listed here. A module-level
   # depends_on makes every resource in this module depend on every resource in

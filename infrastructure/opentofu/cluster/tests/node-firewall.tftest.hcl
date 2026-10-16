@@ -256,7 +256,7 @@ run "scaleway_and_talos_follow_the_same_list" {
   command = plan
 
   variables {
-    node_firewall_mode = "rules_only"
+    node_firewall_mode = "port_allowlist"
     node_firewall      = { node_cidrs = ["172.16.0.0/22"] }
   }
 
@@ -269,13 +269,18 @@ run "scaleway_and_talos_follow_the_same_list" {
   }
   assert {
     condition = sort([for d in module.talos.appended_documents : yamldecode(d).name if yamldecode(d).kind == "NetworkRuleConfig"]) == sort([
-      for k in ["kube-apiserver", "talos-apid", "talos-trustd", "etcd", "kubelet", "cilium-vxlan", "cilium-wireguard", "cilium-health", "cilium-metrics", "node-exporter"] : "openaether-${k}"
+      for k in ["kube-apiserver", "talos-apid", "talos-trustd", "etcd", "etcd-metrics", "kubelet", "cilium-vxlan", "cilium-wireguard", "cilium-health", "cilium-metrics", "node-exporter"] : "openaether-${k}"
     ])
     error_message = "The Talos rules must be exactly the shared list without DHCP and without ICMP (Talos refuses a rule without ports and allows ICMP itself)"
   }
+  # vmagent (a pod) scrapes etcd on :2381; a pod on a control-plane node arrives with its pod address.
+  assert {
+    condition     = anytrue([for d in module.talos.appended_documents : try(yamldecode(d).name, "") == "openaether-etcd-metrics" && yamldecode(d).portSelector.ports == [2381] && contains([for i in yamldecode(d).ingress : i.subnet], "10.244.0.0/16")]) && anytrue([for d in module.talos.appended_documents : try(yamldecode(d).name, "") == "openaether-etcd" && yamldecode(d).portSelector.ports == ["2379-2380"] && !contains([for i in yamldecode(d).ingress : i.subnet], "10.244.0.0/16")])
+    error_message = "etcd client/peer (2379-2380) stay nodes-only; the metrics port 2381 also admits the pod range (vmagent scrapes it from a pod)"
+  }
   assert {
     condition     = alltrue([for d in module.talos.appended_documents : yamldecode(d).kind == "NetworkRuleConfig" || yamldecode(d).ingress == "accept"])
-    error_message = "rules_only must never write a blocking default action"
+    error_message = "port_allowlist must never write a blocking default action"
   }
 }
 

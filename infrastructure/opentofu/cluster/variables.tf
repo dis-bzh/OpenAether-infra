@@ -946,17 +946,20 @@ variable "restrict_inter_node" {
 variable "node_firewall_mode" {
   description = <<-EOT
     Talos ingress firewall of the nodes (ANSSI PA-022 R17/R20, batch B24 stage 2). "off" (default)
-    renders nothing: the generated configs are byte-identical. "rules_only" appends one NetworkRuleConfig
-    per flow of the shared port list plus NetworkDefaultActionConfig ingress: accept, so the rules exist on
-    the node and nothing is blocked. There is no "enforce" yet: it waits for a soaked rules_only and a
-    rehearsed exit path (docs/network.md section 6). Needs node_firewall.node_cidrs.
+    renders nothing: the generated configs are byte-identical. "port_allowlist" appends one NetworkRuleConfig
+    per flow of the shared port list plus NetworkDefaultActionConfig ingress: accept. A rule is a per-port
+    allow-list even with that default: each listed port ACCEPTS ONLY THE LISTED SOURCES (node_firewall) and
+    drops the rest, ports that are not listed stay open, and a source missing from node_firewall is cut off
+    (a broken cluster: not inert, measured on live nodes, lab 11). No mode with a blocking default action
+    exists. Rehearse on a throwaway cluster (docs/network.md section 6, LAB-CHECKLIST B24). Needs
+    node_firewall.node_cidrs.
   EOT
   type        = string
   default     = "off"
 
   validation {
-    condition     = contains(["off", "rules_only"], var.node_firewall_mode)
-    error_message = "node_firewall_mode must be \"off\" or \"rules_only\" (enforce is not implemented yet)."
+    condition     = contains(["off", "port_allowlist"], var.node_firewall_mode)
+    error_message = "node_firewall_mode must be \"off\" or \"port_allowlist\" (no mode with a blocking default action exists)."
   }
 }
 
