@@ -1294,6 +1294,12 @@ TF
     && ok "closed: no 80/443, no 8200, the cluster ports on the subnet, DNS and NTP pinned" || bad "the closed render is not the reviewed one"
   ! grep -q 'unattended-upgrades' <<<"$(awk '/^packages:/,/^write_files:/' <<<"$R_CLO")" && grep -q 'apt-daily-upgrade.timer' <<<"$R_CLO" && ! grep -q 'enable --now unattended-upgrades' <<<"$R_CLO" \
     && ok "closed: no update tooling is installed or enabled (patching is replacing the bastion)" || bad "closed still installs or enables unattended-upgrades"
+  # cloud-init 22.2+ calls `sudo: false` deprecated (status "degraded", exit 2 of `cloud-init status`): the baseline render says
+  # `null`, the default render keeps the released bytes (a changed user_data replaces the bastion on OVH and Outscale).
+  R_BASE="$(render_bastion 'baseline = {enabled = true, audit_logging = false, restrict_ssh_source = false, time_servers = [], revoked_keys = []}, admins = { alice = { ssh_keys = ["ssh-ed25519 AAAAa alice"] } }')"
+  [ "$(grep -c '^    sudo: null' <<<"$R_BASE")" = 2 ] && ! grep -q 'sudo: false' <<<"$R_BASE" && grep -q '^    sudo: false' <<<"$R_DEF" \
+    && ok "sudo: null for the baseline accounts (cloud-init 22.2+), sudo: false kept in the default render" \
+    || bad "the sudo key is wrong: baseline accounts need null (deprecated false makes cloud-init degraded), the default must keep false"
 else
   skip "tofu not installed: the new bastion variables were not rendered"
 fi

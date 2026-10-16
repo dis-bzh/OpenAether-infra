@@ -70,6 +70,7 @@ Found by the labs above, each with the rung it reached after the fix (mocked tes
   and cloud-init ended in error. Closed mode now purges `nc`, `curl` and `tcpdump` offline. The documentation said first boot was unaffected;
   it is corrected (EN and FR).
 - **`explain-failure.sh`** explains a replaced bastion that ends as a cluster health check failure, like the refused-port shape.
+- **Bastion with the baseline: `cloud-init status` says `done`, not `degraded` (lab 11, Scaleway and Outscale).** The baseline render writes `sudo: null` for the shared and named accounts (cloud-init 22.2 deprecates `false`; `null` also means "no sudoers entry"). The render without the baseline keeps `sudo: false`, byte for byte, because a changed user data replaces the bastion on OVH and Outscale (the released hash is pinned by `test-cluster-checks.sh`). Rung: render tests; `cloud-init schema` on a real image not run here.
 
 ### Security
 

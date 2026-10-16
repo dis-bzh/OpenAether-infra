@@ -21,13 +21,13 @@ users:
     groups: [bastion-admins%{ if !baseline.enabled }, sudo%{ endif }]
     shell: /bin/bash
     lock_passwd: true
-    sudo: false
+    sudo: %{ if baseline.enabled }null # `false` is deprecated since cloud-init 22.2 (status "degraded"); null = no sudoers entry%{ else }false%{ endif }
 %{ for name, a in admins ~}
   - name: ${name}
     groups: [bastion-admins]
     shell: /bin/bash
     lock_passwd: true
-    sudo: false
+    sudo: %{ if baseline.enabled }null # `false` is deprecated since cloud-init 22.2 (status "degraded"); null = no sudoers entry%{ else }false%{ endif }
 %{ endfor ~}
 
 ssh_pwauth: false
