@@ -664,7 +664,7 @@ variable "git_ref" {
 }
 
 # Opt-in verification of the commit Flux applies (ANSSI SSDLC-CICD-AIP-03, SSDLC-CONT-REC06). Off = the bootstrap manifest
-# is byte-identical to the one before this variable existed. Flux checks OpenPGP signatures only (not SSH ones).
+# is byte-identical to the one before this variable existed. This repository wires OpenPGP keys only; the vendored Flux would also take SSH keys (.sshpub), not wired here.
 variable "flux_git_verify" {
   description = <<-EOT
     Flux Git source verification. enabled = false (default): nothing changes. enabled = true: the bootstrap manifest gets

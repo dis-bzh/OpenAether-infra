@@ -5,6 +5,9 @@
 # signs. A runner without the signer keys sees a signed commit as `E` (cannot be checked): that counts as signed
 # here, because the cryptographic verdict is GitHub's (required_signatures ruleset) and Flux's (spec.verify).
 #
+# Merge commits are skipped: on a pull_request run HEAD is GitHub's synthetic, unsigned refs/pull/N/merge commit,
+# which would make --strict fail every PR.
+#
 # Usage: check-commit-signatures.sh [--strict] <rev-range>
 set -euo pipefail
 
@@ -15,7 +18,7 @@ range="${1:?usage: check-commit-signatures.sh [--strict] <rev-range>}"
 # A file, not a process substitution: a failing `git log` must stop the script (see check-commit-authors.sh, #132).
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
-if ! git log --format='%H%x09%G?%x09%s' "$range" > "$tmp"; then
+if ! git log --no-merges --format='%H%x09%G?%x09%s' "$range" > "$tmp"; then
   echo "✗ git log $range failed — commit signatures could not be checked" >&2
   exit 2
 fi

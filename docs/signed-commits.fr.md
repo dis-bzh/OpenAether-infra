@@ -11,8 +11,11 @@ de script avec clé jetable), jamais exécuté sur un cluster (checklist de labo
 
 ## Étape 1 - côté dépôt (sans risque pour le cluster)
 
-- **Standard : signatures OpenPGP (GPG).** `GitRepository.spec.verify` de Flux ne vérifie que l'OpenPGP ; une signature SSH
-  satisferait le ruleset GitHub et serait refusée par Flux. Configuration : `git config --global user.signingkey
+- **Standard : signatures OpenPGP (GPG).** Ce dépôt standardise sur OpenPGP, un choix et non une limite de Flux : le Flux
+  embarqué accepte aussi des clés publiques SSH dans le Secret des signataires (clés suffixées `.sshpub`), ce qui n'est PAS
+  câblé ici (la validation de `flux_git_verify` et le Secret `git-signers` ne prennent que des clés OpenPGP armorées). Un
+  commit signé par une clé SSH satisferait le ruleset GitHub mais échouerait à la vérification de Flux dans ce montage :
+  signer avec GPG. Configuration : `git config --global user.signingkey
   <empreinte>` et `git config --global commit.gpgsign true`, puis publier la clé publique sur le compte GitHub.
 - **CI** : `scripts/dev/check-commit-signatures.sh` s'exécute sur chaque PR, sur les commits ajoutés (job `commits`). C'est
   un **avertissement** tant que tous les mainteneurs ne signent pas ; ajouter `--strict` dans `ci.yml` pour échouer. Un

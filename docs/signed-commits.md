@@ -11,8 +11,10 @@ everything below: mocked/static (`tofu test`, a throwaway-key script test), neve
 
 ## Stage 1 - the repository side (no cluster risk)
 
-- **Standard: OpenPGP (GPG) signatures.** Flux's `GitRepository.spec.verify` checks OpenPGP signatures only; an SSH
-  signature would satisfy GitHub's ruleset and be rejected by Flux. Setup: `git config --global user.signingkey <fingerprint>`
+- **Standard: OpenPGP (GPG) signatures.** This repository standardises on OpenPGP, a choice and not a Flux limit: the
+  vendored Flux also accepts SSH public keys in the signers Secret (keys suffixed `.sshpub`), which is NOT wired here (the
+  `flux_git_verify` validation and the `git-signers` Secret take armored OpenPGP keys only). A commit signed with an SSH key
+  would satisfy GitHub's ruleset but fail Flux's verification of this setup, so sign with GPG. Setup: `git config --global user.signingkey <fingerprint>`
   and `git config --global commit.gpgsign true`, then publish the public key on the GitHub account.
 - **CI**: `scripts/dev/check-commit-signatures.sh` runs on every PR over the commits it adds (job `commits`). It is a
   **warning** until every maintainer signs; add `--strict` in `ci.yml` to make it fail. A runner without the keys sees a
