@@ -70,7 +70,25 @@ Found by the labs above, each with the rung it reached after the fix (mocked tes
   and cloud-init ended in error. Closed mode now purges `nc`, `curl` and `tcpdump` offline. The documentation said first boot was unaffected;
   it is corrected (EN and FR).
 - **`explain-failure.sh`** explains a replaced bastion that ends as a cluster health check failure, like the refused-port shape.
+
 ### Security
+
+- **Review fixes of the first and second ANSSI waves (infra review of B10-B30). Static / mocked, not run on a cluster.**
+  - `check-commit-signatures.sh` skips merge commits: on a PR run HEAD is GitHub's unsigned synthetic merge commit, so the documented `--strict`
+    switch-on would have failed every PR. Its test now has a merge-commit case and expired-key/signature cases (status X/Y, throwaway key signed in the past).
+  - `docs/signed-commits.md` (+ `.fr.md`) and the `flux_git_verify` comment no longer say Flux checks OpenPGP only: the vendored Flux also takes
+    SSH keys (`.sshpub`). OpenPGP is this repository's choice, and SSH keys are NOT wired (the validation and the Secret take armored OpenPGP keys).
+  - `kubeconfig-new.sh` no longer needs GNU `realpath -m`, `base64 -w0` or `date -d` (macOS operators); its test now checks that the temporary directory
+    holding the private key is removed. The tests still run on Linux only, so the macOS path is untested.
+  - `rotate-secret.sh --restart` waits only for the ExternalSecrets that read the rotated path, not every ExternalSecret of the cluster.
+  - `task render-manifests` renders the dropped-flow Cilium variant too and `task render-check` runs the effective-config check on it (a Cilium bump no
+    longer leaves the lock with the old variant hash).
+  - The pid and lock files of `etcd-snapshot-cron.sh` and `local-admin-portforward.sh` live in `~/.cache/openaether` only (cron has no runtime dir, an
+    SSH session has one: two lock files let a cron run and a manual run overlap).
+  - `escrow-openbao.sh attest` refuses `--holders` above the receipt's recipients; the https-only Keystone guard is now tested in all five scripts.
+  - Wording: `node_log_forwarding` is global (one apply re-applies every node; there is no "one node first"); the 192-bit passphrase threshold is 33, not 40;
+    the Proxmox and Scaleway examples no longer offer `restrict_inter_node`, the Outscale one gained the `flux_git_verify` block.
+  - It does NOT: add SSH signature support, a per-node switch for the log forwarding or the node baseline, or run anything on a cluster.
 
 - **Critic follow-ups and the ops scripts that hold provider admin keys (B28, infra half). Static / mocked, not run on a cloud.**
   - `CKV_OA_3` (new Checkov custom check): an Outscale inbound `outscale_security_group_rule` with a literal `/0` range fails the hard gate.
@@ -78,9 +96,9 @@ Found by the labs above, each with the rung it reached after the fix (mocked tes
     (`test-checkov-custom-checks.sh`). It reads literals only: a range coming from `admin_ip` is not judged, and Proxmox is still uncovered.
   - The five OpenStack-facing ops scripts (`purge-orphans/ovh.py`, `verify-provider-clean.py`, `delete-openstack-resource.py`, `ensure-capo-fip.py`,
     `preflight-quotas.py`) refuse an `OS_AUTH_URL` that is not `https://` (exit 2, nothing sent): the Keystone request carries the account password.
-  - `local-admin-portforward.sh` and `etcd-snapshot-cron.sh` keep their pid and lock files under `$XDG_RUNTIME_DIR` or `~/.cache/openaether` (mode 0700)
+  - `local-admin-portforward.sh` and `etcd-snapshot-cron.sh` keep their pid and lock files under `~/.cache/openaether` (mode 0700; first written with `$XDG_RUNTIME_DIR` as an option, then fixed, see the review entry below)
     instead of a fixed name in `/tmp`, where another local user could plant a symlink (the lock redirection) or a pid list (`--stop` kills what it lists).
-  - `disk_encryption_passphrase_length` (default 32, the released value, about 190 bits): 40 or more reaches the 192 bits the critic measured against
+  - `disk_encryption_passphrase_length` (default 32, the released value, about 190 bits): 33 or more reaches the 192 bits the critic measured against
     PG-083's symmetric key size. For a NEW cluster only; on a live one it would replace the LUKS passphrase. Does not re-key an existing cluster.
   - Corrected a documentation defect: `docs/admin-access.md` told operators to forward `-L 8443:<gateway>:443`, which the bastion's `PermitOpen` refuses.
     The page now says so instead of promising a path that was never run. It does not open 443.
@@ -109,7 +127,7 @@ Found by the labs above, each with the rung it reached after the fix (mocked tes
   - `cilium_hubble_drop_log` (new, default `false`) boots Cilium from the new committed `cilium-hubble-drops.yaml`: the Hubble server only (no relay, no UI, no TLS material, **no TCP listener**), exporting only DROPPED/ERROR flows, field-masked (no payload), to the agent's stdout, where the existing pod-log collector reads it. `render-bootstrap-manifests.sh --hubble-drops` renders it, `--check` and `upstream-artifacts.lock` cover it, `check-cilium-effective-config.py` refuses a widened export. `cilium.yaml` is unchanged byte for byte.
   - It does NOT: ship anything by itself (the receiver and the Loki side live in OpenAether-apps), change the kube-apiserver audit policy (Talos's default Metadata policy stays; the file is collected by the apps opt-in collector), add a second sink outside the cluster, or touch the bastion. The `hubble-peer` Service and a declared (not listening) `hostPort` 4244 come with the chart.
 
-- **Node kernel/kubelet baseline and node time sources, opt-in and off by default (addresses ANSSI BP-028 R9/R12/R13, PA-012 R5; audit B23, infra half: F18, F03, F19, F10, LOG-09, TLS-11, F14).** Rung: **mocked/static (`tofu test`, 63 runs in the talos module), not run on a cluster.**
+- **Node kernel/kubelet baseline and node time sources, opt-in and off by default (addresses ANSSI BP-028 R9/R12/R13, PA-012 R5; audit B23, infra half: F18, F03, F19, F10, LOG-09, TLS-11, F14).** Rung: **mocked/static (`tofu test`, 63 runs in the talos module when written, 71 after B24/B28), not run on a cluster.**
   - `node_baseline` (new, default `null`): `sysctls` writes `machine.sysctls` on every node (`kernel.sysrq=0`, perf sampling limits, no ICMP/secure redirects or source routing in IPv4 and IPv6, `tcp_syncookies=1`, `tcp_rfc1337=1`), `sysctls_extra` adds or overrides, `panic_on_oops` is its own switch (a panic with a zero panic timeout hangs the node); `worker_default_seccomp` gives the workers the RuntimeDefault seccomp default the control planes already had; `pod_pids_limit` sets the kubelet `podPidsLimit`; `kubelet_server_tls` sets `serverTLSBootstrap`. A hash is in `machine_config_version`; unset (or all-default), configs and that trigger are byte-identical (tested).
   - `node_time_servers` (new, default `[]`): several NTP sources as `ntp.servers`, merged with the encrypted-DNS `bootTimeout` into the one `TimeSyncConfig` document. The bastion half already exists (`bastion_baseline.time_servers`).
   - `docs/hardening.md` (EN/FR): the sysctl deviation table (`ip_forward`, `rp_filter`, `pid_max`, `modules_disabled`, IPv6 kept) and a decision note on SELinux, sandboxed runtimes and `hostUsers`.
