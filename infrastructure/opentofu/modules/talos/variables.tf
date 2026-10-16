@@ -440,3 +440,62 @@ variable "node_baseline" {
     error_message = "node_baseline.panic_on_oops only applies with sysctls = true; use sysctls_extra for a lone key."
   }
 }
+
+# ==============================================================================
+# Node ingress firewall (batch B24, stage 2). Off: nothing is rendered.
+# ==============================================================================
+
+variable "node_firewall_mode" {
+  description = <<-EOT
+    "off" (default): no firewall document, every node config byte-identical. "rules_only": one
+    NetworkRuleConfig per flow of node_firewall_ports plus NetworkDefaultActionConfig ingress: accept.
+    That default action is Talos's own, so the rules are on the node but nothing is blocked; they
+    only matter the day a later mode blocks by default. No "enforce" exists yet (needs a soaked
+    rules_only and a rehearsed way out; LAB-CHECKLIST B24). A change is applied without a reboot.
+  EOT
+  type        = string
+  default     = "off"
+
+  validation {
+    condition     = contains(["off", "rules_only"], var.node_firewall_mode)
+    error_message = "node_firewall_mode must be \"off\" or \"rules_only\" (enforce is not implemented yet)."
+  }
+}
+
+variable "node_firewall" {
+  description = "Source ranges of the rules (node_cidrs required when the mode is not off; bastion_cidrs, pod_cidrs, lb_cidrs). Subnets only, never node addresses."
+  type = object({
+    node_cidrs    = optional(list(string), [])
+    bastion_cidrs = optional(list(string), [])
+    pod_cidrs     = optional(list(string), ["10.244.0.0/16"])
+    lb_cidrs      = optional(list(string), ["100.64.0.0/10"])
+  })
+  default = {}
+
+  validation {
+    condition = alltrue([for c in concat(var.node_firewall.node_cidrs, var.node_firewall.bastion_cidrs, var.node_firewall.pod_cidrs, var.node_firewall.lb_cidrs) :
+    can(cidrhost(c, 0)) && !contains(["0.0.0.0/0", "::/0"], c)])
+    error_message = "node_firewall: every entry must be a CIDR and none may be the whole Internet (0.0.0.0/0)."
+  }
+  validation {
+    condition     = var.node_firewall_mode == "off" || length(var.node_firewall.node_cidrs) > 0
+    error_message = "node_firewall.node_cidrs is required when node_firewall_mode is not \"off\"."
+  }
+}
+
+variable "node_firewall_ports" {
+  description = "name => { protocol (TCP|UDP|ICMP), ports (\"6443\", \"2379-2381\", null for ICMP) }: the shared list of modules/providers/_shared/node-ports (between_members)."
+  type        = map(object({ protocol = string, ports = optional(string) }))
+  default     = {}
+}
+
+variable "node_firewall_scope" {
+  description = "name => source groups (nodes, bastion, pods, lb) allowed for each entry of node_firewall_ports (output scope of the shared list)."
+  type        = map(list(string))
+  default     = {}
+
+  validation {
+    condition     = alltrue([for k, v in var.node_firewall_scope : alltrue([for g in v : contains(["nodes", "bastion", "pods", "lb"], g)])])
+    error_message = "node_firewall_scope: groups are nodes, bastion, pods, lb."
+  }
+}

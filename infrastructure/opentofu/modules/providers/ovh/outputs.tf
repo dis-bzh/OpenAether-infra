@@ -58,3 +58,16 @@ output "app_lb_allowed_cidrs" {
     https = one(openstack_lb_listener_v2.https[*].allowed_cidrs)
   }
 }
+
+# Test-only: the member-to-member rules in the shared list's notation ("TCP 6443", "ICMP -"), and whether the
+# two broad rules are still there.
+output "inter_node_rules" {
+  description = "restrict_inter_node: the explicit member rules as 'PROTOCOL ports' and whether the all-protocol and 51820 rules exist, for tests"
+  value = {
+    all_protocol = length(openstack_networking_secgroup_rule_v2.inter_node) > 0
+    wireguard    = length(openstack_networking_secgroup_rule_v2.wireguard) > 0
+    explicit = sort([for k, r in openstack_networking_secgroup_rule_v2.inter_node_ports :
+      "${upper(r.protocol)} ${r.port_range_min == null || r.port_range_min == 0 ? "-" : (r.port_range_min == r.port_range_max ? tostring(r.port_range_min) : "${r.port_range_min}-${r.port_range_max}")}"
+    ])
+  }
+}

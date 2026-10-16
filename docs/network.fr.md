@@ -118,8 +118,9 @@ Chaque bloc est la sortie de `scripts/dev/gen-flow-matrix.sh --fr <provider>` : 
 | `talos_api` | tcp | 50000 | SG du bastion | toujours |
 | `http` | tcp | `var.app_lb_node_ports.http` | `10.0.0.0/24` | `deploy_app_lb` |
 | `https` | tcp | `var.app_lb_node_ports.https` | `10.0.0.0/24` | `deploy_app_lb` |
-| `wireguard` | udp | 51820 | membres du SG du cluster | toujours |
-| `inter_node` | tous | tous | membres du SG du cluster | toujours |
+| `wireguard` | udp | 51820 | membres du SG du cluster | pas `restrict_inter_node` |
+| `inter_node` | tous | tous | membres du SG du cluster | pas `restrict_inter_node` |
+| `inter_node_ports` | chaque entrée de la liste | la liste partagée (`_shared/node-ports`) | membres du SG du cluster | `restrict_inter_node` |
 <!-- flow-matrix:ovh:end -->
 
 **Outscale**
@@ -134,8 +135,9 @@ Chaque bloc est la sortie de `scripts/dev/gen-flow-matrix.sh --fr <provider>` : 
 | `https` | tcp | `var.app_lb_node_ports.https` | sous-réseau public (LB) | `deploy_app_lb` |
 | `app_lb_http` | tcp | 80 | `app_lb_allowed_cidrs`, sortie du cluster | `deploy_app_lb` et `app_lb_allowed_cidrs` |
 | `app_lb_https` | tcp | 443 | `app_lb_allowed_cidrs`, sortie du cluster | `deploy_app_lb` et `app_lb_allowed_cidrs` |
-| `wireguard` | udp | 51820 | membres du SG du cluster | toujours |
-| `inter_node` | tous | tous | membres du SG du cluster | toujours |
+| `wireguard` | udp | 51820 | membres du SG du cluster | pas `restrict_inter_node` |
+| `inter_node` | tous | tous | membres du SG du cluster | pas `restrict_inter_node` |
+| `inter_node_ports` | chaque entrée de la liste | la liste partagée (`_shared/node-ports`) | membres du SG du cluster | `restrict_inter_node` |
 <!-- flow-matrix:outscale:end -->
 
 Proxmox n'a pas de groupe de sécurité ; ses ports sont les mêmes services, filtrés par ce que l'opérateur fait tourner sur l'hôte ou le bridge.
@@ -157,7 +159,8 @@ Le test exige que chaque nom de règle ci-dessus ait une ligne ici, dans les deu
 | `gateway-<name>`, `http`, `https` | les backends du load balancer applicatif sur les NodePorts fixes de la Gateway | n'existe qu'avec `deploy_app_lb` ; les routes de la Gateway s'authentifient elles-mêmes (`OpenAether-apps/docs/public-exposure.md`) |
 | `app_lb_http`, `app_lb_https` | Outscale seulement : le groupe du load balancer est le groupe du cluster, les clients publics admis sur 80/443 sont donc des règles dans ce groupe | seulement avec `app_lb_allowed_cidrs` ; non exécuté sur un cloud, savoir si le groupe filtre le load balancer est le premier contrôle en laboratoire |
 | `carrier-<name>` | trafic de backend de load balancer qui arrive de la plage carrier ; l'origine n'est pas confirmée | gardée jusqu'à ce qu'un vrai déploiement montre qu'elle est inutilisée |
-| `inter_node` | tout le trafic entre nœuds (etcd, kubelet, Cilium) | **n'importe quel port et protocole entre membres** : plus large que ce dont la matrice a besoin ; le resserrer est un travail prévu, pas fait |
+| `inter_node` | tout le trafic entre nœuds (etcd, kubelet, Cilium) | **n'importe quel port et protocole entre membres** : plus large que ce dont la matrice a besoin. Défaut ; `restrict_inter_node = true` le remplace (ainsi que `wireguard`) par `inter_node_ports` |
+| `inter_node_ports` | les mêmes flux que la liste de Scaleway (sans DHCP), une règle chacun, membres seulement ; WireGuard sur 51871 | seulement avec `restrict_inter_node` ; la liste est un fichier (`modules/providers/_shared/node-ports`) partagé avec Scaleway et les règles Talos ; vérifié au plan, non exécuté sur un cloud (LAB-CHECKLIST B24) |
 
 ### 5.4 Bastion
 
@@ -169,9 +172,9 @@ seulement TCP 6443 et 50000 vers le sous-réseau du cluster, ICMP dans le sous-r
 Listées pour qu'un lecteur ne prenne pas la matrice pour plus qu'elle n'est. Aucune n'est changée par cette page.
 
 1. **Le groupe de Scaleway ne filtre pas le réseau privé.** Les règles sont exactes pour qu'un pare-feu d'hôte puisse les appliquer plus tard.
-2. **Pas de pare-feu d'hôte.** Les nœuds admettent 50000, 50001, 2379-2381 et 10250 depuis tout le sous-réseau (Scaleway) ou le groupe (OVH, Outscale), y compris depuis un nœud compromis ou un pod hostNetwork. Le mTLS ou l'authentification propres à chaque service est la seule barrière.
-   Un plan par étapes existe dans l'audit (des listes de ports explicites à la place d'`inter_node`, puis un pare-feu d'hôte Talos ou Cilium optionnel en mode audit, puis l'application) ; l'étape 0 est cette page.
-3. **`inter_node` d'OVH et Outscale admet tous protocoles et ports entre membres.**
+2. **Pas de pare-feu d'hôte par défaut.** Les nœuds admettent 50000, 50001, 2379-2381 et 10250 depuis tout le sous-réseau (Scaleway) ou le groupe (OVH, Outscale), y compris depuis un nœud compromis ou un pod hostNetwork. Le mTLS ou l'authentification propres à chaque service est la seule barrière.
+   Plan par étapes : l'étape 0 est cette page ; l'étape 1 est `restrict_inter_node` (ci-dessous) ; l'étape 2 est `node_firewall_mode = "rules_only"`, qui écrit une `NetworkRuleConfig` Talos par flux de la liste partagée avec une action d'entrée par défaut à accept : les règles existent sur le nœud et rien n'est bloqué. **L'application (`block`) n'est pas implémentée** ; elle attend un rules_only éprouvé et une sortie de secours répétée. Les deux interrupteurs sont désactivés par défaut et aucun n'a été exécuté sur un cluster.
+3. **`inter_node` d'OVH et Outscale admet tous protocoles et ports entre membres** sauf si `restrict_inter_node = true` (défaut false : rien ne change tant qu'il n'est pas posé). Le remplacement des règles n'est pas atomique : quelques secondes peuvent manquer des nouvelles alors que les anciennes ont disparu.
 4. **La sortie des nœuds est ouverte** (Scaleway `outbound_default_policy = accept`, OVH des règles de sortie totale explicites, Outscale n'en déclare aucune). Un nœud compromis peut tout joindre ; une liste d'autorisation de sortie risque les téléchargements d'images, les sauvegardes S3 et le premier démarrage, et demande une conception.
 5. **Le load balancer applicatif n'a pas de filtre de source par défaut** quand `deploy_app_lb` est vrai : chaque route de la Gateway répond à quiconque pose son en-tête Host, et la connexion propre à la route est sa seule protection
    (`OpenAether-apps/docs/public-exposure.md`, qui liste les routes et la façon dont chacune s'authentifie). `admin_ip` ne garde que le frontal de l'API Kubernetes et le bastion. `admin-access.fr.md` disait la passerelle « rien de public » : corrigé.

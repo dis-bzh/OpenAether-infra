@@ -284,6 +284,45 @@ locals {
 }
 
 # ==============================================================================
+# node_firewall_mode (batch B24): Talos ingress firewall, rules only. "off" renders nothing. With
+# "rules_only" every flow of the shared port list becomes a NetworkRuleConfig and the default action is
+# written down as accept (Talos's own), so no packet is dropped; the rules are there to be reviewed on
+# the node (`talosctl get networkrules`) before a blocking mode exists. Sources are subnets, never
+# node addresses. Appended like the other documents, so they also change machine_config_version.
+# ==============================================================================
+
+locals {
+  fw_groups = {
+    nodes   = var.node_firewall.node_cidrs
+    bastion = var.node_firewall.bastion_cidrs
+    pods    = var.node_firewall.pod_cidrs
+    lb      = var.node_firewall.lb_cidrs
+  }
+
+  node_firewall_documents = var.node_firewall_mode == "off" ? [] : concat(
+    [yamlencode({
+      apiVersion = "v1alpha1"
+      kind       = "NetworkDefaultActionConfig"
+      ingress    = "accept"
+    })],
+    [for name in sort(keys(var.node_firewall_ports)) : yamlencode(merge(
+      {
+        apiVersion = "v1alpha1"
+        kind       = "NetworkRuleConfig"
+        name       = "openaether-${name}"
+        portSelector = merge(
+          { protocol = lower(var.node_firewall_ports[name].protocol) },
+          var.node_firewall_ports[name].ports == null ? {} : { ports = [try(tonumber(var.node_firewall_ports[name].ports), var.node_firewall_ports[name].ports)] },
+        )
+      },
+      {
+        ingress = [for c in distinct(flatten([for g in lookup(var.node_firewall_scope, name, ["nodes"]) : local.fw_groups[g]])) : { subnet = c }]
+      },
+    ))],
+  )
+}
+
+# ==============================================================================
 # node_nameservers: ResolverConfig (+ TimeSyncConfig if encrypted) appended to
 # every config, not config_patches: provider 0.11 rejects `protocol` and
 # `tlsServerName` there (#241). No `hostDNS`: v1alpha1 already sets it.
@@ -299,6 +338,7 @@ locals {
 
   appended_documents = concat(
     local.node_log_kmsg_documents,
+    local.node_firewall_documents,
     length(var.node_nameservers) == 0 ? [] : [yamlencode({
       apiVersion = "v1alpha1"
       kind       = "ResolverConfig"

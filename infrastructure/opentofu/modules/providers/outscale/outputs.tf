@@ -85,3 +85,15 @@ output "app_lb_sources" {
     https = sort([for k, r in outscale_security_group_rule.app_lb_https : k])
   }
 }
+
+# Test-only: see the OVH output of the same name.
+output "inter_node_rules" {
+  description = "restrict_inter_node: the explicit member rules as 'PROTOCOL ports' and whether the all-protocol and 51820 rules exist, for tests"
+  value = {
+    all_protocol = length(outscale_security_group_rule.inter_node) > 0
+    wireguard    = length(outscale_security_group_rule.wireguard) > 0
+    explicit = sort([for k, r in outscale_security_group_rule.inter_node_ports :
+      "${upper(r.rules[0].ip_protocol)} ${r.rules[0].from_port_range == -1 ? "-" : (r.rules[0].from_port_range == r.rules[0].to_port_range ? tostring(r.rules[0].from_port_range) : "${r.rules[0].from_port_range}-${r.rules[0].to_port_range}")}"
+    ])
+  }
+}

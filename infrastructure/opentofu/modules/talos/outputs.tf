@@ -98,7 +98,7 @@ output "inline_manifest_names" {
 }
 
 output "appended_documents" {
-  description = "The documents appended to every node's config (KmsgLogConfig first when node_log_forwarding is set, then ResolverConfig and TimeSyncConfig), empty when neither node_log_forwarding nor node_nameservers is. Exposed because the rendered configs are unknown at plan."
+  description = "The documents appended to every node's config (KmsgLogConfig first when node_log_forwarding is set, then the node firewall documents when node_firewall_mode is not off, then ResolverConfig and TimeSyncConfig), empty when neither node_log_forwarding nor node_nameservers is. Exposed because the rendered configs are unknown at plan."
   value       = local.appended_documents
 }
 

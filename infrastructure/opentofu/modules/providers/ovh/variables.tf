@@ -216,3 +216,17 @@ variable "app_lb_allowed_cidrs" {
   type        = list(string)
   default     = []
 }
+
+variable "restrict_inter_node" {
+  description = <<-EOT
+    false (default): the node group keeps its all-protocol "inter_node" rule between members and the
+    UDP 51820 "wireguard" rule, exactly as before. true: both are replaced by one rule per entry of the
+    shared list (modules/providers/_shared/node-ports: apid, trustd, etcd, kubelet, Cilium vxlan,
+    WireGuard 51871, health, ICMP, metrics), the same list Scaleway and the Talos rules use (ANSSI
+    PA-022 R17/R20, batch B24 stage 1). The swap is not atomic: a few seconds can lack the new rules while
+    the old ones are gone, and established flows stay tracked. Try it on a throwaway cluster first
+    (LAB-CHECKLIST B24).
+  EOT
+  type        = bool
+  default     = false
+}

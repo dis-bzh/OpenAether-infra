@@ -898,3 +898,49 @@ variable "talos_installer_schematic_id" {
   type        = string
   default     = "613e1592b2da41ae5e265e8789429f22e121aab91cb4deb6bc3c0b6262961245"
 }
+
+variable "restrict_inter_node" {
+  description = <<-EOT
+    OVH and Outscale only (Scaleway already lists its ports; Proxmox and local have no security group).
+    false (default): the cluster group keeps its all-protocol rule between members. true: replaced by the
+    explicit port list shared with Scaleway and the Talos rules (ANSSI PA-022 R17/R20, batch B24 stage 1).
+    Rules and caveats: the variable of the same name in modules/providers/ovh/variables.tf.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "node_firewall_mode" {
+  description = <<-EOT
+    Talos ingress firewall of the nodes (ANSSI PA-022 R17/R20, batch B24 stage 2). "off" (default)
+    renders nothing: the generated configs are byte-identical. "rules_only" appends one NetworkRuleConfig
+    per flow of the shared port list plus NetworkDefaultActionConfig ingress: accept, so the rules exist on
+    the node and nothing is blocked. There is no "enforce" yet: it waits for a soaked rules_only and a
+    rehearsed exit path (docs/network.md section 6). Needs node_firewall.node_cidrs.
+  EOT
+  type        = string
+  default     = "off"
+
+  validation {
+    condition     = contains(["off", "rules_only"], var.node_firewall_mode)
+    error_message = "node_firewall_mode must be \"off\" or \"rules_only\" (enforce is not implemented yet)."
+  }
+}
+
+variable "node_firewall" {
+  description = <<-EOT
+    Source ranges of the Talos ingress rules, used only when node_firewall_mode is not "off".
+      node_cidrs     the node subnet(s) (required): see docs/network.md for each provider's value
+      bastion_cidrs  the bastion subnet (default: none; the bastion then reaches apid only if it is in node_cidrs)
+      pod_cidrs      the pod network (default 10.244.0.0/16, Talos's default)
+      lb_cidrs       load balancer carrier/backend sources (default 100.64.0.0/10)
+    Subnets, never node addresses, so a replaced node needs no change.
+  EOT
+  type = object({
+    node_cidrs    = optional(list(string), [])
+    bastion_cidrs = optional(list(string), [])
+    pod_cidrs     = optional(list(string), ["10.244.0.0/16"])
+    lb_cidrs      = optional(list(string), ["100.64.0.0/10"])
+  })
+  default = {}
+}

@@ -267,15 +267,16 @@ module "ovh" {
   control_plane_count = local.ovh_dist.control_planes
   worker_count        = local.ovh_dist.workers
 
-  region             = local.ovh_dist.region
-  flavor_name        = local.ovh_dist.flavor_name
-  image_id           = local.ovh_dist.image_id
-  image_name         = local.ovh_image_name
-  network_name       = local.ovh_dist.network_name
-  availability_zones = local.ovh_dist.availability_zones
-  bastion_image_id   = local.ovh_dist.bastion_image_id
-  k8s_lb_mode        = local.ovh_dist.k8s_lb_mode
-  deploy_app_lb      = var.deploy_app_lb
+  region              = local.ovh_dist.region
+  flavor_name         = local.ovh_dist.flavor_name
+  image_id            = local.ovh_dist.image_id
+  image_name          = local.ovh_image_name
+  network_name        = local.ovh_dist.network_name
+  availability_zones  = local.ovh_dist.availability_zones
+  bastion_image_id    = local.ovh_dist.bastion_image_id
+  k8s_lb_mode         = local.ovh_dist.k8s_lb_mode
+  deploy_app_lb       = var.deploy_app_lb
+  restrict_inter_node = var.restrict_inter_node
 
   app_lb_allowed_cidrs = var.app_lb_allowed_cidrs
 
@@ -305,13 +306,14 @@ module "outscale" {
   control_plane_count = local.osc_dist.control_planes
   worker_count        = local.osc_dist.workers
 
-  instance_type      = local.osc_dist.instance_type
-  image_id           = local.osc_dist.image_id
-  image_name         = local.osc_image_name
-  availability_zones = local.osc_dist.availability_zones
-  bastion_image_id   = local.osc_dist.bastion_image_id
-  k8s_lb_mode        = local.osc_dist.k8s_lb_mode
-  deploy_app_lb      = var.deploy_app_lb
+  instance_type       = local.osc_dist.instance_type
+  image_id            = local.osc_dist.image_id
+  image_name          = local.osc_image_name
+  availability_zones  = local.osc_dist.availability_zones
+  bastion_image_id    = local.osc_dist.bastion_image_id
+  k8s_lb_mode         = local.osc_dist.k8s_lb_mode
+  deploy_app_lb       = var.deploy_app_lb
+  restrict_inter_node = var.restrict_inter_node
 
   app_lb_allowed_cidrs = var.app_lb_allowed_cidrs
 
@@ -563,6 +565,11 @@ resource "terraform_data" "talos_tunnels" {
 # Talos Cluster (secrets, config, bootstrap, kubeconfig)
 # ==============================================================================
 
+# The shared node port list, handed to the Talos ingress rules (the providers read it themselves).
+module "node_ports" {
+  source = "../modules/providers/_shared/node-ports"
+}
+
 module "talos" {
   source = "../modules/talos"
 
@@ -627,6 +634,12 @@ module "talos" {
   node_log_forwarding   = var.node_log_forwarding
   node_time_servers     = var.node_time_servers
   node_baseline         = var.node_baseline
+
+  # Talos ingress firewall, rules only (batch B24): off by default, nothing is rendered.
+  node_firewall_mode  = var.node_firewall_mode
+  node_firewall       = var.node_firewall
+  node_firewall_ports = module.node_ports.between_members
+  node_firewall_scope = module.node_ports.scope
 
   # The provider modules are DELIBERATELY not listed here. A module-level
   # depends_on makes every resource in this module depend on every resource in
