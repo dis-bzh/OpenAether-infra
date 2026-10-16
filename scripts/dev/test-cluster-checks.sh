@@ -816,6 +816,35 @@ verify_local
   && ok "an unanswered version query is UNCHECKED ($(unk_count) unknown), not a pass" \
   || bad "a failed node query read as a fleet on the target, or was not counted as unknown"
 
+# --- Flux and the application load balancer follow what the config asks for ---
+# Lab 11: a deploy_flux = true cluster, seeded, never got a green verify ("flux-system exists", "an application load balancer
+# exists"), and the message called the red "expected until the Day-1 seeding". Asked for -> must be there; not asked -> must be absent.
+OKPLAN='osImage\t0\tTalos (v0.0.2)\n''kubeletVersion\t0\tv0.0.2\n'
+FLUX_UP='get ns flux-system\t0\tflux-system Active\n''wait --for=condition=Available\t0\tdeployment condition met\n'
+plan "$FLUX_UP""$OKPLAN""$BASE"
+run env TF_VAR_deploy_flux=true "$VERIFY_SH" local
+{ said 'deploy_flux = true: flux-system exists and every Flux controller is Available' && ! said 'not a pure-infra cluster' && ! said 'was not installed'; } \
+  && ok "deploy_flux = true and Flux up: the floor check passes" \
+  || bad "a seeded deploy_flux = true cluster is not recognised: $RUN_OUT"
+plan "$OKPLAN""$BASE"
+run env TF_VAR_deploy_flux=true "$VERIFY_SH" local
+{ said 'deploy_flux = true but there is no flux-system namespace' && [ "$RUN_RC" -ne 0 ]; } \
+  && ok "deploy_flux = true and no Flux FAILS (the install did not land)" \
+  || bad "deploy_flux = true with no Flux passed: rc=$RUN_RC"
+plan 'get ns flux-system\t0\tflux-system Active\n''wait --for=condition=Available\t1\ttimed out\n'"$OKPLAN""$BASE"
+run env TF_VAR_deploy_flux=true "$VERIFY_SH" local
+{ said 'a Flux controller is not Available' && [ "$RUN_RC" -ne 0 ]; } \
+  && ok "deploy_flux = true with a controller that is not Available FAILS" \
+  || bad "a Flux install with a dead controller passed: rc=$RUN_RC"
+plan "$FLUX_UP""$OKPLAN""$BASE"
+run "$VERIFY_SH" local
+{ said 'not a pure-infra cluster' && said 'deploy_flux is not true' && ! said 'until the Day-1 seeding' && [ "$RUN_RC" -ne 0 ]; } \
+  && ok "Flux present although deploy_flux is not true still FAILS, and the message no longer says it is expected" \
+  || bad "an unrequested Flux passed, or the old 'expected until seeding' wording is back: $RUN_OUT"
+plan "$OKPLAN""$BASE"
+run "$VERIFY_SH" local
+said 'no flux-system namespace — Talos and Cilium, as scoped' && ok "no Flux and none asked for: the infra-only floor passes" || bad "the default infra-only floor changed: $RUN_OUT"
+
 # =============================================================================
 # infra-verify: control planes across failure domains (#38)
 #
@@ -914,6 +943,27 @@ for c in '-|the output missing' '["z1","z2"]|a list shorter than the control pla
     && ok "${c#*|} is UNCHECKED ($(tally 3) unknown), not a pass" \
     || bad "${c#*|} was read as a placement, or named the wrong cure (failed=$(tally 2), unknown=$(tally 3), apply hint=$hint): $RUN_OUT"
 done
+
+# --- the application load balancer follows deploy_app_lb ---
+applb_verify() { # <app_lb_ip answer> [env assignment…]
+  local ip="$1"; shift
+  plan 'tofu output -raw app_lb_ip\t0\t'"$ip"'\n''tofu output -json control_plane_zones\t0\t["z1","z2","z3"]\n''tofu output -json control_plane_private_ips\t0\t["ip1","ip2","ip3"]\n'\
+'osImage\t0\tTalos (v0.0.1)\n''kubeletVersion\t0\tv0.0.1\n''get nodes -l node-role.kubernetes.io/control-plane\t0\tcp-1 Ready control-plane 9m%%cp-2 Ready control-plane 9m%%cp-3 Ready control-plane 9m\n'"$BASE"
+  run env PATH="$TOFU_BIN:$PATH" "$@" "$VERIFY_SH" "$PROVIDER" "$ROLE"
+}
+applb_verify 203.0.113.10 TF_VAR_deploy_app_lb=true
+{ said 'deploy_app_lb = true: an application load balancer exists' && ! said 'exists and is billed'; } \
+  && ok "deploy_app_lb = true and a load balancer in the state: passes" || bad "a wanted application load balancer is still a red: $RUN_OUT"
+applb_verify 203.0.113.10 TF_VAR_deploy_app_lb=true TF_VAR_deploy_flux=false
+said 'without deploy_flux' && ok "a wanted load balancer without Flux is a warning (nothing serves its NodePorts)" || bad "no warning for an app LB without Flux"
+applb_verify N/A TF_VAR_deploy_app_lb=true
+{ said 'deploy_app_lb = true but the state holds no application load balancer' && [ "$RUN_RC" -ne 0 ]; } \
+  && ok "deploy_app_lb = true and none in the state FAILS" || bad "a missing wanted load balancer passed"
+applb_verify 203.0.113.10
+{ said 'exists and is billed' && said 'deploy_app_lb is not true' && [ "$RUN_RC" -ne 0 ]; } \
+  && ok "a load balancer nobody asked for still FAILS (a cluster that should be infra-only)" || bad "an unrequested application load balancer passed"
+applb_verify N/A
+said 'no application load balancer (deploy_app_lb is not true)' && ok "no load balancer and none asked for: passes" || bad "the default app-LB floor changed: $RUN_OUT"
 
 # =============================================================================
 # cluster-upgrade: the path across minors

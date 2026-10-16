@@ -9,7 +9,9 @@
 #
 # It also asserts what must be ABSENT. "No Flux" and "no application load
 # balancer" are the product decision for this release, and a decision nothing checks is
-# a decision that quietly reverts — this repository has watched that happen.
+# a decision that quietly reverts — this repository has watched that happen. They are
+# absent unless the env file (or TF_VAR_deploy_flux / TF_VAR_deploy_app_lb) asks for them:
+# a deploy_flux = true cluster must then HAVE Flux, with its controllers Available.
 #
 # Every check FAILS the run. A verify that warns and ends green is the defect
 # that let a CNI-less cluster ship for weeks.
@@ -183,12 +185,35 @@ fi
 
 info "The floor is the floor — what this release says is NOT there"
 
-# Not cosmetic. deploy_flux defaults to false; if something re-enables it the
-# cluster silently stops being the thing this release validated.
-if K get ns flux-system >/dev/null 2>&1; then
-  bad "flux-system exists — this is not a pure-infra cluster (deploy_flux?). If deploy_flux = true is on purpose, this red is expected until the Day-1 seeding has run: scripts/ops/seed-openbao.sh <provider> (docs/admin-access.md § 3)"
+# What the operator configured decides what must be present and what must be absent. Before, the verdict ignored it: a
+# deploy_flux = true cluster could never be green ("flux-system exists", "an application load balancer exists"), and the first
+# message said that red was "expected until the Day-1 seeding" (it is not: the namespace exists from the install on). TF_VAR_*
+# wins over the env file, like tofu; anything but the word true is false, the variables' defaults.
+VER_TFVARS="$CLUSTER_DIR/envs/${ROLE}-${PROVIDER}.tfvars"
+cfg_value() { # <key> — TF_VAR_<key>, else the env file, else empty
+  local n="TF_VAR_$1" v
+  v="${!n:-}"
+  [ -n "$v" ] || { [ -f "$VER_TFVARS" ] && v="$(tfv "$VER_TFVARS" "$1")"; }
+  printf '%s' "$v"
+}
+WANT_FLUX=false; [ "$(cfg_value deploy_flux)" = true ] && WANT_FLUX=true
+WANT_APP_LB=false; [ "$(cfg_value deploy_app_lb)" = true ] && WANT_APP_LB=true
+FLUX_NS="$(cfg_value flux_namespace)"; FLUX_NS="${FLUX_NS:-flux-system}"
+
+# Not cosmetic. deploy_flux defaults to false; if something re-enables it the cluster silently stops being the thing this
+# release validated. And the other way round: deploy_flux = true must find Flux, or the install did not land.
+if [ "$WANT_FLUX" = true ]; then
+  if ! K get ns "$FLUX_NS" >/dev/null 2>&1; then
+    bad "deploy_flux = true but there is no ${FLUX_NS} namespace — Flux was not installed (bootstrap-phase2 of cluster-up), or the file read here (${VER_TFVARS##*/}) is not the one applied"
+  elif K -n "$FLUX_NS" wait --for=condition=Available deploy --all --timeout=60s >/dev/null 2>&1; then
+    ok "deploy_flux = true: ${FLUX_NS} exists and every Flux controller is Available"
+  else
+    bad "deploy_flux = true: ${FLUX_NS} exists but a Flux controller is not Available (kubectl -n ${FLUX_NS} get deploy)"
+  fi
+elif K get ns "$FLUX_NS" >/dev/null 2>&1; then
+  bad "${FLUX_NS} exists — this is not a pure-infra cluster, and deploy_flux is not true in ${VER_TFVARS##*/} or TF_VAR_deploy_flux. If Flux is meant to be here, set deploy_flux = true there (this check then asks for it instead); otherwise something re-enabled it"
 else
-  ok "no flux-system namespace — Talos and Cilium, as scoped"
+  ok "no ${FLUX_NS} namespace — Talos and Cilium, as scoped (deploy_flux is not true)"
 fi
 
 if [ "$PROVIDER" != local ]; then
@@ -199,11 +224,22 @@ if [ "$PROVIDER" != local ]; then
   # exit code and treat a failed question as unanswered, never as reassurance.
   if APP_LB="$(cd "$CLUSTER_DIR" && timeout 60 tofu output -raw app_lb_ip 2>/dev/null)"; then
     case "$APP_LB" in
-      N/A | "" | null) ok "no application load balancer (deploy_app_lb=false)" ;;
-      *) bad "an application load balancer exists and is billed; on an infra-only cluster it points at Gateway NodePorts nothing serves (with deploy_flux = true the Gateway serves them, and this red is the flux-system one repeated)" ;;
+      N/A | "" | null)
+        if [ "$WANT_APP_LB" = true ]; then
+          bad "deploy_app_lb = true but the state holds no application load balancer (app_lb_ip is ${APP_LB:-empty}) — the apply that creates it did not land"
+        else
+          ok "no application load balancer (deploy_app_lb is not true)"
+        fi ;;
+      *)
+        if [ "$WANT_APP_LB" = true ]; then
+          ok "deploy_app_lb = true: an application load balancer exists"
+          [ "$WANT_FLUX" = true ] || warn "deploy_app_lb = true without deploy_flux: the load balancer points at Gateway NodePorts nothing serves"
+        else
+          bad "an application load balancer exists and is billed, and deploy_app_lb is not true in ${VER_TFVARS##*/} or TF_VAR_deploy_app_lb: on an infra-only cluster it points at Gateway NodePorts nothing serves. Set deploy_app_lb = true there if it is meant to be, or remove it"
+        fi ;;
     esac
   else
-    unk "could not read app_lb_ip (is the backend initialised, are the S3 credentials exported?) — the absence of an app LB is UNCHECKED"
+    unk "could not read app_lb_ip (is the backend initialised, are the S3 credentials exported?) — the application load balancer is UNCHECKED"
   fi
 fi
 
@@ -272,7 +308,6 @@ version_check() { # <label> <field> <key>
   fi
 }
 
-VER_TFVARS="$CLUSTER_DIR/envs/${ROLE}-${PROVIDER}.tfvars"
 version_check "Talos"      '.status.nodeInfo.osImage'        talos_version
 version_check "Kubernetes" '.status.nodeInfo.kubeletVersion' kubernetes_version
 
