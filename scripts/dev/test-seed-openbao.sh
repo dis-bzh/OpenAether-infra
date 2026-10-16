@@ -107,7 +107,9 @@ grep -q "seed-openbao/synced-at=" "$LOG" && ok "ExternalSecrets are nudged to re
 [ "$(grep -c 'annotate clusters.postgresql.cnpg.io .* cnpg.io/reloadedAt=' "$LOG")" = 2 ] && ok "the CloudNativePG clusters are reloaded so that a late S3 Secret is picked up" || bad "no cnpg reload recorded: $(grep annotate "$LOG")"
 
 echo "--- a reduced profile has no CloudNativePG CRD: the seed still completes ---"
-OUT_NC="$(OA_STUB_NO_CNPG=1 run)"; RC_NC=$?
+SAVED_EXTRA="$ENV_EXTRA"; ENV_EXTRA="$BASE OA_STUB_NO_CNPG=1"
+OUT_NC="$(run)"; RC_NC=$?
+ENV_EXTRA="$SAVED_EXTRA"
 is "the script completes without the CNPG CRD" 0 "$RC_NC"
 grep -q "Day-1 secrets seeded" <<<"$OUT_NC" && ok "…and says so" || bad "no completion line: $OUT_NC"
 
