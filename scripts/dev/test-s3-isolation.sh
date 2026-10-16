@@ -105,6 +105,20 @@ OUT="$(check "${DED[@]}")"; RC=$?
 is "exit 1" 1 "$RC"
 grep -q "✗ $BK-backup list" <<<"$OUT" && ok "named" || bad "$OUT"
 
+echo "--- a store that rejects a made-up version id: inconclusive by default, settled with a real version ---"
+fresh; : >"$FAKE_S3/strict-vid"; limit LOKIAK "$LG" keep-vd
+OUT2="$(check "${DED[@]}")"
+grep -q "? $LG delete-version.*inconclusive" <<<"$OUT2" && ok "the made-up id gives 'inconclusive', not a pass" || bad "$OUT2"
+grep -q "inconclusive: this store rejects\|probe(s) inconclusive" <<<"$OUT2" && ok "the summary says how to settle it" || bad "$OUT2"
+fresh; : >"$FAKE_S3/strict-vid"
+OUT="$(check "${DED[@]}" OA_ISOLATION_REAL_VERSION=1)"; RC=$?
+is "real version, pairs refused: exit 0" 0 "$RC"
+grep -q "✓ $LG delete-version" <<<"$OUT" && ok "denied on a real version" || bad "$OUT"
+fresh; : >"$FAKE_S3/strict-vid"; limit LOKIAK "$LG" keep-vd
+OUT="$(check "${DED[@]}" OA_ISOLATION_REAL_VERSION=1)"; RC=$?
+is "real version, Loki may delete: exit 1" 1 "$RC"
+grep -q "✗ $LG delete-version *expected denied *observed allowed" <<<"$OUT" && ok "caught only with a real version" || bad "$OUT"
+
 echo
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$PASS" -gt 0 ] && [ "$FAIL" -eq 0 ]

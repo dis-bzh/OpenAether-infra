@@ -8,7 +8,11 @@
 # OA_BACKUP_S3_* (primary backups bucket), OA_BACKUP_REPLICA_S3_* (its -backup twin). Probes, all harmless:
 #   list    ListObjectsV2, one key: may this identity read the bucket at all?
 #   delver  DeleteObjectVersion on a version that does not exist: refused with AccessDenied = the policy withholds it
-#           (anything else = the store was willing to look, so a real version would go). Nothing is ever deleted.
+#           (NoSuchVersion/NoSuchKey = the store was willing to look, so a real version would go). A store that rejects the
+#           made-up id as malformed (InvalidArgument) tells nothing about the policy: reported "inconclusive", not a pass.
+#           OA_ISOLATION_REAL_VERSION=1 settles it: the operator's keys write one tiny probe object in the pair's own
+#           bucket, the pair tries to delete that real version, and the operator removes what is left. This WRITES (one
+#           object, one version) and is off by default.
 # Expected: a dedicated pair lists its own bucket and nothing else; with backup_immutability not off it may not call
 # DeleteObjectVersion on it (OA_EXPECT_NO_VERSION_DELETE=0/1 overrides). The operator's keys are listed for contrast and
 # never asserted. A bucket that does not exist is skipped, not counted as "denied".
@@ -47,7 +51,8 @@ OPAK="$(s3_cred "$PROVIDER" primary ak)"; OPSK="$(s3_cred "$PROVIDER" primary sk
 RPAK="$(s3_cred "$PROVIDER" backup ak "$REPLICA_EP")"; RPSK="$(s3_cred "$PROVIDER" backup sk "$REPLICA_EP")"
 [ -n "$OPAK" ] || { echo "✗ no S3 credentials for '$PROVIDER' in this shell (source .env.sh)" >&2; exit 1; }
 
-FAILS=0; ASSERTED=0
+FAILS=0; ASSERTED=0; UNVERIFIED=0; REAL_VID=""
+REAL="${OA_ISOLATION_REAL_VERSION:-0}"
 ep_of() { [ "$1" = p ] && printf '%s' "$PRIMARY_EP" || printf '%s' "$REPLICA_EP"; }
 rg_of() { [ "$1" = p ] && printf '%s' "$PRIMARY_REGION" || printf '%s' "$REPLICA_REGION"; }
 
@@ -58,18 +63,22 @@ probe() {
     out="$(_oa_s3api "$ak" "$sk" "$(ep_of "$st")" "$(rg_of "$st")" list-objects-v2 --bucket "$b" --max-keys 1 2>&1)" || rc=$?
   else
     out="$(_oa_s3api "$ak" "$sk" "$(ep_of "$st")" "$(rg_of "$st")" delete-object --bucket "$b" \
-            --key oa-isolation-probe --version-id 4242424242424242 2>&1)" || rc=$?
+            --key oa-isolation-probe --version-id "${REAL_VID:-4242424242424242}" 2>&1)" || rc=$?
   fi
   if [ "$rc" -eq 0 ]; then echo allowed
   elif grep -qiE 'InvalidAccessKeyId|SignatureDoesNotMatch|AuthFailure|InvalidToken' <<<"$out"; then echo "error:the store does not accept this key"
   elif grep -qiE 'AccessDenied|Forbidden|\(403\)' <<<"$out"; then echo denied
   elif grep -qiE 'NoSuchBucket|\(404\).*(Not Found)' <<<"$out" && ! grep -qi 'NoSuchVersion\|NoSuchKey' <<<"$out"; then echo absent
-  elif [ "$what" = delver ] && grep -qiE 'NoSuchVersion|NoSuchKey|InvalidArgument|InvalidVersion' <<<"$out"; then echo allowed
+  elif [ "$what" = delver ] && [ -z "${REAL_VID:-}" ] && grep -qiE 'InvalidArgument|InvalidVersion' <<<"$out"; then echo inconclusive
+  elif [ "$what" = delver ] && grep -qiE 'NoSuchVersion|NoSuchKey' <<<"$out"; then echo allowed
   else echo "error:$(_oa_first_line "$out")"; fi
 }
 
 report() { # <label> <expected> <observed> <asserted 0|1>
   local mark="·" extra=""
+  if [ "$3" = inconclusive ]; then
+    UNVERIFIED=$((UNVERIFIED + 1)); printf '  ? %-34s expected %-7s observed inconclusive (the store rejects a made-up version id; OA_ISOLATION_REAL_VERSION=1 tests a real one)\n' "$1" "$2"; return 0
+  fi
   if [ "$4" = 1 ]; then
     ASSERTED=$((ASSERTED + 1))
     if [ "$2" = "$3" ]; then mark="✓"; else mark="✗"; FAILS=$((FAILS + 1)); fi
@@ -92,8 +101,22 @@ check_identity() { # <name> <ak> <sk> <store p|r> <own bucket> <asserted 1|0> �
     exp=denied; if [ "$asserted" = 0 ] || [ "$b" = "$own" ]; then exp=allowed; fi
     report "$b list" "$exp" "$obs" "$asserted"
     if [ "$asserted" = 1 ] && [ "$b" = "$own" ]; then
+      REAL_VID=""
+      if [ "$REAL" = 1 ]; then
+        oak="$OPAK"; osk="$OPSK"; [ "$st" = p ] || { oak="$RPAK"; osk="$RPSK"; }
+        REAL_VID="$(_oa_s3api "$oak" "$osk" "$(ep_of "$st")" "$(rg_of "$st")" put-object --bucket "$b" --key oa-isolation-probe \
+                      --body /dev/null 2>/dev/null | jq -r '.VersionId // empty' 2>/dev/null)" || REAL_VID=""
+        [ -n "$REAL_VID" ] || echo "  · $b: the operator could not write a probe version; falling back to the made-up id"
+      fi
       obs="$(probe "$ak" "$sk" "$st" delver "$b")"
       report "$b delete-version" denied "$obs" "$EXPECT_NOVD"
+      if [ -n "$REAL_VID" ]; then
+        _oa_s3api "$oak" "$osk" "$(ep_of "$st")" "$(rg_of "$st")" delete-object --bucket "$b" --key oa-isolation-probe \
+          --version-id "$REAL_VID" --bypass-governance-retention >/dev/null 2>&1 || \
+        _oa_s3api "$oak" "$osk" "$(ep_of "$st")" "$(rg_of "$st")" delete-object --bucket "$b" --key oa-isolation-probe \
+          --version-id "$REAL_VID" >/dev/null 2>&1 || echo "  ⚠ $b: the probe version $REAL_VID could not be removed; delete it by hand"
+        REAL_VID=""
+      fi
     fi
   done
 }
@@ -143,3 +166,4 @@ if [ "$DEDICATED" -eq 0 ]; then
 fi
 if [ "$FAILS" -gt 0 ]; then echo "✗ $FAILS of $((ASSERTED + PROT_BAD)) assertion(s) did not hold"; exit 1; fi
 echo "✓ $ASSERTED assertion(s) held"
+[ "$UNVERIFIED" -eq 0 ] || echo "? $UNVERIFIED delete-version probe(s) inconclusive: this store rejects a made-up version id. Rerun with OA_ISOLATION_REAL_VERSION=1 (writes one probe object per dedicated bucket) to test a real one."

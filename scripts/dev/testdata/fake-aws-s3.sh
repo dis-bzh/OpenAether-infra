@@ -78,7 +78,10 @@ case "$op" in
   delete-object-version) echo "aws: [ERROR]: argument operation: Invalid choice, valid choices are: delete-object, delete-objects" >&2; exit 252 ;;
   delete-object) [ -n "$key" ] && [ -n "$vid" ] || fail InvalidArgument "key and version id are required"
                  case "$vid" in *[!0-9]*) fail InvalidArgument "Invalid version id specified" ;; esac
+                 # strict-vid: like Scaleway, only a version id the store issued is well formed
+                 if [ -f "$FAKE_S3/strict-vid" ] && [ "$vid" != "$(cat "$FAKE_S3/last-vid" 2>/dev/null)" ]; then fail InvalidArgument "Invalid version id specified"; fi
                  echo "{\"VersionId\": \"$vid\"}" ;;
+  put-object) echo 1234567890123456 >"$FAKE_S3/last-vid"; echo '{"VersionId": "1234567890123456"}' ;;
   *) echo "fake aws: unsupported operation $op" >&2; exit 2 ;;
 esac
 exit 0
