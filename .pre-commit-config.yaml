@@ -77,7 +77,7 @@ repos:
 
   # YAML linting (same config the CI uses)
   - repo: https://github.com/adrienverge/yamllint
-    rev: 81e9f98ffd059efe8aa9c1b1a42e5cce61b640c6  # v1.35.1
+    rev: cba56bcde1fdd01c1deb3f945e69764c291a6530  # v1.38.0
     hooks:
       - id: yamllint
         args: ["-c", "infrastructure/.yamllint"]
