@@ -64,7 +64,7 @@ repos:
 
   # OpenTofu / Terraform formatting
   - repo: https://github.com/antonbabenko/pre-commit-terraform
-    rev: 55d0143972eec4905fdaea2f444f1e88218f9dce  # v1.96.3
+    rev: 80c8033123f6d6b9ccd1a9458562ea4180742af7  # v1.109.2
     hooks:
       # Per changed file's directory, not -recursive: from cluster/ it also
       # rewrote the gitignored envs/*.tfvars (#191). `files:` adds the test files
