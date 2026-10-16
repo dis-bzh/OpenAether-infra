@@ -1342,6 +1342,8 @@ TF
   ! grep -q 'tcp dport { 80, 443 }' <<<"$R_CLO" && ! grep -q '8200' <<<"$R_CLO" && grep -q 'ip daddr 10.0.0.0/24 tcp dport { 6443, 50000 } accept' <<<"$R_CLO" \
     && grep -q 'ip daddr { 192.0.2.53 } udp dport 53 accept' <<<"$R_CLO" && grep -q 'ip daddr { 192.0.2.123 } udp dport 123 accept' <<<"$R_CLO" && ! grep -qE '^[[:space:]]*udp dport 53 accept' <<<"$R_CLO" \
     && ok "closed: no 80/443, no 8200, the cluster ports on the subnet, DNS and NTP pinned" || bad "the closed render is not the reviewed one"
+  grep -qE 'apt-get purge -y .*\bwget\b' <<<"$R_CLO" && ! grep -qE 'apt-get purge' <<<"$R_DEF" \
+    && ok "closed: the offline purge list holds wget (the image ships it); the default render purges nothing" || bad "closed does not purge wget, or the default render purges"
   ! grep -q 'unattended-upgrades' <<<"$(awk '/^packages:/,/^write_files:/' <<<"$R_CLO")" && grep -q 'apt-daily-upgrade.timer' <<<"$R_CLO" && ! grep -q 'enable --now unattended-upgrades' <<<"$R_CLO" \
     && ok "closed: no update tooling is installed or enabled (patching is replacing the bastion)" || bad "closed still installs or enables unattended-upgrades"
   # Closed egress forces audit_logging off (variables.tf), and the journal needs no package: lab 11 found bastion-logs-pull.sh

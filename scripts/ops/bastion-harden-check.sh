@@ -11,7 +11,7 @@
 #   3. sshd: PermitRootLogin no + PasswordAuthentication no
 #   4. nftables egress DROP. BASTION_EGRESS=legacy (default, what is deployed unless bastion_internet_egress is set):
 #      an arbitrary port on the Internet must time out (80/443 are open by design there). BASTION_EGRESS=closed:
-#      80, 443 and a second public address must time out, 8200 to the node too, nc/curl/tcpdump must be absent and
+#      80, 443 and a second public address must time out, 8200 to the node too, nc/curl/wget/tcpdump must be absent and
 #      the update timers off
 #   5. nftables egress ALLOW: nc to cluster private on 6443 must pass (if node IP given)
 #   6. ss -tlnp: only :22 listening externally
@@ -140,8 +140,8 @@ if [ "${EGRESS_MODE}" = closed ]; then
   blocked closed 1.1.1.1 443
   blocked closed 9.9.9.9 443
   [ -n "${NODE_IP}" ] && blocked closed "${NODE_IP}" 8200
-  TOOLS=$(${SSH_CMD} 'for c in nc ncat curl tcpdump; do command -v "$c" >/dev/null 2>&1 && echo "$c"; done; true' || true)
-  if [ -z "${TOOLS}" ]; then ok "closed: no nc, curl or tcpdump on the bastion"; else fail "closed: tools still installed: $(echo "${TOOLS}" | tr '\n' ' ')"; fi
+  TOOLS=$(${SSH_CMD} 'for c in nc ncat curl wget tcpdump; do command -v "$c" >/dev/null 2>&1 && echo "$c"; done; true' || true)
+  if [ -z "${TOOLS}" ]; then ok "closed: no nc, curl, wget or tcpdump on the bastion"; else fail "closed: tools still installed: $(echo "${TOOLS}" | tr '\n' ' ')"; fi
   TIMER=$(${SSH_CMD} 'systemctl is-enabled apt-daily-upgrade.timer 2>/dev/null; true' || true)
   if echo "${TIMER}" | grep -q "^enabled"; then fail "closed: apt-daily-upgrade.timer is still enabled (no mirror is reachable: patching is replacing the bastion)"; else ok "closed: the update timer is off (${TIMER:-not present})"; fi
 else

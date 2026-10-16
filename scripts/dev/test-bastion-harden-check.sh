@@ -32,7 +32,8 @@ case "$cmd" in
   *"/dev/tcp/1.1.1.1/"*|*"/dev/tcp/9.9.9.9/"*) echo "exit:${STUB_EGRESS:-124}" ;;
   *"/dev/tcp/10.0.0.5/8200"*) echo "exit:${STUB_8200:-124}" ;;
   *"/dev/tcp/"*) echo "exit:${STUB_NODE:-0}" ;;
-  *"command -v"*) printf '%s' "${STUB_TOOLS:-}" ;;
+  # Only the tools the check actually asks about are found, like the real host: a name missing from its loop is not reported.
+  *"command -v"*) for t in ${STUB_TOOLS:-}; do case "$cmd" in *" $t "*) echo "$t" ;; esac; done ;;
   *"is-enabled apt-daily"*) echo "${STUB_TIMER:-disabled}" ;;
   *"ss -tlnp"*) echo "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*" ;;
   *"getent group"*) echo "bastion-admins:x:1001:bastion" ;;
@@ -83,7 +84,7 @@ grep -q 'FAIL.*10.0.0.5:6443 blocked' <<<"$OUT" && ok "a node port that times ou
 echo "=== BASTION_EGRESS=closed ==="
 run BASTION_EGRESS=closed
 [ "$RC" = 0 ] && grep -q 'closed: egress to 1.1.1.1:80 blocked' <<<"$OUT" && grep -q 'closed: egress to 1.1.1.1:443 blocked' <<<"$OUT" && grep -q 'closed: egress to 9.9.9.9:443 blocked' <<<"$OUT" \
-  && grep -q 'closed: egress to 10.0.0.5:8200 blocked' <<<"$OUT" && grep -q 'no nc, curl or tcpdump' <<<"$OUT" && grep -q 'update timer is off' <<<"$OUT" \
+  && grep -q 'closed: egress to 10.0.0.5:8200 blocked' <<<"$OUT" && grep -q 'no nc, curl, wget or tcpdump' <<<"$OUT" && grep -q 'update timer is off' <<<"$OUT" \
   && ok "closed, good facts: 80, 443, another public address and 8200 blocked; no tools; timers off" || bad "closed good run: rc=$RC $OUT"
 run BASTION_EGRESS=closed STUB_EGRESS=0
 [ "$RC" != 0 ] && grep -q 'FAIL.*closed: egress to 1.1.1.1:443 NOT blocked' <<<"$OUT" && ok "closed: an open 443 FAILS" || bad "closed with open 443 passed: rc=$RC"
@@ -91,6 +92,9 @@ run BASTION_EGRESS=closed STUB_8200=0
 [ "$RC" != 0 ] && grep -q 'FAIL.*closed: egress to 10.0.0.5:8200 NOT blocked' <<<"$OUT" && ok "closed: 8200 reachable on a node FAILS" || bad "closed with open 8200 passed: rc=$RC"
 run BASTION_EGRESS=closed STUB_TOOLS=curl
 [ "$RC" != 0 ] && grep -q 'FAIL.*tools still installed: curl' <<<"$OUT" && ok "closed: curl still installed FAILS" || bad "closed with curl passed: rc=$RC"
+# Lab 11: the Ubuntu image ships wget and nothing purged it.
+run BASTION_EGRESS=closed STUB_TOOLS=wget
+[ "$RC" != 0 ] && grep -q 'FAIL.*tools still installed: wget' <<<"$OUT" && ok "closed: wget still installed FAILS" || bad "closed with wget passed: rc=$RC"
 run BASTION_EGRESS=closed STUB_TIMER=enabled
 [ "$RC" != 0 ] && grep -q 'FAIL.*apt-daily-upgrade.timer is still enabled' <<<"$OUT" && ok "closed: an enabled update timer FAILS" || bad "closed with the timer on passed: rc=$RC"
 run BASTION_EGRESS=wide

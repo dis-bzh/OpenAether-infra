@@ -371,7 +371,7 @@ Closed means: no 80/443 in the VM's firewall or the security group (Scaleway, OV
 OVH: the subnet resource's CIDR, not a literal; Outscale: the Net), ICMP only inside that subnet, **8200 is gone** from the firewall
 and from `PermitOpen` (nothing in this repository or in OpenAether-apps forwards 8200 through the bastion; OpenBao is reached with
 `bao_admin` and port-forwards), the instance metadata addresses stay reachable on port 80 (cloud-init and the provider agents need
-them), and `curl`, `netcat` and `tcpdump` are purged (a dpkg operation, no mirror needed) while `unattended-upgrades` is neither installed
+them), and `curl`, `wget` (the image ships it), `netcat` and `tcpdump` are purged (a dpkg operation, no mirror needed) while `unattended-upgrades` is neither installed
 nor enabled. **First boot cannot install packages:** the security group is closed from the bastion's creation, so no mirror is reachable.
 That is why `closed` together with `bastion_baseline` is refused at plan time unless `audit_logging = false` and `time_servers` is empty
 (auditd and chrony would never be installed; a real OVH run showed cloud-init ending in error with no auditd). Needing them closed means

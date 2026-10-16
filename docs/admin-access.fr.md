@@ -403,7 +403,7 @@ legacy, où 80/443 sont ouverts par construction (il attendait le port 80 bloqu�
 
 **Le premier démarrage ne peut pas installer de paquet :** le groupe de sécurité est fermé dès la création du bastion, aucun miroir n'est
 joignable. C'est pourquoi `closed` avec `bastion_baseline` est refusé au plan, sauf `audit_logging = false` et `time_servers` vide (auditd et
-chrony ne seraient jamais installés ; un vrai run OVH a fini avec cloud-init en erreur et sans auditd). `curl`, `netcat` et `tcpdump` sont
+chrony ne seraient jamais installés ; un vrai run OVH a fini avec cloud-init en erreur et sans auditd). `curl`, `wget` (livré par l'image), `netcat` et `tcpdump` sont
 purgés hors ligne ; les avoir fermé suppose une image qui embarque déjà ce qu'il faut.
 
 **Journaux hors de la VM et qui se cache derrière une connexion.** `scripts/ops/bastion-logs-pull.sh <ip> <utilisateur> <clé>` tire le
