@@ -1,1 +1,6 @@
 * @vde-dis
+# What Flux applies with cluster-admin and what runs the cloud: name the owner explicitly so a second reviewer can be
+# added here (and enforced by a ruleset "require code owner review"). One owner today, so it enforces nothing yet.
+/.github/ @vde-dis
+/infrastructure/opentofu/cluster/bootstrap-manifests/ @vde-dis
+/scripts/dev/check-required-checks.sh @vde-dis

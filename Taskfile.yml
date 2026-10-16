@@ -575,6 +575,8 @@ tasks:
       # (#132) — proves a malformed rev-range fails loud instead of reading
       # as zero commits, none of them tool-authored.
       - ./scripts/dev/test-commit-authors.sh
+      # Unsigned or badly signed commits are reported (a warning until every maintainer signs): docs/signed-commits.md.
+      - ./scripts/dev/test-check-commit-signatures.sh
       # feint.sh checked `running` once, immediately after `feint start`
       # returned, with no retry — raced on a GitHub-hosted runner and failed
       # CI once with no code change (#169). A stub feint puts the startup

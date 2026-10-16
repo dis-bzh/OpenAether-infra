@@ -53,6 +53,10 @@ cat > "$tmp/render/main.tf" <<HCL
 variable "keys" {
   type = list(string)
 }
+variable "verify" {
+  type    = bool
+  default = false
+}
 output "manifest" {
   value = templatefile("$ROOT/$TEMPLATE", {
     namespace         = "flux-system"
@@ -65,22 +69,27 @@ output "manifest" {
     backup_s3_endpoint = "s3.fr-par.example.invalid"
     openbao_pgp_keys  = var.keys
     openbao_threshold = 2
+    flux_git_verify_enabled = var.verify
+    flux_git_verify_keys    = var.verify ? ["-----BEGIN PGP PUBLIC KEY BLOCK-----\n\nmQINBAAA\n=abcd\n-----END PGP PUBLIC KEY BLOCK-----"] : []
   })
 }
 HCL
 (cd "$tmp/render" && tofu init -input=false >/dev/null 2>&1) || { echo "✗ tofu init failed in the render sandbox" >&2; exit 1; }
-render() { # <name> <keys json>
-  (cd "$tmp/render" && tofu apply -auto-approve -input=false -var "keys=$2" >/dev/null 2>&1 && tofu output -raw manifest) > "$tmp/$1.yaml" ||
+render() { # <name> <keys json> [verify true|false]
+  (cd "$tmp/render" && tofu apply -auto-approve -input=false -var "keys=$2" -var "verify=${3:-false}" >/dev/null 2>&1 && tofu output -raw manifest) > "$tmp/$1.yaml" ||
     { echo "✗ the template does not render ($1)" >&2; exit 1; }
 }
 render rendered-dev '[]'
 render rendered-prod '["AAAA","BBBB","CCCC"]'
+render rendered-verify '[]' true # opt-in flux_git_verify: Secret + spec.verify must be schema-valid too
+grep -q 'name: git-signers' "$tmp/rendered-verify.yaml" && ! grep -q 'git-signers' "$tmp/rendered-dev.yaml" ||
+  { echo "✗ git-signers is not rendered exactly when flux_git_verify is on" >&2; exit 1; }
 grep -q 'name: openbao-operator-keys' "$tmp/rendered-prod.yaml" && ! grep -q 'name: openbao-operator-keys' "$tmp/rendered-dev.yaml" ||
   { echo "✗ the recovery-share ConfigMap is not rendered exactly when keys are given" >&2; exit 1; }
 
 flux schema extract crd "$VENDORED" -d "$tmp/schemas" >/dev/null
 
-for f in rendered-dev rendered-prod; do
+for f in rendered-dev rendered-prod rendered-verify; do
   flux schema validate "$tmp/$f.yaml" \
     --schema-location "$tmp/schemas" --schema-location default --verbose
 done

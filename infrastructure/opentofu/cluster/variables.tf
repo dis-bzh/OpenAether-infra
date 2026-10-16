@@ -663,6 +663,39 @@ variable "git_ref" {
   }
 }
 
+# Opt-in verification of the commit Flux applies (ANSSI SSDLC-CICD-AIP-03, SSDLC-CONT-REC06). Off = the bootstrap manifest
+# is byte-identical to the one before this variable existed. Flux checks OpenPGP signatures only (not SSH ones).
+variable "flux_git_verify" {
+  description = <<-EOT
+    Flux Git source verification. enabled = false (default): nothing changes. enabled = true: the bootstrap manifest gets
+    the Secret `git-signers` (one `signer-N.asc` per armored PUBLIC key in public_keys, which must include GitHub's
+    web-flow key if squash merges are used) and `spec.verify {mode: HEAD, secretRef: git-signers}` on the GitRepository.
+    A commit not signed by one of these keys is NOT applied (the GitRepository goes NotReady, the last good artifact
+    stays). Enable it on the apps side too (apps/flux/components/git-verify) and read docs/signed-commits.md first.
+    Fingerprints are NOT checked here: compare them to the published signer table before applying.
+  EOT
+  type = object({
+    enabled     = optional(bool, false)
+    public_keys = optional(list(string), [])
+  })
+  default = {}
+
+  validation {
+    condition     = !var.flux_git_verify.enabled || length(var.flux_git_verify.public_keys) > 0
+    error_message = "flux_git_verify: enabled = true needs at least one armored public key (an empty signer set would reject every commit)."
+  }
+  validation {
+    condition = alltrue([for k in var.flux_git_verify.public_keys :
+      startswith(trimspace(k), "-----BEGIN PGP PUBLIC KEY BLOCK-----") && endswith(trimspace(k), "-----END PGP PUBLIC KEY BLOCK-----")
+    ])
+    error_message = "flux_git_verify.public_keys: each entry is an ARMORED PGP PUBLIC key block (gpg --armor --export <id>); never a private key."
+  }
+  validation {
+    condition     = length(distinct([for k in var.flux_git_verify.public_keys : trimspace(k)])) == length(var.flux_git_verify.public_keys)
+    error_message = "flux_git_verify.public_keys: the same key twice."
+  }
+}
+
 # The OpenBao recovery shares (OpenAether-apps, foundation/vault). OpenBao unseals itself with a static key, so no
 # human holds an unseal share; what the operators hold are RECOVERY shares, used only to generate a root token in an
 # emergency. They come out of `sys/init` encrypted to the keys below, so the cluster never stores a usable share.

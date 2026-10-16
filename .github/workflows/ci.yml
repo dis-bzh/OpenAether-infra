@@ -108,6 +108,13 @@ jobs:
       - name: No commit authored by a tool
         run: ./scripts/dev/check-commit-authors.sh "origin/${{ github.base_ref }}..HEAD"
 
+      # A WARNING until every maintainer signs (0 signed commits today): add --strict then. docs/signed-commits.md.
+      - name: The signature check behaves
+        run: ./scripts/dev/test-check-commit-signatures.sh
+
+      - name: Commits carry a signature (warning only)
+        run: ./scripts/dev/check-commit-signatures.sh "origin/${{ github.base_ref }}..HEAD"
+
       # Scoped by the tree, not by a date or a pinned sha: a commit is checked
       # only if the rule already existed in it. Commits predating the rule are
       # skipped rather than rewritten.

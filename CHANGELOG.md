@@ -72,6 +72,14 @@ Found by the labs above, each with the rung it reached after the fix (mocked tes
 - **`explain-failure.sh`** explains a replaced bastion that ends as a cluster health check failure, like the refused-port shape.
 ### Security
 
+- **`flux_git_verify`: opt-in OpenPGP verification of the commit Flux applies, and a signature report in CI (default off; ANSSI SSDLC-CICD-AIP-03, SSDLC-CONT-REC06, B27).**
+  `flux_git_verify = {enabled, public_keys}` makes the bootstrap manifest carry the Secret `git-signers` before the GitRepository and
+  `spec.verify {mode: HEAD, secretRef: git-signers}` on it; off, the render is byte-identical (asserted). Validation refuses an empty
+  key list, a non-armored or private key and a duplicate. `check-commit-signatures.sh` reports unsigned commits of a PR as a warning
+  (`--strict` fails); CODEOWNERS names `.github/` and the bootstrap manifests; `docs/signed-commits.md` (+ `.fr.md`) holds the standard
+  and the break-glass. Rung: mocked/static (`tofu test`, throwaway-key script test), not run on a cluster. It does NOT change any
+  GitHub ruleset, check fingerprints, verify tags, or make the apps side carry the block (its component `git-verify` must be used too).
+
 - **Named, short-lived Kubernetes identities through the CSR API, and an RBAC review that knows them (addresses ANSSI PA-022 R38/R40, PG-078 R15, NSA-12 AUTH-02/AUTH-03; audit B26, infra half: F04, F13, F20).** Rung: **mocked/static (`test-kubeconfig-new.sh` with a stub kubectl and the real openssl, `test-rbac-review.sh`, `test-security-tests-checks.sh`), not run on a cluster.**
   - `scripts/ops/kubeconfig-new.sh` and `task kubeconfig-new` (new, additive: nothing existing changes): files a CertificateSigningRequest (`kubernetes.io/kube-apiserver-client`, `expirationSeconds`, default 8 h, 10 min to 24 h accepted) for `CN=<name>`, `O=oa:readers` (default) or `O=oa:admins` (`ACCESS=admin`), using the `system:masters` kubeconfig only to file and approve it; key generated locally; request deleted afterwards; 0600 file outside the repository (a path inside it is refused); a signer that grants more than asked is refused. The groups mean nothing without the apps `platform-rbac` brick.
   - `rbac-review` and `cluster-security` 3.7 allow exactly the brick's two bindings (`oa-admins`: Group `oa:admins` to `cluster-admin`; `oa-readers`: Group `oa:readers` to `view`, cluster scope) and nothing else under those names (an extra subject, another group, another role or a RoleBinding is still flagged).

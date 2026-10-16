@@ -503,6 +503,9 @@ locals {
     git_ref      = var.git_ref
     cluster_role = var.cluster_role
     cluster_id   = local.cluster_id
+    # Opt-in commit-signature verification (default off: the rendered manifest is then unchanged).
+    flux_git_verify_enabled = var.flux_git_verify.enabled
+    flux_git_verify_keys    = var.flux_git_verify.public_keys
     # Recovery-share holders of OpenBao (openbao-keys.tf). Empty list = the ConfigMap is not rendered.
     openbao_pgp_keys  = local.openbao_pgp_keys
     openbao_threshold = local.openbao_threshold

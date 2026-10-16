@@ -131,6 +131,9 @@ git_ref          = "refs/tags/0.2.0"
 # ]
 # openbao_recovery_threshold = 2   # default: a majority
 
+# Flux Git source verification: OPT-IN, default off. See management-scaleway.tfvars.example and docs/signed-commits.md.
+# flux_git_verify = { enabled = true, public_keys = ["-----BEGIN PGP PUBLIC KEY BLOCK-----\n...\n-----END PGP PUBLIC KEY BLOCK-----"] }
+
 # --- Backup / DR object stores (any S3-compatible store) ----------------------
 # Proxmox has no native object storage — point these at an external S3 (e.g. a
 # Scaleway/OVH bucket). Each store is opened with the keys of the cloud that
