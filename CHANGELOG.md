@@ -16,6 +16,61 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ANSSI hardening work, not released yet. **Nothing here is a claim of compliance with any ANSSI document**: each entry names the requirements it addresses and the rung it reached.
 
+### Validated
+
+- **ANSSI first wave on three real clouds, 2026-10-15: once per cloud, by hand, with the apps branch `claude/anssi-wave1` followed by Flux.**
+  Infra `1de00a4`, then the fixes listed under Fixed up to `030933d` (the labs were moved to each fix as it landed). Scaleway and OVH ran the
+  full DAG (36 Kustomizations), Outscale the reduced apps profile only. What was seen:
+  - **Escrow and rotation, on all three clouds:** `escrow export` to two custodians, `verify` (the seal key rebuilt from the escrow alone has
+    the live key's sha256, the restic password and the three recovery shares match), `attest`, then `cluster-security` 4.7 green (2 holders);
+    the apps CronJob `openbao-escrow-check` read the attestation ("attested 0 day(s) ago by 2 holders", Outscale). `rotate-secret` dry run,
+    `--apply` (version 1 to 2, ExternalSecrets nudged) and the refusal of `backup/restic` (OVH, Outscale).
+  - **Bucket protection `versioned`:** versioning and a 60-day non-current-version expiry read back on all seven buckets of each cloud.
+    `s3-isolation-check` exits 2 and says nothing is isolated when no dedicated key pair is given, as designed.
+  - **App load-balancer source filter (Scaleway):** the allow (admin address, the VPC ranges, the NAT gateway) and deny ACLs are on both
+    frontends (read back from the provider API). With a list that excluded the admin host, the connection was reset on 80 and 443; with the
+    list restored the Gateway answered `301`. Both changes were in-place updates and the public address did not change.
+  - **Read-only checks:** `cluster-exposure` (22 and 6443 only, plus 80/443 on the app LB), `cluster-netcheck` (7 of 7 denied on Scaleway and
+    OVH), `cluster-security` 34 of 36 on Scaleway and OVH with the escrow check on (the 2 left are skipped checks: no MinIO, shared keys).
+    `rbac-review` flagged one binding on every cluster (see Fixed).
+  - **Zitadel (apps B14):** the generated 32-character administrator password opens a session (201), `Password1!` does not (400).
+  - **A bastion with the baseline, named operator and closed egress (OVH, replaced three times):** the operator `alice` logs in, is in
+    `bastion-admins` and has no sudo; with the corrected template the hardening check passes 35 of 35 (80, 443, another address and 8200
+    refused; the cluster ports on the subnet allowed; `nc`, `curl` and `tcpdump` purged; sshd directives and kernel settings as asserted).
+    Before the fixes it failed 11 and then 4 checks, for the reasons under Fixed. `cloud-init status` says `done`, extended status
+    `degraded`: `sudo: false` in the user list is deprecated in cloud-init 22.2 and later, and is in the 0.2.0 render too (left, to keep the
+    default render byte for byte).
+  - **Strict plan "No changes" on all three clouds at the end**, which also shows that the Scaleway ACL resources do not fight their frontends.
+  - **Every replacement of the OVH bastion ended the first `cluster-up` as a 15-minute cluster health check failure** (the tunnels died with
+    the bastion); the second run converged each time, and the failure is now explained by `explain-failure.sh`.
+  - **Not run:** object lock (governance or compliance), a dedicated key pair for Loki or the backup stores (`OA_LOKI_S3_*`,
+    `OA_BACKUP_S3_*`), FIDO hardware keys, the SSH CA end to end, host-key pinning on a real bastion, closed egress on Scaleway and Outscale,
+    `bastion-logs-pull` upload, the `app_lb_allowed_cidrs` filter on OVH and Outscale, Proxmox. Of the apps changes only the first wave
+    was in the lab (not the OpenBao TLS 1.3 and metrics work, which is on a later branch).
+
+### Fixed
+
+Found by the labs above, each with the rung it reached after the fix (mocked tests plus the real run that found it).
+
+- **Scaleway: the app LB ACLs are standalone `scaleway_lb_acl` resources.** With the list in the frontend's inline `acl` block a real apply
+  failed ("Provider produced inconsistent final plan: `.acl[0].match[0].ip_subnet` was null, but now ..."): the allow list holds the NAT
+  gateway address, unknown before apply, and a mocked provider knows it, so no test saw it. The frontends ignore their `acl` attribute.
+- **`rbac-review` flagged `system:public-info-viewer`**, a binding of every cluster (anonymous read of `/healthz` and `/version`). Only that
+  binding to that role is exempt now; the same name bound to another role is still flagged.
+- **`seed-openbao.sh` reloads the CloudNativePG clusters.** A Secret that appears after the database pods started is not seen by the instance
+  manager ("failed to get envs: cache miss", `ContinuousArchiving` False) until the Cluster is annotated `cnpg.io/reloadedAt`; seen on
+  Scaleway when the seeding came 30 minutes after the pods. The annotation brought archiving back in about a minute on both clusters.
+- **`bastion-harden-check.sh` on a baseline bastion.** The unprivileged operator account (no sudo, by design) cannot read the 0600 sshd
+  drop-ins or `/proc/sys/fs`; the check died silently after "=== 3", counted a loopback listener (the resolver stub) as an exposed port, and
+  judged sshd from a commented line of the world-readable `sshd_config`. The baseline drop-in is now 0644 (directives, no secret); the check
+  judges what it cannot read from outside (it must see exactly `publickey`), ignores loopback, skips `fs.protected_regular` and, with
+  `BASTION_AUDIT=0`, the log-reader checks.
+- **`bastion_internet_egress = closed` with `bastion_baseline` is refused at plan time unless `audit_logging = false` and no
+  `time_servers`.** The security group is closed from creation, so the first boot reaches no mirror: auditd and chrony were never installed
+  and cloud-init ended in error. Closed mode now purges `nc`, `curl` and `tcpdump` offline. The documentation said first boot was unaffected;
+  it is corrected (EN and FR).
+- **`explain-failure.sh`** explains a replaced bastion that ends as a cluster health check failure, like the refused-port shape.
+
 ### Security
 
 - **Bastion OS baseline, opt-in: sysctl, auditd, journald, sshd directives, mounts, root-owned `authorized_keys.d`, in-VM nftables logging, key-type validation (ANSSI BP-028 R9/R11/R12/R14/R28/R29/R36/R38/R58/R73, NT-007 R14/R15/R23/R24/R26, NT-006 R3/R6, NT-SSH R8/R10; addresses the audit's F16, F04, F05, F07, F09, F03, TLS-15 and LOG-08).**
