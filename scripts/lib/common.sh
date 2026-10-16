@@ -310,3 +310,53 @@ oa_pinned_version() {
                       sed -nE 's/^[[:space:]]*default[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' | head -1)"
   printf '%s' "$v"
 }
+
+# --- Is this operator-typed secret plausibly random? A heuristic, never a proof. ----
+# Length alone passes 32 copies of one word. Prints one reason per line (nothing when the
+# value looks fine). Hex output (`openssl rand -hex`) has at most 16 distinct characters,
+# so it gets a lower bar than base64. Usage: oa_passphrase_problems <value>
+oa_passphrase_problems() {
+  local p="$1" lower distinct w
+  lower="${p,,}"
+  [ "${#p}" -ge 32 ] || echo "shorter than 32 characters"
+  distinct="$(printf '%s' "$p" | grep -o . | sort -u | wc -l)"
+  if [[ "$p" =~ ^[0-9a-fA-F]+$ ]]; then
+    [ "$distinct" -ge 10 ] || echo "only $distinct distinct characters for a hex string"
+  else
+    [ "$distinct" -ge 20 ] || echo "only $distinct distinct characters (a random base64 string has about 40)"
+  fi
+  for w in change-me changeme password passphrase qwerty azerty 123456 abcdef example; do
+    case "$lower" in *"$w"*) echo "contains the common word '$w'"; break ;; esac
+  done
+  # Pure bash: BSD/ugrep builds of grep do not all take back-references.
+  local n="${#p}" u k i rep run=1
+  for ((u = 1; u <= n / 2; u++)); do
+    [ $((n % u)) -eq 0 ] || continue
+    rep=""; for ((k = 0; k < n / u; k++)); do rep+="${p:0:u}"; done
+    [ "$rep" = "$p" ] && { echo "is one block repeated"; break; }
+  done
+  for ((i = 1; i < n; i++)); do
+    if [ "${p:i:1}" = "${p:i-1:1}" ]; then run=$((run + 1)); else run=1; fi
+    [ "$run" -ge 6 ] && { echo "has a run of six identical characters"; break; }
+  done
+  return 0
+}
+
+# Gate on it. OA_PASSPHRASE_CHECK=warn (default: say so, go on) | enforce (refuse) | off.
+# Warn first, because a refusal of a passphrase that already protects a deployed state would
+# lock its owner out of `cluster-up`. The value is never printed.
+# Usage: oa_check_passphrase <name-for-messages> <value>
+oa_check_passphrase() {
+  local name="$1" value="$2" mode="${OA_PASSPHRASE_CHECK:-warn}" probs
+  case "$mode" in
+    off) return 0 ;;
+    warn | enforce) ;;
+    *) echo "✗ OA_PASSPHRASE_CHECK must be warn, enforce or off (got '$mode')" >&2; return 2 ;;
+  esac
+  probs="$(oa_passphrase_problems "$value")"
+  [ -n "$probs" ] || return 0
+  if [ "$mode" = enforce ]; then echo "✗ $name looks weak:" >&2; else echo "⚠ $name looks weak:" >&2; fi
+  sed 's/^/    - /' <<<"$probs" >&2
+  echo "  Generate one: scripts/ops/gen-passphrase.sh  (OA_PASSPHRASE_CHECK=enforce refuses, =off silences this)" >&2
+  [ "$mode" != enforce ]
+}

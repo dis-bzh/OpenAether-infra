@@ -1233,7 +1233,7 @@ if command -v tofu >/dev/null 2>&1; then
   # No stdin and a timeout: CI's tofu is wrapped, and `tofu console` waited on a stdin the wrapper never closes (15 min).
   mkdir -p "$STUB_DIR/bastion-render"
   cat >"$STUB_DIR/bastion-render/main.tf" <<TF
-output "sha" { value = sha256(templatefile("$BASTION_TPL", {ssh_keys = ["k"], bastion_user = "bastion", private_cidr = "10.0.0.0/24", extra_packages = [], extra_write_files = [], extra_runcmd = [], ssh_ca_public_key = "", ssh_ca_principals = ""})) }
+output "sha" { value = sha256(templatefile("$BASTION_TPL", {ssh_keys = ["k"], bastion_user = "bastion", private_cidr = "10.0.0.0/24", extra_packages = [], extra_write_files = [], extra_runcmd = [], ssh_ca_public_key = "", ssh_ca_principals = "", baseline = {enabled = false, audit_logging = true, restrict_ssh_source = false, time_servers = [], revoked_keys = []}, admin_ip = [], admins = {}, egress = {mode = "legacy", dns_servers = [], ntp_servers = []}})) }
 TF
   BASTION_SHA="$(cd "$STUB_DIR/bastion-render" && timeout 120 tofu apply -auto-approve -input=false -no-color </dev/null >/dev/null 2>&1 && tofu output -raw sha </dev/null 2>/dev/null)"
   [ "$BASTION_SHA" = 1f09a8566681c3e4f3e6c5dde34060a3c1509aa6e0b4db0ad7dc295479637c47 ] \
@@ -1241,6 +1241,61 @@ TF
     || bad "the default bastion render changed (${BASTION_SHA:-no answer}): every OVH/Outscale bastion is replaced on upgrade — keep the default bytes, or update this hash AND the CHANGELOG upgrade notes"
 else
   skip "tofu not installed: the bastion render was not compared"
+fi
+
+echo "=== bastion_baseline reaches the cloud-init of all four providers ==="
+# A root-level tofu test cannot read a child module's user_data, so the wiring is pinned here: the root passes the variable
+# to each module, each module declares it with the same keys, and each templatefile call hands the template what it reads.
+for prov in scw:scaleway ovh:ovh outscale:outscale proxmox:proxmox; do
+  m="${prov%%:*}"; r="${prov##*:}"
+  MODDIR="$ROOT/infrastructure/opentofu/modules/providers/$m"
+  grep -qE '^[[:space:]]*baseline[[:space:]]*=[[:space:]]*var\.bastion_baseline$' "$MODDIR/bastion.tf" \
+    && grep -qE '^[[:space:]]*admin_ip[[:space:]]*=[[:space:]]*var\.admin_ip$' "$MODDIR/bastion.tf" \
+    && ok "$m: the template call passes baseline and admin_ip" || bad "$m: bastion.tf does not hand baseline/admin_ip to the template"
+  grep -q 'restrict_ssh_source' "$MODDIR/variables.tf" && grep -q 'revoked_keys' "$MODDIR/variables.tf" \
+    && ok "$m: declares bastion_baseline with its keys" || bad "$m: variables.tf lacks bastion_baseline"
+  awk -v want="\"$r\"" '/^module "/ {inmod = 0} $0 ~ "bastion_ssh_keys = lookup\\(var.bastion_ssh_keys, " want {found = 1; getline; if ($0 ~ /bastion_baseline = var.bastion_baseline/) ok = 1} END {exit !(found && ok)}' "$ROOT/infrastructure/opentofu/cluster/main.tf" \
+    && ok "$m: cluster/main.tf passes bastion_baseline" || bad "$m: cluster/main.tf does not pass bastion_baseline"
+done
+
+echo "=== bastion_admins and bastion_internet_egress reach the cloud-init of all four providers ==="
+# Same wiring pin as bastion_baseline above: the template needs both variables, and a call that forgets one fails a real deploy.
+for prov in scw:scaleway ovh:ovh outscale:outscale proxmox:proxmox; do
+  m="${prov%%:*}"
+  MODDIR="$ROOT/infrastructure/opentofu/modules/providers/$m"
+  grep -qE '^[[:space:]]*admins[[:space:]]*=[[:space:]]*var\.bastion_admins$' "$MODDIR/bastion.tf" \
+    && grep -qE '^[[:space:]]*egress[[:space:]]*=[[:space:]]*var\.bastion_internet_egress$' "$MODDIR/bastion.tf" \
+    && ok "$m: the template call passes admins and egress" || bad "$m: bastion.tf does not hand admins/egress to the template"
+  grep -q 'variable "bastion_admins"' "$MODDIR/variables.tf" && grep -q 'variable "bastion_internet_egress"' "$MODDIR/variables.tf" \
+    && ok "$m: declares bastion_admins and bastion_internet_egress" || bad "$m: variables.tf lacks bastion_admins/bastion_internet_egress"
+  awk -v want="$m" '/^module "/ { gsub(/"/, "", $2); cur = $2 } cur == want && /bastion_admins[[:space:]]*= var.bastion_admins/ { a = 1 } cur == want && /bastion_internet_egress[[:space:]]*= var.bastion_internet_egress/ { e = 1 } cur == want && /bastion_ssh_ca_public_key[[:space:]]*= var.bastion_ssh_ca_public_key/ { c = 1 } cur == want && /bastion_ssh_ca_principals[[:space:]]*= var.bastion_ssh_ca_principals/ { p = 1 } END { exit !(a && e && c && p) }' "$ROOT/infrastructure/opentofu/cluster/main.tf" \
+    && ok "$m: cluster/main.tf passes admins, egress and the SSH CA" || bad "$m: cluster/main.tf does not pass bastion_admins/bastion_internet_egress/bastion_ssh_ca_*"
+done
+grep -q 'admins' "$ROOT/infrastructure/opentofu-feint/main.tf" && grep -q 'egress' "$ROOT/infrastructure/opentofu-feint/main.tf" \
+  && ok "the Feint lane renders the same template with both variables" || bad "opentofu-feint/main.tf does not pass admins/egress"
+
+echo "=== what the new variables render ==="
+if command -v tofu >/dev/null 2>&1; then
+  render_bastion() { # <extra template vars as HCL> — the rendered cloud-config on stdout
+    cat >"$STUB_DIR/bastion-render/main.tf" <<TF
+output "r" { value = templatefile("$BASTION_TPL", merge({ssh_keys = ["k"], bastion_user = "bastion", private_cidr = "10.0.0.0/24", extra_packages = [], extra_write_files = [], extra_runcmd = [], ssh_ca_public_key = "", ssh_ca_principals = "", baseline = {enabled = false, audit_logging = true, restrict_ssh_source = false, time_servers = [], revoked_keys = []}, admin_ip = [], admins = {}, egress = {mode = "legacy", dns_servers = [], ntp_servers = []}}, { $1 })) }
+TF
+    (cd "$STUB_DIR/bastion-render" && timeout 120 tofu apply -auto-approve -input=false -no-color </dev/null >/dev/null 2>&1 && tofu output -raw r </dev/null 2>/dev/null)
+  }
+  R_DEF="$(render_bastion '')"
+  R_ADM="$(render_bastion 'admins = { alice = { ssh_keys = ["ssh-ed25519 AAAAa alice"] } }, ssh_ca_public_key = "ssh-ed25519 AAAACA ca"')"
+  R_CLO="$(render_bastion 'egress = {mode = "closed", dns_servers = ["192.0.2.53"], ntp_servers = ["192.0.2.123"]}')"
+  grep -q 'PermitOpen \*:6443 \*:50000 \*:8200' <<<"$R_DEF" && grep -q 'tcp dport { 80, 443 } accept' <<<"$R_DEF" && ! grep -q '^  - name: alice' <<<"$R_DEF" && ! grep -q 'auth_principals/alice' <<<"$R_DEF" \
+    && ok "default: 8200 and 80/443 stay, no operator account (and the hash above pins every other byte)" || bad "the default render changed"
+  grep -q '^  - name: alice' <<<"$R_ADM" && grep -q 'path: /etc/ssh/authorized_keys.d/alice' <<<"$R_ADM" && grep -q 'path: /etc/ssh/auth_principals/alice' <<<"$R_ADM" \
+    && ok "an operator gets an account, an authorized_keys file and (with a CA) a principals file" || bad "bastion_admins did not render an account"
+  ! grep -q 'tcp dport { 80, 443 }' <<<"$R_CLO" && ! grep -q '8200' <<<"$R_CLO" && grep -q 'ip daddr 10.0.0.0/24 tcp dport { 6443, 50000 } accept' <<<"$R_CLO" \
+    && grep -q 'ip daddr { 192.0.2.53 } udp dport 53 accept' <<<"$R_CLO" && grep -q 'ip daddr { 192.0.2.123 } udp dport 123 accept' <<<"$R_CLO" && ! grep -qE '^[[:space:]]*udp dport 53 accept' <<<"$R_CLO" \
+    && ok "closed: no 80/443, no 8200, the cluster ports on the subnet, DNS and NTP pinned" || bad "the closed render is not the reviewed one"
+  ! grep -q 'unattended-upgrades' <<<"$(awk '/^packages:/,/^write_files:/' <<<"$R_CLO")" && grep -q 'apt-daily-upgrade.timer' <<<"$R_CLO" && ! grep -q 'enable --now unattended-upgrades' <<<"$R_CLO" \
+    && ok "closed: no update tooling is installed or enabled (patching is replacing the bastion)" || bad "closed still installs or enables unattended-upgrades"
+else
+  skip "tofu not installed: the new bastion variables were not rendered"
 fi
 
 [ "$FAIL" -eq 0 ] || RC=1

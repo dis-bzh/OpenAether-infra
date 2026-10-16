@@ -3,8 +3,8 @@
 # OpenAether — encrypted backup of cluster access artifacts (talosconfig/kubeconfig)
 #
 # Called by cluster/backup.tf (local-exec) during a Phase-2 apply. CLIENT-side
-# encrypts each artifact with gpg (symmetric AES-256, authenticated) using the
-# SAME passphrase as the tfstate, then uploads the ciphertext to TWO object
+# encrypts each artifact with gpg (symmetric AES-256) using PASSPHRASE (backup.tf: the
+# artifact passphrase when set, else the tfstate one), then uploads the ciphertext to TWO object
 # stores — PRIMARY (the cluster's own provider) and REPLICA (in prod a different
 # provider) — with S3 SSE (server-side) layered on top.
 #
@@ -35,8 +35,8 @@ GNUPGHOME="$(mktemp -d)"; export GNUPGHOME
 WORK="$(mktemp -d)"
 trap 'rm -rf "$GNUPGHOME" "$WORK"' EXIT
 
-# Client-side encrypt: AES-256, authenticated (MDC, or OCB AEAD on gpg >=2.3),
-# key derived from the passphrase with hardened S2K (max iterations + SHA-512).
+# Client-side encrypt: AES-256 in OpenPGP CFB with a SHA-1 MDC (tamper-evident, not an AEAD mode:
+# no OCB/AEAD option is requested), key derived with iterated-salted S2K (max count, SHA-512).
 # Passphrase via fd 3 so it never appears in argv.
 enc() { # base64-content  out-file
   printf '%s' "$1" | base64 -d | \

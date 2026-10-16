@@ -23,7 +23,7 @@ C="$W/infrastructure/opentofu/cluster"
 mkdir -p "$C/envs" "$C/bootstrap-manifests" "$W/scripts"/{internal,bootstrap,ops,dev,lib} "$W/bin"
 cp Taskfile.yml "$W/"
 cp scripts/lib/common.sh "$W/scripts/lib/"
-cp scripts/internal/resolve-s3-cred.sh "$W/scripts/internal/"
+cp scripts/internal/resolve-s3-cred.sh scripts/internal/check-passphrase.sh "$W/scripts/internal/"
 
 # One stub behind every leaf: it logs "<name> <args>" in call order, then answers
 # what the next step reads. A plan file must exist for infra-apply to take it.
@@ -57,14 +57,14 @@ for e in management-scaleway workload-ovh; do echo 'cluster_name = "fixture"' >"
 : >"$W/key"
 
 O="$W/out"
-run() { # <verifier rc> <task args...> — combined output in $O, calls in calls.log; EXTRA=NAME=value sets one env var, last, so it overrides the defaults; TTY=1 gives it a terminal that answers "yes" to every question
+run() { # PCHK=<mode> sets OA_PASSPHRASE_CHECK; <verifier rc> <task args...> — combined output in $O, calls in calls.log; EXTRA=NAME=value sets one env var, last, so it overrides the defaults; TTY=1 gives it a terminal that answers "yes" to every question
   local rc="$1"; shift
   : >"$W/calls.log"
   local cmd=(env -i PATH="$W/bin:$PATH" HOME="$W" VERIFY_RC="$rc" NO_COLOR=1
       TF_VAR_encryption_passphrase=fixture-passphrase-of-at-least-32-characters
       SCW_ACCESS_KEY=scw-access-key SCW_SECRET_KEY=scw-secret-key
       OVH_AWS_ACCESS_KEY_ID=ovh-access-key OVH_AWS_SECRET_ACCESS_KEY=ovh-secret-key
-      ${EXTRA:+"$EXTRA"}
+      ${PCHK:+OA_PASSPHRASE_CHECK="$PCHK"} ${EXTRA:+"$EXTRA"}
       "$TASK" -d "$W" "$@")
   if [ -n "${TTY:-}" ]; then
     printf 'yes\n%.0s' 1 2 3 4 5 6 7 8 9 | script -qefc "$(printf '%q ' "${cmd[@]}")" /dev/null >"$O" 2>&1
@@ -241,13 +241,24 @@ for c in "|is not set" "change-me-fixture-passphrase|is still the example"; do
     && ok "passphrase '${c%%|*}': refused, nothing built" \
     || bad "passphrase '${c%%|*}', exit $rc, ensure-buckets $(calls '^ensure-buckets.sh '), image $(calls '^talos-image.sh '): $(tail_of)"
 done
-
+# A weak passphrase (not the placeholder) is a warning by default and a refusal only under OA_PASSPHRASE_CHECK=enforce.
+EXTRA="TF_VAR_encryption_passphrase=correct-horse-battery-staple-32chars" run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" = 0 ] && grep -q "^⚠ TF_VAR_encryption_passphrase looks weak" "$O" \
+  && ok "a low-diversity passphrase: warned, and the run goes on (default mode)" \
+  || bad "weak passphrase, default mode, exit $rc: $(tail_of)"
+PCHK=enforce EXTRA="TF_VAR_encryption_passphrase=correct-horse-battery-staple-32chars" run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" != 0 ] && grep -q "^✗ TF_VAR_encryption_passphrase looks weak" "$O" \
+  && [ "$(calls '^ensure-buckets.sh ')" = 0 ] && [ "$(calls '^talos-image.sh ')" = 0 ] \
+  && ok "OA_PASSPHRASE_CHECK=enforce: the same passphrase is refused, nothing built" \
+  || bad "weak passphrase, enforce, exit $rc, ensure-buckets $(calls '^ensure-buckets.sh '): $(tail_of)"
 
 echo "--- cluster-verify on its own still refreshes kubeconfig ---"
 run 0 cluster-verify PROVIDER=scaleway; rc=$?
 [ "$rc" = 0 ] && [ "$(calls '^tofu output -raw kubeconfig')" = 1 ] && [ "$(calls '^infra-verify.sh ')" = 1 ] \
   && ok "one refresh, then the verifier — a cold shell still verifies" \
   || bad "exit $rc, refreshes $(calls '^tofu output -raw kubeconfig'), verifier $(calls '^infra-verify.sh ')"
+[ "$(stat -c %a "$C/kubeconfig" "$C/talosconfig" 2>/dev/null | sort -u)" = 600 ] \
+  && ok "kubeconfig and talosconfig are written 0600" || bad "modes: $(stat -c '%n %a' "$C/kubeconfig" "$C/talosconfig" 2>&1 | tr '\n' ' ')"
 
 
 echo

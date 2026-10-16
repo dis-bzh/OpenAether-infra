@@ -4,6 +4,15 @@
 # forwarding to NodePorts where nothing listens.
 # ==============================================================================
 
+locals {
+  # Caller list + the cluster's own egress (pods reach the Gateway through this LB's
+  # public address) + the VPC ranges, as the k8s API ACL below. Empty = no ACL.
+  app_lb_acl_sources = length(var.app_lb_allowed_cidrs) == 0 ? [] : concat(
+    distinct(concat(var.app_lb_allowed_cidrs, ["172.16.0.0/12", "10.0.0.0/8"])),
+    ["${scaleway_vpc_public_gateway_ip.this.address}/32"],
+  )
+}
+
 resource "scaleway_lb_ip" "app" {
   count      = var.deploy_app_lb ? 1 : 0
   zone       = var.zone
@@ -52,6 +61,11 @@ resource "scaleway_lb_frontend" "http" {
   backend_id   = scaleway_lb_backend.http[0].id
   name         = "http-frontend"
   inbound_port = 80
+
+  # The ACLs are the standalone scaleway_lb_acl resources below.
+  lifecycle {
+    ignore_changes = [acl]
+  }
 }
 
 resource "scaleway_lb_backend" "https" {
@@ -70,6 +84,11 @@ resource "scaleway_lb_frontend" "https" {
   backend_id   = scaleway_lb_backend.https[0].id
   name         = "https-frontend"
   inbound_port = 443
+
+  # The ACLs are the standalone scaleway_lb_acl resources below.
+  lifecycle {
+    ignore_changes = [acl]
+  }
 }
 
 # ==============================================================================
@@ -160,3 +179,36 @@ resource "scaleway_lb_frontend" "k8s_api" {
 # --- ACLs K8s API LB (admin_ip only + private subnets) ---
 # The ACLs are inline in the frontend to avoid the conflict between standalone
 # scaleway_lb_acl resources and the frontend's state.
+
+# --- ACLs of the app LB frontends ---
+# Standalone resources, unlike the k8s API frontend above. The allow list holds the NAT gateway's public address, which is
+# unknown until apply on a fresh cluster; the provider cannot plan that inside a frontend's inline `acl` block ("Provider
+# produced inconsistent final plan: .acl[0].match[0].ip_subnet was null, but now ..."; seen on a real Scaleway apply). The
+# frontends ignore their `acl` attribute so that the two ways of declaring ACLs do not fight over the state.
+resource "scaleway_lb_acl" "app_allow" {
+  for_each    = var.deploy_app_lb && length(var.app_lb_allowed_cidrs) > 0 ? { http = scaleway_lb_frontend.http[0].id, https = scaleway_lb_frontend.https[0].id } : {}
+  frontend_id = each.value
+  name        = "app-allow"
+  index       = 1
+  action {
+    type = "allow"
+  }
+  match {
+    ip_subnet = local.app_lb_acl_sources
+  }
+}
+
+# The deny comes after the allow (the LB evaluates by index).
+resource "scaleway_lb_acl" "app_deny" {
+  for_each    = var.deploy_app_lb && length(var.app_lb_allowed_cidrs) > 0 ? { http = scaleway_lb_frontend.http[0].id, https = scaleway_lb_frontend.https[0].id } : {}
+  frontend_id = each.value
+  name        = "app-deny"
+  index       = 2
+  action {
+    type = "deny"
+  }
+  match {
+    ip_subnet = ["0.0.0.0/0"]
+  }
+  depends_on = [scaleway_lb_acl.app_allow]
+}

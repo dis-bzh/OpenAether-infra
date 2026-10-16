@@ -28,17 +28,46 @@ resource "openstack_networking_secgroup_rule_v2" "bastion_ssh" {
   security_group_id = openstack_networking_secgroup_v2.bastion.id
 }
 
+locals {
+  bastion_egress_closed = var.bastion_internet_egress.mode == "closed"
+  # The IPv4 servers DNS/NTP are pinned to (the firewall in the VM also takes IPv6); anywhere when not pinned.
+  bastion_dns_cidrs = local.bastion_egress_closed && length(var.bastion_internet_egress.dns_servers) > 0 ? [
+    for a in var.bastion_internet_egress.dns_servers : strcontains(a, "/") ? a : "${a}/32" if !strcontains(a, ":")
+  ] : []
+  bastion_ntp_cidrs = local.bastion_egress_closed ? [
+    for a in var.bastion_internet_egress.ntp_servers : strcontains(a, "/") ? a : "${a}/32" if !strcontains(a, ":")
+  ] : []
+  # Not pinned: the two DNS rules below, without a destination, exactly as before.
+  bastion_dns_pinned = local.bastion_egress_closed && length(var.bastion_internet_egress.dns_servers) > 0
+}
+
 # Egress restricted to: established/related, DNS, NTP, apt, private subnet.
 # nftables (in-VM) is the hard enforcement; this SG rule provides defence-in-depth
 # by allowing egress to the private subnet and well-known services only.
+# bastion_internet_egress.mode = "closed": TCP 6443/50000 to the subnet instead of every protocol, no 80/443 (only the
+# instance metadata service), DNS/NTP to the pinned servers. The `moved` blocks keep the legacy rules at their state
+# address, so a cluster that never sets the variable plans no change.
 resource "openstack_networking_secgroup_rule_v2" "bastion_egress_private" {
+  count             = local.bastion_egress_closed ? 0 : 1
   direction         = "egress"
   ethertype         = "IPv4"
-  remote_ip_prefix  = "10.0.0.0/24"
+  remote_ip_prefix  = openstack_networking_subnet_v2.private.cidr
+  security_group_id = openstack_networking_secgroup_v2.bastion.id
+}
+
+resource "openstack_networking_secgroup_rule_v2" "bastion_egress_cluster" {
+  for_each          = local.bastion_egress_closed ? toset(["6443", "50000"]) : toset([])
+  direction         = "egress"
+  ethertype         = "IPv4"
+  protocol          = "tcp"
+  port_range_min    = tonumber(each.value)
+  port_range_max    = tonumber(each.value)
+  remote_ip_prefix  = openstack_networking_subnet_v2.private.cidr
   security_group_id = openstack_networking_secgroup_v2.bastion.id
 }
 
 resource "openstack_networking_secgroup_rule_v2" "bastion_egress_dns" {
+  count             = local.bastion_dns_pinned ? 0 : 1
   direction         = "egress"
   ethertype         = "IPv4"
   protocol          = "udp"
@@ -48,6 +77,7 @@ resource "openstack_networking_secgroup_rule_v2" "bastion_egress_dns" {
 }
 
 resource "openstack_networking_secgroup_rule_v2" "bastion_egress_dns_tcp" {
+  count             = local.bastion_dns_pinned ? 0 : 1
   direction         = "egress"
   ethertype         = "IPv4"
   protocol          = "tcp"
@@ -56,7 +86,43 @@ resource "openstack_networking_secgroup_rule_v2" "bastion_egress_dns_tcp" {
   security_group_id = openstack_networking_secgroup_v2.bastion.id
 }
 
+resource "openstack_networking_secgroup_rule_v2" "bastion_egress_dns_pinned" {
+  for_each          = { for pair in setproduct(["udp", "tcp"], local.bastion_dns_cidrs) : "${pair[0]} ${pair[1]}" => pair }
+  direction         = "egress"
+  ethertype         = "IPv4"
+  protocol          = each.value[0]
+  port_range_min    = 53
+  port_range_max    = 53
+  remote_ip_prefix  = each.value[1]
+  security_group_id = openstack_networking_secgroup_v2.bastion.id
+}
+
+# No NTP rule existed on this provider; with the pin, the listed servers get one (the firewall in the VM allows them too).
+resource "openstack_networking_secgroup_rule_v2" "bastion_egress_ntp_pinned" {
+  for_each          = toset(local.bastion_ntp_cidrs)
+  direction         = "egress"
+  ethertype         = "IPv4"
+  protocol          = "udp"
+  port_range_min    = 123
+  port_range_max    = 123
+  remote_ip_prefix  = each.value
+  security_group_id = openstack_networking_secgroup_v2.bastion.id
+}
+
+# Neutron applies the egress rules to the metadata address too: without this, a closed bastion cannot reach it.
+resource "openstack_networking_secgroup_rule_v2" "bastion_egress_metadata" {
+  count             = local.bastion_egress_closed ? 1 : 0
+  direction         = "egress"
+  ethertype         = "IPv4"
+  protocol          = "tcp"
+  port_range_min    = 80
+  port_range_max    = 80
+  remote_ip_prefix  = "169.254.169.254/32"
+  security_group_id = openstack_networking_secgroup_v2.bastion.id
+}
+
 resource "openstack_networking_secgroup_rule_v2" "bastion_egress_http" {
+  count             = local.bastion_egress_closed ? 0 : 1
   direction         = "egress"
   ethertype         = "IPv4"
   protocol          = "tcp"
@@ -66,12 +132,34 @@ resource "openstack_networking_secgroup_rule_v2" "bastion_egress_http" {
 }
 
 resource "openstack_networking_secgroup_rule_v2" "bastion_egress_https" {
+  count             = local.bastion_egress_closed ? 0 : 1
   direction         = "egress"
   ethertype         = "IPv4"
   protocol          = "tcp"
   port_range_min    = 443
   port_range_max    = 443
   security_group_id = openstack_networking_secgroup_v2.bastion.id
+}
+
+moved {
+  from = openstack_networking_secgroup_rule_v2.bastion_egress_private
+  to   = openstack_networking_secgroup_rule_v2.bastion_egress_private[0]
+}
+moved {
+  from = openstack_networking_secgroup_rule_v2.bastion_egress_dns
+  to   = openstack_networking_secgroup_rule_v2.bastion_egress_dns[0]
+}
+moved {
+  from = openstack_networking_secgroup_rule_v2.bastion_egress_dns_tcp
+  to   = openstack_networking_secgroup_rule_v2.bastion_egress_dns_tcp[0]
+}
+moved {
+  from = openstack_networking_secgroup_rule_v2.bastion_egress_http
+  to   = openstack_networking_secgroup_rule_v2.bastion_egress_http[0]
+}
+moved {
+  from = openstack_networking_secgroup_rule_v2.bastion_egress_https
+  to   = openstack_networking_secgroup_rule_v2.bastion_egress_https[0]
 }
 
 resource "openstack_networking_port_v2" "bastion" {
@@ -113,12 +201,16 @@ resource "openstack_compute_instance_v2" "bastion" {
     # as on Scaleway, avoids the collision.
     bastion_user      = "bastion"
     ssh_keys          = var.bastion_ssh_keys
-    private_cidr      = "10.0.0.0/24"
+    private_cidr      = openstack_networking_subnet_v2.private.cidr
     extra_packages    = []
     extra_write_files = []
     extra_runcmd      = []
     ssh_ca_public_key = var.bastion_ssh_ca_public_key
     ssh_ca_principals = var.bastion_ssh_ca_principals
+    baseline          = var.bastion_baseline
+    admin_ip          = var.admin_ip
+    admins            = var.bastion_admins
+    egress            = var.bastion_internet_egress
   })
 
   tags = ["bastion", var.cluster_name]

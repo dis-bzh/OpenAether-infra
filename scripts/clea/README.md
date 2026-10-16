@@ -174,6 +174,7 @@ label = "clea"
 
 [policy]
 min_release_age_days = 7        # keep equal to Renovate's minimumReleaseAge
+max_minors_behind = 2           # optional, 0/absent = off: report pins further behind than this (any major counts)
 
 [[osv]]                         # which OSV package to ask about a dependency
 dep = "owner/tool"

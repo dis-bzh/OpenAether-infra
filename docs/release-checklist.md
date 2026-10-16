@@ -135,6 +135,9 @@ for each old image the retention destroys (§7, image lane).
 - [ ] **`task cluster-verify`** green. A warning is a finding: it now reads each
       control plane's failure domain and each worker's data volume (the volume read
       needs `task tunnels-up`; without a tunnel it warns instead of passing).
+      It also reads STATE and EPHEMERAL back as LUKS2 and the apiserver's etcd-encryption flag.
+- [ ] **the network, asked of the network**: `task cluster-exposure` (and once with `FROM=denied`
+      from an address outside `admin_ip`), `task cluster-netcheck`, `task cluster-security`, `task rbac-review`.
 - [ ] **idempotency is three assertions, not one**: an empty plan, the *same*
       nodes (name and `creationTimestamp`), and a kubeconfig that still reaches
       the apiserver. Two of the three can pass while the cluster was rebuilt.
@@ -164,7 +167,8 @@ for each old image the retention destroys (§7, image lane).
       `OSC-work-ha`: all untested; worker volumes were read back on the management
       role only) and **bastion hardening**,
       `scripts/ops/bastion-harden-check.sh <bastion_ip> <bastion_user> <ssh_key>`
-      (never against the reference cluster).
+      (never against the reference cluster; `BASTION_BASELINE=1` adds the checks of the opt-in
+      `bastion_baseline`, and `task bastion-baseline-check` is the offline proof to run first).
 
 ## 5. Cloud — OVH
 
@@ -458,6 +462,10 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       items** list built from the open issue titles that day (`gh issue list
       --state open`): several known limits appear in no tracked file. Link the
       issues, not a backlog file. Not a pre-release (the owner's decision, 2026-10-12).
+- [ ] the release carries `openaether-infra-<tag>.cdx.json` (the `SBOM` workflow attaches it on
+      publish; `gh release view <tag> --json assets`) and the last `SBOM` run's image scans are green
+      or each red one is in `.vex/openaether-infra.openvex.json`. `docs/supply-chain.md` says what
+      the inventory covers and what it does not.
 - [ ] the examples and the default pin the apps tag, and it exists. OpenAether-apps
       is tagged and released first (`git ls-remote --tags
       https://github.com/dis-bzh/OpenAether-apps refs/tags/0.2.0` prints it).
@@ -493,6 +501,52 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       re-ran only the upgrade counts, and a typed row looks measured. The newest
       rows are dated 2026-10-10 and 11, so it is red from 2026-11-25 (the 46th day) unless a newer row
       at the pin is added.
+
+---
+
+## Quarterly security review
+
+Every quarter, and before each release, by the maintainer, in this order. It reads and runs; it changes nothing by itself. Each item is a command or a comparison;
+record the review as one row of `audit-register.md`. None of it has been run as a routine yet: the first review is the test of this list.
+
+**Keys and secrets** (`key-management.md`)
+
+- [ ] every row of the key inventory still true: a new generated key, bucket or credential has a row; none is past its proposed period without a reason written in the row
+- [ ] the state and artifact passphrases (K5, K6) open from their escrow copies, held in two places: `task restore-artifacts PROVIDER=<p> FROM=replica` into a scratch directory succeeds, and a second person can open the vault entry
+- [ ] the OpenBao seal-key escrow is attested and younger than 400 days (`OA_ESCROW_ANNOTATION_CHECK=1 ENVIRONMENT=prod task cluster-security`, check 4.7: it also fails when the attestation is of another key than the live one) and names at least two custodians; each custodian ran `task escrow -- verify --from <their copy>` this quarter
+- [ ] S3 keys (K7) and provider keys (K8): list them at each provider, match each to a use, revoke what has none; the CI `sandbox` keys are younger than 90 days
+
+**Accounts and access** (`security-architecture.md`, section 3)
+
+- [ ] compare the privileged-accounts table with reality: provider console members and IAM, GitHub collaborators, tokens and the `sandbox` environment reviewers, the bastion's keys (`scripts/ops/bastion-fingerprints.sh`), the PGP keys of the recovery-share holders
+- [ ] `task rbac-review` against last quarter's file: every new line explained
+- [ ] anyone who left since the last review is gone from each of the above (`incident-response.md`, section 7, last rows)
+
+**Exposure** (`network.md`)
+
+- [ ] `task cluster-exposure PROVIDER=<p> FROM=denied` from an address outside `admin_ip`, `task cluster-netcheck PROVIDER=<p>`, `task cluster-security PROVIDER=<p> ENVIRONMENT=prod`
+- [ ] `scripts/dev/test-flow-matrix.sh` is green and the known gaps of `network.md` section 6 are re-read: closed, unchanged, or worse
+- [ ] `admin_ip` still lists only addresses in use
+
+**Backups and recovery** (`backup-policy.md`, `disaster-recovery.md`)
+
+- [ ] newest and oldest object on both stores for the state (`task backup-state PROVIDER=<p> -- --list`), the artifacts, the etcd snapshots (younger than 24 h if the cron is meant to run) and the bastion logs; a gap is an incident
+- [ ] the application backup alerts and restore-test jobs are green (apps), and `task check-alerts` shows no rule blind
+- [ ] the dead-man's switch reached its receiver this week
+- [ ] yearly: the disaster-recovery drill (`disaster-recovery.md`, section 5) and the incident drill (a mock S1 timed against `incident-response.md`), with their rows filled
+
+**Patching and components** (`patching.md`, `hardening.md` section 4, `component-selection.md`)
+
+- [ ] no advisory issue older than 30 days without a fix or a waiver that has not expired; the CERT-FR and GitHub-advisory reading of the quarter was done
+- [ ] the end-of-support date of each infrastructure pin (Talos, Kubernetes, Cilium, Flux, OpenTofu) read at the upstream page; any within six months is a row in the audit register
+- [ ] Cléa's last report is green or its reds are explained; Renovate is not silent (Cléa detects it); the VEX register and triage table still match the scans
+
+**Delivery chain** (`threat-model.md`)
+
+- [ ] `repo-settings.yml` is green on the live rulesets; the `sandbox` environment exists with its reviewers; no new token, secret, environment or workflow trigger since the last review that the threat model does not know
+- [ ] the `git_ref` of every running cluster is a tag, not a branch
+
+**Close the review**: add a row to `audit-register.md` (section 2), change the status of the actions it moved (section 3), and correct whichever page above turned out to be wrong.
 
 ---
 

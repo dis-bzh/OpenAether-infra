@@ -96,14 +96,32 @@ fournisseur et six paires à deviner.
 Et celle qui compte le plus :
 
 ```bash
-TF_VAR_encryption_passphrase="$(openssl rand -base64 48)"
+export TF_VAR_encryption_passphrase="$(scripts/ops/gen-passphrase.sh)"   # openssl rand -base64 48
 ```
 
 Minimum 32 caractères. `task cluster-up` refuse net si elle n'est pas définie, et refuse
 encore si elle contient toujours `change-me` : le texte d'exemple est publié dans
-ce dépôt, et ce contrôle est la seule chose entre toi et un déploiement sous un
-secret public. Perdre cette passphrase, c'est perdre l'état et les deux artefacts
-d'accès.
+ce dépôt. Au-delà, il ne fait que **prévenir** d'une valeur qui semble peu entropique (peu de
+caractères distincts, un bloc répété, un mot courant) : une heuristique, pas une preuve.
+`OA_PASSPHRASE_CHECK=enforce` transforme l'avertissement en refus ; à utiliser dès que ta passphrase
+passe. Perdre cette passphrase, c'est perdre l'état et les deux artefacts d'accès.
+
+Par défaut, la même passphrase protège aussi les sauvegardes gpg de talosconfig/kubeconfig et les
+snapshots etcd : une seule fuite ouvre les trois. Pour les séparer, définis-en une seconde, générée de
+la même façon :
+
+```bash
+export TF_VAR_artifact_passphrase="$(scripts/ops/gen-passphrase.sh)"   # à garder ailleurs que la première
+```
+
+La définir par l'environnement uniquement : `etcd-snapshot.sh` ne lit pas les fichiers tfvars, donc une valeur placée
+là chiffrerait les artefacts d'accès sous elle et les snapshots sous la passphrase d'état (le script avertit s'il le voit).
+
+Elle re-téléverse les artefacts sous ce secret au prochain apply. Les anciens objets restent lisibles
+(`restore-artifacts.sh` l'essaie d'abord, puis retombe sur la passphrase d'état), mais **un snapshot
+écrit sous elle ne s'ouvre pas sans elle** : sauvegarde-la comme la première. Gardée au même endroit que
+la passphrase d'état, la séparation est cosmétique. `.env.sh` contient toutes les clés en clair : `chmod 600`,
+ou garde les secrets dans un coffre et injecte-les (`op run`, `sops exec-env`, `pass`) plutôt que de sourcer un fichier.
 
 N'exporte pas `AWS_*` toi-même : le flux les dérive par provider à partir des
 variables préfixées ci-dessus.
@@ -220,6 +238,18 @@ supprime un nœud d'un cluster déjà amorcé, car OpenTofu détruirait la machi
 haut et ses volumes de données sans drain ni sortie d'etcd (`scripts/internal/refuse-node-deletes.sh`). Retirer des
 nœuds a ses deux commandes, `task cluster-shrink-plan` puis `task cluster-shrink`, mesurées sur les trois
 clouds : [`upgrade.fr.md`](upgrade.fr.md#retirer-des-nœuds).
+
+### Risque résiduel : l'application en mode maintenance
+
+Un nouveau nœud démarre en mode maintenance de Talos, où son API répond avec un **certificat éphémère que rien de ce que vous détenez ne peut vérifier**, et le provider Talos
+lui envoie la configuration machine complète : les CA et clés du cluster, la passphrase de chiffrement des disques et la clé des Secrets etcd. Le provider rejoue la poignée de main jusqu'à ce que
+le nœud passe sur la CA du cluster. Donc, pendant ces minutes, **le nœud qui reçoit les secrets est identifié par son adresse, pas par un identifiant** ; une partie placée sur le chemin privé entre le
+tunnel du bastion et le nœud pourrait se faire passer pour lui. Ce qui se tient devant cela, sans rien qui authentifie le nœud : les nœuds n'ont pas d'adresse publique ; l'API Talos n'est atteinte que par
+le tunnel SSH depuis le bastion ; sur OVH et Outscale le groupe des nœuds n'admet 50000 que depuis le groupe du bastion (Scaleway : depuis tout le sous-réseau privé, dont le groupe n'y est pas appliqué) ;
+le bastion est derrière la liste d'autorisation `admin_ip`. Le canal lui-même est chiffré, donc seul un homme du milieu actif sur ce chemin pourrait en tirer parti. Aucun changement de code ne l'authentifie :
+c'est la façon dont Talos s'amorce. `config_delivery = "userdata"` du module Talos saute l'application en mode maintenance sur les plateformes qui peuvent injecter la configuration à la création (Docker l'utilise),
+au prix d'une configuration machine placée dans les métadonnées du provider pour ce nœud ; ce compromis n'a pas été évalué pour les trois clouds. Consigné comme écart dans
+[`key-management.fr.md`](key-management.fr.md#5-écarts-consignés-et-risques-résiduels) et [`security-architecture.fr.md`](security-architecture.fr.md).
 
 ## 5. Joindre le cluster
 

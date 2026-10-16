@@ -94,14 +94,31 @@ between.
 And the one that matters most:
 
 ```bash
-TF_VAR_encryption_passphrase="$(openssl rand -base64 48)"
+export TF_VAR_encryption_passphrase="$(scripts/ops/gen-passphrase.sh)"   # openssl rand -base64 48
 ```
 
 Minimum 32 characters. `task cluster-up` refuses outright if it is unset, and refuses
 again if it still contains `change-me` — the shipped placeholder is published in
-this repository, and that check is the only thing between you and deploying
-under a public secret. Losing this passphrase means losing the state and both
-access artifacts.
+this repository. Beyond that it only **warns** about a value that looks low-entropy (few distinct
+characters, a repeated block, a common word): a heuristic, not a proof. `OA_PASSPHRASE_CHECK=enforce`
+turns the warning into a refusal; use it once your own passphrase passes. Losing this passphrase
+means losing the state and both access artifacts.
+
+By default the same passphrase also protects the gpg-encrypted talosconfig/kubeconfig backups and the etcd
+snapshots, so one leak opens all three. Set a second one, generated the same way, to split them:
+
+```bash
+export TF_VAR_artifact_passphrase="$(scripts/ops/gen-passphrase.sh)"   # keep it elsewhere than the first
+```
+
+Set it through the environment only: `etcd-snapshot.sh` does not read tfvars files, so a value put there would
+encrypt the access artifacts under it and the snapshots under the state passphrase (the script warns when it sees it).
+
+Setting it re-uploads the artifacts under it on the next apply. Older objects stay readable
+(`restore-artifacts.sh` tries it first and falls back to the state passphrase), but **a snapshot written under
+it cannot be opened without it**: back it up like the first one. Held in the same place as the state passphrase,
+the split is cosmetic. `.env.sh` holds every key in clear text: `chmod 600` it, or keep the secrets in a vault and
+inject them (`op run`, `sops exec-env`, `pass`) rather than sourcing a file.
 
 Do not export `AWS_*` yourself: the flow derives them per provider from the
 namespaced variables above.
@@ -213,6 +230,18 @@ node of a bootstrapped cluster, because OpenTofu would destroy the highest-index
 data volumes with no drain and no etcd leave (`scripts/internal/refuse-node-deletes.sh`). Removing nodes is a pair of
 commands of its own, `task cluster-shrink-plan` then `task cluster-shrink`, measured on all three
 clouds: [`upgrade.md`](upgrade.md#removing-nodes).
+
+### Residual risk: the maintenance-mode apply
+
+A new node boots in Talos' maintenance mode, where its API answers with an **ephemeral certificate that nothing you hold can verify**, and the Talos provider
+sends it the full machine configuration: the cluster CAs and keys, the disk-encryption passphrase and the etcd Secrets key. The provider retries the handshake until the node switches
+to the cluster CA. So for those minutes **the node that receives the secrets is identified by its address, not by a credential**; a party on the private path between the
+bastion's tunnel and the node could pose as it. What stands in front of that, none of it an authentication of the node: the nodes have no public address; the Talos API is reached only through
+the SSH tunnel from the bastion; on OVH and Outscale the node group admits 50000 from the bastion group only (Scaleway: from the whole private subnet, whose group is not enforced
+there); the bastion is behind the `admin_ip` allowlist. The channel itself is encrypted, so only an active man in the middle on that path could use it. No code change makes it
+authenticated: it is how Talos bootstraps. `config_delivery = "userdata"` of the Talos module skips the maintenance-mode apply on platforms that can inject the configuration at creation (Docker uses it),
+at the price of the machine configuration sitting in the provider's metadata for the node; that trade was not evaluated for the three clouds. Recorded as a deviation in
+[`key-management.md`](key-management.md#5-recorded-deviations-and-residual-risks) and [`security-architecture.md`](security-architecture.md).
 
 ## 5. Talk to it
 

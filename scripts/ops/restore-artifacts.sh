@@ -22,8 +22,9 @@
 #   restore-artifacts.sh <provider> [--role management] [--from primary|replica]
 #                        [--out <dir>] [--force]
 #
-# Needs: TF_VAR_encryption_passphrase (the SAME one that wrote them — nothing
-# else can decrypt), and the S3 credentials for the store being read.
+# Needs: the passphrase that wrote them — TF_VAR_artifact_passphrase when one was set,
+# else TF_VAR_encryption_passphrase (both are tried, the artifact one first, so objects
+# written before the split stay readable) — and the S3 credentials for the store being read.
 # ==============================================================================
 set -euo pipefail
 
@@ -60,9 +61,12 @@ OUT="${OUT:-$CLUSTER_DIR}"
 # with no cluster configured the script refused for a different reason, and
 # test-restore.sh — which asserts THIS refusal — passed only where a real tfvars
 # happened to exist. It passed here and failed in CI.
-PASSPHRASE="${TF_VAR_encryption_passphrase:-}"
-[ -n "$PASSPHRASE" ] || {
-  echo "✗ TF_VAR_encryption_passphrase is not set." >&2
+PASSPHRASES=()
+[ -z "${TF_VAR_artifact_passphrase:-}" ] || PASSPHRASES+=("$TF_VAR_artifact_passphrase")
+[ -z "${TF_VAR_encryption_passphrase:-}" ] || [ "${TF_VAR_encryption_passphrase:-}" = "${TF_VAR_artifact_passphrase:-}" ] \
+  || PASSPHRASES+=("$TF_VAR_encryption_passphrase")
+[ "${#PASSPHRASES[@]}" -gt 0 ] || {
+  echo "✗ TF_VAR_encryption_passphrase is not set (nor TF_VAR_artifact_passphrase)." >&2
   echo "  It is the ONLY thing that can decrypt these objects; there is no recovery without it." >&2
   exit 1
 }
@@ -116,6 +120,17 @@ dec() { # in-file  out-file
   gpg --batch --yes --quiet --pinentry-mode loopback --passphrase-fd 3 \
       --decrypt -o "$2" "$1" 3< <(printf '%s' "$PASSPHRASE")
 }
+# Each candidate in turn: gpg exits non-zero on a wrong one, so a failed try costs nothing. Its
+# complaint is printed only when none worked.
+dec_any() { # in-file  out-file
+  local err="" pp
+  for pp in "${PASSPHRASES[@]}"; do
+    PASSPHRASE="$pp"
+    err="$(dec "$1" "$2" 2>&1)" && return 0
+  done
+  [ -z "$err" ] || echo "$err" >&2
+  return 1
+}
 
 RESTORED=0
 for name in talosconfig kubeconfig; do
@@ -130,7 +145,7 @@ for name in talosconfig kubeconfig; do
     esac
     continue
   fi
-  if ! dec "$WORK/${name}.gpg" "$WORK/${name}"; then
+  if ! dec_any "$WORK/${name}.gpg" "$WORK/${name}"; then
     echo "  ✗ ${name}.gpg downloaded but would not decrypt — wrong passphrase, or the object is damaged" >&2
     continue
   fi

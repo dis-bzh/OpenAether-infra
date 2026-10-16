@@ -415,7 +415,9 @@ jobs:
         env:
           # Optional. GITHUB_TOKEN cannot push a change to a file under
           # .github/workflows/ (no `permissions:` grant exists for it); only a
-          # classic PAT with the `workflow` scope can. The script falls back to
+          # PAT with workflow rights can: a fine-grained one limited to this repository
+          # (Contents + Workflows: write, short expiry) is preferred to a classic PAT with the
+          # `workflow` scope; untried here. The script falls back to
           # the default token when this is unset OR rejected, which still pushes
           # every other probe branch.
           CLEA_WORKFLOW_TOKEN: ${{ secrets.CLEA_WORKFLOW_TOKEN }}

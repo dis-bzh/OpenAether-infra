@@ -14,6 +14,284 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ## [Unreleased]
 
+ANSSI hardening work, not released yet. **Nothing here is a claim of compliance with any ANSSI document**: each entry names the requirements it addresses and the rung it reached.
+
+### Validated
+
+- **ANSSI first wave on three real clouds, 2026-10-15: once per cloud, by hand, with the apps branch `claude/anssi-wave1` followed by Flux.**
+  Infra `1de00a4`, then the fixes listed under Fixed up to `030933d` (the labs were moved to each fix as it landed). Scaleway and OVH ran the
+  full DAG (36 Kustomizations), Outscale the reduced apps profile only. What was seen:
+  - **Escrow and rotation, on all three clouds:** `escrow export` to two custodians, `verify` (the seal key rebuilt from the escrow alone has
+    the live key's sha256, the restic password and the three recovery shares match), `attest`, then `cluster-security` 4.7 green (2 holders);
+    the apps CronJob `openbao-escrow-check` read the attestation ("attested 0 day(s) ago by 2 holders", Outscale). `rotate-secret` dry run,
+    `--apply` (version 1 to 2, ExternalSecrets nudged) and the refusal of `backup/restic` (OVH, Outscale).
+  - **Bucket protection `versioned`:** versioning and a 60-day non-current-version expiry read back on all seven buckets of each cloud.
+    `s3-isolation-check` exits 2 and says nothing is isolated when no dedicated key pair is given, as designed.
+  - **App load-balancer source filter (Scaleway):** the allow (admin address, the VPC ranges, the NAT gateway) and deny ACLs are on both
+    frontends (read back from the provider API). With a list that excluded the admin host, the connection was reset on 80 and 443; with the
+    list restored the Gateway answered `301`. Both changes were in-place updates and the public address did not change.
+  - **Read-only checks:** `cluster-exposure` (22 and 6443 only, plus 80/443 on the app LB), `cluster-netcheck` (7 of 7 denied on Scaleway and
+    OVH), `cluster-security` 34 of 36 on Scaleway and OVH with the escrow check on (the 2 left are skipped checks: no MinIO, shared keys).
+    `rbac-review` flagged one binding on every cluster (see Fixed).
+  - **Zitadel (apps B14):** the generated 32-character administrator password opens a session (201), `Password1!` does not (400).
+  - **A bastion with the baseline, named operator and closed egress (OVH, replaced three times):** the operator `alice` logs in, is in
+    `bastion-admins` and has no sudo; with the corrected template the hardening check passes 35 of 35 (80, 443, another address and 8200
+    refused; the cluster ports on the subnet allowed; `nc`, `curl` and `tcpdump` purged; sshd directives and kernel settings as asserted).
+    Before the fixes it failed 11 and then 4 checks, for the reasons under Fixed. `cloud-init status` says `done`, extended status
+    `degraded`: `sudo: false` in the user list is deprecated in cloud-init 22.2 and later, and is in the 0.2.0 render too (left, to keep the
+    default render byte for byte).
+  - **Strict plan "No changes" on all three clouds at the end**, which also shows that the Scaleway ACL resources do not fight their frontends.
+  - **Every replacement of the OVH bastion ended the first `cluster-up` as a 15-minute cluster health check failure** (the tunnels died with
+    the bastion); the second run converged each time, and the failure is now explained by `explain-failure.sh`.
+  - **Not run:** object lock (governance or compliance), a dedicated key pair for Loki or the backup stores (`OA_LOKI_S3_*`,
+    `OA_BACKUP_S3_*`), FIDO hardware keys, the SSH CA end to end, host-key pinning on a real bastion, closed egress on Scaleway and Outscale,
+    `bastion-logs-pull` upload, the `app_lb_allowed_cidrs` filter on OVH and Outscale, Proxmox. Of the apps changes only the first wave
+    was in the lab (not the OpenBao TLS 1.3 and metrics work, which is on a later branch).
+
+### Fixed
+
+Found by the labs above, each with the rung it reached after the fix (mocked tests plus the real run that found it).
+
+- **Scaleway: the app LB ACLs are standalone `scaleway_lb_acl` resources.** With the list in the frontend's inline `acl` block a real apply
+  failed ("Provider produced inconsistent final plan: `.acl[0].match[0].ip_subnet` was null, but now ..."): the allow list holds the NAT
+  gateway address, unknown before apply, and a mocked provider knows it, so no test saw it. The frontends ignore their `acl` attribute.
+- **`rbac-review` flagged `system:public-info-viewer`**, a binding of every cluster (anonymous read of `/healthz` and `/version`). Only that
+  binding to that role is exempt now; the same name bound to another role is still flagged.
+- **`seed-openbao.sh` reloads the CloudNativePG clusters.** A Secret that appears after the database pods started is not seen by the instance
+  manager ("failed to get envs: cache miss", `ContinuousArchiving` False) until the Cluster is annotated `cnpg.io/reloadedAt`; seen on
+  Scaleway when the seeding came 30 minutes after the pods. The annotation brought archiving back in about a minute on both clusters.
+- **`bastion-harden-check.sh` on a baseline bastion.** The unprivileged operator account (no sudo, by design) cannot read the 0600 sshd
+  drop-ins or `/proc/sys/fs`; the check died silently after "=== 3", counted a loopback listener (the resolver stub) as an exposed port, and
+  judged sshd from a commented line of the world-readable `sshd_config`. The baseline drop-in is now 0644 (directives, no secret); the check
+  judges what it cannot read from outside (it must see exactly `publickey`), ignores loopback, skips `fs.protected_regular` and, with
+  `BASTION_AUDIT=0`, the log-reader checks.
+- **`bastion_internet_egress = closed` with `bastion_baseline` is refused at plan time unless `audit_logging = false` and no
+  `time_servers`.** The security group is closed from creation, so the first boot reaches no mirror: auditd and chrony were never installed
+  and cloud-init ended in error. Closed mode now purges `nc`, `curl` and `tcpdump` offline. The documentation said first boot was unaffected;
+  it is corrected (EN and FR).
+- **`explain-failure.sh`** explains a replaced bastion that ends as a cluster health check failure, like the refused-port shape.
+
+### Security
+
+- **Bastion OS baseline, opt-in: sysctl, auditd, journald, sshd directives, mounts, root-owned `authorized_keys.d`, in-VM nftables logging, key-type validation (ANSSI BP-028 R9/R11/R12/R14/R28/R29/R36/R38/R58/R73, NT-007 R14/R15/R23/R24/R26, NT-006 R3/R6, NT-SSH R8/R10; addresses the audit's F16, F04, F05, F07, F09, F03, TLS-15 and LOG-08).**
+  New variable `bastion_baseline` (`enabled` default **false**; `audit_logging` default true; `restrict_ssh_source`, `time_servers`, `revoked_keys` default off/empty). With it off the cloud-init is **byte for byte
+  what 0.1.0 shipped** (`test-cluster-checks.sh` pins the hash, now with the two extra template inputs), so no deployed bastion changes. **Turning `enabled` on changes `user_data`, which
+  REPLACES the bastion on OVH and Outscale** (new IP, new host key, the Talos tunnels die with it; the plan decides on Scaleway and Proxmox): apply it on a fresh cluster or in a planned window with a second session
+  open, never during a bootstrap or an upgrade, and read the plan first. `restrict_ssh_source` and `revoked_keys` put `admin_ip` / the revoked keys into `user_data`, so changing them replaces the bastion too.
+  On: a sysctl file (R9 minus modules_disabled, R11, R12 minus the ARP options, R14), auditd with execve/`/etc`/mount/module/ptrace rules and **no `-e 2`**, a persistent journald capped at 200 MB / 90 days, a second sshd drop-in
+  (`LogLevel VERBOSE`, `StrictModes`, `PermitUserEnvironment no`, `AllowStreamLocalForwarding no`, `GatewayPorts no`, `RevokedKeys`) that the runcmd deletes again if `sshd -t` rejects it, `AcceptEnv` commented out of the main file with a
+  copy kept, `authorized_keys.d/<user>` root:root 0644, `/var/tmp` tmpfs noexec, `/boot` 700, umask 0077, sudo 4750 root:sudo, snapd/ModemManager masked, no tcpdump/netcat on new VMs, chrony on `time_servers`, and nftables
+  rate-limited `nft-drop-in/out` log rules and ICMP in limited to echo-request and fragmentation-needed. Not changed: port 22, the user, the keys, `AllowTcpForwarding`/`PermitOpen`, the egress rules, `talos-tunnels.sh`.
+  Always on (no resource changes): `bastion_ssh_keys` refuses `ssh-dss`, unknown types, a line break inside an entry and an `ssh-rsa` under `bastion_ssh_rsa_min_bits` (default 2048 so a deployed key keeps planning; 3072 selectable),
+  checked on the type token (options prefixes and the truncated fixtures still pass). New: `scripts/ops/bastion-logs-pull.sh` (journal since a cursor + audit log off the VM, gpg-encrypted with `OA_LOGS_PASSPHRASE`; the upload came with the logs entry below),
+  `bastion-harden-check.sh` probes with `/dev/tcp` instead of `nc` and gains section 9 (`BASTION_BASELINE=1`), and `task bastion-baseline-check`.
+  Rung: **local Docker for the rendered files only** - `bastion-baseline-check.sh` runs the exact bytes on Ubuntu 22.04 and 24.04 (sshd -t, a real key login, the fingerprint in the login line, tunnels through `PermitOpen`, a revoked key refused,
+  the guard removing a broken drop-in, `nft -c` and the ruleset loaded in a container network namespace accepting 22 from the admin source only, sysctl names in `/proc/sys`, audit rules parsed by libaudit, sudo mode, umask), `cloud-init schema`,
+  `tofu test` for the input rules, stub harnesses for the two scripts. **Nothing booted a cloud image**: not proven are cloud-init ordering on a real first boot, auditd loading the rules in a real kernel, `journalctl` match syntax of the pull script,
+  chrony taking the source file, `rp_filter=1` on a Scaleway bastion with its private NIC, that a provider keeps the admin source address, and the unattended-upgrades interaction (statoverride, masked units).
+  Measured on the way: OpenSSH 8.9 already refuses unix-socket forwarding while `PermitOpen` is set, so `AllowStreamLocalForwarding no` is defence in depth, and the `Accepted publickey ... SHA256:` line already carries the fingerprint at the default log level (what `LogLevel VERBOSE` adds is the `authorized_keys` line number of the key and the session start/close).
+  **Not done**: `restrict,port-forwarding` key options (they would change the interactive login path; `bastion-harden-check.sh` would need rewriting first), removing the `sudo` group from the login user (done below, with the baseline on),
+  client-side `Ciphers`/`KexAlgorithms` in `talos-tunnels.sh`, `ListenAddress`, a cloud audit-trail export (documented as a manual procedure below, not automated), and the documented Grafana tunnel `-L ...:443` that `PermitOpen` refuses (a documentation defect in `docs/admin-access.md`, untouched).
+  Also: the Feint lane renders the same template and now passes the two new inputs with the baseline off; `task test-scripts` runs the three 0.2.0 ops harnesses (netcheck, exposure scan, RBAC review) that `task lint`'s reachability check found unwired.
+
+- **Bastion identity: named operators, the SSH CA from the root, a plan-time hardware-key check, `SSH_USER`, and a host key that is kept and checked (ANSSI NT-SSH R6/R21/R30, NT-007 R6, PA-022 R21/R30, HYG-M8; audit ADM/F05, TLS-13, TLS-16, OSN/F10, NET/F16).**
+  New `bastion_admins` (map of account name to `{ ssh_keys }`, default **{}**): each entry is one more unix account in `bastion-admins` (no sudo, no password) with its own `authorized_keys.d/<name>`; with a CA configured
+  it also gets a principals file holding its own name, so a certificate cannot be used as another person. `ssh_keys = []` makes a certificate-only account. `bastion_ssh_keys` and the shared account are unchanged (automation, `auto_tunnels`,
+  break-glass). `bastion_ssh_ca_public_key` and `bastion_ssh_ca_principals` are now variables of the cluster root (the modules always had them; the root never passed them), validated so a quote or a line break cannot reach the
+  YAML. `bastion_require_hardware_key` (default false) refuses at plan any key in `bastion_admins` that is not `sk-ssh-ed25519@openssh.com` / `sk-ecdsa-sha2-nistp256@openssh.com`; it does **not** cover `bastion_ssh_keys` and
+  cannot see what a CA signs. `talos-tunnels.sh` reads `SSH_USER` (the state's `bastion_user` stays the shared account; the single-apply tunnels keep it). New output `bastion_access_keys` and
+  `scripts/ops/bastion-fingerprints.sh` (account, SHA256 fingerprint, type, comment; `--find`) to map the fingerprint in a login line to a person. With the baseline on, the bastion user also leaves the `sudo` group.
+  Host key: new `scripts/lib/bastion-hostkey.sh`; with `OA_BASTION_PIN_HOSTKEY=1` the first key seen is accepted once (fingerprint printed, flagged unverified), kept in `.talos-bastion-known-hosts` after a successful login and
+  required from then on; `=verify` refuses a first contact unless `OA_BASTION_HOSTKEY_FP=SHA256:...` matches; a different key on a pinned address is refused until `OA_BASTION_FORGET=1` with the new fingerprint.
+  `bastion-harden-check.sh` no longer uses `StrictHostKeyChecking=no` (pinned file when it holds the bastion, else a private file, fingerprint printed, `OA_BASTION_HOSTKEY_FP` checked) and `bastion-logs-pull.sh` takes
+  the pinned file when it holds the bastion. **Everything is off by default**: with the defaults the rendered cloud-init is byte for byte the previous one (hash in `test-cluster-checks.sh`, now also asserting the new inputs render nothing);
+  the scripts behave as before without the variable. Setting `bastion_admins` or the CA changes `user_data` (replaces the bastion on OVH and Outscale; ignored by a running instance elsewhere): plan window, never during a bootstrap.
+  Rung: **mocked and local Docker**. `tofu test` (25 cases: names, keys, hardware, CA, egress inputs), stub harnesses (`test-talos-tunnels.sh` pinning, first contact, changed key, forget, verify, `SSH_USER`, `open-direct`;
+  `test-bastion-harden-check.sh`; `test-bastion-fingerprints.sh`) and the new `task bastion-identity-check` (`scripts/dev/bastion-identity-check.sh`, Ubuntu 22.04 and 24.04): a real sshd takes each person's key for that account only,
+  names the person and key in the login line, accepts an 8 h certificate for the matching principal only, refuses an expired one, refuses a key in `RevokedKeys` (and, measured, every certificate for that key) while the others log in.
+  **Not proven**: any cloud image, cloud-init ordering on a first boot, a FIDO token (no `sk` login, no `verify-required`), that each provider shows the host key in a console log, that a plan on a running cluster is empty.
+  **Not done**: a host certificate signed by the CA (no first-contact step), injecting host keys (deliberately refused: they would live in the state), operating the CA (it stays offline or in OpenBao, outside this repository),
+  an OIDC login, session recording, and moving `bastion_image_id` to Ubuntu 24.04 with the hybrid `sntrup761x25519` KEX (TLS-01/TLS-19: it replaces the bastion on a running cluster and OpenSSH 8.9 on 22.04 does not know that KEX).
+
+- **Bastion Internet egress can be closed, opt-in `bastion_internet_egress` (ANSSI PA-022 R10/R19, HYG-M27, NT-006 R2; audit ADM/F06, OSN/F14, SCC/F18, NET/F04).**
+  `mode = "closed"` (default `"legacy"`: nothing changes) removes 80/443 to any address from the bastion's nftables and from the security group on Scaleway, OVH and Outscale; replaces the Scaleway "ANY to 172.16.0.0/12" and
+  the OVH "every protocol to 10.0.0.0/24" rules by TCP 6443 and 50000 to the subnet the network really has (Scaleway: `scw_subnet_in_use`, which follows an adopted network; OVH: the subnet resource's CIDR; Outscale: the Net);
+  limits outbound ICMP to that subnet; drops 8200 from the firewall and from `PermitOpen` (grep: no script or document in this repository or in OpenAether-apps forwards 8200 through the bastion); keeps the metadata
+  addresses reachable on port 80 (a security group applies to them on OpenStack); and installs neither `curl`, `netcat`, `tcpdump` nor `unattended-upgrades` and switches the apt timers off, since no mirror is reachable: **a closed
+  bastion is patched by replacing it** (`docs/admin-access.md` gives the `-replace` addresses). `dns_servers` / `ntp_servers` (addresses only) pin DNS and NTP in the VM's firewall (IPv4 and IPv6) and, IPv4, in the security group;
+  empty keeps them open. The OVH and Outscale rule resources gain `count` / `for_each` with `moved` blocks, so a cluster that never sets the variable plans no change (tests pin the legacy rule lists, in order for Scaleway,
+  where the provider compares a list). With the baseline on, the bastion user also leaves the `sudo` group. `bastion-harden-check.sh` no longer expects port 80 blocked (the shipped rules never did): it checks an arbitrary port in
+  legacy, and with `BASTION_EGRESS=closed` 80, 443, another public address and 8200 refused, no tools, timers off. Rung: **mocked and local Docker**: `tofu test` on the security-group rules of the three providers (legacy and
+  closed, pinned servers), a render test of the template, and `task bastion-identity-check`, which loads the closed and the legacy ruleset in a container's network namespace and shows 80, 443 and 8200 dropped and 6443 and
+  50000 kept only when closed. **Not proven**: a closed bastion on a real cloud (first boot, the Scaleway private-NIC route fix, DHCP renewals and the metadata address under the new rules, the Scaleway metadata address
+  `169.254.42.42` is from memory), tunnels to control planes, workers and the VIP, a plan on a running cluster. **Not done**: an ephemeral jump host or a baked-image replacement schedule (S13.6), disk encryption of the
+  bastion (it holds no secret at rest; the exception is not argued in a separate document), a provider mirror allowlist (not possible by name in nftables), and a changed default.
+
+- **Bastion logs off the VM: upload with a watermark, a fingerprint-to-person table (ANSSI PA-012 R2/R9/R14, HYG-42 M8; audit LOG-08).**
+  `bastion-logs-pull.sh` with `OA_LOGS_UPLOAD=1` stores the encrypted journal and audit archives in the artifacts bucket of both object stores under `backups/bastion-logs/` (SSE on top, the credentials of
+  `etcd-snapshot.sh`), refuses to upload anything in clear, keeps a per-store marker so a failed store is retried and nothing is re-sent, and keeps the journal cursor in the bucket too (moved only when both stores hold
+  everything), so a pull from another machine resumes. `docs/admin-access.md` documents reading a file back, the fingerprint table, and the cloud audit trails (Scaleway Audit Trail, OVH Activity logs, Outscale API logs,
+  Proxmox syslog) as a **manual** export. Rung: **mocked** (stub `ssh` and `aws`: both stores, per-store credentials, a store down then retried, a fresh directory resuming from the bucket cursor, the clear-text refusal);
+  restoring and reading goes through `systemd-journal-remote`, shown on a hand-built export in a container, not on a real `journalctl -o export`. **Not run against a real bucket.** The logs on the VM are still not
+  tamper-proof between two pulls, and nothing schedules the pull.
+
+- **Ops verification tooling: encryption at rest read back, an exposure scan, a behavioural network check, an RBAC review (ANSSI HYG M37/M38 evidence, NT-006 R14; NSA/CISA AUTH-03 and the Cilium encryption control).**
+  `infra-verify.sh` now reads `STATE` and `EPHEMERAL` back from each node's Talos API and fails unless they are `ready` and `luks2`, and
+  fails when the kube-apiserver has no `--encryption-provider-config` (the volume id is taken from Talos' source and has never been read on a
+  node: a node that does not know it is reported as unchecked, not as red). `cluster-security-tests.sh` gains 1.8 (Cilium WireGuard enabled in
+  `cilium-config` and reported by the agent), 4.6 (`openbao-recovery-dev` fails with `OA_ENVIRONMENT=prod`, is only reported otherwise) and
+  4.7 (the seal-key `openaether.io/escrowed-at` annotation; **opt-in** with `OA_ESCROW_ANNOTATION_CHECK=1` until the apps escrow step that sets it
+  exists, prod only). New: `task cluster-exposure` (`scripts/ops/exposure-scan.sh`: TCP probes of the bastion, API and app load balancers,
+  `FROM=denied` from an address outside `admin_ip`), `task cluster-netcheck` (`cluster-netcheck.sh`: a throwaway non-root pod in a temporary
+  namespace must be unable to reach a Service of each platform namespace, with an API-server reachability control; `CILIUM=1` adds
+  `cilium connectivity test`, never run here), `task rbac-review` (`rbac-review.sh` + `rbac-review.jq`, a dated `.tsv` flagging named User/Group
+  subjects, anonymous bindings and `cluster-admin` outside the allowlist) and a "review at staff change" paragraph in `docs/admin-access.md`.
+  The regression workflow runs the exposure scan and the netcheck after `cluster-verify`. Everything is read-only except the netcheck's temporary
+  namespace. Rung: mocked/static (stub `kubectl`/`talosctl`, loopback listener, failure and mutant cases; `shellcheck`), **not run on a cluster**.
+  It does **not** prove that a real node answers the way the stubs do, that the netcheck image can be pulled under the cluster's policies,
+  or that any of the new checks is green on a good cluster; it adds no OIDC and no named-human access (K8S/F13 steps 2-4 are not done), no etcd
+  or barman restore test and no backup-policy document (DP-16's apps and policy part), and no UDP probing.
+
+- **Supply chain: committed provider locks, a checksum lane for the Talos boot images, an SBOM, a protected environment for the cloud workflow, rulesets as code (ANSSI SSDLC CICD-AIP-01c/-03, PROV-REC03, CICD-IAM-03/-05, CIO-REC03, SCM-REC06/-07, SBOM25-1/-2/-3 in part).**
+  `.terraform.lock.hcl` of `cluster/` and `talos-image/` is committed (linux and macOS, amd64 and arm64); both roots' `>=` provider
+  constraints become `~>`; `task validate`/`test` and CI run `tofu init -lockfile=readonly` (shown to fail on a constraint bumped without
+  a refresh); `task lock-providers` refreshes by hand and Renovate looks providers up on registry.opentofu.org. `talos-image/images.lock`
+  records the sha256 of the Factory raw image per platform and arch for the pinned Talos version; `verify-image-checksum.sh` runs after
+  the download in the Scaleway, OVH and Outscale modules, driven by `image_checksum_mode` (**`warn` by default**: today's behaviour plus a
+  message; `enforce` stops the build; `off`), and Proxmox passes the provider's `checksum` under `enforce` only. `talos_tunnels` hands its
+  values to `local-exec` as environment variables (a key path with a space or `$(...)` stays data; it stays off by default). `real-cloud-regression.yml`
+  runs in an environment `sandbox`. `sbom.yml` (weekly and on release) attaches a CycloneDX 1.5 inventory (`gen-sbom.py`: tool pins, locked
+  providers, bootstrap images with digests, Factory images with hashes) and Trivy-scans the bootstrap images; `.vex/` holds an empty OpenVEX file.
+  `.github/rulesets/` holds the two rulesets as exported; `check-required-checks.sh` compares them with GitHub, requires a pull request,
+  no force-push and no deletion on main, and **warns** (fails under `--strict-main`) on 0 approving reviews, no required signatures and the
+  admin bypass on main; it also checks the `sandbox` environment. `docs/supply-chain.md` has the rotation table. Rung: mocked/static
+  (`tofu test` on the image root and the Proxmox module, stub harnesses, 79 offline cases for the settings check); the settings check was
+  also run once, read-only, against the live repository; the Factory was downloaded for real to write the lock. Nothing was run on a cloud or
+  a Proxmox host, Trivy and the Renovate validator were not run, and the new workflow has not run. It does **not**
+  prove the Factory serves stable bytes over months, that Proxmox's checksum covers the compressed file, that provider versions in the locks
+  are the ones the clusters ran on, or that the `sandbox` environment exists with reviewers (create it, then move the secrets); it adds no OIDC,
+  no bucket versioning, no image signature verification, and it covers none of what `OpenAether-apps` deploys.
+
+- **Patch policy and the signals behind it (ANSSI hygiene measure 34, audit ids HYG-M34, SSDLC CICD-AIP-01a/-03, NT-35 R2 in part).**
+  `docs/patching.md` states the rule (security fix merged or waived in writing within 30 days, 7 when exploited or internet-reachable)
+  and what feeds it. `renovate.json5` gains `vulnerabilityAlerts` (label only: Renovate's default for that block already skips the
+  schedule, the dashboard approval and `minimumReleaseAge`) and `osvVulnerabilityAlerts`. Cléa gets an optional
+  `[policy] max_minors_behind` (set to 2 in `clea.toml`): its report lists every pin more than that many minor releases, or a major,
+  behind upstream, held back or not; report only, 15 new assertions in `test-clea.sh`. `scripts/dev/check-image-pins.sh --enforce` runs in
+  `task lint` and fails on an `image:` pinned by tag with neither `@sha256` nor an entry in `flux-image-digests.lock` (none today);
+  `.github/workflows/image-digests.yml` runs `check-flux-image-digests.sh` weekly (anonymous ghcr.io, no credential, never on a PR).
+  Rung: mocked/static; the digest check was also run once against ghcr.io. Renovate's validator was not run (no Node here), and
+  the new Renovate keys are checked only against its published JSON schema. It does **not** upgrade Istio, cert-manager, Kyverno or
+  CNPG (those pins live in `OpenAether-apps`), does not move the bastion image off Ubuntu 22.04 (a replacement of a deployed
+  bastion, left to its own change), does not enable Renovate `pinDigests` (this repository has no manifest a Renovate manager would
+  rewrite: the Flux and Cilium manifests are generated), and the 30 days are a commitment of one maintainer, not a control.
+
+- **Passphrase hygiene for the state, the access artifacts and the etcd snapshots (ANSSI PG-083 weak-entropy rule, B2 one key / one use, PA-079 R4 and R14 in part).**
+  `scripts/ops/gen-passphrase.sh` prints `openssl rand -base64 48`. `task cluster-up` runs an entropy heuristic on the
+  passphrase after the existing placeholder check (distinct characters, repeated block, runs, common words; random base64 and hex
+  pass): **warn by default**, `OA_PASSPHRASE_CHECK=enforce` refuses, `=off` silences. New optional `artifact_passphrase`
+  (`TF_VAR_artifact_passphrase`, default null = unchanged behaviour and no plan diff) encrypts the gpg talosconfig/kubeconfig
+  backups and the etcd snapshots; `restore-artifacts.sh` tries it first and falls back to the state passphrase, so older objects
+  open. The pbkdf2 parameters of the state encryption are pinned to OpenTofu 1.12's defaults (600000 / sha512 / 32, read back
+  from a state's own metadata: existing states decrypt unchanged). `task kubeconfig` writes both files 0600, the snapshot cron
+  warns on a `.env.sh` readable by others, and the false "SSE-C" and "authenticated/OCB" wording is gone. Rung: mocked (`tofu
+  test`, the stub harnesses with real gpg, a real go-task), plus a local-backend decrypt check of the pbkdf2 defaults; nothing
+  run on a cluster or against a real store. It does **not** make gpg an AEAD (still CFB + SHA-1 MDC), does not add `enforced = true`
+  (an unencrypted state would stop planning), does not move artifacts to PGP public keys, and splitting the secrets is only as
+  good as the places they are kept.
+- **Secrets-at-rest cipher said as it is (ANSSI PA-079 R12).** The comments in `modules/talos/main.tf` called the etcd
+  encryption `AES-256-GCM`; Talos' `secretbox` is XSalsa20-Poly1305. `docs/upgrade.md` now records the deviation (not a
+  listed AEAD; Talos offers no AEAD alternative) and that the key has no verified in-place rotation. Docs and comments
+  only, nothing run; it does not add a rotation procedure, a KMS provider or a new cipher.
+- **Review fixes for the passphrase, supply-chain and ops-check changes above (ANSSI PG-083, SSDLC CICD-AIP-03, CICD-IAM-03; found by an independent review).**
+  `test-passphrase.sh` now greps that `backup.tf` hands the backup script `local.artifact_passphrase` (reverting it to the state
+  passphrase left every test green before; the line was changed and the new check went red). `artifact_passphrase_set` is
+  `nonsensitive()`: it derived from a sensitive variable and so hid the whole `triggers_replace` map in every plan, set or not (a
+  test asserts it is readable; no value changes, so no plan diff is expected, **not run against a real state**). `etcd-snapshot.sh` warns
+  when `artifact_passphrase` is in a tfvars file but not in `TF_VAR_artifact_passphrase`, the case where artifacts and snapshots would
+  silently end up under different passphrases (the variable's description now says environment only). The sandbox-environment
+  check fetches the deployment-branch patterns and fails on anything but `main` (a `*` policy passed before) and warns on
+  "protected branches" only (82 self-test cases, 3 new). `task kubeconfig` creates its two files with `touch` and `chmod 0600`
+  (BSD `install` on macOS may refuse `/dev/null`; **not run on macOS**). `test-talos-tunnels.sh` checks that `OA_TUNNEL_KEY` is
+  still `pathexpand()`ed. `test-passphrase.sh` checks a fixed hex value instead of a random one (a random 32-character hex string
+  has fewer than 10 distinct characters about once in 10^4 draws and was flagged, so the line flaked). Docs and variable text now say that `checksum_mode = enforce` on a Proxmox root that already holds
+  the image plans its re-download (bpg 0.116 `checksum` forces replacement; the resource is deprecated there), that a Talos bump
+  needs `talos-image-lock.sh` run by hand (the Renovate PR body says so), and what `osvVulnerabilityAlerts` actually reaches.
+  Rung: mocked/static, nothing run on a cluster or a Proxmox host. It does **not** automate the lock update, and
+  does not replace the deprecated Proxmox resource.
+
+- **The security documentation set, each page with a French twin (ANSSI rules on key impact, crypto-period and erasure; incident handling and PG-078 R26; backup policy, restore tests and destruction; a documented recovery plan; a documented architecture, flow matrix and trust zones; a documented administration system and privileged accounts; patching, vulnerability watch and written deviations; audit ids DP-06, DP-07, DP-17, TLS-12, TLS-19, TLS-20, F-BKP-07, F-BKP-10, F-BKP-16, LOG-17, ADM/F11, ADM/F13, NET/F07, NET/F09, OSN/F13 stage 0, OSN/F18, SCC/F11).**
+  New in `docs/`: `key-management` (every key K1 to K13 with purpose, algorithm, crypto-period, impact if lost and if leaked, replacement, revocation, erasure and archive; the Talos PKI, state-passphrase and etcd-key replacement procedures; the recorded deviations for
+  the software seal key, the AES-GCM wrap, the three CAs and the absent post-quantum hybrid), `incident-response` (detection sources, severity, contact placeholders, evidence capture with `talosctl` before a node is replaced, backups protected first, containment, a rotation table per secret, restore-point choice,
+  degraded access when Zitadel or the bastion is down, a register template), `backup-policy`, `disaster-recovery` (one ordered chain, OpenBao's snapshot before Zitadel's database because the masterkey lives in OpenBao, prerequisites, time targets, a yearly drill with a result table), `security-architecture`, `network`,
+  `hardening`, `threat-model`, `component-selection` (with the VEX register) and `audit-register`; linked from `SECURITY.md` and both READMEs; "Quarterly security review" added to `release-checklist.md`.
+  **Two statements the code contradicts are corrected** in `admin-access` (EN and FR): section 6 said the gateway was "nothing public" (with `deploy_app_lb` the application load balancer forwards public 80/443 to it, with no source filter) and showed bare `bao token create`
+  commands that need a token this platform does not hand out (`openaether-admin` explicitly cannot mint one); the maintenance-mode apply is written up as a residual risk in `first-cluster` and in the `modules/talos` header (DP-17).
+  New checks: `scripts/dev/check-doc-twins.sh` (in `task lint`: each pair opens with a link to the other, the security pairs have the same sections and code blocks on both sides, relative links resolve; its own test `test-check-doc-twins.sh`), and `scripts/dev/gen-flow-matrix.sh` with `test-flow-matrix.sh`
+  (in `task test-scripts`): the node-inbound tables of `network.md` and `network.fr.md` are generated from `scw/security.tf` (the `node_inbound_ports` map), `ovh/security.tf` and `outscale/security.tf` and compared with the code, and every rule must have a justification row.
+  Rung: **documents, read against the code, plus mocked tests of the two checks; nothing was run on a cluster, and no procedure in these pages was drilled.** RPO and RTO figures are proposed targets, the periods marked "proposed" are the maintainer's to confirm, and two joins of the recovery chain are named as unsettled (how the seal-key Secret is placed before OpenBao starts on a cluster built with Flux; the restic repository prefix of a rebuilt cluster).
+  It does **not** add a mechanism, an object lock or versioning on the buckets (recorded as a gap), a rotate-secret task, a host firewall (stage 0 of OSN/F13 is the page), named Kubernetes identities, the Talos node baseline (sysctls, kernel arguments, Secure Boot: rows left open in `hardening`), or end-of-support dates for the infrastructure pins; the application-side inventory it points to (`OpenAether-apps/docs/key-inventory.md`) ships with the apps half of the same work.
+
+- **Optional source filter on the application load balancer, `app_lb_allowed_cidrs` (ANSSI PA-022 R15/R16, HYG-M28, BP-028 R79; the infra half of the audit's OSN/F15 and ADM/F03).**
+  New variable (list of IPv4 CIDRs, default **empty = no filter = exactly the previous behaviour**, so no deployed cluster changes). With `deploy_app_lb` and a non-empty list: Scaleway gets inline allow-then-deny ACLs
+  on the `http` and `https` frontends (the pattern of the Kubernetes API frontend, an in-place update), OVH `allowed_cidrs` (sorted) on the two Octavia listeners, Outscale inbound 80/443 rules from the list in the
+  cluster security group, which is the load balancer's group. Each module also admits the cluster's own egress address (Scaleway NAT gateway, OVH router address, Outscale NAT service: pods reach
+  `https://zitadel.openaether.local` through the load balancer) and, on Scaleway and OVH, the private range; Proxmox and local are left out (no cloud load balancer). `["0.0.0.0/0"]` is accepted to turn the machinery on while
+  staying open. A `check` warns when the list is set but nothing can apply it. `network.md`/`.fr.md` (generated flow tables, section 6 gap 5) and `admin-access.md`/`.fr.md` section 6 describe it and the staged roll-out.
+  Rung: **mocked/static, not run on a cloud**: `tests/app-lb-source-filter.tftest.hcl` (ten cases: no ACL by default, allow before deny on both frontends, listener lists sorted, Outscale rule sources, input refused for a bare
+  address and for IPv6, the warning), the flow-matrix generator and its test. **Not proven**: that any of the three clouds enforces it, that the update is in place (no LB replacement, hence the same public IP), that pods still
+  reach Zitadel, that health checks and the client source address survive the NodePort path, and, on Outscale, whether the load balancer is filtered by its group at all (the group has had no 80/443 rule until now). It does
+  **not** authenticate anyone (a listed address still reaches every route's own login), does not remove any route (the apps half is another change), does not change the default to `admin_ip`, and does not cover Proxmox.
+
+- **Opt-in versioning, expiry and object lock on the buckets that hold copies and logs, `backup_immutability` (ANSSI RW-SAUV-2/-3, GH-BKP-1, HYG-M37; the infra half of the audit's F-BKP-01, LOG-07 and DP-05).**
+  New variables `backup_immutability` (`off` default | `versioned` | `governance` | `compliance`) and `backup_retention_days` (default 60), read from the tfvars by `scripts/internal/ensure-buckets.sh`
+  (no resource reads them: the buckets exist before OpenTofu runs). **`off` changes nothing**: no call is made, no bucket is created. Otherwise the script creates the application-backups bucket and its `-backup`
+  twin (until now the operator's to create by hand; the seed and the apps need them) and, on all seven buckets, turns on versioning and a lifecycle rule `oa-noncurrent-expiry` (non-current versions expire after
+  `backup_retention_days`); with `governance`/`compliance` the five buckets that hold copies or logs (application backups and their replica, the state and artifact replicas, Loki's logs) are CREATED with object lock
+  and get a default retention of the same length (the primary state and artifact buckets are versioned, never locked: tofu writes them). Everything is read back from the store and a refusal is a loud warning naming the
+  bucket and the provider's words, never a silent pass (`OA_BUCKET_PROTECTION_STRICT=1` makes it exit 1). Lifecycle rules someone else set are merged, not replaced, and nothing is written when they cannot be read.
+  A check warns for `compliance` on a dev cluster with more than 7 days: such a bucket cannot be emptied or deleted before the retention ends. Rung: **mocked/static, not run on a cluster**: a fake store
+  (`testdata/fake-aws-s3.sh`) that refuses object lock on a bucket not created with it, 56 assertions in `test-bucket-protection.sh`, seven `tofu test` cases. **Not proven**: that Scaleway, OVH or Outscale accept any of
+  these calls (versioning, a lifecycle on non-current versions, create-with-lock, a default retention), that restic, Barman, Longhorn and Loki keep working against a versioned or locked bucket, or that the expiry fires.
+  It does **not** stop a key that may call `DeleteObjectVersion` from removing an unlocked version (that is the key policy, below), does not touch an existing cluster unless its tfvars ask, and does not enable
+  object lock on a bucket that already exists without it on providers that refuse it (reported, not forced).
+
+- **Key pairs of their own for the backup stores, and a check of who can open what (ANSSI RW-SAUV-2, GH-BKP-1, PA-012 R26/R26+, HYG-M37; the infra half of the audit's F-BKP-01, F-BKP-04, LOG-07, F05 and DP-05).**
+  Extends 0.2.1's Loki bucket and `OA_LOKI_S3_*`. `seed-openbao.sh` takes the same optional, both-or-neither pairs for the two backup stores: `OA_BACKUP_S3_ACCESS_KEY_ID` / `OA_BACKUP_S3_SECRET_ACCESS_KEY` for
+  `backup/s3-primary` and `OA_BACKUP_REPLICA_S3_*` for `backup/s3-replica`, each meant to be limited by the operator to its bucket. **Without them nothing changes** (the cluster still gets the operator's keys, which also open the
+  state, artifact and logs buckets and may delete in them) **and the script now says so, from OpenBao's answers**, for the backups as it already did for Loki; a pair set against an entry that exists is reported as not applied (the
+  seed is create-only). New `scripts/ops/s3-isolation-check.sh <tfvars>` reads, with the pairs in the environment, which identity lists which bucket and whether a dedicated pair may call DeleteObjectVersion (a version that does not
+  exist is named: nothing is deleted), and compares the buckets with `backup_immutability`; exit 0 held, 1 not, 2 nothing dedicated in scope. Rung: **mocked/static, not run on a cluster**: `test-seed-openbao.sh` (96 assertions) and
+  `test-s3-isolation.sh` (23, on the fake store). **Not proven**: that any provider lets a key be limited to one bucket, or to everything but DeleteObjectVersion (the policy is the operator's to write and is not shipped:
+  `docs/backup-policy.md` lists the actions each identity needs), or that restic prune, Barman, Longhorn and Loki run with such a key. It does **not** move `forget --prune` out of the cluster (that is apps and needs restic locking
+  checked against a reduced key), does not rotate a seeded key (create-only: `bao_admin kv put`, documented), and does not touch an existing cluster's entries.
+  Documented in `backup-policy.md`/`.fr.md` (section 3 the modes and their limits, new section 4 the identity-to-bucket table and the rotation order), `admin-access`, `incident-response` (step 5 no longer says "no object lock is configured" without the opt-in), `key-management`, `security-architecture`, `audit-register`, `.env.example` and the teardown message of `fleet-down.sh` (a locked bucket cannot be emptied).
+
+- **`task cluster-security` checks that Loki writes to a bucket of its own and does not hold the backups' keys (4.8, 4.9; ANSSI PA-012 R26, RW-SAUV-3; the live-cluster half of the audit's F-BKP-04 and F05).**
+  Reads `loki-s3-credentials` and `backup-restic-env`, compares the encoded values and prints none. 4.8 **fails** when Loki's bucket is the backups bucket (what a cluster seeded before 0.2.1 still has, create-only);
+  4.9 is a **skip**, not a failure, when the key pair is the same (the seed's default without `OA_LOKI_S3_*`), and says what that leaves open. A cluster that lacked a dedicated pair keeps its 0.2.1 count
+  of passes, with one more skip and one more pass. Rung: **mocked/static**, six cases in `test-security-tests-checks.sh` (21 in all); not run on a cluster. Already there and not repeated: the Cilium WireGuard
+  check (1.8) and `check-cilium-effective-config.py`, which answer the audit's cleartext Alloy-to-Loki hop (WireGuard, no application-layer TLS); the `insecure: true` of `loki.yaml` is the apps repository's.
+
+- **`task escrow`: the OpenBao seal key, recovery shares and restic password escrowed to at least two custodians, proved against the live key, then attested (ANSSI GH-M37-5, RW-PRA-1, B2 recovery rule, PA-022 R45 in part; the infra half of the audit's F-BKP-05, DP-02 and F15).**
+  New `scripts/ops/escrow-openbao.sh` (`task escrow -- export|verify|attest`). `export` reads the three items from the cluster (the restic password through the `openaether-admin` path, the token on stdin), encrypts the seal key and the
+  password to every custodian (`-r KEYID` twice or more, or `--recipients-from-tfvars`), copies the already PGP-encrypted shares and writes a receipt of hashes (no secret); it refuses fewer than two **distinct** keys (two names for one key
+  count once), a directory inside a git work tree, a non-empty directory and a development bootstrap, and never puts a value on a command line or in a file unencrypted. `verify` reconstructs the key from the escrow alone (or from `--key-file`
+  for a hand-made k-of-n split) and compares its sha256 with the receipt and with the live Secret, and does the same for the restic password and the share copies; `attest` runs `verify` and only then writes the ConfigMap
+  `openbao-escrow-ack` and the annotation `openaether.io/escrowed-at`, exactly as the apps Day 0 step 5 does. **`cluster-security` check 4.7 now compares the attested hash with the live key**, and also fails on one holder, an attestation
+  older than 400 days or undated, and an annotation without the ConfigMap: the case the apps CronJob cannot see (it never reads the key) is an escrow of a key that was rotated since. 4.7 stays opt-in (`OA_ESCROW_ANNOTATION_CHECK=1`, prod only).
+  Rung: **mocked/static with real crypto**: `test-escrow-openbao.sh` (37 assertions, real gpg keys, a stub cluster, mutants run) and 29 in `test-security-tests-checks.sh`. **Not run on a cluster**: the pod exec, the apps CronJob
+  accepting the ConfigMap this writes, the `ssss`/`gfsplit` split (not tried), a restore from the escrow. It does **not** split the key (several recipients means any one opens it: it survives losing a person, not one leak), prove that each custodian
+  can open their copy (each runs `verify`), move the key out of the cluster, or run the disaster-recovery drill. Docs: `admin-access`, `key-management`, `disaster-recovery`, `release-checklist`, `audit-register` (EN and FR).
+
+- **`task rotate-secret`: the replace path that `seed-openbao.sh` (create-only) does not have (ANSSI B2 renewal rule, PG-078 R7/R26; the infra half of the audit's F-BKP-10, ADM/F11 and DP-07).**
+  New `scripts/ops/rotate-secret.sh <path> [--apply] [--restart ns/kind/name]`. As `openaether-admin` (token exchanged inside the pod, on stdin) it reads the entry, replaces only the fields it is given from `OA_ROTATE_*` in the environment
+  (the S3 pairs of `backup/s3-primary`, `backup/s3-replica` and `observability/loki-s3` with an optional bucket or endpoint; `OA_ROTATE_VALUE` for the two Alertmanager URLs and `grafana/oidc`), writes a new version with a check-and-set on the version it read,
+  nudges every ExternalSecret and, for `--restart`, waits until they have refreshed before restarting the named consumer (and restarts nothing if they did not). A dry run is the default. It **refuses, with the reason**, `backup/restic`, `zitadel/masterkey`,
+  `longhorn/encryption`, `zitadel/db`, `grafana/db`, `zitadel/admin`, `grafana/admin` and `minio/root`: each has a step outside OpenBao (a repository key, a database role, an encrypted volume) that this tool cannot do. Implemented as its own script rather than a mode of
+  `seed-openbao.sh`: the seed's identity may only create, and a replace mode would have widened it. Rung: **mocked/static**, `test-rotate-secret.sh` (39 assertions, stub kubectl, mutants run); not run against an OpenBao or a cluster. It does **not** rotate
+  the Talos PKI, the state passphrase or the etcd and disk keys (written procedures only, `key-management.md` section 3), does not create the new key at the provider, and does not revoke the old one. `incident-response.md` section 7 and `backup-policy.md` section 4 point to it (EN and FR).
+
 ## [0.2.1] — 2026-10-15
 
 **The infra half of the pair with OpenAether-apps 0.2.0: Day-1 seeding without a root token, a bucket of its own for Loki, a language check shared with the apps, and the Day-1 documentation corrected. A patch: no new scope.** It pins apps `refs/tags/0.2.0`. Read the entries below with their rung: real cloud means once, by hand, on the clouds named; nothing is repeated or unattended, and `cluster-up` with `deploy_flux = true` still ends 201 until the Day-1 seeding has run.

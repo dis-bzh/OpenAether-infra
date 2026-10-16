@@ -1,0 +1,34 @@
+# Weekly: does each Flux controller tag still resolve to the digest recorded in
+# flux-image-digests.lock? A tag force-moved upstream changes no committed byte,
+# so nothing on a pull request can see it (#119; ANSSI SSDLC CICD-AIP-01a/-03).
+# Anonymous ghcr.io reads only: no credential of any kind. Never on a pull request,
+# so it joins no required check; a red run is the signal.
+name: Image digests
+
+on:
+  schedule:
+    # Off the hour: a shared runner pool is busiest at :00.
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  flux-digests:
+    name: Flux controller digests
+    # A fork has no reason to carry this and no one to read the result.
+    if: github.repository == 'dis-bzh/OpenAether-infra'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
+
+      - name: Tags still resolve to the recorded digests
+        run: ./scripts/dev/check-flux-image-digests.sh

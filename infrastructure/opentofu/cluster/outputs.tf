@@ -87,6 +87,17 @@ output "bastion_user" {
   value       = local.bastion_user
 }
 
+# Public material only. The input of scripts/ops/bastion-fingerprints.sh, which maps the fingerprint sshd logs for a
+# login to the account (the person) that holds the key.
+output "bastion_access_keys" {
+  description = "Public keys allowed on the bastion: shared = bastion_ssh_keys by provider (the shared account), operators = bastion_admins by account name; hardware_keys_checked says whether the plan required sk-* keys for the operators"
+  value = {
+    shared                = var.bastion_ssh_keys
+    operators             = { for name, a in var.bastion_admins : name => a.ssh_keys }
+    hardware_keys_checked = var.bastion_require_hardware_key
+  }
+}
+
 # --- Secrets (for backup/DR) ---
 
 output "machine_secrets" {

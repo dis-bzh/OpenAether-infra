@@ -200,6 +200,23 @@ check "single_provider_per_cluster" {
   }
 }
 
+# A warning, not a failure: an allow-list that filters nothing must not pass for protection.
+check "app_lb_allowed_cidrs_applies" {
+  assert {
+    condition     = length(var.app_lb_allowed_cidrs) == 0 || (var.deploy_app_lb && length(setintersection(local.active_providers, ["scaleway", "ovh", "outscale"])) > 0)
+    error_message = "app_lb_allowed_cidrs is set but filters nothing: it needs deploy_app_lb = true on Scaleway, OVH or Outscale (Proxmox and local have no cloud load balancer)."
+  }
+}
+
+# A warning, not a failure: a compliance lock cannot be undone before it ends, and on a dev cluster that means buckets
+# nobody can delete for backup_retention_days.
+check "compliance_lock_on_dev" {
+  assert {
+    condition     = !(var.backup_immutability == "compliance" && var.environment == "dev" && var.backup_retention_days > 7)
+    error_message = "backup_immutability = compliance on a dev cluster: the locked buckets cannot be emptied or deleted for backup_retention_days (${var.backup_retention_days}). Use governance, or a retention of 7 days or less, for a cluster you will tear down."
+  }
+}
+
 # ==============================================================================
 # Scaleway Infrastructure
 # ==============================================================================
@@ -222,10 +239,19 @@ module "scw" {
   k8s_lb_mode      = local.scw_dist.k8s_lb_mode
   deploy_app_lb    = var.deploy_app_lb
 
+  app_lb_allowed_cidrs = var.app_lb_allowed_cidrs
+
   worker_storage = var.worker_storage
 
   admin_ip         = var.admin_ip
   bastion_ssh_keys = lookup(var.bastion_ssh_keys, "scaleway", [])
+  bastion_baseline = var.bastion_baseline
+
+  bastion_admins          = var.bastion_admins
+  bastion_internet_egress = var.bastion_internet_egress
+
+  bastion_ssh_ca_public_key = var.bastion_ssh_ca_public_key
+  bastion_ssh_ca_principals = var.bastion_ssh_ca_principals
 }
 
 # ==============================================================================
@@ -251,10 +277,19 @@ module "ovh" {
   k8s_lb_mode        = local.ovh_dist.k8s_lb_mode
   deploy_app_lb      = var.deploy_app_lb
 
+  app_lb_allowed_cidrs = var.app_lb_allowed_cidrs
+
   worker_storage = var.worker_storage
 
   admin_ip         = var.admin_ip
   bastion_ssh_keys = lookup(var.bastion_ssh_keys, "ovh", [])
+  bastion_baseline = var.bastion_baseline
+
+  bastion_admins          = var.bastion_admins
+  bastion_internet_egress = var.bastion_internet_egress
+
+  bastion_ssh_ca_public_key = var.bastion_ssh_ca_public_key
+  bastion_ssh_ca_principals = var.bastion_ssh_ca_principals
 }
 
 # ==============================================================================
@@ -278,10 +313,19 @@ module "outscale" {
   k8s_lb_mode        = local.osc_dist.k8s_lb_mode
   deploy_app_lb      = var.deploy_app_lb
 
+  app_lb_allowed_cidrs = var.app_lb_allowed_cidrs
+
   worker_storage = var.worker_storage
 
   admin_ip         = var.admin_ip
   bastion_ssh_keys = lookup(var.bastion_ssh_keys, "outscale", [])
+  bastion_baseline = var.bastion_baseline
+
+  bastion_admins          = var.bastion_admins
+  bastion_internet_egress = var.bastion_internet_egress
+
+  bastion_ssh_ca_public_key = var.bastion_ssh_ca_public_key
+  bastion_ssh_ca_principals = var.bastion_ssh_ca_principals
 }
 
 # ==============================================================================
@@ -323,6 +367,13 @@ module "proxmox" {
 
   admin_ip         = var.admin_ip
   bastion_ssh_keys = lookup(var.bastion_ssh_keys, "proxmox", [])
+  bastion_baseline = var.bastion_baseline
+
+  bastion_admins          = var.bastion_admins
+  bastion_internet_egress = var.bastion_internet_egress
+
+  bastion_ssh_ca_public_key = var.bastion_ssh_ca_public_key
+  bastion_ssh_ca_principals = var.bastion_ssh_ca_principals
 }
 
 # ==============================================================================
@@ -487,17 +538,23 @@ resource "terraform_data" "talos_tunnels" {
     join(",", local.worker_ips),
   ]
 
+  # Values travel as environment variables, never spliced into the command line: a user name or key path with a
+  # space or a metacharacter stays one argument. pathexpand() resolves the default "~/.ssh/..." here, since an
+  # env value is not tilde-expanded by the shell. test-talos-tunnels.sh runs this block with hostile values.
   provisioner "local-exec" {
-    command = join(" ", concat(
-      [
-        "${path.module}/../../../scripts/bootstrap/talos-tunnels.sh", "open-direct",
-        "--bastion", local.bastion_ip,
-        "--user", local.bastion_user,
-        "--cps", join(",", local.control_plane_ips),
-        "--key", var.ssh_key_path,
-      ],
-      length(local.worker_ips) > 0 ? ["--workers", join(",", local.worker_ips)] : []
-    ))
+    interpreter = ["/usr/bin/env", "bash", "-c"]
+    environment = {
+      OA_TUNNEL_BASTION = local.bastion_ip
+      OA_TUNNEL_USER    = local.bastion_user
+      OA_TUNNEL_CPS     = join(",", local.control_plane_ips)
+      OA_TUNNEL_WORKERS = join(",", local.worker_ips)
+      OA_TUNNEL_KEY     = pathexpand(var.ssh_key_path)
+    }
+    command = <<-EOT
+      exec "${path.module}/../../../scripts/bootstrap/talos-tunnels.sh" open-direct \
+        --bastion "$OA_TUNNEL_BASTION" --user "$OA_TUNNEL_USER" --cps "$OA_TUNNEL_CPS" \
+        --key "$OA_TUNNEL_KEY" $${OA_TUNNEL_WORKERS:+--workers "$OA_TUNNEL_WORKERS"}
+    EOT
   }
 }
 

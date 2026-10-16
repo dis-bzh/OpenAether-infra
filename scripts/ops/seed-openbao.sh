@@ -83,6 +83,22 @@ else
   LAK="$AK"; LSK="$SK"; LOKI_KEYS="shared"
 fi
 
+# The same for the two backup stores (restic, Longhorn and CNPG write with these, from inside the cluster): a pair per
+# store, OA_BACKUP_S3_* for the primary's backups bucket and OA_BACKUP_REPLICA_S3_* for its -backup twin, each limited to
+# that bucket by the operator. Without them the cluster holds the OPERATOR's keys, which open the state and artifact buckets too.
+BAK="$AK"; BSK="$SK"; BKEYS="shared"
+if [ -n "${OA_BACKUP_S3_ACCESS_KEY_ID:-}" ] || [ -n "${OA_BACKUP_S3_SECRET_ACCESS_KEY:-}" ]; then
+  [ -n "${OA_BACKUP_S3_ACCESS_KEY_ID:-}" ] && [ -n "${OA_BACKUP_S3_SECRET_ACCESS_KEY:-}" ] ||
+    fail "OA_BACKUP_S3_ACCESS_KEY_ID and OA_BACKUP_S3_SECRET_ACCESS_KEY go together: set both or neither"
+  BAK="$OA_BACKUP_S3_ACCESS_KEY_ID"; BSK="$OA_BACKUP_S3_SECRET_ACCESS_KEY"; BKEYS="dedicated"
+fi
+RBAK="$RAK"; RBSK="$RSK"; RBKEYS="shared"
+if [ -n "${OA_BACKUP_REPLICA_S3_ACCESS_KEY_ID:-}" ] || [ -n "${OA_BACKUP_REPLICA_S3_SECRET_ACCESS_KEY:-}" ]; then
+  [ -n "${OA_BACKUP_REPLICA_S3_ACCESS_KEY_ID:-}" ] && [ -n "${OA_BACKUP_REPLICA_S3_SECRET_ACCESS_KEY:-}" ] ||
+    fail "OA_BACKUP_REPLICA_S3_ACCESS_KEY_ID and OA_BACKUP_REPLICA_S3_SECRET_ACCESS_KEY go together: set both or neither"
+  RBAK="$OA_BACKUP_REPLICA_S3_ACCESS_KEY_ID"; RBSK="$OA_BACKUP_REPLICA_S3_SECRET_ACCESS_KEY"; RBKEYS="dedicated"
+fi
+
 # Alerting endpoints are real in production and arbitrary on a throwaway cluster. Say which of the two happened.
 SLACK_URL="${OA_SLACK_WEBHOOK_URL:-}"
 DMS_URL="${OA_DEADMANSSWITCH_URL:-}"
@@ -104,8 +120,8 @@ doc() { # <path> <key=ENVVAR>... — values come from the named variables
   jq -nc "$filter"
 }
 PAYLOAD="$(
-  EP1="$PRIMARY_EP" B1="$BUCKET" A1="$AK" S1="$SK" \
-  EP2="$REPLICA_EP" B2="${BUCKET}-backup" A2="$RAK" S2="$RSK" \
+  EP1="$PRIMARY_EP" B1="$BUCKET" A1="$BAK" S1="$BSK" \
+  EP2="$REPLICA_EP" B2="${BUCKET}-backup" A2="$RBAK" S2="$RBSK" \
   B3="$LOGS_BUCKET" A3="$LAK" S3="$LSK" \
   SL="$SLACK_URL" DM="$DMS_URL" \
   bash -c "$(declare -f doc)
@@ -190,6 +206,21 @@ elif grep -q '^= observability/loki-s3' <<<"$OUT"; then
   echo "  dedicated logs bucket points at the BACKUPS bucket with the primary keys; ${LOGS_BUCKET}$([ "$LOKI_KEYS" = dedicated ] && echo " and the OA_LOKI_S3_* pair you set were") not applied."
   echo "  Replace the entry by hand to change it (docs/admin-access.md, section 3)."
 fi
+# The same, for the keys the backups run with. Said from OpenBao's answers, like the Loki line above.
+report_backup_keys() { # <secret path> <what it feeds> <shared|dedicated> <bucket> <env prefix> <whose keys>
+  if grep -q "^+ $1\$" <<<"$OUT"; then
+    if [ "$3" = shared ]; then
+      echo "⚠ $1 holds $6 (${5}_ACCESS_KEY_ID / ${5}_SECRET_ACCESS_KEY not set): inside the cluster they reach the state, artifact and"
+      echo "  logs buckets as well as $4, and may delete in all of them. Give $2 a pair limited to $4 (docs/backup-policy.md, section 4)."
+    else
+      echo "  $1 got the key pair you gave (${5}_*) and bucket $4."
+    fi
+  elif grep -q "^= $1\$" <<<"$OUT" && [ "$3" = dedicated ]; then
+    echo "⚠ $1 already existed and was left alone: the ${5}_* pair you set was not applied. Replace the entry by hand (docs/admin-access.md, section 3)."
+  fi
+}
+report_backup_keys backup/s3-primary "restic, Longhorn and CNPG" "$BKEYS" "$BUCKET" OA_BACKUP_S3 "the operator's keys for the primary store"
+report_backup_keys backup/s3-replica "the second copy" "$RBKEYS" "${BUCKET}-backup" OA_BACKUP_REPLICA_S3 "the keys the replica store was opened with"
 [ $((WROTE + KEPT)) -eq "$EXPECTED" ] || fail "expected $EXPECTED answers from OpenBao, got $((WROTE + KEPT)): $(tr '\n' ' ' <<<"$OUT" | cut -c1-300)"
 
 # ExternalSecrets refresh hourly. Nudge them, or the cluster spends up to an hour looking broken for secrets that are
@@ -199,6 +230,17 @@ kubectl get externalsecrets -A -o jsonpath='{range .items[*]}{.metadata.namespac
   while read -r ns name; do
     [ -n "$ns" ] && kubectl annotate externalsecret "$name" -n "$ns" \
       "seed-openbao/synced-at=$(date -u +%s)" --overwrite >/dev/null 2>&1 || true
+  done
+
+# A CloudNativePG instance manager reads the S3 Secret of its barman archive when the pod starts: a Secret that appears later
+# is not seen ("failed to get envs: cache miss") and ContinuousArchiving stays False until the Cluster is reloaded. Seeding
+# after the databases are up is the normal order here (seen on a real Scaleway cluster seeded 30 minutes after its pods), so the
+# reload is part of seeding. Best effort: no CNPG CRD yet, or no Cluster, is not an error.
+echo "▶ Reloading the CloudNativePG clusters so that their archive picks the Secret up"
+kubectl get clusters.postgresql.cnpg.io -A -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' 2>/dev/null |
+  while read -r ns name; do
+    [ -n "$ns" ] && kubectl annotate clusters.postgresql.cnpg.io "$name" -n "$ns" \
+      "cnpg.io/reloadedAt=$(date -u +%Y-%m-%dT%H:%M:%SZ)" --overwrite >/dev/null 2>&1 || true
   done
 
 echo "✓ Day-1 secrets seeded. Still manual, and neither blocks the DAG:"

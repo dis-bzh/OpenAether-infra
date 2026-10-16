@@ -30,7 +30,11 @@ resource "terraform_data" "build_and_upload" {
 
   provisioner "local-exec" {
     interpreter = ["/usr/bin/env", "bash", "-c"]
-    command     = <<-EOT
+    environment = {
+      OA_IMAGE_SHA256 = var.expected_sha256
+      OA_IMAGE_CHECK  = var.checksum_mode
+    }
+    command = <<-EOT
       set -euo pipefail
       # S3-compatible stores reject the AWS CLI v2.23+ default trailing checksum —
       # only add checksums when the operation actually requires them.
@@ -44,6 +48,8 @@ resource "terraform_data" "build_and_upload" {
       mkdir -p "${var.cache_dir}"
       echo "▶ Downloading Talos ${var.talos_version} (scaleway-${var.arch}) from Image Factory..."
       curl -fL --retry 3 "${local.factory_url}" -o "${local.raw_zst}"
+      bash "${path.module}/../../../../../scripts/internal/verify-image-checksum.sh" \
+        "${local.raw_zst}" "$OA_IMAGE_SHA256" "$OA_IMAGE_CHECK" "scaleway-${var.arch} ${var.talos_version}"
       echo "▶ Decompressing (zstd) + converting to QCOW2 (qemu-img)..."
       zstd -f -d "${local.raw_zst}" -o "${local.raw_path}"
       qemu-img convert -f raw -O qcow2 "${local.raw_path}" "${local.qcow2_path}"

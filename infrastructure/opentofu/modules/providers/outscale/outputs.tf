@@ -60,3 +60,28 @@ output "worker_zone_index" {
   description = "Index into the private subnets of each worker (its zone, and its data volumes')"
   value       = local.worker_zone_index
 }
+
+# Test-only: the bastion's outbound rules as "protocol port destination", for the egress tests.
+output "bastion_egress_rules" {
+  description = "Every Outbound rule of the bastion security group as 'protocol from-to ip_range', for tests"
+  value = concat(
+    [for r in outscale_security_group_rule.bastion_egress_private : "${r.ip_protocol} ${r.from_port_range}-${r.to_port_range} ${r.ip_range}"],
+    [for k, r in outscale_security_group_rule.bastion_egress_cluster : "${r.ip_protocol} ${r.from_port_range}-${r.to_port_range} ${r.ip_range}"],
+    [for r in outscale_security_group_rule.bastion_egress_dns_udp : "${r.ip_protocol} ${r.from_port_range}-${r.to_port_range} ${r.ip_range}"],
+    [for r in outscale_security_group_rule.bastion_egress_dns_tcp : "${r.ip_protocol} ${r.from_port_range}-${r.to_port_range} ${r.ip_range}"],
+    [for k, r in outscale_security_group_rule.bastion_egress_dns_pinned : "${r.ip_protocol} ${r.from_port_range}-${r.to_port_range} ${r.ip_range}"],
+    [for k, r in outscale_security_group_rule.bastion_egress_ntp_pinned : "${r.ip_protocol} ${r.from_port_range}-${r.to_port_range} ${r.ip_range}"],
+    [for r in outscale_security_group_rule.bastion_egress_metadata : "${r.ip_protocol} ${r.from_port_range}-${r.to_port_range} ${r.ip_range}"],
+    [for r in outscale_security_group_rule.bastion_egress_http : "${r.ip_protocol} ${r.from_port_range}-${r.to_port_range} ${r.ip_range}"],
+    [for r in outscale_security_group_rule.bastion_egress_https : "${r.ip_protocol} ${r.from_port_range}-${r.to_port_range} ${r.ip_range}"],
+  )
+}
+
+# Test-only: a test cannot read a child module's resources. The sources admitted on the app LB ports, as "port source".
+output "app_lb_sources" {
+  description = "Source CIDRs of the app LB inbound rules (80, 443), for tests; empty = no rule (unfiltered or no app LB)"
+  value = {
+    http  = sort([for k, r in outscale_security_group_rule.app_lb_http : k])
+    https = sort([for k, r in outscale_security_group_rule.app_lb_https : k])
+  }
+}

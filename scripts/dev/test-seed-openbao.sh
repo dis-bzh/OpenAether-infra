@@ -47,6 +47,8 @@ case "$*" in
     if [ "${OA_STUB_NO_SA:-0}" = 1 ]; then echo 'Error from server (NotFound): serviceaccounts "openbao-seeder" not found' >&2; exit 1; fi
     printf 'jwt-STUB-SA-TOKEN' ;;
   "get externalsecrets"*) printf 'observability alertmanager-slack\nbackup restic\n' ;;
+  "get clusters.postgresql.cnpg.io"*) printf 'foundation-databases grafana-db\nfoundation-databases zitadel-db\n' ;;
+  "annotate clusters.postgresql.cnpg.io"*) ;;
   "annotate externalsecret"*) ;;
   "exec -i openbao-0 -n foundation-vault -- sh -c "*)
     n="$(cat "$OA_STUB_LOG.attempts" 2>/dev/null || echo 0)"; echo $((n + 1)) >"$OA_STUB_LOG.attempts"
@@ -100,6 +102,7 @@ is "loki writes to its OWN bucket, never the backups bucket (#302)" "s3-example-
 grep -q "does NOT protect them from a compromised one" <<<"$OUT" && ok "without dedicated keys it SAYS what the separation does not cover" || bad "silent shared keys: $OUT"
 grep -q "placeholders" <<<"$OUT" && ok "no alerting URLs in scope: it SAYS placeholders were seeded" || bad "silent placeholders: $OUT"
 grep -q "seed-openbao/synced-at=" "$LOG" && ok "ExternalSecrets are nudged to re-read" || bad "no annotate call recorded"
+[ "$(grep -c 'annotate clusters.postgresql.cnpg.io .* cnpg.io/reloadedAt=' "$LOG")" = 2 ] && ok "the CloudNativePG clusters are reloaded so that a late S3 Secret is picked up" || bad "no cnpg reload recorded: $(grep annotate "$LOG")"
 
 echo "--- Loki with a key pair of its own: that pair is seeded, and the warning is gone ---"
 ENV_EXTRA="$BASE OA_LOKI_S3_ACCESS_KEY_ID=STUB-LOKI-AK OA_LOKI_S3_SECRET_ACCESS_KEY=STUB-LOKI-SK"
@@ -114,6 +117,33 @@ ENV_EXTRA="$BASE OA_LOKI_S3_ACCESS_KEY_ID=STUB-LOKI-AK"
 OUT2="$(run)"; RC=$?
 [ "$RC" -ne 0 ] && ok "half a pair is refused (rc=$RC)" || bad "seeded with half a Loki pair"
 is "…before any write" 0 "$(puts | wc -l)"
+ENV_EXTRA="$BASE"
+OUT="$(run)"
+
+echo "--- the backups with key pairs of their own: seeded per store, Loki and the operator's keys untouched ---"
+grep -q "backup/s3-primary holds the operator's keys" <<<"$OUT" && ok "shared keys: the seed says what the cluster then holds, and that it can delete elsewhere" || bad "silent shared backup keys: $OUT"
+grep -q "backup/s3-replica holds" <<<"$OUT" && ok "…for the replica store too" || bad "no replica warning: $OUT"
+ENV_EXTRA="$BASE OA_BACKUP_S3_ACCESS_KEY_ID=STUB-BKP-AK OA_BACKUP_S3_SECRET_ACCESS_KEY=STUB-BKP-SK OA_BACKUP_REPLICA_S3_ACCESS_KEY_ID=STUB-BKR-AK OA_BACKUP_REPLICA_S3_SECRET_ACCESS_KEY=STUB-BKR-SK"
+OUT2="$(run)"; RC=$?
+is "the script completes" 0 "$RC"
+is "s3-primary carries the dedicated access key" "STUB-BKP-AK" "$(field backup/s3-primary access_key)"
+is "…and secret key" "STUB-BKP-SK" "$(field backup/s3-primary secret_key)"
+is "s3-replica carries ITS dedicated pair" "STUB-BKR-AK" "$(field backup/s3-replica access_key)"
+is "…and secret key" "STUB-BKR-SK" "$(field backup/s3-replica secret_key)"
+is "…in the same buckets as before" "s3-example-scaleway-backups-test-backup" "$(field backup/s3-replica bucket)"
+is "Loki keeps the primary's keys (it never gets a backup pair)" "STUB-PRIMARY-AK" "$(field observability/loki-s3 accessKey)"
+grep -q "holds the operator's keys\|holds the keys the replica" <<<"$OUT2" && bad "the shared-keys warning is printed for dedicated pairs" || ok "no shared-keys warning for dedicated pairs"
+grep -q "STUB-BK" <<<"$OUT2" && bad "a backup key was printed" || ok "the backup keys are not printed"
+ENV_EXTRA="$BASE OA_BACKUP_S3_ACCESS_KEY_ID=STUB-BKP-AK"
+OUT2="$(run)"; RC=$?
+[ "$RC" -ne 0 ] && ok "half a primary pair is refused (rc=$RC)" || bad "seeded with half a backup pair"
+is "…before any write" 0 "$(puts | wc -l)"
+ENV_EXTRA="$BASE OA_BACKUP_REPLICA_S3_SECRET_ACCESS_KEY=STUB-BKR-SK"
+OUT2="$(run)"; RC=$?
+[ "$RC" -ne 0 ] && ok "half a replica pair is refused (rc=$RC)" || bad "seeded with half a replica pair"
+ENV_EXTRA="$BASE OA_STUB_EXISTING=backup/s3-primary OA_BACKUP_S3_ACCESS_KEY_ID=STUB-BKP-AK OA_BACKUP_S3_SECRET_ACCESS_KEY=STUB-BKP-SK"
+OUT2="$(run)"
+grep -q "backup/s3-primary already existed and was left alone: the OA_BACKUP_S3_\* pair you set was not applied" <<<"$OUT2" && ok "a pair set against an existing entry is reported as NOT applied" || bad "$OUT2"
 ENV_EXTRA="$BASE"
 OUT="$(run)"
 

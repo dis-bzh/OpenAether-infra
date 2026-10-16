@@ -10,7 +10,7 @@
 #
 # Needs the network (an anonymous ghcr.io token, same as `docker pull` would
 # use) but never a cloud account — same rung distinction Cléa's probes draw.
-# Not part of `task lint`, which must stay fully offline.
+# Not part of `task lint`, which must stay fully offline: .github/workflows/image-digests.yml runs it weekly.
 #
 # Usage:
 #   check-flux-image-digests.sh          # compare against the recorded lock

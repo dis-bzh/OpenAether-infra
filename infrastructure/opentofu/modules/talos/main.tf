@@ -44,8 +44,9 @@ locals {
   installer_image = var.installer_schematic_id == "" ? "ghcr.io/siderolabs/installer:${var.talos_version}" : "factory.talos.dev/installer/${var.installer_schematic_id}:${var.talos_version}"
 }
 
-# 32-byte random key for Kubernetes Secrets encryption at rest (AES-256-GCM via
-# secretbox). Generated once, stable across applies (stored in tfstate).
+# 32-byte random key for Kubernetes Secrets encryption at rest (secretbox,
+# XSalsa20-Poly1305). Generated once, stable across applies (stored in tfstate).
+# Rotation is not a supported in-place operation: docs/upgrade.md.
 # Applied via cluster.secretboxEncryptionSecret in the control plane config patch.
 resource "random_bytes" "etcd_encryption_secret" {
   length = 32
@@ -309,7 +310,7 @@ data "talos_machine_configuration" "control_plane" {
           proxy = {
             disabled = true # kube-proxy replaced by Cilium
           }
-          # Encrypt all Kubernetes Secrets in etcd at rest (AES-256-GCM / secretbox).
+          # Encrypt all Kubernetes Secrets in etcd at rest (secretbox: XSalsa20-Poly1305).
           # Key is generated once and stored in tfstate — stable across applies.
           secretboxEncryptionSecret = random_bytes.etcd_encryption_secret.base64
           inlineManifests           = local.inline_manifests
@@ -473,6 +474,11 @@ data "talos_machine_configuration" "worker" {
 #   2. timeouts.create = "15m" — headroom for slow cloud boot + CA transition.
 # In container mode (config_delivery = "userdata") do_apply is false → these
 # resources and the config_apply resources below are all skipped (inert local).
+#
+# RESIDUAL RISK (ANSSI DP-17): that maintenance certificate cannot be verified, so the full machine
+# config (cluster CAs, LUKS and secretbox keys) is sent to a node identified only by its address. What
+# narrows it, none of it a node authentication: no public address, the SSH tunnel, the bastion-only
+# security group on 50000 (OVH, Outscale). docs/first-cluster.md, "Residual risk: the maintenance-mode apply".
 # ==============================================================================
 
 resource "terraform_data" "talos_port_ready_cp" {

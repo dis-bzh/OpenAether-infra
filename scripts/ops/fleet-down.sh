@@ -295,6 +295,8 @@ cat <<EOT
     s3-${CN:-<project>}-${PROVIDER}-${ROLE}-${ENVN:-<env>}
     s3-${CN:-<project>}-*-backups-${ENVN:-<env>}   (restic, all providers)
     s3-${CN:-<project>}-${PROVIDER}-logs-${ENVN:-<env>}   (Loki; no teardown removes it, delete it by hand)
+  With backup_immutability set these are versioned or locked: emptying one means deleting every version and delete marker,
+  and a locked version stays until its retention ends (a compliance lock cannot be shortened by anyone).
   Talos images (reusable — one set per version built; a rebuild is 8 min to over 1 h on Outscale):
     task talos-image PROVIDER=$PROVIDER LIST=1 shows them, VERSION=<v> PRUNE=1 removes one; the
     state is one key per version in bucket s3-${CN:-<project>}-${PROVIDER}-talos-image.

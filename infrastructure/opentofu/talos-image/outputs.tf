@@ -26,3 +26,8 @@ output "image_file_id" {
   description = "Proxmox only: file_id (datastore:iso/filename) — matches the convention cluster/main.tf falls back to, so talos_image_file_id rarely needs to be set explicitly."
   value       = var.target_provider == "proxmox" ? one(module.proxmox[*].image_file_id) : null
 }
+
+output "image_expected_sha256" {
+  description = "sha256 of the Factory raw.zst each target would download, from images.lock (empty = none recorded for this schematic, version and arch)."
+  value       = local.image_expected
+}
