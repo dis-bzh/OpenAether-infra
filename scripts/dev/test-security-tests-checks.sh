@@ -108,6 +108,11 @@ STUB_ESCROWED=x STUB_ACK_AT=$TODAY STUB_ACK_SHA=$SEAL_SHA STUB_ACK_N=2 STUB_SEAL
 verdict "4.7" "❌" && grep -q 'cannot read the live seal key' <<<"$OUT" && ok "a live key that cannot be read is a FAIL, not a pass" || bad "unreadable key: $(line 4.7)"
 STUB_SEAL=1 OA_ENVIRONMENT=dev OA_ESCROW_ANNOTATION_CHECK=1 run
 verdict "4.7" "⏭" && ok "a dev cluster is skipped" || bad "dev: $(line 4.7)"
+# Lab 11: the opt-in alone looked like it had been ignored. The skip names both switches and the environment it saw.
+grep -q "OA_ESCROW_ANNOTATION_CHECK=1 is set but OA_ENVIRONMENT is 'dev'" <<<"$OUT" && grep -q 'ENVIRONMENT=prod task cluster-security' <<<"$OUT" \
+  && ok "…and the skip says that the opt-in needs prod, with the command" || bad "dev skip text: $(line 4.7)"
+STUB_SEAL=1 OA_ESCROW_ANNOTATION_CHECK=1 run
+verdict "4.7" "⏭" && grep -q "OA_ENVIRONMENT is 'unset'" <<<"$OUT" && ok "an unset environment is named as unset in the skip" || bad "unset skip text: $(line 4.7)"
 OA_ENVIRONMENT=prod OA_ESCROW_ANNOTATION_CHECK=1 run
 verdict "4.7" "⏭" && ok "no seal-key Secret (static seal not in use) is a skip" || bad "no seal key: $(line 4.7)"
 

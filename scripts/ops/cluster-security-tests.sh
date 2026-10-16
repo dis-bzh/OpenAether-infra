@@ -9,7 +9,9 @@
 #   ./cluster-security-tests.sh
 #   KUBECONFIG=/path/to/kubeconfig ./cluster-security-tests.sh
 #   OA_ENVIRONMENT=prod ./cluster-security-tests.sh      # the OpenBao bootstrap checks (4.6, 4.7) are strict on prod
-#   OA_ESCROW_ANNOTATION_CHECK=1 ./cluster-security-tests.sh   # also require the seal-key escrow record (4.7: annotation, hash of the live key, two holders)
+#   OA_ESCROW_ANNOTATION_CHECK=1 OA_ENVIRONMENT=prod ./cluster-security-tests.sh   # also require the seal-key escrow record (4.7: annotation,
+#                                                    # hash of the live key, two holders). BOTH are needed: the record is required on prod only,
+#                                                    # on any other environment 4.7 is a skip that says so (task cluster-security: ENVIRONMENT=prod)
 # ══════════════════════════════════════════════════════════════════════════════
 
 set -euo pipefail
@@ -497,7 +499,8 @@ fi
 if [ "${OA_ESCROW_ANNOTATION_CHECK:-}" != "1" ]; then
   skip "4.7 Seal-key escrow recorded" "opt-in (OA_ESCROW_ANNOTATION_CHECK=1) until the escrow step that sets openaether.io/escrowed-at is in your apps ref"
 elif [ "$OA_ENV" != "prod" ]; then
-  skip "4.7 Seal-key escrow recorded" "strict only with OA_ENVIRONMENT=prod"
+  # The opt-in alone is not enough, by design (a dev cluster has no escrow to attest): say so instead of looking like a failed opt-in.
+  skip "4.7 Seal-key escrow recorded" "OA_ESCROW_ANNOTATION_CHECK=1 is set but OA_ENVIRONMENT is '${OA_ENV:-unset}': the escrow record is required on prod only; run ENVIRONMENT=prod task cluster-security (or OA_ENVIRONMENT=prod)"
 elif ! kubectl -n foundation-vault get secret openbao-seal-key &>/dev/null; then
   skip "4.7 Seal-key escrow recorded" "no openbao-seal-key Secret (static seal not in use)"
 else

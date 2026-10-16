@@ -675,7 +675,8 @@ tasks:
     desc: >-
       Run runtime security validation tests on the cluster. ENVIRONMENT=prod makes the OpenBao bootstrap
       checks strict (no openbao-recovery-dev); OA_ESCROW_ANNOTATION_CHECK=1 adds the seal-key escrow
-      record (annotation, hash of the live key, two holders).
+      record (annotation, hash of the live key, two holders) and only counts together with ENVIRONMENT=prod
+      (on any other environment 4.7 is skipped, and says so).
     env:
       OA_ENVIRONMENT: '{{.ENVIRONMENT | default ""}}'
     cmds:
