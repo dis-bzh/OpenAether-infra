@@ -7,6 +7,7 @@ Static Kubernetes manifests injected at cluster creation via **Talos `inlineMani
 | File | Source | Injected when |
 |------|--------|---------------|
 | `cilium.yaml` | `helm template cilium/cilium` | Always (CNI is required) |
+| `cilium-hubble-drops.yaml` | `render-bootstrap-manifests.sh --hubble-drops` | `cilium_hubble_drop_log=true` (default false): Hubble server only, DROPPED/ERROR flows to the agent's stdout |
 | `cilium-local.yaml` | `helm template cilium/cilium --local` | Local Docker testing only |
 | `flux-install.yaml` | Flux2 official `install.yaml` | `deploy_flux=true` (default false) |
 | `flux-bootstrap.yaml.tftpl` | OpenTofu template | `deploy_flux=true` (default false) |
@@ -23,6 +24,9 @@ Run whenever upgrading Cilium or Flux:
 # without it a FLUX_VERSION bump leaves the vendored file, and `task render-check`, on the old release.
 CILIUM_VERSION=1.20.0 FLUX_VERSION=v2.5.0 OPENAETHER_REFRESH_FLUX=1 ./scripts/bootstrap/render-bootstrap-manifests.sh
 ./scripts/dev/check-flux-image-digests.sh --write   # then the controller image digests (network)
+
+# The opt-in dropped-flow variant (cilium-hubble-drops.yaml; also rewrites the lock)
+./scripts/bootstrap/render-bootstrap-manifests.sh --hubble-drops
 
 # Local Docker testing only (regenerate cilium-local.yaml)
 ./scripts/bootstrap/render-bootstrap-manifests.sh --local
