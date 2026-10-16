@@ -616,6 +616,8 @@ tasks:
       - ./scripts/dev/test-bastion-harden-check.sh
       - ./scripts/dev/test-bastion-logs-pull.sh
       - ./scripts/dev/test-bastion-fingerprints.sh
+      # etcd-snapshot-cron.sh with two runs at once: the one that loses the lock cleans up nothing of the winner's.
+      - ./scripts/dev/test-etcd-snapshot-cron.sh
       # grow-nodes.sh (#59): machines, then tunnels, then only the new nodes' configuration.
       - ./scripts/dev/test-grow-nodes.sh
       - ./scripts/dev/test-refuse-node-deletes.sh
