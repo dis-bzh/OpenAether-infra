@@ -1217,6 +1217,12 @@ tasks:
       APPROVE: '{{.APPROVE | default "ask"}}'
     env: *provider-env
     cmds:
+      # Dropped first, like `infra-apply`: the explainer below reads this transcript, and a stale one would diagnose the
+      # run before this one. Lab 11: a phase-2 failure ("time is not in sync yet", OVH) printed no hint although the
+      # OVH no-egress one exists, because only `infra-apply` was wired to the explainer. Phase 2 is the cluster-up
+      # phase that bootstraps Talos, and the one that waits on the nodes' clock.
+      - rm -f .tofu-run.log
+      - defer: '{{if .EXIT_CODE}}../../../scripts/internal/explain-failure.sh .{{else}}true{{end}}'
       - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
       - SSH_KEY="{{.KEY}}" ../../../scripts/bootstrap/talos-tunnels.sh open .
       # A bootstrap the state forgot would be re-sent below at a live etcd. Needs
@@ -1240,7 +1246,10 @@ tasks:
         # so this gate is the only one — and OpenTofu refuses a saved plan whose
         # state has moved, which is what makes "what I read is what ran" true.
         PLANFILE="phase2-{{.ROLE}}-{{.PROVIDER}}.tfplan"
-        tofu plan -out="$PLANFILE" -var-file="envs/{{.ROLE}}-{{.PROVIDER}}.tfvars" -var talos_bootstrap=true
+        # tee + pipefail: the transcript is what the explainer reads, and pipefail keeps tofu's status through the pipe.
+        set -o pipefail
+        tofu plan -out="$PLANFILE" -var-file="envs/{{.ROLE}}-{{.PROVIDER}}.tfvars" \
+          -var talos_bootstrap=true 2>&1 | tee -a .tofu-run.log
         ../../../scripts/internal/refuse-node-deletes.sh "$PLANFILE" || exit 1
         if [ "{{.APPROVE}}" != auto ]; then
           if [ -t 0 ]; then
@@ -1257,7 +1266,7 @@ tasks:
             exit 1
           fi
         fi
-        tofu apply "$PLANFILE"
+        tofu apply "$PLANFILE" 2>&1 | tee -a .tofu-run.log
         rm -f "$PLANFILE"
       - task: _backup-state
         vars: {PROVIDER: "{{.PROVIDER}}"}

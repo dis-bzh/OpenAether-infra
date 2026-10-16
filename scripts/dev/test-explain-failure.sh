@@ -304,7 +304,8 @@ WIRED="$(awk '
   /^  [a-zA-Z0-9_-]+:$/          { t=$1; sub(/:$/,"",t) }
   t != "" && /defer:.*explain-failure\.sh/ { print t }
 ' Taskfile.yml | sort -u)"
-for T in infra-apply infra-plan; do
+# bootstrap-phase2 (lab 11): its failures ("time is not in sync yet" on OVH) printed no hint at all.
+for T in infra-apply infra-plan bootstrap-phase2; do
   grep -qx "$T" <<<"$WIRED" \
     && ok "$T defers to the explainer" \
     || bad "$T no longer defers to the explainer — a failure there explains nothing"
