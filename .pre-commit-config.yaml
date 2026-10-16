@@ -6,7 +6,7 @@ repos:
   # Conventional Commits: the subject decides the CHANGELOG entry, so a subject
   # that does not parse is a release note nobody wrote. Same tool as CI.
   - repo: https://github.com/commitizen-tools/commitizen
-    rev: cc981fcb065527b6de0033b0cbf0432e69781901  # v4.9.1
+    rev: 57217c394fff5064bedd48421fe4b6f5f73aad47  # v4.19.2
     hooks:
       - id: commitizen
         stages: [commit-msg]
