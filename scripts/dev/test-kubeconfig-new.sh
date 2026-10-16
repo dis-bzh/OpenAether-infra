@@ -38,7 +38,8 @@ esac
 STUB
 chmod +x "$TMP/bin/kubectl"
 CAB64="$(base64 -w0 <"$TMP/ca.crt")"
-run() { : >"$TMP/calls.log"; OUT="$(PATH="$TMP/bin:$PATH" HOME="$TMP/home" CA_DATA="$CAB64" bash "$SUT" "$@" 2>&1)"; RC=$?; }
+mkdir -p "$TMP/tmpd"
+run() { : >"$TMP/calls.log"; OUT="$(TMPDIR="$TMP/tmpd" PATH="$TMP/bin:$PATH" HOME="$TMP/home" CA_DATA="$CAB64" bash "$SUT" "$@" 2>&1)"; RC=$?; }
 
 echo "=== defaults: a reader, 8 hours ==="
 run alice --out "$TMP/home/a.kubeconfig"
@@ -51,6 +52,7 @@ grep -q 'kubectl delete csr' "$TMP/calls.log" && ok "the request is deleted afte
 [ "$(stat -c %a "$TMP/home/a.kubeconfig")" = 600 ] && ok "the kubeconfig is 0600" || bad "mode $(stat -c %a "$TMP/home/a.kubeconfig")"
 grep -q 'client-key-data' "$TMP/home/a.kubeconfig" && grep -q 'server: https://127.0.0.1:6443' "$TMP/home/a.kubeconfig" \
   && ok "it embeds the key, the server and the CA of the admin kubeconfig" || bad "kubeconfig content"
+[ -z "$(ls -A "$TMP/tmpd")" ] && ok "the temporary directory holding the private key is removed" || bad "temp dir left: $(ls "$TMP/tmpd")"
 grep -q 'PRIVATE KEY' "$TMP/csr.yaml" && bad "private key in the request" || ok "the private key is not in the request"
 
 echo "=== admin is explicit ==="

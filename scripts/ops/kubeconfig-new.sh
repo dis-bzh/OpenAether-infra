@@ -49,11 +49,12 @@ fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT="${OUT:-${HOME:?}/.kube/oa-${NAME}-${ROLE}.kubeconfig}"
-case "$(realpath -m "$OUT")" in
+# No GNU realpath -m / base64 -w0 / date -d below: operators also run this on macOS (BSD userland).
+case "$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$OUT")" in
   "$ROOT"/*) echo "✗ $OUT is inside the repository, where CI and the artifact backups collect: pick a path outside" >&2; exit 2 ;;
 esac
 
-for t in kubectl openssl jq base64; do command -v "$t" >/dev/null 2>&1 || { echo "✗ $t not found" >&2; exit 2; }; done
+for t in kubectl openssl jq base64 python3; do command -v "$t" >/dev/null 2>&1 || { echo "✗ $t not found" >&2; exit 2; }; done
 # The admin kubeconfig: needed for the server, its CA, and the CSR calls.
 CFG="$(kubectl config view --raw --minify -o json 2>/dev/null)" \
   || { echo "✗ no usable admin kubeconfig: set KUBECONFIG (task kubeconfig-new does)" >&2; exit 1; }
@@ -64,6 +65,7 @@ if [ -z "$SERVER" ] || [ -z "$CA" ]; then
   echo "✗ the admin kubeconfig has no server or no embedded CA: nothing to build the new one from" >&2; exit 1
 fi
 
+b64() { base64 | tr -d '\n'; }
 umask 077
 WORK="$(mktemp -d)"
 CSR="oa-${NAME}-$(date -u +%s)"
@@ -79,7 +81,7 @@ kind: CertificateSigningRequest
 metadata:
   name: ${CSR}
 spec:
-  request: $(base64 -w0 <"$WORK/req.csr")
+  request: $(b64 <"$WORK/req.csr")
   signerName: kubernetes.io/kube-apiserver-client
   expirationSeconds: ${SECS}
   usages: ["client auth"]
@@ -91,7 +93,8 @@ kubectl get csr "$CSR" -o jsonpath='{.status.certificate}' | base64 -d >"$WORK/c
 
 # Report what the signer granted, not what was asked: it may clamp the duration.
 END="$(openssl x509 -in "$WORK/crt.pem" -noout -enddate | sed 's/^notAfter=//')"
-LEFT=$(( $(date -d "$END" +%s) - $(date +%s) ))
+LEFT="$(LC_ALL=C python3 -c 'import sys,time,calendar; print(calendar.timegm(time.strptime(sys.argv[1], "%b %d %H:%M:%S %Y %Z")) - int(time.time()))' "$END")"
+[[ "$LEFT" =~ ^-?[0-9]+$ ]] || { echo "✗ cannot read the certificate expiry '$END'" >&2; exit 1; }
 if [ "$LEFT" -gt $((SECS + 120)) ]; then
   echo "✗ the signer granted ${LEFT}s, more than the ${SECS}s asked: not using it (a cluster-signing-duration or a signer that ignores expirationSeconds)" >&2
   exit 1
@@ -110,8 +113,8 @@ clusters:
 users:
 - name: ${NAME}
   user:
-    client-certificate-data: $(base64 -w0 <"$WORK/crt.pem")
-    client-key-data: $(base64 -w0 <"$WORK/key.pem")
+    client-certificate-data: $(b64 <"$WORK/crt.pem")
+    client-key-data: $(b64 <"$WORK/key.pem")
 contexts:
 - name: ${NAME}@${CLUSTER_NAME}
   context: {cluster: ${CLUSTER_NAME}, user: ${NAME}}
