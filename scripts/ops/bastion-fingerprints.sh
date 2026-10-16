@@ -31,9 +31,21 @@ if [ -n "$FILE" ]; then
   JSON="$(cat "$FILE")"
 else
   command -v tofu >/dev/null 2>&1 || { echo "✗ tofu is required (or pass -f keys.json)" >&2; exit 2; }
-  JSON="$(tofu -chdir="${DIR:-infrastructure/opentofu/cluster}" output -json bastion_access_keys 2>/dev/null || echo null)"
+  # tofu's own error is kept: "cannot read the state" and "the output does not exist" are different problems with different cures
+  # (lab 11 read the first as "apply the infra first", from a shell that simply lacked the backend settings).
+  TOFU_ERR="$(mktemp)"; trap 'rm -f "$TOFU_ERR"' EXIT
+  if JSON="$(tofu -chdir="${DIR:-infrastructure/opentofu/cluster}" output -json bastion_access_keys 2>"$TOFU_ERR")"; then
+    [ -n "$JSON" ] && [ "$JSON" != null ] || { echo "✗ the bastion_access_keys output is empty - apply the infra first (an older state has no such output)" >&2; exit 2; }
+  elif grep -qiE 'output.*not found|no outputs? (found|defined)|not (a )?(valid )?output' "$TOFU_ERR"; then
+    echo "✗ the state has no bastion_access_keys output - apply the infra first" >&2; exit 2
+  else
+    echo "✗ tofu could not read the state, so nothing was learned about the keys. tofu said:" >&2
+    tail -n 8 "$TOFU_ERR" | sed 's/^/    /' >&2
+    echo "  Fix: run it where the backend is reachable (the S3 credentials and the TF_DATA_DIR of this cluster exported)," >&2
+    echo "  or save 'tofu output -json bastion_access_keys > keys.json' where it is, and pass: $0 -f keys.json" >&2
+    exit 2
+  fi
 fi
-[ -n "$JSON" ] && [ "$JSON" != null ] || { echo "✗ no bastion_access_keys output - apply the infra first" >&2; exit 2; }
 
 ROWS=0; FOUND=0
 emit() { # <account> <public key line>
