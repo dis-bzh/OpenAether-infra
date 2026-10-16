@@ -25,7 +25,8 @@ Run whenever upgrading Cilium or Flux:
 CILIUM_VERSION=1.20.0 FLUX_VERSION=v2.5.0 OPENAETHER_REFRESH_FLUX=1 ./scripts/bootstrap/render-bootstrap-manifests.sh
 ./scripts/dev/check-flux-image-digests.sh --write   # then the controller image digests (network)
 
-# The opt-in dropped-flow variant (cilium-hubble-drops.yaml; also rewrites the lock)
+# The opt-in dropped-flow variant (cilium-hubble-drops.yaml; also rewrites the lock). `task render-manifests` runs both
+# renders, so after a Cilium bump use the task; with the script directly, run this line too or render-check goes red.
 ./scripts/bootstrap/render-bootstrap-manifests.sh --hubble-drops
 
 # Local Docker testing only (regenerate cilium-local.yaml)

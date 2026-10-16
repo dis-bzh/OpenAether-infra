@@ -1712,9 +1712,12 @@ tasks:
       - ../../../scripts/ops/backup-state.sh .
 
   render-manifests:
-    desc: Render/update bootstrap manifests (Cilium + Flux)
+    desc: Render/update bootstrap manifests (Cilium, its dropped-flow variant, Flux lock)
     cmds:
       - ./scripts/bootstrap/render-bootstrap-manifests.sh
+      # The opt-in variant is a second committed artifact in the lock: rendering only the first after a Cilium bump left
+      # the lock with the OLD variant hash and `render-check` red. Both renders, so a bump is one command.
+      - ./scripts/bootstrap/render-bootstrap-manifests.sh --hubble-drops
 
   check-alerts:
     desc: >-
@@ -1738,6 +1741,10 @@ tasks:
       # render against itself, so regenerating after a typo is green too.
       # This reads the EFFECTIVE settings the committed ConfigMap carries.
       - python3 scripts/ops/check-cilium-effective-config.py
+      # The opt-in dropped-flow variant carries its own required keys (no listener, DROPPED/ERROR only, field mask).
+      - >-
+        python3 scripts/ops/check-cilium-effective-config.py
+        infrastructure/opentofu/cluster/bootstrap-manifests/cilium-hubble-drops.yaml
 
   check-flux-digests:
     desc: >-
