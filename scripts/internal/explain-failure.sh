@@ -80,6 +80,24 @@ TXT
   fi
 fi
 
+# Scaleway, first install with app_lb_allowed_cidrs: the app LB allow list holds the NAT gateway's public address, unknown until the
+# gateway exists, and the provider mis-plans a list with an unknown element ("Provider produced inconsistent final plan ...
+# scaleway_lb_acl ... ip_subnet was null, but now ..."). Everything else of the apply LANDED; the address is in state now, so the
+# same command converges (seen on a real fresh Scaleway account, 2026-10-16). Transcript only: the provider's words, naming the resource.
+if [ -f "$LOG" ]; then
+  CLEAN="$(sed -E 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null)"
+  if grep -Fq 'Provider produced inconsistent final plan' <<<"$CLEAN" && grep -Eq 'scaleway_lb_acl\.app_(allow|deny)' <<<"$CLEAN"; then
+    printf '\n\033[33m─── the app load balancer ACL could not be planned on a fresh account (Scaleway provider) ───\033[0m\n' >&2
+    cat >&2 <<'TXT'
+The allow list of the app load balancer contains the NAT gateway's public address, which does not exist before this apply,
+and the Scaleway provider cannot plan a list with an unknown element. Everything else of the apply LANDED, and the address
+is in the state now: re-run the same command (`task cluster-up`), it converges. If it fails the same way a second time,
+the ACL is not the cause: read the first error of the transcript.
+
+TXT
+  fi
+fi
+
 # OVH: a router whose SNAT port never came up leaves every node without egress (no DNS, no NTP), and the first thing Talos says
 # is that its time is not in sync. Seen once, on a real account (a fresh router of the same code was fine); the port is the
 # discriminator, and it is a read. Transcript only: the symptom AND an OVH resource in the same run.
