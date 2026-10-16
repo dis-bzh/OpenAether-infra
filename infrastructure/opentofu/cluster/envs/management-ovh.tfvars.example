@@ -89,6 +89,11 @@ node_distribution = {
 #   { address = "149.112.112.112", tls_server_name = "dns.quad9.net" },
 # ]
 
+# Node and flow logs (optional, ANSSI PA-012 R9; off by default). Rules, plaintext caveat and
+# rollout order: modules/talos/variables.tf and docs/hardening.md.
+# node_log_forwarding    = { endpoint = "tcp://127.0.0.1:5170" }   # receiver on every node (hostNetwork)
+# cilium_hubble_drop_log = true                                    # policy denials in the cilium-agent log
+
 admin_ip = ["YOUR_IP/32"]
 
 bastion_ssh_keys = {

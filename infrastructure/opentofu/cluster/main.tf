@@ -477,7 +477,8 @@ locals {
 # ==============================================================================
 
 locals {
-  cilium_manifest = var.cilium_manifest != null ? var.cilium_manifest : file("${path.module}/bootstrap-manifests/cilium.yaml")
+  cilium_manifest_file = var.cilium_manifest != null ? "(override)" : (var.cilium_hubble_drop_log ? "cilium-hubble-drops.yaml" : "cilium.yaml")
+  cilium_manifest      = var.cilium_manifest != null ? var.cilium_manifest : file("${path.module}/bootstrap-manifests/${local.cilium_manifest_file}")
   # deploy_flux=false yields "", which modules/talos already reads as "no Flux"
   # (main.tf:116) — the same path infrastructure/opentofu-local drives through
   # this very module on every `task local-up`. Locals only: no resource address
@@ -623,6 +624,7 @@ module "talos" {
 
   node_nameservers      = var.node_nameservers
   node_dns_boot_timeout = var.node_dns_boot_timeout
+  node_log_forwarding   = var.node_log_forwarding
 
   # The provider modules are DELIBERATELY not listed here. A module-level
   # depends_on makes every resource in this module depend on every resource in

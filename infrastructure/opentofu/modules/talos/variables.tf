@@ -330,3 +330,42 @@ variable "node_dns_boot_timeout" {
     error_message = "node_dns_boot_timeout must be empty or a positive whole number of seconds, minutes or hours: 90s, 2m."
   }
 }
+
+variable "node_log_forwarding" {
+  description = <<-EOT
+    Ships the nodes' Talos service logs (machine.logging, json_lines) and, unless
+    `kernel = false`, the kernel log (KmsgLogConfig) to a receiver, so that node events
+    outlive the node (ANSSI PA-012 R9, batch B22). Null (default) renders nothing and
+    leaves every node's config byte-identical.
+      endpoint        tcp://host:port. TCP only (a UDP log is lost silently). PLAINTEXT:
+                      acceptable only on the private network, and the logs hold node
+                      and service events, not secrets. The host network sends it, not a
+                      pod: a ClusterIP does NOT work from the host under Cilium
+                      (socketLB.hostNamespaceOnly), so use a receiver on every node
+                      (hostNetwork, tcp://127.0.0.1:<port>) or a fixed LB address.
+      kernel          Also send the kernel log (default true).
+      kernel_endpoint Another receiver for the kernel log (default: endpoint).
+    An unreachable receiver drops logs; whether it also delays a boot is a lab check
+    (LAB-CHECKLIST B22). Apply to ONE node first. The receiver is not part of this repo's
+    default: a hostNetwork collector must exist before this is switched on.
+  EOT
+  type = object({
+    endpoint        = string
+    kernel          = optional(bool, true)
+    kernel_endpoint = optional(string, "")
+  })
+  default = null
+
+  validation {
+    condition     = var.node_log_forwarding == null || can(regex("^tcp://[A-Za-z0-9.-]+:[0-9]{1,5}/?$|^tcp://\\[[0-9A-Fa-f:]+\\]:[0-9]{1,5}/?$", var.node_log_forwarding.endpoint))
+    error_message = "node_log_forwarding.endpoint must be tcp://host:port (TCP only, no path, no udp://)."
+  }
+  validation {
+    condition     = var.node_log_forwarding == null || var.node_log_forwarding.kernel_endpoint == "" || can(regex("^tcp://[A-Za-z0-9.-]+:[0-9]{1,5}/?$|^tcp://\\[[0-9A-Fa-f:]+\\]:[0-9]{1,5}/?$", var.node_log_forwarding.kernel_endpoint))
+    error_message = "node_log_forwarding.kernel_endpoint must be empty or tcp://host:port."
+  }
+  validation {
+    condition     = var.node_log_forwarding == null || var.node_log_forwarding.kernel || var.node_log_forwarding.kernel_endpoint == ""
+    error_message = "node_log_forwarding.kernel_endpoint is set while kernel = false: it would be ignored."
+  }
+}

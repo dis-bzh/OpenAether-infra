@@ -196,6 +196,35 @@ locals {
 }
 
 # ==============================================================================
+# node_log_forwarding: Talos service logs (machine.logging, json_lines) and, unless
+# kernel = false, the kernel log (KmsgLogConfig) pushed over plain TCP to a receiver
+# the HOST can reach (ANSSI PA-012 R9, batch B22). Unset (default) renders neither,
+# so every node's config stays byte-identical. Machine.logging lives in v1alpha1, so it
+# is merged into the machine patch; the kernel document is appended with the others.
+# ==============================================================================
+
+locals {
+  node_log_machine_patch = var.node_log_forwarding == null ? {} : {
+    logging = {
+      destinations = [{
+        endpoint = var.node_log_forwarding.endpoint
+        format   = "json_lines"
+      }]
+    }
+  }
+
+  node_log_kmsg_documents = var.node_log_forwarding == null || !var.node_log_forwarding.kernel ? [] : [yamlencode({
+    apiVersion = "v1alpha1"
+    kind       = "KmsgLogConfig"
+    name       = "openaether-kernel"
+    url        = var.node_log_forwarding.kernel_endpoint != "" ? var.node_log_forwarding.kernel_endpoint : var.node_log_forwarding.endpoint
+  })]
+
+  # Folded into machine_config_version so an existing cluster actually gets a change.
+  node_log_signature = var.node_log_forwarding == null ? "" : sha256(jsonencode(local.node_log_machine_patch))
+}
+
+# ==============================================================================
 # node_nameservers: ResolverConfig (+ TimeSyncConfig if encrypted) appended to
 # every config, not config_patches: provider 0.11 rejects `protocol` and
 # `tlsServerName` there (#241). No `hostDNS`: v1alpha1 already sets it.
@@ -205,6 +234,7 @@ locals {
   encrypted_dns = anytrue([for n in var.node_nameservers : n.protocol != "Do53"])
 
   appended_documents = concat(
+    local.node_log_kmsg_documents,
     length(var.node_nameservers) == 0 ? [] : [yamlencode({
       apiVersion = "v1alpha1"
       kind       = "ResolverConfig"
@@ -298,7 +328,8 @@ data "talos_machine_configuration" "control_plane" {
             image = local.installer_image
           }
         },
-        local.apiserver_vip_network_patch
+        local.apiserver_vip_network_patch,
+        local.node_log_machine_patch
       )
       cluster = merge(
         {
@@ -428,7 +459,8 @@ data "talos_machine_configuration" "worker" {
             wipe  = true
             image = local.installer_image
           }
-        }
+        },
+        local.node_log_machine_patch
       )
       cluster = {
         network = {
@@ -515,12 +547,12 @@ resource "terraform_data" "talos_port_ready_worker" {
   }
 }
 
-# Carries the version pair and a hash of the appended resolver documents (none
-# when unset, so the input is unchanged there), and exists only to be referenced
+# Carries the version pair and a hash of the appended documents and of the node log
+# forwarding (none when unset, so the input is unchanged there), and exists only to be referenced
 # by the two `replace_triggered_by` below. See the comment on them.
 resource "terraform_data" "machine_config_version" {
   count = local.do_apply ? 1 : 0
-  input = "${var.talos_version}/${var.kubernetes_version}${local.resolver_tail == "" ? "" : "/${sha256(local.resolver_tail)}"}"
+  input = "${var.talos_version}/${var.kubernetes_version}${local.resolver_tail == "" ? "" : "/${sha256(local.resolver_tail)}"}${local.node_log_signature == "" ? "" : "/${local.node_log_signature}"}"
 }
 
 resource "talos_machine_configuration_apply" "control_plane" {

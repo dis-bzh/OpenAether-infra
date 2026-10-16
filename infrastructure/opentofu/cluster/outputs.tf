@@ -169,3 +169,8 @@ output "installer_image" {
   description = "Talos installer image the machine config installs from (Image Factory schematic included)"
   value       = var.talos_bootstrap ? module.talos.installer_image : null
 }
+
+output "cilium_manifest_file" {
+  description = "Which bootstrap manifest the nodes boot Cilium from: cilium.yaml, cilium-hubble-drops.yaml (cilium_hubble_drop_log), or an override."
+  value       = local.cilium_manifest_file
+}

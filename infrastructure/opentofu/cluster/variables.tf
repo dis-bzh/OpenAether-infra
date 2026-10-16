@@ -333,6 +333,34 @@ variable "node_dns_boot_timeout" {
   default     = "90s"
 }
 
+variable "node_log_forwarding" {
+  description = <<-EOT
+    Ships the nodes' Talos service and kernel logs over plain TCP to a receiver the host can
+    reach. Null (default) changes nothing. { endpoint = "tcp://host:port", kernel = true,
+    kernel_endpoint = "" }; the rules and the trade-offs (plaintext, ClusterIP unreachable from
+    the host, apply to one node first) are on the variable of the same name in modules/talos/variables.tf.
+  EOT
+  type = object({
+    endpoint        = string
+    kernel          = optional(bool, true)
+    kernel_endpoint = optional(string, "")
+  })
+  default = null
+}
+
+variable "cilium_hubble_drop_log" {
+  description = <<-EOT
+    Boots Cilium from bootstrap-manifests/cilium-hubble-drops.yaml: the Hubble SERVER only (no relay, no UI,
+    no TCP listener) exporting DROPPED/ERROR flows, field-masked, to the agent's stdout so that policy denials
+    reach the pod-log collector (ANSSI PA-012 R9). False (default) keeps cilium.yaml, byte for byte. It is a
+    bootstrap manifest: it reaches an EXISTING cluster as a Talos inline-manifest change (agents restart
+    one node at a time); read LAB-CHECKLIST B22 and try it on a throwaway cluster first. Ignored when
+    cilium_manifest is set.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "admin_ip" {
   description = "Allowed source IPs/CIDRs for admin access (SSH, K8s API LB ACL)"
   type        = list(string)
