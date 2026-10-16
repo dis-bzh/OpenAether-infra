@@ -52,6 +52,8 @@ RPAK="$(s3_cred "$PROVIDER" backup ak "$REPLICA_EP")"; RPSK="$(s3_cred "$PROVIDE
 [ -n "$OPAK" ] || { echo "✗ no S3 credentials for '$PROVIDER' in this shell (source .env.sh)" >&2; exit 1; }
 
 FAILS=0; ASSERTED=0; UNVERIFIED=0; REAL_VID=""
+# aws CLI v2 refuses `--body /dev/null` ("Blob values must be a path to a file"): the real-version probe needs a regular file.
+PROBE_BODY="$(mktemp)"; trap 'rm -f "$PROBE_BODY"' EXIT; printf 'oa-isolation-probe\n' > "$PROBE_BODY"
 REAL="${OA_ISOLATION_REAL_VERSION:-0}"
 ep_of() { [ "$1" = p ] && printf '%s' "$PRIMARY_EP" || printf '%s' "$REPLICA_EP"; }
 rg_of() { [ "$1" = p ] && printf '%s' "$PRIMARY_REGION" || printf '%s' "$REPLICA_REGION"; }
@@ -105,7 +107,7 @@ check_identity() { # <name> <ak> <sk> <store p|r> <own bucket> <asserted 1|0> �
       if [ "$REAL" = 1 ]; then
         oak="$OPAK"; osk="$OPSK"; [ "$st" = p ] || { oak="$RPAK"; osk="$RPSK"; }
         REAL_VID="$(_oa_s3api "$oak" "$osk" "$(ep_of "$st")" "$(rg_of "$st")" put-object --bucket "$b" --key oa-isolation-probe \
-                      --body /dev/null 2>/dev/null | jq -r '.VersionId // empty' 2>/dev/null)" || REAL_VID=""
+                      --body "$PROBE_BODY" 2>/dev/null | jq -r '.VersionId // empty' 2>/dev/null)" || REAL_VID=""
         [ -n "$REAL_VID" ] || echo "  · $b: the operator could not write a probe version; falling back to the made-up id"
       fi
       obs="$(probe "$ak" "$sk" "$st" delver "$b")"

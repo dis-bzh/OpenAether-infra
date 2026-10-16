@@ -27,6 +27,8 @@ while [ $# -gt 0 ]; do
     --versioning-configuration) cfg="$2"; shift 2 ;;
     --lifecycle-configuration | --object-lock-configuration) cfg="$2"; shift 2 ;;
     --create-bucket-configuration) shift 2 ;;
+    # aws CLI v2: a blob parameter must be a path to a regular file (`--body /dev/null` is refused; found by lab 12)
+    --body) if [ ! -f "$2" ]; then echo "aws: [ERROR]: An error occurred (ParamValidation): Error parsing parameter '--body': Blob values must be a path to a file." >&2; exit 252; fi; shift 2 ;;
     --object-lock-enabled-for-bucket) lockflag=1; shift ;;
     --key) key="$2"; shift 2 ;;
     --version-id) vid="$2"; shift 2 ;;
