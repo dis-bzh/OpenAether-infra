@@ -13,7 +13,9 @@ lib.audit_determine_machine.restype = ctypes.c_int
 lib.audit_detect_machine.restype = ctypes.c_int
 
 bad = 0
-for n, line in enumerate(open(sys.argv[1]), 1):
+with open(sys.argv[1]) as fh:
+    rules = fh.readlines()
+for n, line in enumerate(rules, 1):
     line = line.strip()
     if not line or line.startswith("#"):
         continue
