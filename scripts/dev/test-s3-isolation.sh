@@ -56,7 +56,7 @@ grep -q "assertion(s) held" <<<"$OUT" && ok "and it says how many" || bad "$OUT"
 grep -q "✓ $LG list" <<<"$OUT" && grep -q "✓ $ST list" <<<"$OUT" && ok "Loki lists its own bucket (✓ allowed) and not the state bucket (✓ denied)" || bad "$OUT"
 grep -q "operator, primary store" <<<"$OUT" && grep -q "· $ST list" <<<"$OUT" && ok "the operator's reach is shown for contrast and not asserted" || bad "no operator block"
 grep -qE 'OPSECRET|REPSECRET|LOKISK|BKPSK|BKRSK' <<<"$OUT" && bad "a secret was printed" || ok "no secret in the output"
-grep -E ' (delete|put-)' "$FAKE_S3/calls.log" | grep -vE 'delete-object-version|put-bucket|put-object-lock' | grep -q . && bad "an unexpected write" || ok "the only delete call is delete-object-version, on a version that does not exist"
+grep -E ' (delete|put-)' "$FAKE_S3/calls.log" | grep -vE ' delete-object [^ ]+$|put-bucket|put-object-lock' | grep -q . && bad "an unexpected write" || ok "the only delete call is delete-object --version-id, on a numeric version that does not exist"
 grep -q "✓ $BK-backup list" <<<"$OUT" && ok "the replica pair is checked on the replica store" || bad "no replica check"
 
 echo "--- Loki with the operator's reach: the bucket it should not open is named ---"

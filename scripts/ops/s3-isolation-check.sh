@@ -57,8 +57,8 @@ probe() {
   if [ "$what" = list ]; then
     out="$(_oa_s3api "$ak" "$sk" "$(ep_of "$st")" "$(rg_of "$st")" list-objects-v2 --bucket "$b" --max-keys 1 2>&1)" || rc=$?
   else
-    out="$(_oa_s3api "$ak" "$sk" "$(ep_of "$st")" "$(rg_of "$st")" delete-object-version --bucket "$b" \
-            --key oa-isolation-probe --version-id oa-isolation-probe-no-such-version 2>&1)" || rc=$?
+    out="$(_oa_s3api "$ak" "$sk" "$(ep_of "$st")" "$(rg_of "$st")" delete-object --bucket "$b" \
+            --key oa-isolation-probe --version-id 4242424242424242 2>&1)" || rc=$?
   fi
   if [ "$rc" -eq 0 ]; then echo allowed
   elif grep -qiE 'InvalidAccessKeyId|SignatureDoesNotMatch|AuthFailure|InvalidToken' <<<"$out"; then echo "error:the store does not accept this key"

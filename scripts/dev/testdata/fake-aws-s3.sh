@@ -45,7 +45,7 @@ if [ -f "$FAKE_S3/id/$ak" ]; then
   grep -qx invalid "$FAKE_S3/id/$ak" && fail InvalidAccessKeyId "The access key does not exist"
   if [ -d "$B" ]; then
     grep -qx "bucket $bucket" "$FAKE_S3/id/$ak" || fail AccessDenied "Access Denied"
-    if [ "$op" = delete-object-version ] && grep -qx no-version-delete "$FAKE_S3/id/$ak"; then fail AccessDenied "Access Denied"; fi
+    if [ "$op" = delete-object ] && [ -n "$vid" ] && grep -qx no-version-delete "$FAKE_S3/id/$ak"; then fail AccessDenied "Access Denied"; fi
   fi
 fi
 
@@ -72,8 +72,13 @@ case "$op" in
     if [ -s "$B/lock.json" ]; then jq -c '{ObjectLockConfiguration: .}' "$B/lock.json"
     else echo '{"ObjectLockConfiguration":{"ObjectLockEnabled":"Enabled"}}'; fi ;;
   list-objects-v2) echo '{}' ;;
-  delete-object-version) [ -n "$key" ] && [ -n "$vid" ] || fail InvalidArgument "key and version id are required"
-                         fail NoSuchVersion "The specified version does not exist" ;;
+  # The real CLI has no `delete-object-version`: it exits 252 with this message (a probe that used it passed its test here and
+  # failed on Scaleway, 2026-10-16). A version is deleted with `delete-object --version-id`, and a store that allows it answers
+  # success for a version that does not exist; a non-numeric id is refused as InvalidArgument (Scaleway).
+  delete-object-version) echo "aws: [ERROR]: argument operation: Invalid choice, valid choices are: delete-object, delete-objects" >&2; exit 252 ;;
+  delete-object) [ -n "$key" ] && [ -n "$vid" ] || fail InvalidArgument "key and version id are required"
+                 case "$vid" in *[!0-9]*) fail InvalidArgument "Invalid version id specified" ;; esac
+                 echo "{\"VersionId\": \"$vid\"}" ;;
   *) echo "fake aws: unsupported operation $op" >&2; exit 2 ;;
 esac
 exit 0
