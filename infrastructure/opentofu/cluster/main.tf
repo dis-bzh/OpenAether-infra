@@ -243,6 +243,8 @@ module "scw" {
 
   worker_storage = var.worker_storage
 
+  root_volume_size_gb = var.scw_root_volume_size_gb
+
   admin_ip         = var.admin_ip
   bastion_ssh_keys = lookup(var.bastion_ssh_keys, "scaleway", [])
   bastion_baseline = var.bastion_baseline

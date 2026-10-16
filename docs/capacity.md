@@ -33,7 +33,7 @@ planes / workers, D = entries in `worker_storage.disks`.
 | | Scaleway | OVH | Outscale | Proxmox |
 |---|---|---|---|---|
 | Instances | CP+W + bastion `DEV1-S` (2 vCPU / 2 GB) | CP+W + bastion `b3-8` (2 vCPU / 8 GB) | CP+W + bastion `tinav5.c2r2p2` (2 vCPU / 2 GB) | CP+W; + bastion (1 vCPU / 1 GiB / 10 GiB) only with `enable_bastion` |
-| Node system disk | 20 GB `sbs_volume` each | the flavour's disk | the OMI's default | `root_disk_gb` (20 GiB) each |
+| Node system disk | 20 GB `sbs_volume` each (`scw_root_volume_size_gb`; the full application stack needs 40 or more, see below) | the flavour's disk | the OMI's default | `root_disk_gb` (20 GiB) each |
 | Data volumes | W × D | W × D | W × D | W × D, on `datastore_id` |
 | Public IPs | 3: bastion, public gateway, API LB | 2 floating: bastion, API LB | 2: bastion, NAT | none — `host_public_ip` is yours |
 | Load balancers | 1 | 1 (Octavia) | 1 (LBU) | none — Talos VIP |
@@ -77,3 +77,13 @@ Also against the examples:
   changes `vm_type` with a stop/start — resize one node at a time.
 - The real-cloud runs in [`status.md`](status.md) record the instance type only for Outscale
   (`tinav5.c2r4p1`), so Scaleway's and OVH's establish no floor.
+
+## Scaleway system disk and the full application stack
+
+Talos keeps its EPHEMERAL partition (kubelet, containerd images, logs) on the system volume, about 4 GB under the volume size. With the
+whole application stack at its current chart versions a worker held about 11 GB of images (lab 12), against about 15.6 GB of ephemeral
+space on the default 20 GB volume: the kubelet reported DiskPressure, evicted pods (25 Zitadel pods in the first minutes) and container
+creation timed out. Set `scw_root_volume_size_gb = 40` (or more) for a cluster that carries the platform. Raising it on a running
+cluster is an in-place resize of the `sbs_volume` (lab 12: `cluster-up` plan "10 to change", no node replaced); Talos grows the
+EPHEMERAL partition at the node's next reboot, so reboot the workers one at a time afterwards (lab 12: 15.6 GB to 35.6 GB). The default
+stays 20 so that existing clusters show no change.

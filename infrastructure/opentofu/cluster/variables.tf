@@ -274,6 +274,21 @@ variable "node_distribution" {
   }
 }
 
+variable "scw_root_volume_size_gb" {
+  description = <<-EOT
+    Scaleway only: size in GB of the system volume of every node (default 20 = the size of existing clusters). Talos keeps
+    its EPHEMERAL partition (kubelet, images) there, about 4 GB under this value. Lab 12: with the whole application
+    stack at its current versions a worker holds ~11 GB of images and the default leaves ~15.6 GB, which means
+    DiskPressure and evictions on the workers; use 40 or more for a full DAG. Raising it resizes the volume in place.
+  EOT
+  type        = number
+  default     = 20
+  validation {
+    condition     = var.scw_root_volume_size_gb >= 20 && var.scw_root_volume_size_gb <= 500
+    error_message = "scw_root_volume_size_gb must be between 20 and 500."
+  }
+}
+
 variable "worker_storage" {
   description = <<-EOT
     Dedicated data storage for worker nodes (the active provider only — one

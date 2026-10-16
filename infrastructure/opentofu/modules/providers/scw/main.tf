@@ -61,7 +61,7 @@ resource "scaleway_instance_server" "control_plane" {
 
   root_volume {
     volume_type           = var.root_volume_type
-    size_in_gb            = 20
+    size_in_gb            = var.root_volume_size_gb
     delete_on_termination = true
   }
 
@@ -88,7 +88,7 @@ resource "scaleway_instance_server" "worker" {
 
   root_volume {
     volume_type           = var.root_volume_type
-    size_in_gb            = 20
+    size_in_gb            = var.root_volume_size_gb
     delete_on_termination = true
   }
 
