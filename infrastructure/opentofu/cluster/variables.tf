@@ -348,6 +348,34 @@ variable "node_log_forwarding" {
   default = null
 }
 
+variable "node_time_servers" {
+  description = <<-EOT
+    NTP sources of the Talos nodes (ANSSI PA-012 R5). Empty (default) keeps Talos's single built-in
+    server. Several independent hosts or addresses; plain NTP, udp/123. Mirror it in
+    bastion_baseline.time_servers. Rules and caveats: the variable of the same name in modules/talos/variables.tf.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
+variable "node_baseline" {
+  description = <<-EOT
+    Opt-in kernel/kubelet baseline of the nodes (ANSSI BP-028 R9/R12/R13). Null (default) changes nothing.
+    { sysctls, sysctls_extra, panic_on_oops, worker_default_seccomp, pod_pids_limit, kubelet_server_tls },
+    all off/empty/0 by default; what each does, its risk and its prerequisite are on the variable of the
+    same name in modules/talos/variables.tf and in docs/hardening.md. Try it on a throwaway cluster first.
+  EOT
+  type = object({
+    sysctls                = optional(bool, false)
+    sysctls_extra          = optional(map(string), {})
+    panic_on_oops          = optional(bool, false)
+    worker_default_seccomp = optional(bool, false)
+    pod_pids_limit         = optional(number, 0)
+    kubelet_server_tls     = optional(bool, false)
+  })
+  default = null
+}
+
 variable "cilium_hubble_drop_log" {
   description = <<-EOT
     Boots Cilium from bootstrap-manifests/cilium-hubble-drops.yaml: the Hubble SERVER only (no relay, no UI,

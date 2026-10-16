@@ -625,6 +625,8 @@ module "talos" {
   node_nameservers      = var.node_nameservers
   node_dns_boot_timeout = var.node_dns_boot_timeout
   node_log_forwarding   = var.node_log_forwarding
+  node_time_servers     = var.node_time_servers
+  node_baseline         = var.node_baseline
 
   # The provider modules are DELIBERATELY not listed here. A module-level
   # depends_on makes every resource in this module depend on every resource in

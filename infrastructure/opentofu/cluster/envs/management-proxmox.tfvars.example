@@ -95,6 +95,11 @@ node_distribution = {
 # node_log_forwarding    = { endpoint = "tcp://127.0.0.1:5170" }   # receiver on every node (hostNetwork)
 # cilium_hubble_drop_log = true                                    # policy denials in the cilium-agent log
 
+# Node baseline and time sources (optional, ANSSI BP-028 R9/R12 and PA-012 R5; off by default). Risks, prerequisites
+# and the deviation table: modules/talos/variables.tf and docs/hardening.md. Try on a throwaway cluster first.
+# node_baseline     = { sysctls = true, worker_default_seccomp = true, pod_pids_limit = 4096 }
+# node_time_servers = ["YOUR_NTP_1", "YOUR_NTP_2", "YOUR_NTP_3"]   # also in bastion_baseline.time_servers
+
 admin_ip = ["YOUR_IP/32"]
 
 # Not used with host-as-bastion (no bastion VM). Only needed if enable_bastion = true.

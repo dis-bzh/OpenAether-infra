@@ -369,3 +369,74 @@ variable "node_log_forwarding" {
     error_message = "node_log_forwarding.kernel_endpoint is set while kernel = false: it would be ignored."
   }
 }
+
+variable "node_time_servers" {
+  description = <<-EOT
+    NTP sources of the Talos nodes, rendered as `ntp.servers` of the TimeSyncConfig document
+    (ANSSI PA-012 R5 / HYG-42 M36, batch B23). Empty (default) renders no source: Talos keeps its
+    built-in single default server, byte for byte as before. Give several independent hosts. Plain NTP
+    over udp/123 only (Talos has no NTS); names resolve through node_nameservers, so with an encrypted
+    resolver list prefer address literals or check `talosctl get timestatus` after the apply. The same
+    list belongs in bastion_baseline.time_servers so that nodes and bastion agree. A change is applied
+    to every node without a reboot; a list no node can reach leaves the clock unsynchronised
+    (`talosctl get timestatus`), so try it on a throwaway cluster first (LAB-CHECKLIST B23).
+  EOT
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for t in var.node_time_servers : can(regex("^[A-Za-z0-9.:-]+$", t))])
+    error_message = "node_time_servers: host names or addresses only (no scheme, no port, no spaces)."
+  }
+  validation {
+    condition     = length(var.node_time_servers) == length(distinct(var.node_time_servers))
+    error_message = "node_time_servers: duplicate entries."
+  }
+}
+
+variable "node_baseline" {
+  description = <<-EOT
+    Opt-in kernel and kubelet baseline of the Talos nodes (ANSSI BP-028 R9/R12/R13, batch B23). Null
+    (default) renders nothing and leaves every node's config byte-identical.
+      sysctls                 Set machine.sysctls on every node: kernel.sysrq=0, perf sampling limits,
+                              no ICMP redirects / source routing (IPv4 and IPv6), tcp_syncookies=1,
+                              tcp_rfc1337=1. rp_filter, ip_forward and the module/pid settings are NOT
+                              touched (Cilium and Kubernetes need them: docs/hardening.md deviation table).
+      sysctls_extra           More or overriding sysctls (strings), merged last. Operator responsibility.
+      panic_on_oops           Also set kernel.panic_on_oops=1. Off even with `sysctls`: with the kernel's
+                              panic timeout at 0 a panic HANGS the node instead of rebooting it. Check
+                              `talosctl read /proc/sys/kernel/panic` first (LAB-CHECKLIST B23).
+      worker_default_seccomp  Set kubelet defaultRuntimeSeccompProfileEnabled on the workers, as the
+                              control planes already have it: pods without a seccompProfile get RuntimeDefault
+                              when they next start. A workload that needs a blocked syscall breaks then.
+      pod_pids_limit          kubelet podPidsLimit on every node (0 = unset, Kubernetes default: unlimited).
+                              A pod over the limit cannot fork; size above your largest legitimate pod.
+      kubelet_server_tls      kubelet serverTLSBootstrap: serving certificates come from the cluster CA
+                              through CSRs. Needs a kubelet-serving CSR approver (OpenAether-apps does not
+                              ship one yet): until the CSRs are approved the kubelet keeps a self-signed
+                              certificate. Do not enable without that approver.
+    Kubelet settings are written into machine.kubelet.extraConfig; the kubelet restarts on apply.
+  EOT
+  type = object({
+    sysctls                = optional(bool, false)
+    sysctls_extra          = optional(map(string), {})
+    panic_on_oops          = optional(bool, false)
+    worker_default_seccomp = optional(bool, false)
+    pod_pids_limit         = optional(number, 0)
+    kubelet_server_tls     = optional(bool, false)
+  })
+  default = null
+
+  validation {
+    condition     = var.node_baseline == null || (var.node_baseline.pod_pids_limit == 0 || (var.node_baseline.pod_pids_limit >= 64 && var.node_baseline.pod_pids_limit == floor(var.node_baseline.pod_pids_limit)))
+    error_message = "node_baseline.pod_pids_limit must be 0 (unset) or a whole number of at least 64."
+  }
+  validation {
+    condition     = var.node_baseline == null || alltrue([for k, v in var.node_baseline.sysctls_extra : can(regex("^[a-z0-9_]+(\\.[A-Za-z0-9_-]+)+$", k))])
+    error_message = "node_baseline.sysctls_extra keys must be dotted sysctl names such as net.ipv4.tcp_syncookies."
+  }
+  validation {
+    condition     = var.node_baseline == null || var.node_baseline.sysctls || !var.node_baseline.panic_on_oops
+    error_message = "node_baseline.panic_on_oops only applies with sysctls = true; use sysctls_extra for a lone key."
+  }
+}

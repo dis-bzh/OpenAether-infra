@@ -225,6 +225,65 @@ locals {
 }
 
 # ==============================================================================
+# node_baseline (batch B23): machine.sysctls and kubelet settings, opt-in. Unset, every local is
+# {} and the patches below merge nothing, so the generated configs stay byte-identical. The values
+# follow BP-028 where Cilium/Kubernetes allow; the exceptions are written in docs/hardening.md.
+# ==============================================================================
+
+locals {
+  # Same object type on both sides, so the conditionals below stay type-consistent.
+  nb = var.node_baseline == null ? {
+    sysctls                = false
+    sysctls_extra          = {}
+    panic_on_oops          = false
+    worker_default_seccomp = false
+    pod_pids_limit         = 0
+    kubelet_server_tls     = false
+  } : var.node_baseline
+
+  baseline_sysctls_set = local.nb.sysctls ? merge(
+    {
+      "kernel.sysrq"                              = "0"
+      "kernel.perf_cpu_time_max_percent"          = "1"
+      "kernel.perf_event_max_sample_rate"         = "1"
+      "net.ipv4.conf.all.accept_redirects"        = "0"
+      "net.ipv4.conf.default.accept_redirects"    = "0"
+      "net.ipv4.conf.all.secure_redirects"        = "0"
+      "net.ipv4.conf.default.secure_redirects"    = "0"
+      "net.ipv4.conf.all.send_redirects"          = "0"
+      "net.ipv4.conf.default.send_redirects"      = "0"
+      "net.ipv4.conf.all.accept_source_route"     = "0"
+      "net.ipv4.conf.default.accept_source_route" = "0"
+      "net.ipv6.conf.all.accept_redirects"        = "0"
+      "net.ipv6.conf.default.accept_redirects"    = "0"
+      "net.ipv6.conf.all.accept_source_route"     = "0"
+      "net.ipv6.conf.default.accept_source_route" = "0"
+      "net.ipv4.tcp_syncookies"                   = "1"
+      "net.ipv4.tcp_rfc1337"                      = "1"
+    },
+    local.nb.panic_on_oops ? { "kernel.panic_on_oops" = "1" } : {},
+  ) : {}
+  baseline_sysctls = merge(local.baseline_sysctls_set, local.nb.sysctls_extra)
+
+  # kubelet extraConfig shared by every role; the worker seccomp flag is separate (CPs have it already).
+  baseline_kubelet_extra = merge(
+    local.nb.pod_pids_limit > 0 ? { podPidsLimit = local.nb.pod_pids_limit } : {},
+    local.nb.kubelet_server_tls ? { serverTLSBootstrap = true } : {},
+  )
+  baseline_kubelet_worker = merge(
+    local.nb.worker_default_seccomp ? { defaultRuntimeSeccompProfileEnabled = true } : {},
+    length(local.baseline_kubelet_extra) > 0 ? { extraConfig = local.baseline_kubelet_extra } : {},
+  )
+  baseline_kubelet_cp = length(local.baseline_kubelet_extra) > 0 ? { extraConfig = local.baseline_kubelet_extra } : {}
+
+  baseline_machine_common = length(local.baseline_sysctls) > 0 ? { sysctls = local.baseline_sysctls } : {}
+  baseline_machine_worker = merge(local.baseline_machine_common, length(local.baseline_kubelet_worker) > 0 ? { kubelet = local.baseline_kubelet_worker } : {})
+
+  # Folded into machine_config_version so an existing cluster actually gets a change.
+  node_baseline_signature = length(local.baseline_machine_common) + length(local.baseline_kubelet_cp) + length(local.baseline_machine_worker) == 0 ? "" : sha256(jsonencode([local.baseline_machine_common, local.baseline_kubelet_cp, local.baseline_machine_worker]))
+}
+
+# ==============================================================================
 # node_nameservers: ResolverConfig (+ TimeSyncConfig if encrypted) appended to
 # every config, not config_patches: provider 0.11 rejects `protocol` and
 # `tlsServerName` there (#241). No `hostDNS`: v1alpha1 already sets it.
@@ -232,6 +291,11 @@ locals {
 
 locals {
   encrypted_dns = anytrue([for n in var.node_nameservers : n.protocol != "Do53"])
+
+  time_sync_body = merge(
+    local.encrypted_dns && var.node_dns_boot_timeout != "" ? { bootTimeout = var.node_dns_boot_timeout } : {},
+    length(var.node_time_servers) > 0 ? { ntp = { servers = var.node_time_servers } } : {},
+  )
 
   appended_documents = concat(
     local.node_log_kmsg_documents,
@@ -243,11 +307,11 @@ locals {
         n.protocol == "Do53" ? {} : { protocol = n.protocol, tlsServerName = n.tls_server_name },
       )]
     })],
-    local.encrypted_dns && var.node_dns_boot_timeout != "" ? [yamlencode({
-      apiVersion  = "v1alpha1"
-      kind        = "TimeSyncConfig"
-      bootTimeout = var.node_dns_boot_timeout
-    })] : [],
+    # One TimeSyncConfig document: bootTimeout (encrypted DNS) and/or ntp.servers (node_time_servers).
+    local.time_sync_body == {} ? [] : [yamlencode(merge({
+      apiVersion = "v1alpha1"
+      kind       = "TimeSyncConfig"
+    }, local.time_sync_body))],
   )
   resolver_tail = join("", [for d in local.appended_documents : "---\n${d}"])
   # Unset: both are "" and a generated config passes through untouched (byte-identical).
@@ -286,9 +350,9 @@ data "talos_machine_configuration" "control_plane" {
             compact([var.k8s_lb_ip]),
             var.control_plane_ips
           )
-          kubelet = {
+          kubelet = merge({
             defaultRuntimeSeccompProfileEnabled = true
-          }
+          }, local.baseline_kubelet_cp)
           features = merge({
             diskQuotaSupport = true
             kubePrism = {
@@ -329,7 +393,8 @@ data "talos_machine_configuration" "control_plane" {
           }
         },
         local.apiserver_vip_network_patch,
-        local.node_log_machine_patch
+        local.node_log_machine_patch,
+        local.baseline_machine_common
       )
       cluster = merge(
         {
@@ -460,7 +525,8 @@ data "talos_machine_configuration" "worker" {
             image = local.installer_image
           }
         },
-        local.node_log_machine_patch
+        local.node_log_machine_patch,
+        local.baseline_machine_worker
       )
       cluster = {
         network = {
@@ -552,7 +618,7 @@ resource "terraform_data" "talos_port_ready_worker" {
 # by the two `replace_triggered_by` below. See the comment on them.
 resource "terraform_data" "machine_config_version" {
   count = local.do_apply ? 1 : 0
-  input = "${var.talos_version}/${var.kubernetes_version}${local.resolver_tail == "" ? "" : "/${sha256(local.resolver_tail)}"}${local.node_log_signature == "" ? "" : "/${local.node_log_signature}"}"
+  input = "${var.talos_version}/${var.kubernetes_version}${local.resolver_tail == "" ? "" : "/${sha256(local.resolver_tail)}"}${local.node_log_signature == "" ? "" : "/${local.node_log_signature}"}${local.node_baseline_signature == "" ? "" : "/${local.node_baseline_signature}"}"
 }
 
 resource "talos_machine_configuration_apply" "control_plane" {

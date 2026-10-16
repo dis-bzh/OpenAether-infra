@@ -518,3 +518,32 @@ run "node_log_forwarding_reaches_the_talos_module" {
     error_message = "node_log_forwarding must be passed to the talos module, where the rules and their tests live."
   }
 }
+
+# --- node baseline and node time sources (batch B23), mocked ------------------------
+
+run "node_baseline_and_time_servers_are_off_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(module.talos.node_baseline_patch.sysctls) == 0 && length(module.talos.node_baseline_patch.worker) == 0 && length(module.talos.node_baseline_patch.control_plane_kubelet) == 0
+    error_message = "node_baseline must default to null at the cluster root: opt-in, and no node's config changes."
+  }
+}
+
+run "node_baseline_and_time_servers_reach_the_talos_module" {
+  command = plan
+
+  variables {
+    node_baseline     = { sysctls = true, pod_pids_limit = 4096 }
+    node_time_servers = ["192.0.2.10"]
+  }
+
+  assert {
+    condition     = module.talos.node_baseline_patch.sysctls["kernel.sysrq"] == "0" && module.talos.node_baseline_patch.worker.kubelet.extraConfig.podPidsLimit == 4096
+    error_message = "node_baseline must be passed to the talos module, where the rules and their tests live."
+  }
+  assert {
+    condition     = yamldecode(module.talos.appended_documents[length(module.talos.appended_documents) - 1]).ntp.servers == ["192.0.2.10"]
+    error_message = "node_time_servers must be passed to the talos module."
+  }
+}

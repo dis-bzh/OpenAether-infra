@@ -106,3 +106,12 @@ output "node_log_patch" {
   description = "The machine.logging patch merged into every node's machine config, empty when node_log_forwarding is null."
   value       = local.node_log_machine_patch
 }
+
+output "node_baseline_patch" {
+  description = "The machine.sysctls and kubelet settings node_baseline merges per role (sysctls and control-plane kubelet extras, worker machine patch), all empty when node_baseline is null."
+  value = {
+    sysctls               = local.baseline_sysctls
+    control_plane_kubelet = local.baseline_kubelet_cp
+    worker                = local.baseline_machine_worker
+  }
+}
