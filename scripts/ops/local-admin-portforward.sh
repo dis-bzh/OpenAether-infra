@@ -18,7 +18,11 @@ set -uo pipefail
 
 KUBECONFIG="${KUBECONFIG:-$PWD/infrastructure/opentofu-local/kubeconfig}"
 export KUBECONFIG
-PIDFILE="/tmp/openaether-admin-pf.pids"
+# Not in /tmp: --stop kills every pid listed here, so the file must not be
+# writable (or replaceable by a symlink) by another local user.
+STATE_DIR="${XDG_RUNTIME_DIR:-$HOME/.cache}/openaether"
+mkdir -p -m 700 "$STATE_DIR"
+PIDFILE="$STATE_DIR/admin-pf.pids"
 
 # name  ns  svc  localport:remoteport
 TARGETS=(

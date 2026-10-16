@@ -1,5 +1,7 @@
 # Signed commits and Flux Git source verification (infra side)
 
+🇫🇷 [Version française](signed-commits.fr.md)
+
 Git write access is the root of trust of the platform: Flux applies whatever the tracked ref contains, with cluster-admin.
 No commit of the history verifies as signed today. This page is the maintainers' standard and the opt-in switch for the
 infrastructure repository; the apps repository has its twin page (`docs/signed-commits.md` there) and the matching

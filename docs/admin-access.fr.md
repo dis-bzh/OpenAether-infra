@@ -182,8 +182,11 @@ ssh -i <clé bastion> -L 8443:<IP gateway>:443 bastion@<IP bastion> -N
 # /etc/hosts : 127.0.0.1 grafana.openaether.local zitadel… vault…
 ```
 
-Importer la root CA dans le navigateur. Sans TLS, pour dépanner :
-`./scripts/ops/local-admin-portforward.sh`.
+⚠️ **Ce forward est refusé par le bastion tel que livré** : son `PermitOpen` liste 6443 et 50000 (et 8200 sur l'egress historique), pas 443 ; ssh répond
+`administratively prohibited`. Le dépôt n'offre aucun interrupteur pour ouvrir 443 ; élargir `PermitOpen` est une décision à prendre et à documenter (`hardening.fr.md`, section 2).
+Non exécuté sur un cloud depuis la rédaction de cette note : à vérifier sur le premier cluster. Ce qui passe par le tunnel 6443 :
+`./scripts/ops/local-admin-portforward.sh` (kubectl port-forward vers OpenBao, Flux et Grafana sur 127.0.0.1, sans TLS ni routage par Host).
+Si vous ouvrez 443, importer la root CA dans le navigateur.
 
 **Il n'y a pas de root token OpenBao à utiliser au quotidien** : il est révoqué à l'amorçage, et un jeton de secours demande un quorum de porteurs de parts de
 récupération (apps `vault/README.md`). Une personne nommée travaille par une identité de ServiceAccount, échangée dans le pod contre un jeton qui dure quelques heures : `bao_admin`

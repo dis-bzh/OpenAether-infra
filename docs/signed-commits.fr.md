@@ -1,5 +1,7 @@
 # Commits signés et vérification de la source Git par Flux (côté infra)
 
+🇬🇧 [English version](signed-commits.md)
+
 L'accès en écriture à Git est la racine de confiance de la plateforme : Flux applique ce que contient la ref suivie, avec
 cluster-admin. Aucun commit de l'historique ne vérifie comme signé aujourd'hui. Cette page est le standard des
 mainteneurs et l'interrupteur optionnel pour le dépôt d'infrastructure ; le dépôt apps a sa page jumelle

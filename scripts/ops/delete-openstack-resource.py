@@ -29,6 +29,9 @@ RESOURCE_PATHS = {
 
 def keystone_token() -> tuple[str, list]:
     base = os.environ["OS_AUTH_URL"].rstrip("/")
+    if not base.startswith("https://"):   # the password goes in this request
+        print("✗ OS_AUTH_URL must be https:// — the password would travel in clear. Nothing was sent.", file=sys.stderr)
+        sys.exit(2)
     url = base + ("/auth/tokens" if base.endswith("/v3") else "/v3/auth/tokens")
     auth = {
         "auth": {

@@ -55,7 +55,11 @@ cleanup() {
 trap cleanup EXIT
 
 # 4. Lock: never two runs in parallel.
-LOCK="/tmp/openaether-etcd-snapshot-${PROVIDER}.lock"
+# Not in /tmp: a predictable name in a shared directory lets another local user
+# plant a symlink that the redirection below would create or truncate as us.
+STATE_DIR="${XDG_RUNTIME_DIR:-$HOME/.cache}/openaether"
+mkdir -p -m 700 "$STATE_DIR"
+LOCK="$STATE_DIR/etcd-snapshot-${PROVIDER}.lock"
 exec 9>"$LOCK"
 if ! flock -n 9; then
   log "⚠ a run is already in progress ($LOCK) — aborting"

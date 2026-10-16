@@ -526,6 +526,9 @@ expect_2 "outscale.py without OUTSCALE_SECRET_KEY" $? "$out" "OUTSCALE_SECRET_KE
 out="$(run_403 ovh.py OS_AUTH_URL=https://stub.invalid/v3 OS_USERNAME=s OS_PASSWORD=s \
        OS_PROJECT_ID=s OS_REGION_NAME=s)"
 expect_2 "ovh.py with its authentication refused" $? "$out" "refused"
+out="$(env OS_AUTH_URL=http://stub.invalid/v3 OS_USERNAME=s OS_PASSWORD=s OS_PROJECT_ID=s OS_REGION_NAME=s \
+       python3 "$ROOT/scripts/ops/purge-orphans/ovh.py" 2>&1)"
+expect_2 "ovh.py refuses a clear-text OS_AUTH_URL" $? "$out" "must be https"
 out="$(OVH_REGION=GRA9 run_403_ovh_partial)"; expect_2 "ovh.py, region absent from the catalog" $? "$out" "gra9"
 
 # --apply that deleted what it could see while another endpoint refused: not
