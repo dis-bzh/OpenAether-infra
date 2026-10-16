@@ -8,8 +8,11 @@
 #   journal   ssh, sudo and kernel (nft drop) entries since the last pull, journalctl -o export, resumed from a cursor
 #   audit     /var/log/audit as a tar.gz (the files are capped small by the baseline)
 #
-# Needs the bastion_baseline (the user in adm and systemd-journal, auditd, a persistent journal). Without
-# OA_LOGS_PASSPHRASE the files are written in clear (mode 0600) with a warning; with it they are encrypted like
+# Needs the bastion_baseline: it puts the user in adm and systemd-journal and makes the journal persistent (with or
+# without audit_logging, no package needed); auditd, hence the audit tarball, only with bastion_baseline.audit_logging=true.
+# Closed egress forces audit_logging=false (variables.tf): such a bastion exports the journal only, and says that the audit
+# part was skipped (exit 0). A bastion where the user cannot read the journal (no baseline, or built before the groups moved
+# out of audit_logging) is refused with the reason. Without OA_LOGS_PASSPHRASE the files are written in clear (mode 0600) with a warning; with it they are encrypted like
 # the access artifacts (gpg symmetric AES-256). Read-only on the bastion.
 #
 # OA_LOGS_UPLOAD=1 also puts the encrypted files in the artifacts bucket of BOTH object stores (the primary and the
@@ -120,6 +123,16 @@ if [ "$UPLOAD" = 1 ] && [ ! -s "$CURSOR_FILE" ]; then
   s3 0 cp "s3://${S3_BUCKET[0]}/$PREFIX/.journal-cursor" "$CURSOR_FILE" >/dev/null 2>&1 \
     && echo "~ journal: resuming from the cursor kept in the bucket" || rm -f "$CURSOR_FILE"
 fi
+# What can this account read? Said up front: a journalctl that is denied looks like an empty journal otherwise.
+PRE="$("${SSH[@]}" 'id -nG; id -u; if [ -r /var/log/audit ] && [ -x /var/log/audit ]; then echo audit-yes; else echo audit-no; fi')" \
+  || { echo "✗ could not run a command on the bastion (ssh failed)" >&2; exit 2; }
+P_GROUPS="$(sed -n 1p <<<"$PRE")"; P_UID="$(sed -n 2p <<<"$PRE")"; P_AUDIT="$(sed -n 3p <<<"$PRE")"
+if [ "$P_UID" != 0 ] && ! grep -qwE 'adm|systemd-journal' <<<"$P_GROUPS"; then
+  echo "✗ journal: ${USER_} is not in adm or systemd-journal on the bastion (groups: ${P_GROUPS:-none}), so it cannot read the journal." >&2
+  echo "  The groups and the persistent journal come with bastion_baseline.enabled (audit_logging is not needed). A bastion without" >&2
+  echo "  the baseline, or one built before they moved out of audit_logging, has to be replaced, or the logs pulled as root." >&2
+  exit 1
+fi
 AFTER=""
 [ -s "$CURSOR_FILE" ] && AFTER="--after-cursor=$(cat "$CURSOR_FILE")"
 # The logins (ssh.service), the privilege use (sudo) and the kernel ring (where the nft-drop-in/out lines land).
@@ -136,13 +149,18 @@ else
   echo "~ journal: nothing new since the last pull"
 fi
 
-"${SSH[@]}" "tar -C /var/log/audit -czf - ." >"$RAW"
-if [ -s "$RAW" ]; then
-  store "audit-$STAMP.tar.gz" <"$RAW"
-  echo "✓ audit: -> $OUT/audit-$STAMP.tar.gz${OA_LOGS_PASSPHRASE:+.gpg}"
+if [ "$P_AUDIT" != audit-yes ]; then
+  # Not an error: bastion_baseline.audit_logging=false (forced by closed egress) never installs auditd, so there is no archive to take.
+  echo "~ audit: skipped, /var/log/audit is absent or unreadable on the bastion (audit_logging=false: auditd is not installed). Only the journal is exported."
 else
-  echo "✗ audit: the bastion returned nothing (is auditd installed, is the user in adm?)" >&2
-  exit 1
+  "${SSH[@]}" "tar -C /var/log/audit -czf - ." >"$RAW"
+  if [ -s "$RAW" ]; then
+    store "audit-$STAMP.tar.gz" <"$RAW"
+    echo "✓ audit: -> $OUT/audit-$STAMP.tar.gz${OA_LOGS_PASSPHRASE:+.gpg}"
+  else
+    echo "✗ audit: the bastion returned nothing (is auditd running, is the user in adm?)" >&2
+    exit 1
+  fi
 fi
 
 if [ "$UPLOAD" = 1 ]; then

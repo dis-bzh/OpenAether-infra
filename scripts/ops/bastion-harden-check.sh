@@ -18,7 +18,10 @@
 #   7. bastion-admins group exists and user is a member
 #   8. SSH-CA placeholder files present
 #   9. (BASTION_BASELINE=1) the opt-in bastion_baseline: sshd directives, sysctl, auditd, journald,
-#      mounts, ownership of authorized_keys.d, sudo mode, umask, the key fingerprint in the login log
+#      mounts, ownership of authorized_keys.d, sudo mode, umask, the key fingerprint in the login log.
+#      BASTION_AUDIT=0 for a bastion with bastion_baseline.audit_logging=false (closed egress forces it): auditd
+#      is then not asserted, because it is not installed. The persistent journal, the adm / systemd-journal
+#      groups and the login line are still asserted: they need no package and are there with or without audit.
 #
 # Egress probes use bash's /dev/tcp, not nc: the baseline no longer installs netcat.
 #
@@ -246,16 +249,13 @@ want "no passwordless sudo for ${BASTION_USER}" SUDON no
 if fact GROUPS | grep -qw sudo; then fail "${BASTION_USER} is in the sudo group"; else ok "${BASTION_USER} is not in the sudo group"; fi
 if fact VARTMP | grep -q noexec; then ok "/var/tmp is mounted noexec ($(fact VARTMP))"; else fail "/var/tmp is not mounted noexec"; fi
 if [ "${BASTION_AUDIT:-1}" = 0 ]; then info "auditd not asserted (BASTION_AUDIT=0: bastion_baseline.audit_logging is off)"; else want "auditd is active" AUDITD active; fi
+# The persistent journal and the log-reader groups need no package: the template sets them with or without audit_logging, so they
+# are asserted in both modes (that is what lets bastion-logs-pull.sh read the journal). Only auditd depends on BASTION_AUDIT.
 want "the journal is persistent" JOURNAL persistent
-if [ "${BASTION_AUDIT:-1}" = 0 ]; then
-  # audit_logging = false: the account is not added to adm / systemd-journal, so the journal cannot be read without root.
-  info "log-reader groups and the login fingerprint line not asserted (BASTION_AUDIT=0)"
-else
 if fact GROUPS | grep -qw adm && fact GROUPS | grep -qw systemd-journal; then ok "${BASTION_USER} can read the audit and journal logs (adm, systemd-journal)"
 else fail "${BASTION_USER} is missing adm or systemd-journal: $(fact GROUPS)"; fi
 if [ "$(fact FP)" -ge 1 ] 2>/dev/null; then ok "the login log shows an Accepted publickey line with a SHA256 fingerprint"
 else fail "no 'Accepted publickey ... SHA256' line in the ssh journal of the last 10 minutes"; fi
-fi
 info "not asserted (needs root on the bastion): auditctl -s, nft list ruleset (log rule), the AcceptEnv comment-out"
 fi
 

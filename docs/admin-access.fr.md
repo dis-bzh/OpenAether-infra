@@ -288,10 +288,13 @@ Changer l'un ou l'autre remplace le bastion, comme ci-dessus. Associer chaque cl
 tfvars (`ssh-keygen -lf <clé>.pub` donne l'empreinte que porte la ligne de connexion `Accepted publickey ... SHA256:<empreinte>`).
 
 Les journaux meurent avec la VM : `scripts/ops/bastion-logs-pull.sh <ip> bastion <clé>` copie le journal (ssh, sudo, rejets nft ;
-incrémental) et le journal d'audit hors de la VM, chiffrés si `OA_LOGS_PASSPHRASE` est posée, et avec `OA_LOGS_UPLOAD=1` déposés dans le bucket d'artefacts des deux stockages objet
+incrémental) et le journal d'audit hors de la VM (avec `audit_logging = false` il n'y a pas de journal d'audit : seul le journal est exporté et le script dit que la partie audit a été sautée ; un compte qui ne peut pas lire le journal est refusé avec la raison), chiffrés si `OA_LOGS_PASSPHRASE` est posée, et avec `OA_LOGS_UPLOAD=1` déposés dans le bucket d'artefacts des deux stockages objet
 (section suivante). Les pistes d'audit côté cloud et le syslog d'un hôte Proxmox sont à part et rien ici ne les exporte.
 
-Vérifier un bastion déployé avec `BASTION_BASELINE=1 scripts/ops/bastion-harden-check.sh <ip> bastion <clé> [<ip nœud>]`. Avant
+Vérifier un bastion déployé avec `BASTION_BASELINE=1 scripts/ops/bastion-harden-check.sh <ip> bastion <clé> [<ip nœud>]` ; ajouter
+`BASTION_AUDIT=0` quand le bastion a `audit_logging = false` (imposé par la sortie fermée) : auditd n'est alors pas vérifié, puisqu'il n'est pas
+installé, mais le journal persistant, les groupes `adm` / `systemd-journal` et la ligne d'empreinte de connexion le restent (aucun paquet requis).
+Avant
 de dépenser quoi que ce soit, `task bastion-baseline-check` exécute les fichiers rendus sur Ubuntu 22.04 et 24.04 dans Docker
 (une vraie connexion sshd, les tunnels via `PermitOpen`, les clés révoquées, les règles de pare-feu chargées, les noms sysctl,
 la syntaxe des règles d'audit).

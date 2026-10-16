@@ -1294,10 +1294,16 @@ TF
     && ok "closed: no 80/443, no 8200, the cluster ports on the subnet, DNS and NTP pinned" || bad "the closed render is not the reviewed one"
   ! grep -q 'unattended-upgrades' <<<"$(awk '/^packages:/,/^write_files:/' <<<"$R_CLO")" && grep -q 'apt-daily-upgrade.timer' <<<"$R_CLO" && ! grep -q 'enable --now unattended-upgrades' <<<"$R_CLO" \
     && ok "closed: no update tooling is installed or enabled (patching is replacing the bastion)" || bad "closed still installs or enables unattended-upgrades"
-  # cloud-init 22.2+ calls `sudo: false` deprecated (status "degraded", exit 2 of `cloud-init status`): the baseline render says
-  # `null`, the default render keeps the released bytes (a changed user_data replaces the bastion on OVH and Outscale).
-  R_BASE="$(render_bastion 'baseline = {enabled = true, audit_logging = false, restrict_ssh_source = false, time_servers = [], revoked_keys = []}, admins = { alice = { ssh_keys = ["ssh-ed25519 AAAAa alice"] } }')"
-  [ "$(grep -c '^    sudo: null' <<<"$R_BASE")" = 2 ] && ! grep -q 'sudo: false' <<<"$R_BASE" && grep -q '^    sudo: false' <<<"$R_DEF" \
+  # Closed egress forces audit_logging off (variables.tf), and the journal needs no package: lab 11 found bastion-logs-pull.sh
+  # unable to read it because the drop-in and the groups were inside the audit conditional. cloud-init 22.2+ also calls
+  # `sudo: false` deprecated ("degraded"); the baseline render says `null`, the default render keeps the released bytes.
+  R_NOAUD="$(render_bastion 'baseline = {enabled = true, audit_logging = false, restrict_ssh_source = false, time_servers = [], revoked_keys = []}, admins = { alice = { ssh_keys = ["ssh-ed25519 AAAAa alice"] } }, egress = {mode = "closed", dns_servers = ["192.0.2.53"], ntp_servers = ["192.0.2.123"]}')"
+  grep -q 'path: /etc/systemd/journald.conf.d/50-bastion.conf' <<<"$R_NOAUD" && grep -q 'Storage=persistent' <<<"$R_NOAUD" \
+    && grep -q 'usermod -aG adm,systemd-journal bastion' <<<"$R_NOAUD" && grep -q 'mkdir -p /var/log/journal' <<<"$R_NOAUD" \
+    && ! grep -q '^  - auditd' <<<"$R_NOAUD" && ! grep -q 'enable --now auditd' <<<"$R_NOAUD" && ! grep -q '/etc/audit/rules.d' <<<"$R_NOAUD" \
+    && ok "baseline without audit_logging: persistent journal and journal groups are there, auditd is not" \
+    || bad "baseline with audit_logging=false lost the persistent journal or the journal groups (or kept auditd): bastion-logs-pull.sh cannot read it"
+  [ "$(grep -c '^    sudo: null' <<<"$R_NOAUD")" = 2 ] && ! grep -q 'sudo: false' <<<"$R_NOAUD" && grep -q '^    sudo: false' <<<"$R_DEF" \
     && ok "sudo: null for the baseline accounts (cloud-init 22.2+), sudo: false kept in the default render" \
     || bad "the sudo key is wrong: baseline accounts need null (deprecated false makes cloud-init degraded), the default must keep false"
 else

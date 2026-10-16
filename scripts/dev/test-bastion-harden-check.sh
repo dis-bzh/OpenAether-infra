@@ -134,6 +134,15 @@ mutant "passwordless sudo"         SUDON yes "passwordless sudo"
 mutant "no adm group"              GROUPS "bastion bastion-admins" "adm or systemd-journal"
 mutant "the sudo group"            GROUPS "bastion bastion-admins sudo adm systemd-journal" "in the sudo group"
 mutant "no fingerprint line"       FP 0 "SHA256"
+# BASTION_AUDIT=0 is a bastion with audit_logging=false (closed egress forces it): no auditd, but the template still sets the
+# persistent journal and the journal groups, so those stay asserted (lab 11 found them asserted-or-skipped inconsistently).
+facts_with AUDITD inactive; run BASTION_BASELINE=1 BASTION_AUDIT=0
+[ "$RC" = 0 ] && grep -q 'auditd not asserted' <<<"$OUT" && ! grep -q 'auditd is active' <<<"$OUT" && grep -q 'the journal is persistent' <<<"$OUT" && grep -q 'adm, systemd-journal' <<<"$OUT" \
+  && ok "BASTION_AUDIT=0: auditd is not asserted, the journal, groups and login line are, and the run passes" || bad "BASTION_AUDIT=0 good facts: rc=$RC $OUT"
+facts_with JOURNAL volatile; run BASTION_BASELINE=1 BASTION_AUDIT=0
+[ "$RC" != 0 ] && grep -q 'FAIL.*journal' <<<"$OUT" && ok "BASTION_AUDIT=0 still FAILS a volatile journal (bastion-logs-pull.sh needs it)" || bad "BASTION_AUDIT=0 volatile journal passed: rc=$RC"
+facts_with GROUPS "bastion bastion-admins"; run BASTION_BASELINE=1 BASTION_AUDIT=0
+[ "$RC" != 0 ] && grep -q 'adm or systemd-journal' <<<"$OUT" && ok "BASTION_AUDIT=0 still FAILS an account outside adm / systemd-journal" || bad "BASTION_AUDIT=0 without groups passed: rc=$RC"
 printf '%s\n' "$GOOD_FACTS" | sed 's/AllowStreamLocalForwarding no;//' >"$FACTS"; run BASTION_BASELINE=1
 [ "$RC" != 0 ] && grep -q "FAIL.*AllowStreamLocalForwarding no" <<<"$OUT" && ok "a missing sshd directive FAILS, named" || bad "missing directive: rc=$RC $(grep FAIL <<<"$OUT" | head -2)"
 : >"$FACTS"; run BASTION_BASELINE=1

@@ -348,8 +348,10 @@ write_files:
       -a always,exit -F arch=b32 -S init_module -S finit_module -S delete_module -k bastion-modules
       -a always,exit -F arch=b64 -S ptrace -k bastion-ptrace
       -a always,exit -F arch=b32 -S ptrace -k bastion-ptrace
+%{ endif ~}
 
-  # The sshd login line carries the key fingerprint (LogLevel VERBOSE): keep it, capped, across reboots.
+  # The sshd login line carries the key fingerprint (LogLevel VERBOSE): keep it, capped, across reboots. No package is
+  # needed, so it is there with or without audit_logging (closed egress forces it off): bastion-logs-pull.sh reads this journal.
   - path: /etc/systemd/journald.conf.d/50-bastion.conf
     permissions: '0644'
     content: |
@@ -357,7 +359,6 @@ write_files:
       Storage=persistent
       SystemMaxUse=200M
       MaxRetentionSec=90day
-%{ endif ~}
 %{ if length(baseline.time_servers) > 0 ~}
 
   # Same time sources as the nodes: a chrony source file; the image's default pools are commented out by runcmd.
@@ -419,10 +420,11 @@ runcmd:
       rm -f /etc/ssh/sshd_config.d/98-bastion-baseline.conf
       [ -f /etc/ssh/sshd_config.pre-baseline ] && cp -p /etc/ssh/sshd_config.pre-baseline /etc/ssh/sshd_config
     fi
-%{ if baseline.audit_logging ~}
+  # The journal needs no package: readable by the shared account (adm, systemd-journal) with or without auditd.
   - usermod -aG adm,systemd-journal ${bastion_user} || usermod -aG adm ${bastion_user} || true
   - mkdir -p /var/log/journal && systemd-tmpfiles --create --prefix /var/log/journal || true
   - systemctl restart systemd-journald || true
+%{ if baseline.audit_logging ~}
   - sed -i -e 's/^log_group.*/log_group = adm/' -e 's/^max_log_file .*/max_log_file = 8/' -e 's/^num_logs.*/num_logs = 5/' /etc/audit/auditd.conf || true
   - augenrules --load || true
   - systemctl enable --now auditd || true

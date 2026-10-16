@@ -168,7 +168,7 @@ for each old image the retention destroys (§7, image lane).
       role only) and **bastion hardening**,
       `scripts/ops/bastion-harden-check.sh <bastion_ip> <bastion_user> <ssh_key>`
       (never against the reference cluster; `BASTION_BASELINE=1` adds the checks of the opt-in
-      `bastion_baseline`, and `task bastion-baseline-check` is the offline proof to run first).
+      `bastion_baseline`, `BASTION_AUDIT=0` with `audit_logging = false`, and `task bastion-baseline-check` is the offline proof to run first).
 
 ## 5. Cloud — OVH
 

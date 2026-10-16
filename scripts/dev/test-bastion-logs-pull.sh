@@ -20,6 +20,8 @@ cat >"$TMP/bin/ssh" <<'STUB'
 cmd="${*: -1}"
 echo "$cmd" >>"$SSH_LOG"
 case "$cmd" in
+  "id -nG"*) [ "${STUB_NOGROUPS:-}" = 1 ] && printf 'bastion\n1001\n' || printf 'bastion adm systemd-journal\n1001\n'
+             [ "${STUB_AUDITDIR:-yes}" = yes ] && echo audit-yes || echo audit-no ;;
   journalctl*) [ "${STUB_EMPTY:-}" = 1 ] && exit 0
                printf '__CURSOR=s=aaa\nMESSAGE=Accepted publickey for bastion ssh2: ED25519 SHA256:abc\n\n__CURSOR=s=bbb\nMESSAGE=second\n\n' ;;
   tar*) [ "${STUB_NOAUDIT:-}" = 1 ] && exit 0; printf 'FAKE-TARBALL' ;;
@@ -46,6 +48,19 @@ run STUB_EMPTY=1
 grep -q 'nothing new' <<<"$OUT" && [ "$(cat "$TMP/out/.journal-cursor")" = "s=bbb" ] && ok "an empty journal answer keeps the watermark" || bad "empty journal: $OUT"
 run STUB_NOAUDIT=1
 [ "$RC" = 1 ] && grep -q 'audit: the bastion returned nothing' <<<"$OUT" && ok "an empty audit answer FAILS (auditd absent or user not in adm)" || bad "no audit: rc=$RC $OUT"
+
+echo "=== audit_logging=false: a journal-only bastion (closed egress forces it) ==="
+# Lab 11: the audit tarball was unconditional (tar: /var/log/audit: Cannot open, rc 2, nothing written) and the journal was unreadable.
+rm -rf "$TMP/out"; : >"$SSH_LOG"
+run STUB_AUDITDIR=no
+[ "$RC" = 0 ] && ls "$TMP"/out/journal-*.export >/dev/null 2>&1 && ! ls "$TMP"/out/audit-* >/dev/null 2>&1 && grep -q 'audit: skipped' <<<"$OUT" && ! grep -q '^tar ' "$SSH_LOG" \
+  && ok "without /var/log/audit the journal is exported, the audit part is skipped with a message, rc 0, no tar is run" || bad "journal-only pull: rc=$RC $OUT"
+rm -rf "$TMP/out"
+run STUB_AUDITDIR=no STUB_EMPTY=1
+[ "$RC" = 0 ] && grep -q 'nothing new' <<<"$OUT" && grep -q 'audit: skipped' <<<"$OUT" && ok "nothing to pull on a journal-only bastion ends rc 0 with both reasons said" || bad "empty journal-only pull: rc=$RC $OUT"
+rm -rf "$TMP/out"
+run STUB_NOGROUPS=1
+[ "$RC" = 1 ] && grep -q 'not in adm or systemd-journal' <<<"$OUT" && ! ls "$TMP"/out/journal-* >/dev/null 2>&1 && ok "an account that cannot read the journal is refused with the reason, not read as an empty journal" || bad "no groups: rc=$RC $OUT"
 
 echo "=== encrypted ==="
 rm -rf "$TMP/out"
