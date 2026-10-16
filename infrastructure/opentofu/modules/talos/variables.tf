@@ -346,7 +346,7 @@ variable "node_log_forwarding" {
       kernel          Also send the kernel log (default true).
       kernel_endpoint Another receiver for the kernel log (default: endpoint).
     An unreachable receiver drops logs; whether it also delays a boot is a lab check
-    (LAB-CHECKLIST B22). Apply to ONE node first. The receiver is not part of this repo's
+    (LAB-CHECKLIST B22). The setting is global (there is no per-node switch): one apply re-applies the machine configuration of EVERY node, so try it on a throwaway cluster first. The receiver is not part of this repo's
     default: a hostNetwork collector must exist before this is switched on.
   EOT
   type = object({
@@ -503,7 +503,7 @@ variable "node_firewall_scope" {
 variable "disk_encryption_passphrase_length" {
   description = <<-EOT
     Length of the generated LUKS2 passphrase (disk encryption at rest). Default 32 keeps the released
-    value (62^32, about 190 bits). 40 or more gives at least 192 bits of entropy (ANSSI PG-083 symmetric key size).
+    value (62^32, about 190 bits). 33 or more gives at least 192 bits (62^33 is about 196 bits) of entropy (ANSSI PG-083 symmetric key size).
     FOR A NEW CLUSTER ONLY: changing it on a live cluster replaces the passphrase in the state, and the
     nodes' STATE/EPHEMERAL partitions are sealed with the old one; Talos has no re-keying step here, so a reboot
     would not unlock them. Raise it before the first apply, or not at all.

@@ -338,7 +338,7 @@ variable "node_log_forwarding" {
     Ships the nodes' Talos service and kernel logs over plain TCP to a receiver the host can
     reach. Null (default) changes nothing. { endpoint = "tcp://host:port", kernel = true,
     kernel_endpoint = "" }; the rules and the trade-offs (plaintext, ClusterIP unreachable from
-    the host, apply to one node first) are on the variable of the same name in modules/talos/variables.tf.
+    the host, applied to every node by one apply) are on the variable of the same name in modules/talos/variables.tf.
   EOT
   type = object({
     endpoint        = string
@@ -981,7 +981,7 @@ variable "node_firewall" {
 variable "disk_encryption_passphrase_length" {
   description = <<-EOT
     Length of the generated LUKS2 passphrase (disk encryption at rest). Default 32 keeps the released
-    value (62^32, about 190 bits). 40 or more gives at least 192 bits of entropy (ANSSI PG-083 symmetric key size).
+    value (62^32, about 190 bits). 33 or more gives at least 192 bits (62^33 is about 196 bits) of entropy (ANSSI PG-083 symmetric key size).
     FOR A NEW CLUSTER ONLY: changing it on a live cluster replaces the passphrase in the state, and the
     nodes' STATE/EPHEMERAL partitions are sealed with the old one; Talos has no re-keying step here, so a reboot
     would not unlock them. Raise it before the first apply, or not at all.

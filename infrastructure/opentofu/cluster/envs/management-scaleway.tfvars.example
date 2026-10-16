@@ -75,10 +75,9 @@ node_distribution = {
 # node_time_servers = ["YOUR_NTP_1", "YOUR_NTP_2", "YOUR_NTP_3"]   # also in bastion_baseline.time_servers
 
 # Node network filtering (optional, ANSSI PA-022 R17/R20; both off by default, neither enforces anything yet).
-# restrict_inter_node (OVH and Outscale only) swaps the all-protocol rule between nodes for an explicit port list.
+# restrict_inter_node has no effect here (OVH and Outscale only; no security-group layer to swap), so it is not offered.
 # node_firewall_mode = "rules_only" writes Talos ingress rules with a default action of accept (nothing blocked).
 # Read docs/network.md section 6 and LAB-CHECKLIST B24 first; a throwaway cluster first.
-# restrict_inter_node = true
 # node_firewall_mode  = "rules_only"
 # node_firewall       = { node_cidrs = ["YOUR_NODE_SUBNET"], bastion_cidrs = ["YOUR_BASTION_SUBNET"] }
 

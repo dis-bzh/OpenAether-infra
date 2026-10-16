@@ -122,6 +122,15 @@ git_ref          = "refs/tags/0.2.0"
 # ]
 # openbao_recovery_threshold = 2   # default: a majority
 
+# --- Flux Git source verification (OPT-IN, default off) ---------------------------
+# Flux then applies only a HEAD commit signed by one of these OpenPGP keys (gpg --armor --export <id>), GitHub's
+# web-flow key included if you squash-merge. Read docs/signed-commits.md first; the apps overlay must carry the
+# same block (components/git-verify). Public keys only.
+# flux_git_verify = {
+#   enabled     = true
+#   public_keys = ["-----BEGIN PGP PUBLIC KEY BLOCK-----\n...\n-----END PGP PUBLIC KEY BLOCK-----"]
+# }
+
 # --- Backup / DR object stores (Outscale OOS, S3-compatible) ------------------
 # Derived buckets (you don't set them) — parts come from this file,
 # and each has a "-backup" twin:
