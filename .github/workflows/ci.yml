@@ -95,7 +95,7 @@ jobs:
 
       - name: Install commitizen
         # renovate: datasource=pypi depName=commitizen
-        run: pip install commitizen==4.19.1
+        run: pip install commitizen==4.19.2
 
       - name: Conventional Commits
         run: cz check --rev-range origin/${{ github.base_ref }}..HEAD
@@ -235,7 +235,7 @@ jobs:
       - name: Validate Renovate config
         env:
           # renovate: datasource=npm depName=renovate
-          RENOVATE_VERSION: "44.52.1"
+          RENOVATE_VERSION: "44.148.4"
         run: npx --yes -p "renovate@${RENOVATE_VERSION}" -- renovate-config-validator renovate.json5
 
       # flux-bootstrap.yaml.tftpl is read by nothing else here (#114) —
@@ -559,7 +559,7 @@ jobs:
 
       - name: Upload the baseline
         if: needs.changes.outputs.code == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: feint-evidence-${{ matrix.provider }}
           path: /tmp/feint-evidence-${{ matrix.provider }}.json
@@ -615,7 +615,7 @@ jobs:
           persist-credentials: false
 
       - name: Run Trivy IaC scan
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # 0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           scan-type: config
           scan-ref: infrastructure/
