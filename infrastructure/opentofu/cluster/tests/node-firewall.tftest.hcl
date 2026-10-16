@@ -269,9 +269,9 @@ run "scaleway_and_talos_follow_the_same_list" {
   }
   assert {
     condition = sort([for d in module.talos.appended_documents : yamldecode(d).name if yamldecode(d).kind == "NetworkRuleConfig"]) == sort([
-      for k in ["kube-apiserver", "talos-apid", "talos-trustd", "etcd", "kubelet", "cilium-vxlan", "cilium-wireguard", "cilium-health", "cilium-icmp", "cilium-metrics", "node-exporter"] : "openaether-${k}"
+      for k in ["kube-apiserver", "talos-apid", "talos-trustd", "etcd", "kubelet", "cilium-vxlan", "cilium-wireguard", "cilium-health", "cilium-metrics", "node-exporter"] : "openaether-${k}"
     ])
-    error_message = "The Talos rules must be exactly the shared list without DHCP"
+    error_message = "The Talos rules must be exactly the shared list without DHCP and without ICMP (Talos refuses a rule without ports and allows ICMP itself)"
   }
   assert {
     condition     = alltrue([for d in module.talos.appended_documents : yamldecode(d).kind == "NetworkRuleConfig" || yamldecode(d).ingress == "accept"])

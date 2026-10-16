@@ -306,20 +306,25 @@ locals {
       kind       = "NetworkDefaultActionConfig"
       ingress    = "accept"
     })],
+    # ICMP has no document: Talos requires `portSelector.ports` on EVERY NetworkRuleConfig (a real node refused the ICMP one,
+    # "portSelector.ports is required", lab 11, 2026-10-16) and its own firewall already allows ICMP and ICMPv6 explicitly (rate
+    # limited) whenever the default action blocks. The shared list still carries ICMP for the providers' security groups.
     [for name in sort(keys(var.node_firewall_ports)) : yamlencode(merge(
       {
         apiVersion = "v1alpha1"
         kind       = "NetworkRuleConfig"
         name       = "openaether-${name}"
-        portSelector = merge(
-          { protocol = lower(var.node_firewall_ports[name].protocol) },
-          var.node_firewall_ports[name].ports == null ? {} : { ports = [try(tonumber(var.node_firewall_ports[name].ports), var.node_firewall_ports[name].ports)] },
-        )
+        portSelector = {
+          protocol = lower(var.node_firewall_ports[name].protocol)
+          ports    = [try(tonumber(var.node_firewall_ports[name].ports), var.node_firewall_ports[name].ports)]
+        }
       },
       {
         ingress = [for c in distinct(flatten([for g in lookup(var.node_firewall_scope, name, ["nodes"]) : local.fw_groups[g]])) : { subnet = c }]
       },
-    ))],
+      ))
+      if var.node_firewall_ports[name].ports != null
+    ],
   )
 }
 

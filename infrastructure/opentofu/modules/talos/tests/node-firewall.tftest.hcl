@@ -58,11 +58,11 @@ run "rules_only_renders_inert_rules" {
   }
 
   assert {
-    condition     = length(output.appended_documents) == 5 && yamldecode(output.appended_documents[0]).kind == "NetworkDefaultActionConfig" && yamldecode(output.appended_documents[0]).ingress == "accept"
-    error_message = "rules_only must write the default action as accept (inert) first, then one rule per flow"
+    condition     = length(output.appended_documents) == 4 && yamldecode(output.appended_documents[0]).kind == "NetworkDefaultActionConfig" && yamldecode(output.appended_documents[0]).ingress == "accept"
+    error_message = "rules_only must write the default action as accept (inert) first, then one rule per TCP/UDP flow (ICMP has none)"
   }
   assert {
-    condition     = alltrue([for d in slice(output.appended_documents, 1, 5) : yamldecode(d).kind == "NetworkRuleConfig" && !contains(["block"], try(yamldecode(d).ingress, ""))])
+    condition     = alltrue([for d in slice(output.appended_documents, 1, 4) : yamldecode(d).kind == "NetworkRuleConfig" && !contains(["block"], try(yamldecode(d).ingress, ""))])
     error_message = "every other document is a NetworkRuleConfig"
   }
   assert {
@@ -74,8 +74,8 @@ run "rules_only_renders_inert_rules" {
     error_message = "etcd: the range stays a string, nodes only"
   }
   assert {
-    condition     = anytrue([for d in output.appended_documents : try(yamldecode(d).name, "") == "openaether-cilium-icmp" && yamldecode(d).portSelector == { protocol = "icmp" } && yamldecode(d).ingress == [{ subnet = "10.0.0.0/24" }, { subnet = "10.244.0.0/16" }]])
-    error_message = "icmp has no ports and admits nodes and the default pod CIDR"
+    condition     = !anytrue([for d in output.appended_documents : try(yamldecode(d).name, "") == "openaether-cilium-icmp"]) && alltrue([for d in output.appended_documents : try(yamldecode(d).kind, "") != "NetworkRuleConfig" || length(yamldecode(d).portSelector.ports) > 0])
+    error_message = "no document for icmp (Talos refuses a NetworkRuleConfig without ports and allows ICMP itself), and every rule document carries ports"
   }
   assert {
     condition     = terraform_data.machine_config_version[0].input != "v1.14.2/v1.37.1"
