@@ -62,6 +62,27 @@ list "$(CRB nobody view null)" >"$TMP/fx.json"
 run
 [ "$RC" = 0 ] && grep -q 'nobody' "$(ls "$TMP"/out/rbac-review-*.tsv)" && ok "a binding without subjects is still listed (and harmless)" || bad "no subjects: rc=$RC $OUT"
 
+echo "=== the platform-rbac bindings of named operators ==="
+list "$(CRB oa-admins cluster-admin '[{"kind":"Group","name":"oa:admins"}]')" \
+     "$(CRB oa-readers view '[{"kind":"Group","name":"oa:readers"}]')" >"$TMP/fx.json"
+run
+[ "$RC" = 0 ] && ok "oa-admins (oa:admins -> cluster-admin) and oa-readers (oa:readers -> view) are not flagged" || bad "platform-rbac flagged: rc=$RC $OUT"
+list "$(CRB oa-admins cluster-admin '[{"kind":"Group","name":"oa:admins"},{"kind":"User","name":"mallory"}]')" >"$TMP/fx.json"
+run
+[ "$RC" = 1 ] && grep -q 'mallory' <<<"$OUT" && ! grep -q 'oa:admins' <<<"$OUT" && ok "an extra subject on oa-admins is flagged, the group line is not" || bad "extra subject: rc=$RC $OUT"
+list "$(CRB oa-admins cluster-admin '[{"kind":"Group","name":"oa:readers"}]')" >"$TMP/fx.json"
+run
+[ "$RC" = 1 ] && grep -q '\[HUMAN,ADMIN\]' <<<"$OUT" && ok "oa-admins bound to another group is flagged" || bad "wrong group: rc=$RC $OUT"
+list "$(CRB oa-readers cluster-admin '[{"kind":"Group","name":"oa:readers"}]')" >"$TMP/fx.json"
+run
+[ "$RC" = 1 ] && ok "oa-readers escalated to cluster-admin is flagged" || bad "readers escalated: rc=$RC $OUT"
+list "$(RB oa-admins platform cluster-admin '[{"kind":"Group","name":"oa:admins"}]')" >"$TMP/fx.json"
+run
+[ "$RC" = 1 ] && ok "the same name as a namespaced RoleBinding is flagged" || bad "rolebinding disguise: rc=$RC $OUT"
+list "$(CRB oa-admins2 cluster-admin '[{"kind":"Group","name":"oa:admins"}]')" >"$TMP/fx.json"
+run
+[ "$RC" = 1 ] && ok "another binding name for the group is flagged" || bad "renamed: rc=$RC $OUT"
+
 echo "=== a broken answer is never a clean review ==="
 STUB_FAIL=1 run
 [ "$RC" = 2 ] && ok "kubectl failing exits 2, not 0" || bad "kubectl failure: rc=$RC $OUT"

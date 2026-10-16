@@ -232,12 +232,23 @@ avec lui, alors que `talosctl get machineconfig` est refusé. En émettre un et 
 réutiliser jusqu'à son expiration plutôt qu'un par exécution : émettre est une
 écriture sur l'API Talos, et une lecture ne devrait pas en demander.
 
+**Identités nommées et de courte durée (`task kubeconfig-new`).** Pour le travail courant, ne pas porter le fichier partagé : tunnels ouverts,
+`task kubeconfig-new PROVIDER=… NAME=alice` dépose une CertificateSigningRequest (signataire `kubernetes.io/kube-apiserver-client`,
+`expirationSeconds`, 8 h par défaut, de 10 min à 24 h acceptés) pour `CN=alice`, `O=oa:readers`, et écrit un kubeconfig en 0600 hors du dépôt
+(`~/.kube/oa-alice-reader.kubeconfig` ; un chemin dans le dépôt est refusé). `ACCESS=admin` demande `O=oa:admins` (cluster-admin via le
+groupe). La clé privée est générée sur votre machine ; le fichier `system:masters` ne sert qu'à déposer et approuver la demande, et reste le
+credential de secours sous séquestre, pas le routinier. Ce que chaque groupe peut faire est dans la brique apps `platform-rbac` (`oa-admins` vers `cluster-admin`,
+`oa-readers` vers `view`) : un certificat portant un groupe qu'aucun binding ne nomme ne peut rien faire. Révoquer une personne avant l'expiration du certificat
+= supprimer ou restreindre le binding de son groupe (effet immédiat, le certificat reste valide mais est refusé) ; un binding de groupe ne peut pas viser un seul porteur,
+donc pour une révocation par personne lier l'utilisateur par son nom (`rbac-review` le signale, à consigner). `rbac-review` et `cluster-security` 3.7 autorisent exactement ces deux bindings et rien d'autre sous ces noms.
+Pas encore joué sur un cloud : les vérifications sont dans la checklist du labo. Cela n'ajoute ni OIDC, ni MFA, ni acheminement de l'audit : le journal d'audit de l'apiserver reste sur le plan de contrôle.
+
 **Revue à chaque changement de personnel.** Quand quelqu'un arrive ou part, lancer `task rbac-review` (un `kubectl` en
 lecture seule, `KUBECONFIG` posé) : il liste chaque binding et ses sujets dans `rbac-review/rbac-review-<date>.tsv` et signale
 un User/Group nommé, un binding anonyme et un `cluster-admin` hors liste d'autorisation (celle de `cluster-security-tests.sh`
-3.7). Aujourd'hui la réponse attendue est « rien de signalé » : l'accès humain est le certificat partagé ci-dessus, donc une
-ligne signalée est une décision à consigner ou un binding à supprimer. Révoquer une personne reste faire tourner la CA ; la
-revue ne fait que trouver ce qui d'autre lui donne accès.
+3.7). Là où la brique apps `platform-rbac` est réconciliée, les deux bindings ci-dessus ne sont pas signalés ; la réponse attendue est
+sinon « rien de signalé », donc une ligne signalée est une décision à consigner ou un binding à supprimer. Révoquer le certificat partagé reste faire tourner la CA ; la
+revue ne fait que trouver ce qui d'autre donne accès.
 Côté réseau, `task cluster-exposure PROVIDER=…` sonde les adresses publiques (à lancer une fois depuis une adresse absente de
 `admin_ip` avec `FROM=denied` : 22 et 6443 doivent alors être fermés) et `task cluster-netcheck PROVIDER=…` envoie du trafic que
 les politiques doivent rejeter. `task cluster-security` accepte `ENVIRONMENT=prod` pour échouer sur un Secret `openbao-recovery-dev`.

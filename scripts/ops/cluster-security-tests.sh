@@ -385,9 +385,14 @@ EXCLUDE_PREFIXES=('system:', 'cnpg-', 'external-secrets-', 'longhorn-', 'istio-'
 # 'cluster-reconciler' is how Flux works: kustomize-controller and
 # helm-controller apply arbitrary manifests and cannot do it with less.
 EXCLUDE_EXACT=('cluster-admin', 'cluster-reconciler')
+# 'oa-admins' is the platform-rbac brick's binding for named operators (kubeconfig-new.sh): allowed only as exactly
+# Group oa:admins -> cluster-admin; any other subject under that name still counts as custom.
+def platform(b):
+  return b['metadata']['name']=='oa-admins' and [(x.get('kind'),x.get('name')) for x in (b.get('subjects') or [])]==[('Group','oa:admins')]
 custom=[b for b in bindings
   if b['roleRef'].get('name')=='cluster-admin'
   and b['metadata']['name'] not in EXCLUDE_EXACT
+  and not platform(b)
   and not any(b['metadata']['name'].startswith(p) for p in EXCLUDE_PREFIXES)]
 print(len(custom))
 " 2>/dev/null || echo "0")

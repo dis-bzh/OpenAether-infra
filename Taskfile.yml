@@ -607,6 +607,8 @@ tasks:
       - ./scripts/dev/test-cluster-netcheck.sh
       - ./scripts/dev/test-exposure-scan.sh
       - ./scripts/dev/test-rbac-review.sh
+      # Named, short-lived Kubernetes certificates through the CSR API (stub kubectl, real openssl).
+      - ./scripts/dev/test-kubeconfig-new.sh
       # The bastion scripts: harden-check (egress probes, opt-in baseline section, host key), the log pull (and its
       # upload) and the fingerprint-to-person table.
       - ./scripts/dev/test-bastion-harden-check.sh
@@ -1528,6 +1530,33 @@ tasks:
       - |
         TALOSCONFIG="$PWD/talosconfig" ../../../scripts/ops/talosconfig-new.sh \
           {{.PROVIDER}} --roles {{.ROLES}} --ttl {{.TTL}}
+
+  kubeconfig-new:
+    desc: >-
+      Issue a short-lived, NAMED Kubernetes client certificate (CertificateSigningRequest, CN=<NAME>, group
+      oa:readers or oa:admins) into a 0600 kubeconfig OUTSIDE the repository. The shared system:masters
+      kubeconfig is only used to file and approve the request. Needs the apps platform-rbac brick for the
+      group to be allowed anything.
+      Usage: task kubeconfig-new PROVIDER=scaleway NAME=alice [ROLE=management] [ACCESS=reader|admin]
+      [TTL=8h] [OUT=PATH]
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER, NAME]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+      ACCESS: '{{.ACCESS | default "reader"}}'
+      TTL: '{{.TTL | default "8h"}}'
+    env: *provider-env
+    # Not run on a cloud: the Kubernetes API is reached through the bastion, so `task tunnels-up PROVIDER=…`
+    # first (docs/admin-access.md, section 7).
+    cmds:
+      - task: kubeconfig
+        vars: {ROLE: '{{.ROLE}}', PROVIDER: '{{.PROVIDER}}'}
+      # Pinned like talosconfig-new: an exported KUBECONFIG would file the request on another cluster.
+      - |
+        KUBECONFIG="$PWD/kubeconfig" ../../../scripts/ops/kubeconfig-new.sh {{.NAME}} \
+          --role {{.ACCESS}} --ttl {{.TTL}} {{if .OUT}}--out {{.OUT}}{{end}}
 
   backup-state:
     desc: >-

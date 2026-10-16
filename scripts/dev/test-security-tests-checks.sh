@@ -33,6 +33,7 @@ case "$*" in
   *"configmap openbao-escrow-ack"*"{.data.holders}"*) printf '%s' "${STUB_ACK_N:-}"; exit 0 ;;
   *"secret openbao-seal-key"*) [ "${STUB_SEAL:-}" = 1 ] && exit 0; exit 1 ;;
   *"get secret"*) exit 1 ;;
+  "get clusterrolebinding -o json"*) [ -n "${STUB_CRB+x}" ] && printf '%s' "$STUB_CRB"; exit 0 ;;
 esac
 exit 0
 STUB
@@ -54,6 +55,17 @@ run
 verdict "1.8" "❌" && ok "no cilium-config at all FAILS (never a pass)" || bad "absent config passed: $(line 1.8)"
 STUB_WG_CFG=true STUB_EXEC_FAIL=1 run
 verdict "1.8" "⏭" && ok "config on but the agent unreadable is SKIPPED, not green" || bad "unreadable agent: $(line 1.8)"
+
+echo "=== 3.7 cluster-admin bindings ==="
+crb() { printf '{"items":[{"metadata":{"name":"%s"},"roleRef":{"name":"%s"},"subjects":%s}]}' "$1" "$2" "$3"; }
+STUB_CRB="$(crb oa-admins cluster-admin '[{"kind":"Group","name":"oa:admins"}]')" run
+verdict "3.7" "✅" && ok "the platform-rbac binding oa-admins (Group oa:admins) is allowed" || bad "oa-admins: $(line 3.7)"
+STUB_CRB="$(crb oa-admins cluster-admin '[{"kind":"Group","name":"oa:admins"},{"kind":"User","name":"mallory"}]')" run
+verdict "3.7" "❌" && ok "...but not with an extra subject" || bad "oa-admins + user passed: $(line 3.7)"
+STUB_CRB="$(crb oa-admins cluster-admin '[{"kind":"Group","name":"other:group"}]')" run
+verdict "3.7" "❌" && ok "...nor bound to another group" || bad "oa-admins other group passed: $(line 3.7)"
+STUB_CRB="$(crb oncall-admins cluster-admin '[{"kind":"Group","name":"oa:admins"}]')" run
+verdict "3.7" "❌" && ok "another binding name to cluster-admin still FAILS" || bad "oncall-admins passed: $(line 3.7)"
 
 echo "=== 4.6 development bootstrap ==="
 STUB_DEV=1 OA_ENVIRONMENT=prod run

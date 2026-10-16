@@ -70,8 +70,12 @@ Found by the labs above, each with the rung it reached after the fix (mocked tes
   and cloud-init ended in error. Closed mode now purges `nc`, `curl` and `tcpdump` offline. The documentation said first boot was unaffected;
   it is corrected (EN and FR).
 - **`explain-failure.sh`** explains a replaced bastion that ends as a cluster health check failure, like the refused-port shape.
-
 ### Security
+
+- **Named, short-lived Kubernetes identities through the CSR API, and an RBAC review that knows them (addresses ANSSI PA-022 R38/R40, PG-078 R15, NSA-12 AUTH-02/AUTH-03; audit B26, infra half: F04, F13, F20).** Rung: **mocked/static (`test-kubeconfig-new.sh` with a stub kubectl and the real openssl, `test-rbac-review.sh`, `test-security-tests-checks.sh`), not run on a cluster.**
+  - `scripts/ops/kubeconfig-new.sh` and `task kubeconfig-new` (new, additive: nothing existing changes): files a CertificateSigningRequest (`kubernetes.io/kube-apiserver-client`, `expirationSeconds`, default 8 h, 10 min to 24 h accepted) for `CN=<name>`, `O=oa:readers` (default) or `O=oa:admins` (`ACCESS=admin`), using the `system:masters` kubeconfig only to file and approve it; key generated locally; request deleted afterwards; 0600 file outside the repository (a path inside it is refused); a signer that grants more than asked is refused. The groups mean nothing without the apps `platform-rbac` brick.
+  - `rbac-review` and `cluster-security` 3.7 allow exactly the brick's two bindings (`oa-admins`: Group `oa:admins` to `cluster-admin`; `oa-readers`: Group `oa:readers` to `view`, cluster scope) and nothing else under those names (an extra subject, another group, another role or a RoleBinding is still flagged).
+  - It does NOT: add OIDC or MFA (`apiserver_oidc` is not implemented: it needs a stable external issuer and can lock out the control plane, see the issue list of the batch), ship the apiserver audit log, revoke a single holder of a group before expiry (delete the group binding, or bind the user by name), remove or shorten the `system:masters` kubeconfig, or make anything compliant.
 
 - **Node network filtering, explicit and rules-only, both off by default (addresses ANSSI PA-022 R16/R17/R19/R20; audit B24 OSN/F13 and ADM/F07).** Rung: **mocked/static (`tofu test`, `test-flow-matrix.sh`), not run on a cluster**.
   - One port list: the Scaleway `node_inbound_ports` map moved unchanged to `modules/providers/_shared/node-ports`, a locals-only module that Scaleway, OVH, Outscale and the Talos module all read, so the layers cannot drift. `tests/node-firewall.tftest.hcl` pins the four against it.
