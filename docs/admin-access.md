@@ -353,8 +353,11 @@ Closed means: no 80/443 in the VM's firewall or the security group (Scaleway, OV
 OVH: the subnet resource's CIDR, not a literal; Outscale: the Net), ICMP only inside that subnet, **8200 is gone** from the firewall
 and from `PermitOpen` (nothing in this repository or in OpenAether-apps forwards 8200 through the bastion; OpenBao is reached with
 `bao_admin` and port-forwards), the instance metadata addresses stay reachable on port 80 (cloud-init and the provider agents need
-them), and `curl`, `netcat`, `tcpdump`, `unattended-upgrades` are neither installed nor enabled. First boot is unaffected: packages
-are installed before the firewall is enabled. The Proxmox bastion has no security group: only the in-VM rules apply there.
+them), and `curl`, `netcat` and `tcpdump` are purged (a dpkg operation, no mirror needed) while `unattended-upgrades` is neither installed
+nor enabled. **First boot cannot install packages:** the security group is closed from the bastion's creation, so no mirror is reachable.
+That is why `closed` together with `bastion_baseline` is refused at plan time unless `audit_logging = false` and `time_servers` is empty
+(auditd and chrony would never be installed; a real OVH run showed cloud-init ending in error with no auditd). Needing them closed means
+needing an image that already ships them. The Proxmox bastion has no security group: only the in-VM rules apply there.
 
 **This is the trade-off: a closed bastion is not patched in place.** Patch by replacing it, on a schedule or on a security notice:
 close the tunnels (`scripts/bootstrap/talos-tunnels.sh close`), then `tofu apply -replace=<address>` with the address of the
