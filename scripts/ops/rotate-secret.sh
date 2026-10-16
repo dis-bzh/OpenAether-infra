@@ -17,7 +17,7 @@
 #   observability/alertmanager-slack  observability/alertmanager-deadmansswitch  grafana/oidc    OA_ROTATE_VALUE
 #
 # Usage: rotate-secret.sh <path> [--apply] [--restart <namespace>/<deployment|statefulset|daemonset>/<name>]...
-#        KUBECONFIG (default: the cluster directory's). --restart waits for the ExternalSecrets to refresh first.
+#        KUBECONFIG (default: the cluster directory's). --restart waits for the ExternalSecrets that read <path> to refresh first.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -119,9 +119,13 @@ echo "  ▶ ExternalSecrets nudged"
 if [ "${#RESTARTS[@]}" -gt 0 ]; then
   deadline=$((SECONDS + ${OA_ROTATE_WAIT:-180}))
   while :; do
-    stale="$(kubectl get externalsecrets -A -o json 2>/dev/null | jq --arg t "$T0" '[.items[] | select((.status.refreshTime // "") < $t)] | length' 2>/dev/null || echo x)"
+    # Only the ExternalSecrets that read THIS path count: an unrelated one that is failing or has no refresh interval must not
+    # hold the rotation (and the restarts) hostage.
+    stale="$(kubectl get externalsecrets -A -o json 2>/dev/null | jq --arg t "$T0" --arg p "$P" \
+      '[.items[] | select([(.spec.data // [])[].remoteRef.key, (.spec.dataFrom // [])[].extract.key] | map(select(. != null and (. == $p or endswith("/" + $p)))) | length > 0)
+        | select((.status.refreshTime // "") < $t)] | length' 2>/dev/null || echo x)"
     [ "$stale" = 0 ] && break
-    [ "$SECONDS" -lt "$deadline" ] || fail "$stale ExternalSecret(s) did not refresh within ${OA_ROTATE_WAIT:-180}s: the new value is in OpenBao, NO consumer was restarted (kubectl get externalsecrets -A, then restart by hand)"
+    [ "$SECONDS" -lt "$deadline" ] || fail "$stale ExternalSecret(s) reading secret/$P did not refresh within ${OA_ROTATE_WAIT:-180}s: the new value is in OpenBao, NO consumer was restarted (kubectl get externalsecrets -A, then restart by hand)"
     sleep "${OA_ROTATE_POLL:-5}"
   done
   for r in "${RESTARTS[@]}"; do

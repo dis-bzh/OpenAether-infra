@@ -31,7 +31,8 @@ case "$*" in
     exit 0 ;;
   "get externalsecrets -A -o jsonpath"*) printf 'backup restic-env\nobservability loki\n'; exit 0 ;;
   "get externalsecrets -A -o json")
-    printf '{"items":[{"status":{"refreshTime":"%s"}},{"status":{"refreshTime":"%s"}}]}' "${STUB_REFRESH:-2999-01-01T00:00:00Z}" "${STUB_REFRESH:-2999-01-01T00:00:00Z}"; exit 0 ;;
+    # two readers of the rotated path, plus an unrelated ExternalSecret that never refreshed
+    printf '{"items":[{"spec":{"data":[{"remoteRef":{"key":"backup/s3-primary"}}]},"status":{"refreshTime":"%s"}},{"spec":{"dataFrom":[{"extract":{"key":"backup/s3-primary"}}]},"status":{"refreshTime":"%s"}},{"spec":{"data":[{"remoteRef":{"key":"other/thing"}}]},"status":{}}]}' "${STUB_REFRESH:-2999-01-01T00:00:00Z}" "${STUB_REFRESH:-2999-01-01T00:00:00Z}"; exit 0 ;;
   "annotate externalsecret"*) exit 0 ;;
   "-n "*" rollout restart "*) exit 0 ;;
 esac
