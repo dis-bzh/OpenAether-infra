@@ -638,6 +638,8 @@ module "talos" {
   node_time_servers     = var.node_time_servers
   node_baseline         = var.node_baseline
 
+  disk_encryption_passphrase_length = var.disk_encryption_passphrase_length
+
   # Talos ingress firewall, rules only (batch B24): off by default, nothing is rendered.
   node_firewall_mode  = var.node_firewall_mode
   node_firewall       = var.node_firewall

@@ -105,3 +105,32 @@ run "protected_secrets_keep_the_node_version" {
     error_message = "the protected secrets must keep the node's Talos version, not the config contract"
   }
 }
+
+# disk_encryption_passphrase_length: the released length is the default (a different one would replace
+# the LUKS passphrase of every existing cluster); a longer one is opt-in and bounded.
+run "passphrase_length_defaults_to_the_released_value" {
+  command = plan
+  assert {
+    condition     = random_password.disk_encryption_secret.length == 32
+    error_message = "the default LUKS passphrase length must stay 32"
+  }
+}
+
+run "passphrase_length_can_be_raised_for_a_new_cluster" {
+  command = plan
+  variables {
+    disk_encryption_passphrase_length = 40
+  }
+  assert {
+    condition     = random_password.disk_encryption_secret.length == 40
+    error_message = "the opted-in length must reach the generated passphrase"
+  }
+}
+
+run "passphrase_length_below_the_released_value_is_refused" {
+  command = plan
+  variables {
+    disk_encryption_passphrase_length = 16
+  }
+  expect_failures = [var.disk_encryption_passphrase_length]
+}

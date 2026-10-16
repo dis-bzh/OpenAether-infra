@@ -60,7 +60,8 @@ resource "random_bytes" "etcd_encryption_secret" {
 # Uses random_password (returns plain string) rather than random_bytes to avoid
 # double-encoding issues with base64encode().
 resource "random_password" "disk_encryption_secret" {
-  length  = 32
+  # 32 chars of [A-Za-z0-9] is about 190 bits; var.disk_encryption_passphrase_length (new clusters only) lifts it.
+  length  = var.disk_encryption_passphrase_length
   special = false
 }
 

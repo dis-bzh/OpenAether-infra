@@ -72,6 +72,19 @@ Found by the labs above, each with the rung it reached after the fix (mocked tes
 - **`explain-failure.sh`** explains a replaced bastion that ends as a cluster health check failure, like the refused-port shape.
 ### Security
 
+- **Critic follow-ups and the ops scripts that hold provider admin keys (B28, infra half). Static / mocked, not run on a cloud.**
+  - `CKV_OA_3` (new Checkov custom check): an Outscale inbound `outscale_security_group_rule` with a literal `/0` range fails the hard gate.
+    CKV_OA_2 cannot cover Outscale (no default-policy attribute), so such a rule used to pass unseen. Tested by mutating the real tree
+    (`test-checkov-custom-checks.sh`). It reads literals only: a range coming from `admin_ip` is not judged, and Proxmox is still uncovered.
+  - The five OpenStack-facing ops scripts (`purge-orphans/ovh.py`, `verify-provider-clean.py`, `delete-openstack-resource.py`, `ensure-capo-fip.py`,
+    `preflight-quotas.py`) refuse an `OS_AUTH_URL` that is not `https://` (exit 2, nothing sent): the Keystone request carries the account password.
+  - `local-admin-portforward.sh` and `etcd-snapshot-cron.sh` keep their pid and lock files under `$XDG_RUNTIME_DIR` or `~/.cache/openaether` (mode 0700)
+    instead of a fixed name in `/tmp`, where another local user could plant a symlink (the lock redirection) or a pid list (`--stop` kills what it lists).
+  - `disk_encryption_passphrase_length` (default 32, the released value, about 190 bits): 40 or more reaches the 192 bits the critic measured against
+    PG-083's symmetric key size. For a NEW cluster only; on a live one it would replace the LUKS passphrase. Does not re-key an existing cluster.
+  - Corrected a documentation defect: `docs/admin-access.md` told operators to forward `-L 8443:<gateway>:443`, which the bastion's `PermitOpen` refuses.
+    The page now says so instead of promising a path that was never run. It does not open 443.
+
 - **`flux_git_verify`: opt-in OpenPGP verification of the commit Flux applies, and a signature report in CI (default off; ANSSI SSDLC-CICD-AIP-03, SSDLC-CONT-REC06, B27).**
   `flux_git_verify = {enabled, public_keys}` makes the bootstrap manifest carry the Secret `git-signers` before the GitRepository and
   `spec.verify {mode: HEAD, secretRef: git-signers}` on it; off, the render is byte-identical (asserted). Validation refuses an empty
