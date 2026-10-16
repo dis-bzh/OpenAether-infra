@@ -20,7 +20,9 @@ KUBECONFIG="${KUBECONFIG:-$PWD/infrastructure/opentofu-local/kubeconfig}"
 export KUBECONFIG
 # Not in /tmp: --stop kills every pid listed here, so the file must not be
 # writable (or replaceable by a symlink) by another local user.
-STATE_DIR="${XDG_RUNTIME_DIR:-$HOME/.cache}/openaether"
+# One fixed place, not $XDG_RUNTIME_DIR: cron has none and an SSH session has one, so two lock (or pid) files would let a
+# cron run and a manual run go in parallel, and --stop from another environment would not find the pids.
+STATE_DIR="${HOME:?}/.cache/openaether"
 mkdir -p -m 700 "$STATE_DIR"
 PIDFILE="$STATE_DIR/admin-pf.pids"
 

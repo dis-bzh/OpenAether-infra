@@ -57,7 +57,9 @@ trap cleanup EXIT
 # 4. Lock: never two runs in parallel.
 # Not in /tmp: a predictable name in a shared directory lets another local user
 # plant a symlink that the redirection below would create or truncate as us.
-STATE_DIR="${XDG_RUNTIME_DIR:-$HOME/.cache}/openaether"
+# One fixed place, not $XDG_RUNTIME_DIR: cron has none and an SSH session has one, so two lock (or pid) files would let a
+# cron run and a manual run go in parallel, and --stop from another environment would not find the pids.
+STATE_DIR="${HOME:?}/.cache/openaether"
 mkdir -p -m 700 "$STATE_DIR"
 LOCK="$STATE_DIR/etcd-snapshot-${PROVIDER}.lock"
 exec 9>"$LOCK"
