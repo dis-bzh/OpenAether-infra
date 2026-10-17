@@ -391,7 +391,7 @@ restent joignables sur le port 80 (cloud-init et les agents du provider en ont b
 l'activation du pare-feu. Le bastion Proxmox n'a pas de security group : seules les règles dans la VM s'y appliquent.
 
 **C'est le compromis : un bastion fermé ne se met pas à jour sur place.** On le corrige en le remplaçant, à échéance ou sur avis de
-sécurité : fermer les tunnels (`scripts/bootstrap/talos-tunnels.sh close`), puis `tofu apply -replace=<adresse>` avec l'adresse de la
+sécurité : fermer les tunnels (`scripts/bootstrap/talos-tunnels.sh close`), puis `TF_VAR_skip_health_check=true tofu apply -replace=<adresse>` (le contrôle de santé a besoin des tunnels qu'on vient de fermer et échoue après ses 15 minutes, vu sur OVH le 2026-10-17 ; le remplacement lui-même a pris moins d'une minute) avec l'adresse de la
 ressource d'instance `…bastion` du module provider (`module.scw[0].scaleway_instance_server.bastion`,
 `module.ovh[0].openstack_compute_instance_v2.bastion`, `module.outscale[0].outscale_vm.bastion`,
 `module.proxmox[0].proxmox_virtual_environment_vm.bastion[0]`), jamais pendant un bootstrap ou une montée de version (les tunnels

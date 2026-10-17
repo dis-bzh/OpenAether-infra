@@ -378,7 +378,8 @@ That is why `closed` together with `bastion_baseline` is refused at plan time un
 needing an image that already ships them. The Proxmox bastion has no security group: only the in-VM rules apply there.
 
 **This is the trade-off: a closed bastion is not patched in place.** Patch by replacing it, on a schedule or on a security notice:
-close the tunnels (`scripts/bootstrap/talos-tunnels.sh close`), then `tofu apply -replace=<address>` with the address of the
+close the tunnels (`scripts/bootstrap/talos-tunnels.sh close`), then `TF_VAR_skip_health_check=true tofu apply -replace=<address>` (the health
+check needs the tunnels you just closed and fails after its 15 minutes, seen on OVH 2026-10-17; the replacement itself took under a minute) with the address of the
 `…bastion` instance resource of the provider module (`module.scw[0].scaleway_instance_server.bastion`,
 `module.ovh[0].openstack_compute_instance_v2.bastion`, `module.outscale[0].outscale_vm.bastion`,
 `module.proxmox[0].proxmox_virtual_environment_vm.bastion[0]`), never during a bootstrap or upgrade (the tunnels die with it). The
