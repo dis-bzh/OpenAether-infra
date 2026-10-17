@@ -375,6 +375,17 @@ tasks:
     cmds:
       - python3 scripts/ops/purge-orphans/{{.PROVIDER}}.py {{if .APPLY}}--apply{{end}}
 
+  egress-probe:
+    desc: >-
+      OVH only: does a private network behind a SNAT router reach the Internet? Builds the minimum
+      (network, router, one small instance), reads its console, removes everything, exits 0 (yes),
+      1 (no) or 2 (could not conclude). Run it BEFORE `task cluster-up` on a project that has no
+      cluster. Usage: task egress-probe [DRY=1] (DRY=1 only lists what it would create).
+    vars:
+      DRY: '{{.DRY | default ""}}'
+    cmds:
+      - python3 scripts/ops/egress-probe.py {{if .DRY}}--dry-run{{end}}
+
   check-jsonpath:
     desc: >-
       Parse every jsonpath the scripts use, with kubectl itself, offline. A
@@ -443,6 +454,7 @@ tasks:
       - ./scripts/dev/test-rolling-replace.sh
       - ./scripts/dev/test-shrink-nodes.sh
       - ./scripts/dev/test-rwx-drain-gate.sh
+      - ./scripts/dev/test-egress-probe.sh
       - ./scripts/dev/test-tunnel-guard.sh
       # The one test that runs talos-tunnels.sh itself: every other harness stubs it (#65).
       - ./scripts/dev/test-talos-tunnels.sh
