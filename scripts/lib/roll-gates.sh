@@ -757,6 +757,63 @@ preflight_roll() {
   ok "Pre-roll survey clean"
 }
 
+# --- Longhorn RWX: never reboot a node that still holds a share-manager --------
+#
+# Lab 12 (Scaleway, Longhorn 1.12, Talos 1.14, apps #124): a worker hosting BOTH
+# the share-manager pod of an RWX volume and a pod mounting that volume did not
+# finish a graceful `talosctl reboot`. Talos stayed in unmountPodMounts, the
+# kernel repeating "nfs: server ... not responding" every 30 s, for more than
+# 12 minutes (twice; a provider hard reset was needed). The NFS server dies with
+# the node's pods, and the client unmount then waits on a server that is gone.
+# A drain is the cure only if it has really finished: the share-manager and its
+# clients must be OFF the node before anything reboots it. `kubectl drain`
+# returns when the evictions are accepted, and a pod stuck terminating on that
+# unmount is still "on the node", so this gate looks at what is left.
+RWX_CLEAR_TIMEOUT="${RWX_CLEAR_TIMEOUT:-300}"   # seconds
+RWX_POLL="${RWX_POLL:-5}"
+
+# "<ns>/<pod>\t<why>" per line: what still sits on <node> that an RWX volume
+# ties to it. Dies when it cannot ask: an unanswered query is not an empty list.
+rwx_node_residue() { # <node_name>
+  local node="$1" pvs pods
+  pvs="$("${KCTL[@]}" get persistentvolumes -o json 2>/dev/null)" ||
+    die "cannot list the PersistentVolumes to look for Longhorn RWX volumes on ${node} — refusing to reboot blind."
+  pods="$("${KCTL[@]}" get pods -A --field-selector "spec.nodeName=${node}" -o json 2>/dev/null)" ||
+    die "cannot list the pods on ${node} to look for Longhorn RWX users — refusing to reboot blind."
+  jq -r --argjson pods "$pods" '
+    ([.items[]
+      | select(.spec.csi.driver == "driver.longhorn.io"
+               and ((.spec.accessModes // []) | index("ReadWriteMany")))
+      | "\(.spec.claimRef.namespace)/\(.spec.claimRef.name)"]) as $rwx
+    | $pods.items[]
+    | select(.status.phase != "Succeeded" and .status.phase != "Failed")
+    | select(((.metadata.ownerReferences // []) | map(.kind) | index("DaemonSet")) | not)
+    | . as $p
+    | if (.metadata.labels["longhorn.io/component"] // "") == "share-manager"
+      then "\(.metadata.namespace)/\(.metadata.name)\tLonghorn share-manager (the NFS server of an RWX volume)"
+      else ([.spec.volumes[]? | .persistentVolumeClaim.claimName // empty
+             | select(. as $c | ($rwx | index("\($p.metadata.namespace)/\($c)")))] | .[0]) as $c
+           | select($c != null)
+           | "\(.metadata.namespace)/\(.metadata.name)\tmounts the RWX claim \($c)"
+      end' <<<"$pvs"
+}
+
+# Waits for rwx_node_residue to come back empty. Returns 1 on timeout, the
+# remaining list on stderr.
+wait_rwx_clear() { # <node_name>
+  local node="$1" deadline left
+  deadline=$((SECONDS + RWX_CLEAR_TIMEOUT))
+  while :; do
+    left="$(rwx_node_residue "$node")" || return 1
+    [[ -z "$left" ]] && return 0
+    if (( SECONDS >= deadline )); then
+      printf '%s\n' "$left" | sed 's/^/    /' >&2
+      return 1
+    fi
+    sleep "$RWX_POLL"
+  done
+}
+
 cordon_drain() { # <node_name>
   local node="$1"
   # RE-ASSERT, once per node. cnpg_maintenance ran once for the whole roll, and a
@@ -817,6 +874,18 @@ cordon_drain() { # <node_name>
     fi
     read -rp "Continue with ${node} anyway? [y/N] " a; [[ "$a" == [yY] ]] || die "aborted by operator"
   fi
+  # The drain returned. Is the node really free of Longhorn RWX servers and their
+  # clients? Rebooting one that is not is the 12-minute shutdown hang of apps #124.
+  info "Checking ${node} holds no Longhorn RWX share-manager or client (up to ${RWX_CLEAR_TIMEOUT}s)…"
+  if ! wait_rwx_clear "$node"; then
+    "${KCTL[@]}" uncordon "$node" >&2 || warn "could not uncordon ${node} — do it by hand before re-running"
+    die "${node} still hosts a Longhorn RWX share-manager or a pod mounting an RWX volume (listed above).
+  Rebooting it now hangs Talos in unmountPodMounts on an NFS server that went away with the node
+  (lab 12, apps #124: > 12 minutes, a provider hard reset needed). Find why they did not move
+  (kubectl -n longhorn-system get pods -o wide | grep share-manager; a PodDisruptionBudget, a
+  terminating pod stuck on the mount), fix it, then re-run this same command."
+  fi
+  ok "${node}: no RWX share-manager or client left"
 }
 
 etcd_remove_member() { # <node_name> <node_ip> <exclude_index>

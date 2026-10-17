@@ -212,6 +212,17 @@ NAME:.metadata.name,PRIMARY:.status.currentPrimary,READY:.status.readyInstances
 kubectl cnpg status <cluster> -n <ns>
 ```
 
+### Never reboot a node that still hosts a Longhorn RWX volume
+
+A worker that hosts both the share-manager pod of an RWX volume and a pod mounting it did not finish a graceful `talosctl reboot` in lab 12
+(Scaleway, Longhorn 1.12.1, Talos 1.14, apps #124): Talos stayed in `unmountPodMounts` (`nfs: server ... not responding`) for more than
+12 minutes, twice, and only a provider hard reset ended it. So **never reboot, shut down or `talosctl upgrade` such a node undrained**.
+`cordon_drain` (used by `cluster-roll`, `cluster-upgrade`, `cluster-shrink`) now waits, after the drain, until no share-manager pod and
+no pod mounting a Longhorn RWX claim is left on the node (`RWX_CLEAR_TIMEOUT`, 300 s by default); when something stays it uncordons the
+node, lists the pods and refuses to go on. By hand: drain, then
+`kubectl -n longhorn-system get pods -o wide | grep share-manager` must show another node. Offline test: `scripts/dev/test-rwx-drain-gate.sh`.
+Not yet proven on a cluster: that a drained node then reboots in about 1.5 minutes (the apps repo also shortens the RWX NFS timeouts).
+
 ### A database left "Failing over" after the roll
 
 The roll finishes, the API never blinked, and minutes later a CNPG cluster sits

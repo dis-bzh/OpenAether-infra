@@ -442,6 +442,7 @@ tasks:
       - ./scripts/dev/check-jsonpath.sh
       - ./scripts/dev/test-rolling-replace.sh
       - ./scripts/dev/test-shrink-nodes.sh
+      - ./scripts/dev/test-rwx-drain-gate.sh
       - ./scripts/dev/test-tunnel-guard.sh
       # The one test that runs talos-tunnels.sh itself: every other harness stubs it (#65).
       - ./scripts/dev/test-talos-tunnels.sh
