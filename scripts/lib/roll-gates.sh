@@ -832,7 +832,7 @@ cordon_drain() { # <node_name>
   "${KCTL[@]}" cordon "$node" || die "cordon failed for ${node}"
   if ! "${KCTL[@]}" drain "$node" \
         --ignore-daemonsets --delete-emptydir-data --timeout="$DRAIN_TIMEOUT"; then
-    warn "drain hit its timeout (${DRAIN_TIMEOUT}); some pods may be stuck (PDBs?)."
+    warn "drain did not complete (kubectl's own reason is printed just above; the timeout is ${DRAIN_TIMEOUT}); some pods may be stuck (PDBs?) or refused (a pod without a controller)."
     # Name them instead of asking. Every one of these forbids its last disruption
     # while missing nothing, so it is the drain's answer, and "(PDBs?)" made the
     # operator go and find by hand what the cluster already knew.
@@ -866,7 +866,9 @@ cordon_drain() { # <node_name>
       # nowhere to go, its budget never recovered, and the drain waited out its
       # full 900s with no eviction error to show for it.
       worker_cpu_requests >&2 || true
-      die "${node} could not be drained within ${DRAIN_TIMEOUT} — refusing to reboot it under workloads that would not move.
+      die "${node} could not be drained (timeout ${DRAIN_TIMEOUT}) — refusing to reboot it under workloads that would not move.
+  0. kubectl refused at once: \"cannot delete Pods that declare no controller\" (a bare pod, e.g. left by a test or
+     kubectl run) is named in kubectl's message above; delete it, or move it under a Deployment, and re-run.
   1. Capacity: the CPU requests above are per worker. If the others are near
      100%, the evicted pods cannot be rescheduled, so their budgets never
      recover. A rolling upgrade needs one node's worth of spare capacity.
