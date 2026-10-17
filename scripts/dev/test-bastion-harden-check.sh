@@ -43,6 +43,13 @@ case "$cmd" in
 esac
 STUB
 chmod +x "$TMP/bin/ssh"
+# tofu: answers control_plane_private_ips from STUB_TOFU (a JSON list), else fails like an undeployed root.
+cat >"$TMP/bin/tofu" <<'STUB'
+#!/usr/bin/env bash
+[ -n "${STUB_TOFU:-}" ] && { echo "$STUB_TOFU"; exit 0; }
+exit 1
+STUB
+chmod +x "$TMP/bin/tofu"
 
 GOOD_FACTS='DROPIN=LogLevel VERBOSE;StrictModes yes;PermitUserEnvironment no;PermitEmptyPasswords no;AllowStreamLocalForwarding no;GatewayPorts no;RevokedKeys /etc/ssh/revoked_keys;
 PTRACE=1
@@ -156,6 +163,17 @@ printf '%s\n' "$GOOD_FACTS" >"$FACTS"; run BASTION_BASELINE=1 STUB_NOSSHD=1
 grep -q "not readable without root" <<<"$OUT" && grep -q "password authentication is not offered" <<<"$OUT" && ! sed -n "/=== 3/,/=== 4/p" <<<"$OUT" | grep -q "FAIL" && ok "an unreadable sshd configuration is judged from outside, and the run goes on" || bad "unreadable sshd config: rc=$RC $(sed -n "/=== 3/,/=== 4/p" <<<"$OUT" | head -8)"
 run BASTION_BASELINE=1 STUB_NOSSHD=1 STUB_PWMETHODS=publickey,password
 [ "$RC" != 0 ] && grep -q "FAIL.*password authentication may be offered" <<<"$OUT" && ok "...and a server that offers a password is a FAIL" || bad "password offered passed: rc=$RC"
+
+echo "=== the control plane address: 4th argument, OA_CP_IP, or the tofu output ==="
+printf '%s\n' "$GOOD_FACTS" >"$FACTS"
+run0() { OUT="$(env PATH="$TMP/bin:$PATH" "$@" bash "$SUT" 192.0.2.10 bastion /dev/null 2>&1)"; RC=$?; }
+run0 STUB_TOFU='["10.0.0.7","10.0.0.8"]'
+grep -q 'Egress to 10.0.0.7:6443 allowed' <<<"$OUT" && ok "no 4th argument: the first control_plane_private_ips entry is probed" || bad "tofu derivation: $(sed -n '/=== 5/,/=== 6/p' <<<"$OUT")"
+run0 OA_CP_IP=10.0.0.9 STUB_TOFU='["10.0.0.7"]'
+grep -q 'Egress to 10.0.0.9:6443 allowed' <<<"$OUT" && ok "OA_CP_IP wins over the tofu output" || bad "OA_CP_IP: $(sed -n '/=== 5/,/=== 6/p' <<<"$OUT")"
+run0
+grep -q 'Skipping cluster egress test: no control plane address' <<<"$OUT" && ok "nothing to derive: check 5 is skipped, and says what to give" || bad "skip message: $(sed -n '/=== 5/,/=== 6/p' <<<"$OUT")"
+grep -q 'control_plane_private_ip\]' "$SUT" && grep -q 'CONTROL PLANE address' "$SUT" && ok "the usage names a CONTROL PLANE address" || bad "usage line"
 
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$PASS" -gt 0 ] && [ "$FAIL" -eq 0 ]

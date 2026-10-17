@@ -32,6 +32,9 @@ case "$*" in
   *"configmap openbao-escrow-ack"*"{.data.seal-key-sha256}"*) printf '%s' "${STUB_ACK_SHA:-}"; exit 0 ;;
   *"configmap openbao-escrow-ack"*"{.data.holders}"*) printf '%s' "${STUB_ACK_N:-}"; exit 0 ;;
   *"secret openbao-seal-key"*) [ "${STUB_SEAL:-}" = 1 ] && exit 0; exit 1 ;;
+  *"get namespace istio-system"*) [ "${STUB_MESH:-}" = absent ] && { echo 'Error from server (NotFound): namespaces "istio-system" not found' >&2; exit 1; }; [ "${STUB_MESH:-}" = error ] && { echo 'Unable to connect to the server: TLS handshake timeout' >&2; exit 1; }; echo namespace/istio-system; exit 0 ;;
+  *"get helmrelease istiod"*"-o name"*) [ "${STUB_MESH:-}" = absent ] && { echo 'error: the server doesn'"'"'t have a resource type "helmrelease"' >&2; exit 1; }; echo helmrelease/istiod; exit 0 ;;
+  *"get gateways.gateway.networking.k8s.io"*) [ "${STUB_MESH:-}" = absent ] && { echo 'error: the server doesn'"'"'t have a resource type "gateways"' >&2; exit 1; }; exit 0 ;;
   *"get secret"*) exit 1 ;;
   "get clusterrolebinding -o json"*) [ -n "${STUB_CRB+x}" ] && printf '%s' "$STUB_CRB"; exit 0 ;;
 esac
@@ -130,6 +133,15 @@ verdict "4.8" "✅" && verdict "4.9" "⏭" && ok "own bucket but the backups' ke
 grep -qF "$BK" <<<"$OUT" && bad "an encoded key was printed" || ok "no secret value in the output"
 run
 verdict "4.8" "⏭" && ok "neither Secret found is a skip" || bad "absent: $(line 4.8)"
+
+echo "=== 2.x mesh checks: not applicable only when the API says there is no mesh ==="
+STUB_MESH=absent run
+ok_all=1; for n in 2.1 2.2 2.3 2.5; do verdict "$n" "⏭️" || { ok_all=0; bad "$n not skipped without a mesh: $(line $n)"; }; done
+[ "$ok_all" = 1 ] && ok "2.1, 2.2, 2.3 and 2.5 are skipped (not applicable) when istio-system and istiod do not exist"
+STUB_MESH=present run
+for n in 2.1 2.3; do verdict "$n" "❌" && ok "$n still FAILS on a cluster with a mesh and no policy" || bad "$n with a mesh: $(line $n)"; done
+STUB_MESH=error run
+for n in 2.1 2.3; do verdict "$n" "❌" && ok "$n is judged (fails) when the API cannot be asked: an error is not 'absent'" || bad "$n on API error: $(line $n)"; done
 
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$PASS" -gt 0 ] && [ "$FAIL" -eq 0 ]

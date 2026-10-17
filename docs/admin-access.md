@@ -282,7 +282,7 @@ incremental) and the audit log off it (with `audit_logging = false` there is no 
 the audit part was skipped; an account that cannot read the journal is refused with the reason), encrypted when `OA_LOGS_PASSPHRASE` is set, and with `OA_LOGS_UPLOAD=1` stored in the artifacts bucket of both object stores
 (next section). Cloud-side audit trails and a Proxmox host's syslog are separate and not exported by anything here.
 
-Check a deployed bastion with `BASTION_BASELINE=1 scripts/ops/bastion-harden-check.sh <ip> bastion <key> [<node ip>]`; add
+Check a deployed bastion with `BASTION_BASELINE=1 scripts/ops/bastion-harden-check.sh <ip> bastion <key> [<control plane ip>]`; add
 `BASTION_AUDIT=0` when the bastion has `audit_logging = false` (closed egress forces it): auditd is then not asserted, since it is not
 installed, while the persistent journal, the `adm` / `systemd-journal` groups and the login fingerprint line still are (they need no package).
 Before

@@ -3,7 +3,12 @@
 # bastion-harden-check.sh — Post-deploy hardening validation for OpenAether bastion
 #
 # Usage:
-#   ./scripts/ops/bastion-harden-check.sh <bastion_ip> <bastion_user> <ssh_key>
+#   ./scripts/ops/bastion-harden-check.sh <bastion_ip> <bastion_user> <ssh_key> [control_plane_private_ip]
+#
+#   The 4th argument must be a CONTROL PLANE address: check 5 probes TCP 6443 from the bastion, and only control
+#   planes serve it (a worker address FAILS the check, lab 12). Left out, it is read from the tofu output
+#   control_plane_private_ips of the cluster root (first entry; OA_CP_IP overrides); when neither answers, check 5 is
+#   skipped and says so.
 #
 # Checks (in order):
 #   1. SSH tunnel non-regression: 6443 + 50000 reachable via bastion
@@ -38,10 +43,14 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib/bastion-hostkey.sh"
 # \$ and \" are for the REMOTE shell; the host and port are expanded here.
 probe_cmd() { printf 'timeout %s bash -c "</dev/tcp/%s/%s" >/dev/null 2>&1; echo exit:$?' "$3" "$1" "$2"; }
 
-BASTION_IP="${1:?Usage: $0 <bastion_ip> <bastion_user> <ssh_key> [node_private_ip]}"
+BASTION_IP="${1:?Usage: $0 <bastion_ip> <bastion_user> <ssh_key> [control_plane_private_ip]  (a CONTROL PLANE address: workers do not serve 6443)}"
 BASTION_USER="${2:?}"
 SSH_KEY="${3:?}"
-NODE_IP="${4:-}"
+NODE_IP="${4:-${OA_CP_IP:-}}"
+if [ -z "${NODE_IP}" ] && command -v tofu >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+  NODE_IP="$(timeout 30 tofu -chdir="$(dirname "${BASH_SOURCE[0]}")/../../infrastructure/opentofu/cluster" output -json control_plane_private_ips 2>/dev/null |
+    jq -r '.[0] // empty' 2>/dev/null)" || NODE_IP=""
+fi
 
 OA_KH_TEMP=""; oa_bastion_oneshot_opts "${BASTION_IP}"
 trap '[ "${OA_KH_TEMP:-}" = 1 ] && rm -f "${OA_KH}"' EXIT
@@ -159,7 +168,7 @@ if [ -n "${NODE_IP}" ]; then
     fail "Egress to ${NODE_IP}:6443 blocked — check nftables private_cidr + node is up"
   fi
 else
-  info "Skipping cluster egress test (no NODE_IP provided)"
+  info "Skipping cluster egress test: no control plane address (4th argument, OA_CP_IP, or the tofu output control_plane_private_ips)"
 fi
 
 # --------------------------------------------------------------------------
