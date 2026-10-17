@@ -256,7 +256,7 @@ variable "node_distribution" {
     apiserver_vip_interface = optional(string, "eth0")
     cpu_cores               = optional(number, 4)
     memory_mb               = optional(number, 8192)
-    root_disk_gb            = optional(number, 20)
+    root_disk_gb            = optional(number, 50)
     control_plane_ip_offset = optional(number, 10)
     worker_ip_offset        = optional(number, 20)
     nameservers             = optional(list(string), ["1.1.1.1", "8.8.8.8"])
@@ -276,16 +276,40 @@ variable "node_distribution" {
 
 variable "scw_root_volume_size_gb" {
   description = <<-EOT
-    Scaleway only: size in GB of the system volume of every node (default 20 = the size of existing clusters). Talos keeps
-    its EPHEMERAL partition (kubelet, images) there, about 4 GB under this value. Lab 12: with the whole application
-    stack at its current versions a worker holds ~11 GB of images and the default leaves ~15.6 GB, which means
-    DiskPressure and evictions on the workers; use 40 or more for a full DAG. Raising it resizes the volume in place.
+    Scaleway only: size in GB of the system volume of every node (default 50). Talos keeps its EPHEMERAL partition
+    (kubelet, containerd images, logs) there, about 4 GB under this value. Lab 12 measured ~11 GB of images on a worker
+    with the whole application stack and 15.6 GB usable at 20 GB: DiskPressure, 25 Zitadel pods evicted. 50 leaves ~46 GB
+    usable: the images, the second set a chart upgrade pulls before the old one is garbage-collected (kubelet image GC
+    starts at 85% use), logs and margin. With deploy_flux the value must be at least 40. A cluster built at 20 gets an
+    in-place resize of its sbs_volumes at the next apply (no node replaced); Talos grows EPHEMERAL at the node's next
+    reboot, so reboot the workers one at a time (drained) afterwards. Pin 20 in the tfvars to keep the old size.
   EOT
   type        = number
-  default     = 20
+  default     = 50
   validation {
     condition     = var.scw_root_volume_size_gb >= 20 && var.scw_root_volume_size_gb <= 500
     error_message = "scw_root_volume_size_gb must be between 20 and 500."
+  }
+  validation {
+    condition     = !var.deploy_flux || var.scw_root_volume_size_gb >= 40
+    error_message = "scw_root_volume_size_gb must be at least 40 with deploy_flux = true: the application stack puts ~11 GB of images on each node and 20 GB left 15.6 GB usable (lab 12: DiskPressure, evictions, CreateContainer timeouts). Use 50 (the default)."
+  }
+}
+
+variable "outscale_root_volume_size_gb" {
+  description = <<-EOT
+    Outscale only: size in GB of the root (BSU) volume of every NEW node. null (the default) keeps the size of the OMI, which is
+    the raw Talos image rounded up to a GiB (about 11-12): Talos then has only a few GB of EPHEMERAL, which the full application
+    stack (~11 GB of images per worker) does not fit. Set 50 for a cluster that carries the platform; a `check` warns when
+    deploy_flux is on and this is null. Applies to nodes created after the change only (the volume of an existing VM
+    is not resized in place by this provider; `ignore_changes` keeps a running node from being replaced): to grow a running
+    cluster, replace its workers one at a time with `task cluster-roll`.
+  EOT
+  type        = number
+  default     = null
+  validation {
+    condition     = var.outscale_root_volume_size_gb == null || (var.outscale_root_volume_size_gb >= 20 && var.outscale_root_volume_size_gb <= 14901)
+    error_message = "outscale_root_volume_size_gb must be null or between 20 and 14901."
   }
 }
 

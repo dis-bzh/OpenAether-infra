@@ -40,9 +40,23 @@ resource "outscale_vm" "control_plane" {
   # a cluster built when every node shared one subnet must not have two of its three control planes
   # replaced because availability_zones now spreads them (#58); new nodes follow the new layout.
   lifecycle {
-    ignore_changes = [image_id, subnet_id]
+    ignore_changes = [image_id, subnet_id, block_device_mappings]
   }
   vm_type = var.instance_type
+
+  # Root volume size: null keeps the OMI's own (the raw Talos image, ~11-12 GiB), which the full application
+  # stack does not fit. block_device_mappings is in ignore_changes, so this reaches NEW nodes only.
+  dynamic "block_device_mappings" {
+    for_each = var.root_volume_size_gb == null ? [] : [var.root_volume_size_gb]
+    content {
+      device_name = "/dev/sda1"
+      bsu {
+        volume_size           = block_device_mappings.value
+        volume_type           = "gp2"
+        delete_on_vm_deletion = true
+      }
+    }
+  }
 
   subnet_id = outscale_subnet.private[local.cp_zone_index[count.index]].subnet_id
 
@@ -74,9 +88,23 @@ resource "outscale_vm" "worker" {
   # a cluster built when every node shared one subnet must not have two of its three control planes
   # replaced because availability_zones now spreads them (#58); new nodes follow the new layout.
   lifecycle {
-    ignore_changes = [image_id, subnet_id]
+    ignore_changes = [image_id, subnet_id, block_device_mappings]
   }
   vm_type = var.instance_type
+
+  # Root volume size: null keeps the OMI's own (the raw Talos image, ~11-12 GiB), which the full application
+  # stack does not fit. block_device_mappings is in ignore_changes, so this reaches NEW nodes only.
+  dynamic "block_device_mappings" {
+    for_each = var.root_volume_size_gb == null ? [] : [var.root_volume_size_gb]
+    content {
+      device_name = "/dev/sda1"
+      bsu {
+        volume_size           = block_device_mappings.value
+        volume_type           = "gp2"
+        delete_on_vm_deletion = true
+      }
+    }
+  }
 
   subnet_id = outscale_subnet.private[local.worker_zone_index[count.index]].subnet_id
 

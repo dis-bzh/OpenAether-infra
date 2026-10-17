@@ -81,3 +81,8 @@ s3_primary_endpoint = "https://s3.fr-par.scw.cloud"
 s3_primary_region   = "fr-par"
 s3_replica_endpoint = "https://s3.gra.io.cloud.ovh.net" # OVH: prod crosses providers, or drop to environment = "dev"
 s3_replica_region   = "gra"
+
+# --- Node system disk --------------------------------------------------------
+# 50 GB per node by default (scw_root_volume_size_gb): the application stack puts ~11 GB of images on a node and Talos
+# keeps them on the system volume, ~4 GB under its size. With deploy_flux the value must be at least 40 (validated).
+# scw_root_volume_size_gb = 50

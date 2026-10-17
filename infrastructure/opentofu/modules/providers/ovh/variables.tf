@@ -147,6 +147,12 @@ variable "bastion_image_id" {
   default     = "Ubuntu 22.04"
 }
 
+variable "look_up_flavor_disk" {
+  description = "Read the root disk size of flavor_name from the account (flavor_disk_gb output), for the root's disk-size check. Off by default: no API call."
+  type        = bool
+  default     = false
+}
+
 variable "bastion_flavor_name" {
   description = "OpenStack flavor for the bastion host (jump box; the default is the minimum recommended)."
   type        = string

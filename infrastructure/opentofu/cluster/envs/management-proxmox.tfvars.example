@@ -143,3 +143,7 @@ s3_primary_endpoint = "https://s3.fr-par.scw.cloud"
 s3_primary_region   = "fr-par"
 s3_replica_endpoint = "https://s3.fr-par.scw.cloud"
 s3_replica_region   = "fr-par"
+
+# --- Node system disk --------------------------------------------------------
+# root_disk_gb (node_distribution, default 50 GiB): the application stack puts ~11 GB of images on each node. With
+# deploy_flux a `check` warns below 40.

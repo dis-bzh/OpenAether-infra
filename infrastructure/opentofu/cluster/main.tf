@@ -145,7 +145,7 @@ locals {
     apiserver_vip_interface = "eth0"
     cpu_cores               = 4
     memory_mb               = 8192
-    root_disk_gb            = 20
+    root_disk_gb            = 50
     control_plane_ip_offset = 10
     worker_ip_offset        = 20
     nameservers             = ["1.1.1.1", "8.8.8.8"]
@@ -217,6 +217,31 @@ check "compliance_lock_on_dev" {
   }
 }
 
+# A warning, not a failure: the root disk of an Outscale node is the OMI's (the raw Talos image, ~11-12 GiB), and the full
+# application stack puts ~11 GB of images on each worker (lab 12, measured on Scaleway). Not yet measured on Outscale.
+check "outscale_root_volume_for_platform" {
+  assert {
+    condition     = !(var.deploy_flux && local.osc_dist.control_planes + local.osc_dist.workers > 0) || (var.outscale_root_volume_size_gb != null && var.outscale_root_volume_size_gb >= 40)
+    error_message = "deploy_flux on Outscale with outscale_root_volume_size_gb below 40 (or null = the OMI's size, ~11-12 GiB): the application stack needs ~11 GB of images per node and the nodes will hit DiskPressure. Set outscale_root_volume_size_gb = 50 (docs/capacity.md)."
+  }
+}
+
+# A warning, not a failure: a Proxmox disk below 40 GiB cannot hold the application stack's images (~11 GB per node).
+check "proxmox_root_disk_for_platform" {
+  assert {
+    condition     = !(var.deploy_flux && local.pmx_dist.control_planes + local.pmx_dist.workers > 0) || local.pmx_dist.root_disk_gb >= 40
+    error_message = "deploy_flux on Proxmox with root_disk_gb below 40: the application stack needs ~11 GB of images per node (docs/capacity.md). Use 50 (the default)."
+  }
+}
+
+# A warning, not a failure: the OVH root disk is the flavour's (the module looks it up when deploy_flux is on). b3-8 has 50 GB.
+check "ovh_flavor_disk_for_platform" {
+  assert {
+    condition     = !var.deploy_flux || one(module.ovh[*].flavor_disk_gb) == null || coalesce(one(module.ovh[*].flavor_disk_gb), 0) >= 40
+    error_message = "deploy_flux on OVH with a flavour whose root disk is below 40 GB: the application stack needs ~11 GB of images per node (docs/capacity.md). Pick a flavour with at least 50 GB (b3-8 has 50)."
+  }
+}
+
 # ==============================================================================
 # Scaleway Infrastructure
 # ==============================================================================
@@ -271,6 +296,7 @@ module "ovh" {
 
   region              = local.ovh_dist.region
   flavor_name         = local.ovh_dist.flavor_name
+  look_up_flavor_disk = var.deploy_flux
   image_id            = local.ovh_dist.image_id
   image_name          = local.ovh_image_name
   network_name        = local.ovh_dist.network_name
@@ -309,6 +335,7 @@ module "outscale" {
   worker_count        = local.osc_dist.workers
 
   instance_type       = local.osc_dist.instance_type
+  root_volume_size_gb = var.outscale_root_volume_size_gb
   image_id            = local.osc_dist.image_id
   image_name          = local.osc_image_name
   availability_zones  = local.osc_dist.availability_zones

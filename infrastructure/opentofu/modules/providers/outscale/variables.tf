@@ -21,6 +21,12 @@ variable "image_name" {
   default     = "talos"
 }
 
+variable "root_volume_size_gb" {
+  description = "Root (BSU) volume size in GB of every NEW node; null = the OMI's own size. See the root variable outscale_root_volume_size_gb."
+  type        = number
+  default     = null
+}
+
 variable "worker_storage" {
   description = <<-EOT
     Dedicated data disks per worker. Each `disks` entry creates one BSU volume

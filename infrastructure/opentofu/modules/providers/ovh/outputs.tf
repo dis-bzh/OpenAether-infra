@@ -71,3 +71,8 @@ output "inter_node_rules" {
     ])
   }
 }
+
+output "flavor_disk_gb" {
+  description = "Root disk (GB) of flavor_name, or null when look_up_flavor_disk is off."
+  value       = one(data.openstack_compute_flavor_v2.node[*].disk)
+}

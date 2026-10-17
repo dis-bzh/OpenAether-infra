@@ -91,3 +91,7 @@ s3_primary_endpoint = "https://s3.gra.io.cloud.ovh.net" # failover state on OVH 
 s3_primary_region   = "gra"
 s3_replica_endpoint = "https://s3.fr-par.scw.cloud"     # replicate back to Scaleway on recovery
 s3_replica_region   = "fr-par"
+
+# --- Node system disk --------------------------------------------------------
+# The root disk is the flavour's. The application stack needs ~11 GB of images per node: pick a flavour with at least
+# 50 GB (b3-8 has 50); with deploy_flux a `check` warns when the flavour's disk is below 40 GB.

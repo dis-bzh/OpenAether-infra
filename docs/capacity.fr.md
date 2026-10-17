@@ -33,7 +33,7 @@ control planes / workers, D = entrées de `worker_storage.disks`.
 | | Scaleway | OVH | Outscale | Proxmox |
 |---|---|---|---|---|
 | Instances | CP+W + bastion `DEV1-S` (2 vCPU / 2 Go) | CP+W + bastion `b3-8` (2 vCPU / 8 Go) | CP+W + bastion `tinav5.c2r2p2` (2 vCPU / 2 Go) | CP+W ; + bastion (1 vCPU / 1 Gio / 10 Gio) seulement avec `enable_bastion` |
-| Disque système | 20 Go `sbs_volume` chacun | celui du flavour | celui de l'OMI | `root_disk_gb` (20 Gio) chacun |
+| Disque système | 50 Go `sbs_volume` chacun (`scw_root_volume_size_gb` ; 40 au moins avec `deploy_flux`, imposé) | celui du flavour (50 Go au moins ; un `check` avertit sous 40) | celui de l'OMI (~11-12 Gio) : `outscale_root_volume_size_gb = 50` (un `check` avertit) | `root_disk_gb` (50 Gio) chacun (un `check` avertit sous 40) |
 | Volumes de données | W × D | W × D | W × D | W × D, sur `datastore_id` |
 | IP publiques | 3 : bastion, public gateway, LB de l'API | 2 flottantes : bastion, LB de l'API | 2 : bastion, NAT | aucune — `host_public_ip` est la tienne |
 | Load balancers | 1 | 1 (Octavia) | 1 (LBU) | aucun — VIP Talos |
@@ -79,3 +79,21 @@ script ne vérifie IP, LB ni security groups.
   Outscale change `vm_type` par un stop/start — un nœud à la fois.
 - Les runs sur cloud réel de [`status.md`](status.md) ne consignent le type d'instance
   que pour Outscale (`tinav5.c2r4p1`) : ceux de Scaleway et d'OVH n'établissent aucun plancher.
+
+## Disque système et pile applicative complète (tous les providers)
+
+Talos garde sa partition EPHEMERAL (kubelet, images containerd, journaux) sur le volume système, environ 4 Go de moins que sa taille. Avec toute la
+pile applicative à ses versions actuelles, un worker portait environ 11 Go d'images (lab 12, Scaleway), pour environ 15,6 Go d'espace éphémère sur un
+volume de 20 Go : DiskPressure, pods évincés (25 pods Zitadel dans les premières minutes) et délais de création de conteneurs.
+
+**Minimum : 40 Go par nœud avec la pile applicative ; le défaut est 50 Go** (environ 46 Go utilisables) : les ~11 Go d'images, le second jeu qu'une mise
+à jour de chart tire avant le ramasse-miettes de l'ancien (le kubelet lance le GC des images à 85 %), les journaux et de la marge. Par provider :
+Scaleway `scw_root_volume_size_gb` (50 ; une validation refuse moins de 40 avec `deploy_flux = true`) ; OVH le flavour (`b3-8` : 50 Go ; un `check`
+avertit sous 40 Go) ; Outscale `outscale_root_volume_size_gb` (null = la taille de l'OMI, l'image Talos brute, ~11-12 Gio, **insuffisant** ; un `check`
+avertit avec `deploy_flux`, ne vaut que pour les nœuds créés ensuite) ; Proxmox `root_disk_gb` (50 Gio ; un `check` avertit sous 40).
+
+Augmenter la valeur Scaleway sur un cluster existant redimensionne le `sbs_volume` sur place (lab 12 : plan « 10 to change », aucun nœud remplacé) ;
+Talos agrandit EPHEMERAL au redémarrage suivant du nœud : drainer et redémarrer les workers un par un ensuite (15,6 Go vers 35,6 Go ; voir l'avertissement RWX
+de [`upgrade.fr.md`](upgrade.fr.md)). Un cluster construit à 20 sans l'épingler dans son tfvars verra ce redimensionnement au prochain plan ; épingler
+`scw_root_volume_size_gb = 20` garde l'ancienne taille (la pile complète n'y tient pas). Chez Outscale et Proxmox ce code ne redimensionne pas le disque
+racine sur place : remplacer les nœuds un par un (`task cluster-roll`). Non mesuré : l'espace utile d'Outscale et d'OVH avec la pile complète.

@@ -146,3 +146,8 @@ s3_primary_endpoint = "https://oos.eu-west-2.outscale.com"
 s3_primary_region   = "eu-west-2"
 s3_replica_endpoint = "https://oos.eu-west-2.outscale.com" # prod: e.g. SCW https://s3.fr-par.scw.cloud
 s3_replica_region   = "eu-west-2"                           # prod: e.g. fr-par
+
+# --- Node system disk --------------------------------------------------------
+# A node's root disk is the OMI's (the raw Talos image, ~11-12 GiB): too small for the application stack (~11 GB of
+# images per node). With deploy_flux a `check` warns until this is set; it applies to nodes created afterwards.
+# outscale_root_volume_size_gb = 50

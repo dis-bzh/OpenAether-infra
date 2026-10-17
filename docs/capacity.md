@@ -33,7 +33,7 @@ planes / workers, D = entries in `worker_storage.disks`.
 | | Scaleway | OVH | Outscale | Proxmox |
 |---|---|---|---|---|
 | Instances | CP+W + bastion `DEV1-S` (2 vCPU / 2 GB) | CP+W + bastion `b3-8` (2 vCPU / 8 GB) | CP+W + bastion `tinav5.c2r2p2` (2 vCPU / 2 GB) | CP+W; + bastion (1 vCPU / 1 GiB / 10 GiB) only with `enable_bastion` |
-| Node system disk | 20 GB `sbs_volume` each (`scw_root_volume_size_gb`; the full application stack needs 40 or more, see below) | the flavour's disk | the OMI's default | `root_disk_gb` (20 GiB) each |
+| Node system disk | 50 GB `sbs_volume` each (`scw_root_volume_size_gb`; at least 40 with `deploy_flux`, enforced) | the flavour's disk (at least 50 GB; `check` warns below 40) | the OMI's (~11-12 GiB): set `outscale_root_volume_size_gb = 50` (`check` warns) | `root_disk_gb` (50 GiB) each (`check` warns below 40) |
 | Data volumes | W × D | W × D | W × D | W × D, on `datastore_id` |
 | Public IPs | 3: bastion, public gateway, API LB | 2 floating: bastion, API LB | 2: bastion, NAT | none — `host_public_ip` is yours |
 | Load balancers | 1 | 1 (Octavia) | 1 (LBU) | none — Talos VIP |
@@ -78,12 +78,26 @@ Also against the examples:
 - The real-cloud runs in [`status.md`](status.md) record the instance type only for Outscale
   (`tinav5.c2r4p1`), so Scaleway's and OVH's establish no floor.
 
-## Scaleway system disk and the full application stack
+## System disk and the full application stack (all providers)
 
 Talos keeps its EPHEMERAL partition (kubelet, containerd images, logs) on the system volume, about 4 GB under the volume size. With the
-whole application stack at its current chart versions a worker held about 11 GB of images (lab 12), against about 15.6 GB of ephemeral
-space on the default 20 GB volume: the kubelet reported DiskPressure, evicted pods (25 Zitadel pods in the first minutes) and container
-creation timed out. Set `scw_root_volume_size_gb = 40` (or more) for a cluster that carries the platform. Raising it on a running
-cluster is an in-place resize of the `sbs_volume` (lab 12: `cluster-up` plan "10 to change", no node replaced); Talos grows the
-EPHEMERAL partition at the node's next reboot, so reboot the workers one at a time afterwards (lab 12: 15.6 GB to 35.6 GB). The default
-stays 20 so that existing clusters show no change.
+whole application stack at its current chart versions a worker held about 11 GB of images (lab 12, Scaleway), against about 15.6 GB of
+ephemeral space on a 20 GB volume: the kubelet reported DiskPressure, evicted pods (25 Zitadel pods in the first minutes) and container
+creation timed out.
+
+**Minimum: 40 GB per node with the application stack; the default is 50 GB** (about 46 GB usable): the ~11 GB of images, the second set a
+chart upgrade pulls before the old one is garbage-collected (the kubelet starts image GC at 85% use), logs, and margin. Per provider:
+
+| Provider | Where it is set | Default | Guard |
+|---|---|---|---|
+| Scaleway | `scw_root_volume_size_gb` | 50 | a validation refuses less than 40 with `deploy_flux = true` (20 stays valid without it) |
+| OVH | the flavour (`flavor_name`) | `b3-8` / `c3-8`: 50 GB | a `check` warns when the flavour's disk, read from the account, is below 40 GB |
+| Outscale | `outscale_root_volume_size_gb` (BSU root of the VM) | null = the OMI's own size, the raw Talos image (~11-12 GiB), **not enough** | a `check` warns with `deploy_flux` until it is 40 or more; applies to nodes created afterwards |
+| Proxmox | `root_disk_gb` in `node_distribution` | 50 GiB | a `check` warns below 40 |
+
+Raising Scaleway's value on a running cluster is an in-place resize of the `sbs_volume` (lab 12: `cluster-up` plan "10 to change", no node
+replaced); Talos grows the EPHEMERAL partition at the node's next reboot, so drain and reboot the workers one at a time afterwards (lab 12:
+15.6 GB to 35.6 GB; see the RWX warning in [`upgrade.md`](upgrade.md)). A cluster built at 20 and not pinning it in its tfvars shows that resize at its
+next plan; pin `scw_root_volume_size_gb = 20` to keep the old size (a full stack will not fit). On Outscale and Proxmox the OMI root volume is not resized
+in place by this code: replace the nodes one at a time (`task cluster-roll`). Not measured: Outscale's usable space and OVH's, with the full stack
+(lab 12 ran the full stack on Scaleway only; the Outscale run was the reduced profile).
