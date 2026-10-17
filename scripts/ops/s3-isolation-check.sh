@@ -166,6 +166,12 @@ if [ "$DEDICATED" -eq 0 ]; then
   [ "$FAILS" -eq 0 ] || { echo "✗ $FAILS problem(s) above (a half pair, or a bucket setting that differs from backup_immutability)"; exit 1; }
   exit 2
 fi
-if [ "$FAILS" -gt 0 ]; then echo "✗ $FAILS of $((ASSERTED + PROT_BAD)) assertion(s) did not hold"; exit 1; fi
+if [ "$FAILS" -gt 0 ]; then
+  echo "✗ $FAILS of $((ASSERTED + PROT_BAD)) assertion(s) did not hold"
+  echo "  Scaleway: the IAM permission sets of a dedicated pair are project-wide, so only BUCKET POLICIES isolate it, and a bucket"
+  echo "  WITHOUT a policy is open to the pair (lab 12: 4 of 8 failed until every other bucket had an operator-only policy)."
+  echo "  Put an operator-only policy on the state, artifact, management and every other bucket (docs/backup-policy.md, section 4)."
+  exit 1
+fi
 echo "✓ $ASSERTED assertion(s) held"
 [ "$UNVERIFIED" -eq 0 ] || echo "? $UNVERIFIED delete-version probe(s) inconclusive: this store rejects a made-up version id. Rerun with OA_ISOLATION_REAL_VERSION=1 (writes one probe object per dedicated bucket) to test a real one."

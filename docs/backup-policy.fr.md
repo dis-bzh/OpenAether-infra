@@ -91,6 +91,14 @@ Les buckets d'état et d'artefacts ne sont écrits que depuis la machine de l'op
 rien n'est supprimé), et si les buckets portent le `backup_immutability` choisi. Sortie 0 : tenu, 1 : non tenu, 2 : aucune paire dédiée dans l'environnement. Le seed est en création seule : pour **renouveler** une paire, créer la nouvelle chez le provider, l'écrire avec
 `task rotate-secret -- <chemin> --apply` (`admin-access.fr.md`, section 3), laisser l'ExternalSecret se rafraîchir, confirmer une sauvegarde ou un flush de journaux, puis révoquer l'ancienne.
 
+**Scaleway : un bucket sans politique de bucket est ouvert à toute paire dédiée.** Les jeux de permissions IAM dont une paire a besoin (les trois jeux
+`ObjectStorage*` d'objets, plus `ObjectStorageBucketsRead` pour HeadBucket, voir le README des sauvegardes côté apps) valent pour tout le projet : la portée de la paire
+est donc ce que les politiques de bucket laissent ouvert. Le lab 12 l'a mesuré : avec des politiques seulement sur les buckets de sauvegardes et de journaux, les
+paires listaient les buckets d'état et de management (`s3-isolation-check.sh` : 4 assertions sur 8 en échec) ; avec une **politique réservée à l'opérateur sur
+tous les autres buckets** du projet (état, artefacts, management, les jumeaux `-backup` et les buckets d'images), 10 sur 10 tenaient, y compris la suppression d'une vraie
+version d'objet (`OA_ISOLATION_REAL_VERSION=1`). La recette pour une paire, que ce dépôt n'applique pas à votre place (l'IAM du fournisseur est à l'opérateur) : créer
+l'application et sa politique IAM, poser la politique réservée à l'opérateur sur tous les AUTRES buckets, la politique de la paire sur son bucket, puis lancer le contrôle. OVH et Outscale : non vérifié.
+
 ## 5. Ce qui n'est pas fait
 
 - Le verrou d'objet et le versionnement sont optionnels, et non vérifiés chez aucun provider ; le défaut laisse une clé S3 volée capable de supprimer des sauvegardes. Aucune politique pour les paires limitées n'est fournie.
