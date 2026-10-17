@@ -778,14 +778,16 @@ rwx_node_residue() { # <node_name>
   local node="$1" pvs pods
   pvs="$("${KCTL[@]}" get persistentvolumes -o json 2>/dev/null)" ||
     die "cannot list the PersistentVolumes to look for Longhorn RWX volumes on ${node} — refusing to reboot blind."
+  # --slurpfile, not --argjson: a node's pod list is hundreds of KB and an argv entry over 128 KB fails with
+  # "Argument list too long" (lab 13), which would refuse every real reboot.
   pods="$("${KCTL[@]}" get pods -A --field-selector "spec.nodeName=${node}" -o json 2>/dev/null)" ||
     die "cannot list the pods on ${node} to look for Longhorn RWX users — refusing to reboot blind."
-  jq -r --argjson pods "$pods" '
+  jq -r --slurpfile pods <(printf '%s' "$pods") '
     ([.items[]
       | select(.spec.csi.driver == "driver.longhorn.io"
                and ((.spec.accessModes // []) | index("ReadWriteMany")))
       | "\(.spec.claimRef.namespace)/\(.spec.claimRef.name)"]) as $rwx
-    | $pods.items[]
+    | $pods[0].items[]
     | select(.status.phase != "Succeeded" and .status.phase != "Failed")
     | select(((.metadata.ownerReferences // []) | map(.kind) | index("DaemonSet")) | not)
     | . as $p

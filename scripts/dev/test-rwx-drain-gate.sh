@@ -64,6 +64,11 @@ run; grep -q 'app/writer.*RWX claim shared' <<<"$OUT" && ok "a pod mounting a Lo
 { pod app nfsuser Running '{}' ReplicaSet nfs-other; pod app done Succeeded '{}' Job shared; } | mkpods >"$TMP/pods.json"
 run; [ -z "$OUT" ] && ok "a non-Longhorn RWX claim and a Succeeded pod are not residue" || bad "false positive: $OUT"
 
+# 4b a real node's pod list is far over the 128 KB limit of one argv entry (lab 13: jq "Argument list too long")
+{ jq -n '{items:[range(900)|{metadata:{namespace:"app",name:"filler-\(.)",labels:{pad:("x"*300)}},status:{phase:"Running"},spec:{volumes:[]}}]}'; pod app writer Running '{}' ReplicaSet shared; } | jq -s '{items:(.[0].items + .[1:])}' >"$TMP/pods.json"
+[ "$(wc -c <"$TMP/pods.json")" -gt 200000 ] || bad "test payload too small"
+run; grep -q 'app/writer.*RWX claim shared' <<<"$OUT" && ok "a pod list over 200 KB is read (not an argv entry)" || bad "big pod list: rc=$RC $OUT"
+
 # 5 an unanswered query dies, never reads as empty
 rm -f "$TMP/pods.json"; run
 [ $RC -eq 97 ] && grep -q 'refusing to reboot blind' <<<"$OUT" && ok "an unanswered pod query is fatal, not an empty list" || bad "rc=$RC out=$OUT"
