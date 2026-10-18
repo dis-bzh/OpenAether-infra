@@ -6,8 +6,8 @@ Les opérations manuelles post-déploiement d'un cluster portant la **plateforme
 applicative**, dans l'ordre : tout cluster construit avec `deploy_flux = true`. Un
 cluster construit avec `deploy_flux = false` (le défaut) n'en exécute rien, et rien
 de ce qui suit ne s'applique. Sur un cluster `deploy_flux = true`, `task cluster-up`
-se termine quand même en rouge, par construction (le vérificateur affirme que Flux
-est absent), et Flux reste à 29 Kustomizations sur 35 tant que le § 3 n'a pas
+se termine au vert (le vérificateur exige alors Flux et le load balancer applicatif),
+mais Flux reste sous son nombre complet de Kustomizations tant que le § 3 n'a pas
 tourné : c'est attendu, et le § 3 est le remède.
 Convention : `KC=infrastructure/opentofu/cluster/kubeconfig`.
 

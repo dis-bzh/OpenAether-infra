@@ -5,9 +5,9 @@
 The manual post-deployment steps for a cluster carrying the **application
 platform**, in order: any cluster built with `deploy_flux = true`. A cluster built
 with `deploy_flux = false` (the default) runs none of it, and nothing below
-applies. On a `deploy_flux = true` cluster `task cluster-up` still ends red, by
-design (the verifier asserts that Flux is absent), and Flux sits at 29 of 35
-Kustomizations until § 3 has run: that is expected, and § 3 is the remedy.
+applies. On a `deploy_flux = true` cluster `task cluster-up` ends green (the verifier then
+requires Flux and the application load balancer), but Flux sits below its full
+Kustomization count until § 3 has run: that is expected, and § 3 is the remedy.
 Convention: `KC=infrastructure/opentofu/cluster/kubeconfig`.
 
 OpenBao keeps **no root token and no unseal key in a log or a readable Secret**:
