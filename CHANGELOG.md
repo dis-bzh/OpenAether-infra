@@ -150,6 +150,11 @@ ANSSI hardening work, not released yet. **Nothing here is a claim of compliance 
 
 ### Fixed
 
+- **The no-terminal stop of `cluster-up` names the command that goes on (#381, lab 16 on OVH).** Without a terminal and without `APPROVE=auto`, `cluster-up` stops at its phase-1 checkpoint
+  on every re-run, even on a plan that says "No changes"; only `task bootstrap-phase2` reaches phase 2, and no message said so (three redundant stops, about 13 of 21 minutes). The stop message now
+  names `task bootstrap-phase2` after the apply (and says a "No changes" plan needs no apply), and phase 2's own stop names `task kubeconfig` and `task cluster-verify`. The checkpoints themselves are
+  kept for 0.3.0 on purpose (`APPROVE=auto` stays the unattended path); `docs/first-cluster.md` already described the sequence. `test-cluster-up.sh` fails without the messages.
+
 - **`test-kubeconfig-new.sh` runs on OpenSSL 3.0 (found by CI on the 0.3.0 pull request).** The stub signer used `openssl x509 -not_after` (OpenSSL 3.4 and later) and the test read the
   subject in the 3.4 spelling; the CI image has 3.0. The stub signs with `openssl ca -enddate` and the subject is normalised. Run on 3.0.13 (a container) and 3.5.7.
 

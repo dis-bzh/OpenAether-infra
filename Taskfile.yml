@@ -903,7 +903,10 @@ tasks:
             echo "✗ no terminal, and no APPROVE=auto — nothing was applied." >&2
             echo "  The plan above is saved. Read it, then land exactly it:" >&2
             echo "    task infra-apply ROLE={{.ROLE}} PROVIDER={{.PROVIDER}} KEY={{.KEY}} PLAN=$PLANFILE" >&2
-            echo "  Or re-run the whole journey unattended: task cluster-up … APPROVE=auto" >&2
+            echo "  Then phase 2 (do NOT re-run cluster-up: it stops here again, even on No changes):" >&2
+            echo "    task bootstrap-phase2 ROLE={{.ROLE}} PROVIDER={{.PROVIDER}} KEY={{.KEY}}" >&2
+            echo "  If the plan above says No changes, skip the apply: run task bootstrap-phase2 directly." >&2
+            echo "  Or run the whole journey unattended: task cluster-up … APPROVE=auto" >&2
             exit 1
           fi
         fi
@@ -1277,6 +1280,8 @@ tasks:
             echo "  Phase 1 is already applied; this only bootstraps Talos on it." >&2
             echo "  The plan above is saved. Read it, then land exactly it:" >&2
             echo "    cd infrastructure/opentofu/cluster && tofu apply $PLANFILE" >&2
+            echo "  Then: task kubeconfig PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}" >&2
+            echo "  and: task cluster-verify PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}" >&2
             echo "  Or re-run the journey unattended: task cluster-up PROVIDER={{.PROVIDER}} … APPROVE=auto" >&2
             exit 1
           fi
