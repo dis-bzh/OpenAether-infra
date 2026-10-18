@@ -8,7 +8,8 @@
 #   The 4th argument must be a CONTROL PLANE address: check 5 probes TCP 6443 from the bastion, and only control
 #   planes serve it (a worker address FAILS the check, lab 12). Left out, it is read from the tofu output
 #   control_plane_private_ips of the cluster root (first entry; OA_CP_IP overrides); when neither answers, check 5 is
-#   skipped and says so.
+#   skipped and says so (BASTION_REQUIRE_ALL=1 makes it a FAIL; the summary always lists the skipped checks). The tofu read
+#   needs the cluster root's backend: run it from the shell that applied the infra (TF_DATA_DIR, S3 credentials).
 #
 # Checks (in order):
 #   1. SSH tunnel non-regression: 6443 + 50000 reachable via bastion
@@ -60,6 +61,7 @@ case "${EGRESS_MODE}" in legacy|closed) ;; *) echo "BASTION_EGRESS is legacy or 
 SSH_CMD="ssh ${SSH_OPTS} ${BASTION_USER}@${BASTION_IP}"
 
 PASS=0
+SKIPPED=""
 FAIL=0
 
 ok()   { echo "  [PASS] $*"; PASS=$((PASS + 1)); }
@@ -169,6 +171,10 @@ if [ -n "${NODE_IP}" ]; then
   fi
 else
   info "Skipping cluster egress test: no control plane address (4th argument, OA_CP_IP, or the tofu output control_plane_private_ips)"
+  info "  the tofu output needs the cluster root's backend: run from the shell that applied it (TF_DATA_DIR and the S3 credentials exported)"
+  SKIPPED="${SKIPPED}5 (egress ALLOW to the cluster: no control plane address) "
+  # BASTION_REQUIRE_ALL=1 turns a skipped check into a failure (CI, an unattended entity): 35 passes instead of 37 was a pass.
+  [ "${BASTION_REQUIRE_ALL:-0}" = 1 ] && fail "check 5 was skipped and BASTION_REQUIRE_ALL=1: give the control plane address (4th argument or OA_CP_IP)"
 fi
 
 # --------------------------------------------------------------------------
@@ -274,6 +280,7 @@ sep "SUMMARY"
 echo ""
 echo "  PASSED: ${PASS}"
 echo "  FAILED: ${FAIL}"
+echo "  SKIPPED: ${SKIPPED:-none}"
 echo ""
 if [ "${FAIL}" -eq 0 ]; then
   echo "  Bastion hardening: ALL CHECKS PASSED"

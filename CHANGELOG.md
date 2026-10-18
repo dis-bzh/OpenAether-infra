@@ -50,6 +50,10 @@ ANSSI hardening work, not released yet. **Nothing here is a claim of compliance 
 
 ### Fixed
 
+- **`bastion-harden-check.sh` says which check it skipped (infra #372).** Without a control plane address (4th argument, `OA_CP_IP`, or the tofu output, which
+  needs the shell that applied the infra) check 5 is skipped as before, but the summary now lists it (`SKIPPED: 5 (...)`), and `BASTION_REQUIRE_ALL=1`
+  turns it into a failure for CI or an unattended entity. Test cases added to `test-bastion-harden-check.sh`.
+
 - **`task check-alerts` no longer calls `kube_job_failed` and the volume stats blind (infra #357).** They have no series while the platform is healthy
   (a failed Job, a CSI-mounted volume), so they are printed apart as "healthy state" and never fail `--strict`; a metric nobody produces is still
   reported. Test `scripts/dev/test-check-alert-metrics.py` (in `task test-scripts`).

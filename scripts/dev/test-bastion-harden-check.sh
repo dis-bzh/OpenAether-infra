@@ -173,6 +173,12 @@ run0 OA_CP_IP=10.0.0.9 STUB_TOFU='["10.0.0.7"]'
 grep -q 'Egress to 10.0.0.9:6443 allowed' <<<"$OUT" && ok "OA_CP_IP wins over the tofu output" || bad "OA_CP_IP: $(sed -n '/=== 5/,/=== 6/p' <<<"$OUT")"
 run0
 grep -q 'Skipping cluster egress test: no control plane address' <<<"$OUT" && ok "nothing to derive: check 5 is skipped, and says what to give" || bad "skip message: $(sed -n '/=== 5/,/=== 6/p' <<<"$OUT")"
+grep -q 'SKIPPED: 5 (egress ALLOW' <<<"$OUT" && ok "the summary names the skipped check" || bad "summary skipped line: $(sed -n '/SUMMARY/,$p' <<<"$OUT")"
+[ "$RC" = 0 ] && ok "a skipped check alone is still a pass by default" || bad "skip default rc=$RC"
+run0 BASTION_REQUIRE_ALL=1
+[ "$RC" != 0 ] && grep -q 'BASTION_REQUIRE_ALL=1' <<<"$OUT" && ok "BASTION_REQUIRE_ALL=1 turns the skipped check into a FAIL" || bad "REQUIRE_ALL: rc=$RC"
+run0 STUB_TOFU='["10.0.0.7"]'
+grep -q 'SKIPPED: none' <<<"$OUT" && ok "nothing skipped: the summary says none" || bad "none line"
 grep -q 'control_plane_private_ip\]' "$SUT" && grep -q 'CONTROL PLANE address' "$SUT" && ok "the usage names a CONTROL PLANE address" || bad "usage line"
 
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
