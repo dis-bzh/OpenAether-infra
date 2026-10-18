@@ -92,6 +92,16 @@ if [ "${STRICT_EXAMPLES:-1}" = "1" ]; then
       bad "$(basename "$ex") — missing: $missing"
     fi
   done
+
+  # A copy without these builds an infrastructure-only cluster (lab 15c): the platform switches are set, not left to the default.
+  echo
+  echo "=== the management and workload examples set deploy_flux (and deploy_app_lb where a cloud LB exists) ==="
+  for ex in "$ENVS"/management-*.tfvars.example "$ENVS"/workload-*.tfvars.example; do
+    miss=""
+    grep -qE '^deploy_flux[[:space:]]*=[[:space:]]*true' "$ex" || miss+="deploy_flux "
+    case "$ex" in *proxmox*) ;; *) grep -qE '^deploy_app_lb[[:space:]]*=[[:space:]]*true' "$ex" || miss+="deploy_app_lb " ;; esac
+    if [ -z "$miss" ]; then ok "$(basename "$ex") — sets the platform switches"; else bad "$(basename "$ex") — missing: $miss"; fi
+  done
 fi
 
 echo

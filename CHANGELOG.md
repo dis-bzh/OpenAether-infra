@@ -50,6 +50,14 @@ ANSSI hardening work, not released yet. **Nothing here is a claim of compliance 
 
 ### Fixed
 
+- **The example tfvars set the platform switches, and the unattended path is written down (lab 15c).** The management and workload examples
+  of the four providers now carry `deploy_flux = true` and `deploy_app_lb = true` (Proxmox: Flux only): an entity that copied the file got
+  an infrastructure-only cluster. `check-doc-inputs.sh` fails an example without them. `docs/first-cluster.md` (EN, FR) names
+  `APPROVE=auto` as the one-command unattended path (it applies the saved plan files, never `-auto-approve`), the three checkpoints
+  without it, and that a harness that refuses a blind apply needs the owner's permission for that command. The approval gates themselves are
+  unchanged (skipping the question for a plan that changes nothing was considered and left to the owner). #361 keeps its hint: the
+  two-phase ACL needs a real Scaleway apply to prove.
+
 Found by the labs above, each with the rung it reached after the fix (mocked tests plus the real run that found it).
 
 - **Scaleway: the app LB ACLs are standalone `scaleway_lb_acl` resources.** With the list in the frontend's inline `acl` block a real apply

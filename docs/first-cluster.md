@@ -174,6 +174,15 @@ phase-1 plan on its own, save it:
 `task infra-apply PROVIDER=scaleway PLAN=tfplan`. PROVIDER is required on both —
 it used to default to Scaleway, which is the wrong cloud to guess.)
 
+**The unattended path is one command, `APPROVE=auto`.** `task cluster-up ROLE=management PROVIDER=… KEY=… APPROVE=auto` plans, runs
+the node-delete guard, and applies *the saved plan file* of each phase (it never uses `-auto-approve`), then converges and verifies;
+a run that stopped can be repeated as is. Without it and without a terminal the journey stops at three checkpoints, each saying
+"nothing was applied": phase-1 plan (`task infra-apply PLAN=up-<role>-<provider>.tfplan`), the same again on the next run, then phase 2
+(`cd infrastructure/opentofu/cluster && tofu apply phase2-<role>-<provider>.tfplan`, then `task kubeconfig`). A coding agent whose
+harness refuses a blind apply therefore needs the owner's explicit permission for the `APPROVE=auto` command; that decision is the
+owner's, not the repository's. Copy the `deploy_flux = true` and `deploy_app_lb = true` lines of the example: without them the cluster
+is infrastructure only (the verifier reports flux-system as red by design).
+
 In order it creates the four state and artifact buckets (the credential check
 above), builds the Talos image and uploads it — **measured at 52 s on Scaleway,
 2026-08-17**, for two buckets, one snapshot and one image per zone — applies the

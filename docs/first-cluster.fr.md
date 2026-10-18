@@ -180,6 +180,15 @@ relis-le, puis `task infra-apply PROVIDER=scaleway PLAN=tfplan`. `PROVIDER` est
 exigé sur les deux — il retombait avant sur Scaleway, ce qui est le mauvais cloud
 à deviner.)
 
+**Le chemin non supervisé est une seule commande, `APPROVE=auto`.** `task cluster-up ROLE=management PROVIDER=… KEY=… APPROVE=auto` planifie,
+passe le garde-fou contre la suppression de nœuds, et applique *le fichier de plan enregistré* de chaque phase (jamais `-auto-approve`), puis
+converge et vérifie ; un run interrompu se relance tel quel. Sans lui et sans terminal, le parcours s'arrête à trois points de contrôle,
+chacun disant « nothing was applied » : plan de la phase 1 (`task infra-apply PLAN=up-<role>-<provider>.tfplan`), le même au run suivant,
+puis la phase 2 (`cd infrastructure/opentofu/cluster && tofu apply phase2-<role>-<provider>.tfplan`, puis `task kubeconfig`). Un agent dont
+l'environnement refuse une application à l'aveugle a donc besoin de l'autorisation explicite du propriétaire pour la commande `APPROVE=auto` ;
+cette décision est celle du propriétaire, pas du dépôt. Recopie les lignes `deploy_flux = true` et `deploy_app_lb = true` de l'exemple : sans
+elles le cluster n'a que l'infrastructure (le vérificateur signale flux-system en rouge, par conception).
+
 Dans l'ordre, il crée les quatre buckets d'état et d'artefacts (le contrôle des
 identifiants ci-dessus), construit l'image Talos et la téléverse — **mesuré à
 52 s sur Scaleway le 2026-08-17**, pour deux buckets, un snapshot et une image

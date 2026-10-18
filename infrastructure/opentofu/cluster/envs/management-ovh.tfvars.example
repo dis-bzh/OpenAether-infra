@@ -34,6 +34,11 @@ cluster_name    = "openaether"
 environment     = "dev"
 cluster_role    = "management"
 talos_bootstrap = true
+# The platform, not only the machines. Both default to FALSE: a copy of this file WITHOUT these lines builds an
+# infrastructure-only cluster (Talos + Cilium: no Flux, no apps, no public load balancer), and `task cluster-verify`
+# then reports flux-system as red. Set them as shown for the platform; the Day-1 seeding follows (scripts/ops/seed-openbao.sh).
+deploy_flux     = true
+deploy_app_lb   = true
 # talos_version / kubernetes_version: leave unset to inherit the tracked
 # defaults from cluster/variables.tf. The image is resolved by NAME from
 # talos_version (same as Scaleway) unless image_id below is set, and it is the
