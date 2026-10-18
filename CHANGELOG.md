@@ -150,6 +150,9 @@ ANSSI hardening work, not released yet. **Nothing here is a claim of compliance 
 
 ### Fixed
 
+- **`test-kubeconfig-new.sh` runs on OpenSSL 3.0 (found by CI on the 0.3.0 pull request).** The stub signer used `openssl x509 -not_after` (OpenSSL 3.4 and later) and the test read the
+  subject in the 3.4 spelling; the CI image has 3.0. The stub signs with `openssl ca -enddate` and the subject is normalised. Run on 3.0.13 (a container) and 3.5.7.
+
 - **The node roll docs warn about an undrained reboot of a worker with a CNPG instance (infra #358).** `docs/upgrade.md` (EN, FR): drain first; the roll commands do, a hand-typed
   `talosctl reboot` does not; the recovery after one. No tooling guard was added (the roll tooling does not run that reboot).
 

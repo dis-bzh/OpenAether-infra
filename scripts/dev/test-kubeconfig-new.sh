@@ -18,6 +18,25 @@ FAKE="$TMP/repo"; mkdir -p "$FAKE/scripts/ops" "$FAKE/scripts/lib"; cp "$SUT" "$
 openssl ecparam -name prime256v1 -genkey -noout -out "$TMP/ca.key" 2>/dev/null
 openssl req -x509 -new -key "$TMP/ca.key" -subj "/CN=fixture-ca" -days 2 -out "$TMP/ca.crt" 2>/dev/null
 
+# `openssl x509 -req -not_after` needs OpenSSL 3.4 and later (the CI image has 3.0): `openssl ca -enddate` sets the end date in both.
+: >"$TMP/index.txt"; echo 01 >"$TMP/serial"
+cat >"$TMP/ca.cnf" <<CNF
+[ca]
+default_ca = CA
+[CA]
+database = $TMP/index.txt
+serial = $TMP/serial
+new_certs_dir = $TMP
+certificate = $TMP/ca.crt
+private_key = $TMP/ca.key
+default_md = sha256
+unique_subject = no
+policy = pol
+[pol]
+organizationName = optional
+commonName = supplied
+CNF
+
 mkdir -p "$TMP/bin"
 cat >"$TMP/bin/kubectl" <<STUB
 #!/usr/bin/env bash
@@ -30,7 +49,7 @@ case "\$1 \$2" in
   "get csr")
     sed -n 's/^  request: //p' "$TMP/csr.yaml" | base64 -d >"$TMP/req.csr"
     secs="\${STUB_SECS:-\$(sed -n 's/^  expirationSeconds: //p' "$TMP/csr.yaml")}"
-    openssl x509 -req -in "$TMP/req.csr" -CA "$TMP/ca.crt" -CAkey "$TMP/ca.key" -CAcreateserial -not_after "\$(date -u -d "+\${secs}sec" +%Y%m%d%H%M%SZ)" -out "$TMP/crt.pem" 2>/dev/null
+    openssl ca -config "$TMP/ca.cnf" -batch -notext -preserveDN -in "$TMP/req.csr" -enddate "\$(date -u -d "+\${secs}sec" +%Y%m%d%H%M%SZ)" -out "$TMP/crt.pem" 2>/dev/null
     base64 -w0 <"$TMP/crt.pem" ;;
   "delete csr") exit 0 ;;
   *) exit 1 ;;
@@ -46,7 +65,7 @@ run alice --out "$TMP/home/a.kubeconfig"
 [ "$RC" = 0 ] && ok "a certificate is issued" || bad "default run: rc=$RC $OUT"
 grep -q 'expirationSeconds: 28800' "$TMP/csr.yaml" && grep -q 'signerName: kubernetes.io/kube-apiserver-client' "$TMP/csr.yaml" \
   && ok "the request carries expirationSeconds 28800 and the client signer" || bad "request: $(cat "$TMP/csr.yaml")"
-S="$(openssl req -in "$TMP/req.csr" -noout -subject)"
+S="$(openssl req -in "$TMP/req.csr" -noout -subject | sed "s/ = /=/g")"   # OpenSSL 3.0 prints "O = x", later versions "O=x"
 [[ "$S" == *"O=oa:readers"* && "$S" == *"CN=alice"* ]] && ok "subject CN=alice, O=oa:readers (the default is the read-only group)" || bad "subject: $S"
 grep -q 'kubectl delete csr' "$TMP/calls.log" && ok "the request is deleted afterwards" || bad "CSR left behind"
 [ "$(stat -c %a "$TMP/home/a.kubeconfig")" = 600 ] && ok "the kubeconfig is 0600" || bad "mode $(stat -c %a "$TMP/home/a.kubeconfig")"
@@ -57,7 +76,7 @@ grep -q 'PRIVATE KEY' "$TMP/csr.yaml" && bad "private key in the request" || ok 
 
 echo "=== admin is explicit ==="
 run bob --role admin --ttl 90m --out "$TMP/home/b.kubeconfig"
-S="$(openssl req -in "$TMP/req.csr" -noout -subject)"
+S="$(openssl req -in "$TMP/req.csr" -noout -subject | sed "s/ = /=/g")"   # OpenSSL 3.0 prints "O = x", later versions "O=x"
 [ "$RC" = 0 ] && [[ "$S" == *"O=oa:admins"* ]] && grep -q 'expirationSeconds: 5400' "$TMP/csr.yaml" \
   && ok "--role admin gives O=oa:admins; --ttl 90m is 5400 s" || bad "admin: rc=$RC $S $OUT"
 
