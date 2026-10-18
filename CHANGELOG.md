@@ -75,7 +75,13 @@ None of these is hidden by a green check; each has an issue.
 
 - **OVH S3 has no bucket policies through the S3 API** (`PutBucketPolicy` answers NotImplemented); OVH runs on the operator's keys and `s3-isolation-check` exits 2
   there. A dedicated pair needs the OVH API. Documented in `docs/backup-policy.md` (infra #379).
-- **Outscale: gp2 root and magnetic data volumes saturate under the full stack** (infra #376), and OOS refused the EIM keys of a dedicated pair (infra #377).
+- **Outscale does not pass the stability criteria with the full stack (lab 16, infra #376).** On 3 CP + 3 W of 3 vCPU / 6 GB (the largest shape the 20 vCPU quota allows, 50 GB gp2 roots) a fresh
+  install converged and passed the first hour; then a backup and restore, and later one drained worker reboot, started an IO and memory-pressure cascade (nodes NotReady in turn, pressure above 97%) that did
+  not settle in an hour. A live change to `io1 3000` did not stop it. Probable cause (not isolated): the 6 GB nodes and the shared root disk (Longhorn, etcd and images on one volume); the examples now set the root size, but a shape that
+  passes was NOT run on Outscale: it needs a larger quota (3+3 of 4 vCPU, `docs/capacity.md`). OOS also refused the EIM keys of a dedicated pair (infra #377).
+- **The checkpoints of `cluster-up` stay in 0.3.0 (infra #381).** Without a terminal it stops at the phase-1 checkpoint on every run; `task bootstrap-phase2` is the way on (the messages name it now), and
+  `APPROVE=auto` is the one-command path. Removing them is a later decision. Time to a working platform was 16 to 29 minutes in lab 16 (budget and phases: infra #374, 0.5.0).
+- **The CPU gate of `cluster-roll` is all that is checked about losing a worker (infra #378).** Replicas with a required spread (OpenBao) stay short while a worker is out; the behaviour of losing nodes under load is 0.4.0.
 - **CNPG `barmanObjectStore` is removed in CNPG 1.31** and **Kyverno `kyverno.io/v1` policies are removed in Kyverno 1.20** (apps #114, #113); 0.3.0 stays on CNPG 1.30.x and Kyverno 1.19.x.
 - **The history is unsigned for now** (infra #332, #333): Flux commit verification (`flux_git_verify`) exists but cannot be switched on until a signing key is
   registered, and the GitHub rulesets do not require signatures or reviews yet. The maintainer will create a dedicated signing key later.
@@ -102,10 +108,11 @@ Real clouds, with Talos 1.14.2 / Kubernetes 1.37.1, each once, by hand or by scr
 | 15a | 2026-10-17 | OVH complete: cluster-up 817 s, verify 16/16, security 33/36, bastion with closed egress, forward and reverse node filtering swaps, control planes replaced for real. |
 | 15b | 2026-10-18 | Outscale, two full clusters (3 CP + 3 W): cluster-up 805/817 s, verify 16/16, security 33/36, bastion 38/38. |
 | 15c | 2026-10-18 | Scaleway lifecycle from infra 0.2.1 + apps 0.2.0: 40 upgrade hops and drills over about 6.5 h; 20896 HTTP probe samples, 135 failed (0.65 %), one 73 s episode (a drain evicting the single Gateway pod). |
+| 16 | 2026-10-18 | Final validation, from the shipped example files, unattended apart from what is named. Scaleway (3 CP + 2 W): two `cluster-up` commands (the known first-install ACL error), 54/54 Flux objects Ready 23.5 min after the start, verify 16/16, security 34/36, bastion 37/37, isolation 12/12, Longhorn backup and restore, CNPG restore into a new cluster, Kyverno enforce, TLS 1.3 with a hybrid group, drained and control-plane reboots. OVH (3 CP + 2 W, checkpointed path, 21 min of which about 13 are checkpoints): the same checks passed except the dedicated pair (not possible there). **Outscale (3 CP + 3 W of 3 vCPU / 6 GB) FAILED stability** after the first hour (see Known limitations); control-plane reboot, alert drill and final acceptance were not run there. On Scaleway and OVH `cluster-roll` refused the 2-worker shapes (172% of CPU requested): the examples now ship 3 workers, **not re-run**. |
 
 Every lab was torn down and its provider account checked clean (`purge-orphans`, `verify-provider-clean`).
 
-**NOT run:** an etcd snapshot restore on a second cluster; a real node replacement through `cluster-roll` on Scaleway (printed only); the Istio hops; Alloy, Grafana,
+**NOT run (lab 16 added):** the break-glass and escrow drills, `rotate-secret`, Loki chunk deletion, bastion replacement, node add, and the webhook-receiver leg of the alert drill (alertmanager egress is default-deny); a roll that passes its capacity gate was not run on any cloud. Also not run: an etcd snapshot restore on a second cluster; a real node replacement through `cluster-roll` on Scaleway (printed only); the Istio hops; Alloy, Grafana,
 Gateway API CRD hops; the Flux (children) and Cilium/Talos patch hops; Zitadel -> Grafana interactive login (MFA, no browser); OpenBao raft snapshot restore; dedicated key
 pairs on OVH and Outscale; Loki retention expiry; FIDO keys; Proxmox; the signed-history path (no signing key yet); the cloud workflow of the CI. Nothing ran for days;
 the longest run is the 6.5 h of lab 15c.
