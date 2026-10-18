@@ -50,6 +50,10 @@ ANSSI hardening work, not released yet. **Nothing here is a claim of compliance 
 
 ### Fixed
 
+- **`bastion-logs-pull.sh` shows tofu's error when it cannot read the backend (infra #352).** With `OA_LOGS_UPLOAD=1` and no saved copy, a tofu that could not
+  initialise its backend printed "apply the infra first", which is wrong when the infra is applied. It now prints tofu's first lines and names the way out
+  (the shell that applied the infra, `OA_TOFU_DIR`, or `OA_BACKUP_TARGETS_JSON`). Test case in `test-bastion-logs-pull.sh`.
+
 - **`bastion-harden-check.sh` says which check it skipped (infra #372).** Without a control plane address (4th argument, `OA_CP_IP`, or the tofu output, which
   needs the shell that applied the infra) check 5 is skipped as before, but the summary now lists it (`SKIPPED: 5 (...)`), and `BASTION_REQUIRE_ALL=1`
   turns it into a failure for CI or an unattended entity. Test cases added to `test-bastion-harden-check.sh`.

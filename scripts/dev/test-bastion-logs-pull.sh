@@ -116,6 +116,13 @@ OUT="$(env PATH="$TMP/bin:$PATH" OA_LOGS_UPLOAD=1 OA_BACKUP_TARGETS_JSON="$TMP/t
 [ "$RC" = 2 ] && grep -q 'never uploaded in clear' <<<"$OUT" && [ ! -s "$SSH_LOG" ] && [ ! -d "$S3DIR" ] \
   && ok "an upload without a passphrase is refused before any connection and nothing leaves" || bad "clear upload: rc=$RC $OUT"
 
+# #352: a tofu that cannot read its backend must show ITS error, not "apply the infra first".
+printf '#!/usr/bin/env bash\necho "Error: Backend initialization required, please run tofu init" >&2\nexit 1\n' >"$TMP/bin/tofu"; chmod +x "$TMP/bin/tofu"
+OUT="$(env PATH="$TMP/bin:$PATH" OA_LOGS_UPLOAD=1 OA_LOGS_PASSPHRASE="$PP" bash "$SUT" 192.0.2.10 bastion "$TMP/key" "$TMP/up" 2>&1)"; RC=$?
+[ "$RC" = 2 ] && grep -q 'Backend initialization required' <<<"$OUT" && grep -q 'OA_BACKUP_TARGETS_JSON' <<<"$OUT" && ! grep -q 'apply the infra first' <<<"$OUT" \
+  && ok "a backend tofu cannot read shows tofu's error and the way out, not 'apply the infra first'" || bad "tofu error hidden: rc=$RC $OUT"
+rm -f "$TMP/bin/tofu"
+
 upl; N1="$(ngpg "$PRIM")"
 if [ "$RC" = 0 ] && [ "$N1" = 2 ] && [ "$(ngpg "$REPL")" = 2 ] && [ "$(cat "$PRIM/.journal-cursor")" = "s=bbb" ] && [ "$(cat "$REPL/.journal-cursor")" = "s=bbb" ]; then
   ok "one pull puts the journal and the audit archive, encrypted, plus the cursor, in BOTH stores"

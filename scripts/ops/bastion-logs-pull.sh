@@ -58,9 +58,21 @@ if [ "$UPLOAD" = 1 ]; then
     BT="$(cat "$OA_BACKUP_TARGETS_JSON")"
   else
     command -v tofu >/dev/null 2>&1 || { echo "✗ tofu is required for OA_LOGS_UPLOAD=1 (or give OA_BACKUP_TARGETS_JSON)" >&2; exit 2; }
-    BT="$(tofu -chdir="${OA_TOFU_DIR:-infrastructure/opentofu/cluster}" output -json backup_targets 2>/dev/null || echo null)"
+    # tofu's own error is kept: "apply the infra first" is wrong when the infra is applied and this shell just cannot read the backend (#352).
+    TOFU_ERR="$(mktemp)"
+    BT="$(tofu -chdir="${OA_TOFU_DIR:-infrastructure/opentofu/cluster}" output -json backup_targets 2>"$TOFU_ERR")" || BT=null
   fi
-  [ -n "$BT" ] && [ "$BT" != null ] || { echo "✗ no backup_targets output - apply the infra first, or set OA_TOFU_DIR / OA_BACKUP_TARGETS_JSON" >&2; exit 2; }
+  if ! { [ -n "$BT" ] && [ "$BT" != null ]; }; then
+    if [ -n "${TOFU_ERR:-}" ] && [ -s "$TOFU_ERR" ]; then
+      echo "✗ tofu could not read the backup_targets output (the infra may well be applied):" >&2
+      head -n 5 "$TOFU_ERR" | sed 's/^/    /' >&2
+      echo "  Run this from the shell that applied the infra (TF_DATA_DIR and the backend credentials exported), or set OA_TOFU_DIR, or OA_BACKUP_TARGETS_JSON to a saved copy of the output." >&2
+    else
+      echo "✗ the backup_targets output is empty: apply the infra first, or set OA_TOFU_DIR / OA_BACKUP_TARGETS_JSON" >&2
+    fi
+    rm -f "${TOFU_ERR:-}"; exit 2
+  fi
+  rm -f "${TOFU_ERR:-}"
   oa_aws_compat
   PROVIDER="$(jq -r '.provider' <<<"$BT")"
   S3_BUCKET=("$(jq -r '.artifact_bucket_primary' <<<"$BT")" "$(jq -r '.artifact_bucket_replica' <<<"$BT")")
