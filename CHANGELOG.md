@@ -50,6 +50,10 @@ ANSSI hardening work, not released yet. **Nothing here is a claim of compliance 
 
 ### Fixed
 
+- **`task check-alerts` no longer calls `kube_job_failed` and the volume stats blind (infra #357).** They have no series while the platform is healthy
+  (a failed Job, a CSI-mounted volume), so they are printed apart as "healthy state" and never fail `--strict`; a metric nobody produces is still
+  reported. Test `scripts/dev/test-check-alert-metrics.py` (in `task test-scripts`).
+
 - **The example tfvars set the platform switches, and the unattended path is written down (lab 15c).** The management and workload examples
   of the four providers now carry `deploy_flux = true` and `deploy_app_lb = true` (Proxmox: Flux only): an entity that copied the file got
   an infrastructure-only cluster. `check-doc-inputs.sh` fails an example without them. `docs/first-cluster.md` (EN, FR) names

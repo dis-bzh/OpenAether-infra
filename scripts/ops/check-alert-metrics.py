@@ -51,6 +51,15 @@ VMSELECT_SVC = "vmselect-victoria-metrics"
 PORT = 8481
 PATH = "/select/0/prometheus/api/v1/query"
 
+# Metrics that have NO series while everything is healthy (infra #357): kube-state-metrics emits kube_job_failed only for a
+# Job that failed, and kubelet_volume_stats_* exists only for a volume a CSI driver mounts (none for local-path). "No
+# series" is the good answer for them, so they are listed apart and never fail --strict. Add a name only with that reason.
+HEALTHY_WHEN_EMPTY = {
+    "kube_job_failed": "emitted only for a failed Job",
+    "kubelet_volume_stats_available_bytes": "emitted only for CSI-mounted volumes (none with local-path)",
+    "kubelet_volume_stats_capacity_bytes": "emitted only for CSI-mounted volumes (none with local-path)",
+}
+
 # PromQL/MetricsQL functions and keywords that look like metric names.
 NOT_A_METRIC = {
     "absent", "increase", "rate", "count", "max", "min", "sum", "avg", "by",
@@ -118,6 +127,12 @@ def query(session_url: str, expr: str) -> int:
         return -1
 
 
+def classify(empty: list[tuple[str, list[str]]]) -> tuple[list, list]:
+    """Split the metrics with no series into (blind, expected): expected ones are empty when the platform is healthy."""
+    return ([m for m in empty if m[0] not in HEALTHY_WHEN_EMPTY],
+            [m for m in empty if m[0] in HEALTHY_WHEN_EMPTY])
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--strict", action="store_true",
@@ -154,8 +169,13 @@ def main() -> int:
     finally:
         pf.terminate()
 
+    missing, expected = classify(missing)
+    if expected:
+        print(f"{len(expected)} metric(s) without series that is the healthy state (not counted):")
+        for name, alerts in expected:
+            print(f"  {name}: {HEALTHY_WHEN_EMPTY[name]} (used by {', '.join(alerts)})")
     if not missing:
-        print("OK — every metric read by a rule has data.")
+        print("OK — every other metric read by a rule has data.")
         return 0
 
     print(f"\n{len(missing)} metric(s) with NO series — each alert below can never fire:")
