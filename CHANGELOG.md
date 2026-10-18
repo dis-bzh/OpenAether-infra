@@ -150,6 +150,14 @@ ANSSI hardening work, not released yet. **Nothing here is a claim of compliance 
 
 ### Fixed
 
+- **The shipped Scaleway and OVH examples can lose a worker and be rolled (#378, lab 16).** With the full stack, two 4 vCPU workers carried 172% of one worker's CPU requests (Scaleway 82% + 90%, OVH
+  81% + 91%) and `cluster-roll` refuses above (workers - 1) x 100%. The management and failover examples now ship 3 workers (6 instances on Scaleway, 7 on OVH, 26 vCPU on both;
+  quota flags and `first-cluster.md` updated, EN and FR). `docs/capacity.md` shows the arithmetic: about 90% of the limit at 3 workers, an estimate from two measured points, not run again. Outscale cannot
+  reach a rollable shape inside the 20 vCPU quota (239% on 3 x 3 vCPU against 200%): its examples say so and name the smallest shape that passes on paper (3+3 of 4 vCPU, 26 vCPU), which was not run there.
+  `check-doc-inputs.sh` fails on a 2-worker example.
+- **The Outscale examples set `outscale_root_volume_size_gb = 50` (#376, #364).** It was commented out although `deploy_flux = true` needs it. The root volume type is fixed to gp2 in the module (no type or IOPS
+  variable) and an `io1 3000` change by hand did not stop lab 16's IO and memory cascade on 6 GB nodes, so nothing here claims the cascade is cured: the examples and `capacity.md` say what was and was not shown.
+
 - **The no-terminal stop of `cluster-up` names the command that goes on (#381, lab 16 on OVH).** Without a terminal and without `APPROVE=auto`, `cluster-up` stops at its phase-1 checkpoint
   on every re-run, even on a plan that says "No changes"; only `task bootstrap-phase2` reaches phase 2, and no message said so (three redundant stops, about 13 of 21 minutes). The stop message now
   names `task bootstrap-phase2` after the apply (and says a "No changes" plan needs no apply), and phase 2's own stop names `task kubeconfig` and `task cluster-verify`. The checkpoints themselves are

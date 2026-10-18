@@ -15,7 +15,7 @@ Elle dit ce qui a été mesuré, sur quel cloud et quand — et ce qui ne l'a pa
 
 ## Ce que tu obtiens, et ce que tu n'obtiens pas
 
-Un unique cluster Talos Linux : 3 control planes, 2 workers, Cilium comme CNI, un load
+Un unique cluster Talos Linux : 3 control planes, 3 workers, Cilium comme CNI, un load
 balancer d'apiserver filtré sur ton IP, un bastion, et un état OpenTofu chiffré
 chez toi avant d'atteindre S3.
 
@@ -29,7 +29,7 @@ signer l'intermédiaire de la PKI) : [`admin-access.fr.md`](admin-access.fr.md).
 
 ## Avant de commencer
 
-- Un compte Scaleway, et le quota pour **5 instances** du type indiqué dans ton
+- Un compte Scaleway, et le quota pour **6 instances** du type indiqué dans ton
   tfvars. Un compte neuf peut être plafonné à 1 — Console → Quotas. Il n'existe
   pas de script de préflight pour Scaleway (`preflight-quotas.py` ne couvre
   qu'OVH et Outscale) : cette vérification est à ta charge. Le bastion ajoute

@@ -14,7 +14,7 @@ has been measured, on which cloud and when — and what has not.
 
 ## What you get, and what you do not
 
-A single Talos Linux cluster: 3 control planes, 2 workers, Cilium as the CNI, an
+A single Talos Linux cluster: 3 control planes, 3 workers, Cilium as the CNI, an
 apiserver load balancer ACL'd to your IP, a bastion, and an OpenTofu state
 encrypted on your side before it reaches S3.
 
@@ -28,7 +28,7 @@ ended (seeding OpenBao, signing the PKI intermediate): [`admin-access.md`](admin
 
 ## Before you start
 
-- A Scaleway account, and the quota to run **5 instances** of the type in your
+- A Scaleway account, and the quota to run **6 instances** of the type in your
   tfvars. A new account may be capped at 1 — Console → Quotas. There is no
   preflight script for Scaleway (`preflight-quotas.py` covers OVH and Outscale
   only), so this check is yours to make. The bastion adds one `DEV1-S`; what

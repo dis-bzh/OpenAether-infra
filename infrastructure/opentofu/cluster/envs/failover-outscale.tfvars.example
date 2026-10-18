@@ -36,6 +36,11 @@ node_distribution = {
     region             = "eu-west-2"
     # Deliberately below the sizing floor (docs/capacity.md): the default Outscale quota is 20 vCPU / 40 GB,
     # and 5 nodes of 4 vCPU / 8 GB do not fit it. Enough for a bare cluster (Talos + Cilium); raise the quota first for the platform.
+    # With the platform, NO profile that fits 20 vCPU can be rolled or lose a worker: lab 16 measured 239% of one worker's
+    # CPU requested on 3 x tinav5.c3r6p2 (3 vCPU), above the 200% that `cluster-roll` allows for 3 workers, and 6 GB nodes fell
+    # into an IO and memory cascade after one backup+restore and one drained reboot (#376). The smallest shape that passes
+    # the gate on the arithmetic is 3 + 3 of tinav5.c4r8p2 (4 vCPU / 8 GB): 26 vCPU with the bastion, so ask for a quota of
+    # at least 26 vCPU / 56 GB first. That shape has NOT been run on Outscale.
     instance_type      = "tinav5.c2r4p1"
     # image_id optional — defaults to looking up "talos-outscale-amd64-<talos_version>" by
     # name (published by talos-image). Override only if you use a different name/OMI:
@@ -90,4 +95,7 @@ s3_replica_region   = "fr-par"
 # --- Node system disk --------------------------------------------------------
 # A node's root disk is the OMI's (the raw Talos image, ~11-12 GiB): too small for the application stack (~11 GB of
 # images per node). With deploy_flux a `check` warns until this is set; it applies to nodes created afterwards.
-# outscale_root_volume_size_gb = 50
+# Set (not commented): the platform (deploy_flux) does not fit the OMI's own ~11-12 GiB. The root is
+# gp2, whose IOPS grow with its size (150 IOPS measured at 50 GB, saturated by the full stack in lab 16, #376); a larger
+# size gives more IOPS, but that was NOT shown to prevent the cascade, and changing the type to io1 did not.
+outscale_root_volume_size_gb = 50

@@ -239,8 +239,8 @@ n'est pas le tien.
 
 ```bash
 # Quotas : OVH et Outscale uniquement — le script ne couvre pas Scaleway.
-# Sur Scaleway, vérifie la console : 3 control planes + 2 workers demandent
-# 5 instances du type de ton tfvars, et un compte neuf peut être plafonné à 1.
+# Sur Scaleway, vérifie la console : 3 control planes + 3 workers demandent
+# 6 instances du type de ton tfvars, et un compte neuf peut être plafonné à 1.
 task preflight-quotas PROVIDER=ovh
 
 task cluster-up ROLE=management PROVIDER=scaleway KEY=~/.ssh/yourkey

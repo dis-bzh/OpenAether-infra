@@ -52,9 +52,9 @@ IPs, LBs or security groups.
 
 | Example | Nodes × type (vCPU / RAM) | Inst. | vCPU | RAM | Meets the floor? | `task preflight-quotas PROVIDER=… --` |
 |---|---|---|---|---|---|---|
-| `management-`, `failover-scaleway` | 3+2 × `POP2-4C-16G` (4 / 16 GB) | 6 | 22 | 82 GB | Type yes; headroom on 2 workers unmeasured | no Scaleway backend |
+| `management-`, `failover-scaleway` | 3+3 × `POP2-4C-16G` (4 / 16 GB) | 7 | 26 | 98 GB | Yes; rollable, see the arithmetic below | no Scaleway backend |
 | `workload-scaleway` | 3+3 × `POP2-4C-16G` | 7 | 26 | 98 GB | Yes | no Scaleway backend |
-| `management-`, `failover-ovh` | 3+2 × `c3-8` (4 / 8 GB) | 6 | 22 | 48 GB | Type yes; headroom on 2 workers unmeasured | `--add-vms 6 --add-cores 22 --add-ram-gb 48` |
+| `management-`, `failover-ovh` | 3+3 × `c3-8` (4 / 8 GB) | 7 | 26 | 56 GB | Yes; rollable, see the arithmetic below | `--add-vms 7 --add-cores 26 --add-ram-gb 56` |
 | `workload-ovh` | 3+3 × `c3-8` | 7 | 26 | 56 GB | Yes | `--add-vms 7 --add-cores 26 --add-ram-gb 56` |
 | `management-`, `failover-outscale` | 3+2 × `tinav5.c2r4p1` (2 / 4 GB) | 6 | 12 | 22 GB | **No, on purpose** — see below | `--add-vms 6 --add-cores 12 --add-ram-gb 22` |
 | `workload-outscale` | 3+3 × `tinav5.c2r4p1` | 7 | 14 | 26 GB | **No, on purpose** | `--add-vms 7 --add-cores 14 --add-ram-gb 26` |
@@ -77,6 +77,33 @@ Also against the examples:
   changes `vm_type` with a stop/start — resize one node at a time.
 - The real-cloud runs in [`status.md`](status.md) record the instance type only for Outscale
   (`tinav5.c2r4p1`), so Scaleway's and OVH's establish no floor.
+
+## Can the cluster lose a worker, and be rolled? (infra #378)
+
+`cluster-roll` refuses to start when the CPU requests of all workers, each as a percentage of its own node, add up to more than
+(workers - 1) x 100%: one node's worth of requests must fit on the others (`worker_cpu_requests` / `preflight_roll`,
+`scripts/lib/roll-gates.sh`). **Measured** in lab 16 with the full application stack on a management cluster, requests as % of a
+worker's allocatable CPU:
+
+| Profile (as shipped before) | Workers | Requested | Limit | Verdict |
+|---|---|---|---|---|
+| Scaleway 3+2 `POP2-4C-16G` | 82% + 90% | 172% | 100% | refused |
+| OVH 3+2 `c3-8` | 81% + 91% | 172% | 100% | refused |
+| Outscale 3+3 `tinav5.c3r6p2` (3 vCPU) | 239% in all | 239% | 200% | refused |
+
+Arithmetic (derived from those numbers, taking a worker's allocatable as about its vCPU count): on 4 vCPU the 172% is about 6.9 vCPU in
+total, on 3 vCPU the 239% is about 7.2 vCPU, so requests are roughly 6.3 vCPU of fixed deployments plus 0.3 vCPU of DaemonSets per
+worker (an estimate from two points, not a measurement of each). With n workers of 4 vCPU the gate needs 6.3 + 0.3n <= 4(n - 1):
+n = 3 gives 7.2 against 8 (about 90% of the limit, 180% against 200%); n = 4 gives 7.5 against 12. The examples for Scaleway and OVH
+therefore ship **3 workers**. The margin at 3 is thin: a heavier app set can break it, and the gate says so before anything is touched.
+This is the CPU gate only: replicas with a required spread (three OpenBao pods, for instance) stay short while a worker is out, and
+the cluster-wide behaviour of losing a node under load belongs to 0.4.0 (resilience), not to this table.
+
+Outscale: no shape fits the default 20 vCPU quota and passes the gate. 3 workers of 3 vCPU fail (above), and 4 workers of 3 vCPU need
+3 + 4 nodes x 3 + 2 (bastion) = 23 vCPU. The smallest passing shape on the arithmetic is 3+3 `tinav5.c4r8p2` (4 vCPU / 8 GB): 26 vCPU with
+the bastion, so a quota raise comes first. It has not been run on Outscale. The 6 GB nodes of lab 16 also fell into an IO and memory
+cascade after one backup and restore and one drained reboot (#376); the root volume is gp2 (type not configurable here), and an `io1 3000`
+change made by hand did not stop it. The example now sets `outscale_root_volume_size_gb = 50` rather than leaving it commented.
 
 ## System disk and the full application stack (all providers)
 
