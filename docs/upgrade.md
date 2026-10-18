@@ -223,6 +223,14 @@ node, lists the pods and refuses to go on. By hand: drain, then
 `kubectl -n longhorn-system get pods -o wide | grep share-manager` must show another node. Offline test: `scripts/dev/test-rwx-drain-gate.sh`.
 Not yet proven on a cluster: that a drained node then reboots in about 1.5 minutes (the apps repo also shortens the RWX NFS timeouts).
 
+### Never reboot a worker undrained when it carries a CNPG instance
+
+A node reboot WITHOUT a drain leaves the CNPG instance pods of that node in phase `Succeeded` (the kubelet's graceful shutdown stops postgres with exit 0) and
+CNPG 1.23.1 never restarts them: both databases down, Zitadel and the Gateway answer 503 (lab 11, 30+ minutes; apps `docs/traps.md`). `cluster-roll`,
+`cluster-upgrade` and `cluster-shrink` drain first, so they are safe; a hand-typed `talosctl reboot` or `shutdown` is not. After an undrained reboot:
+`kubectl get pods -A --field-selector=status.phase==Succeeded`, then delete the CNPG pods listed (never their PVC). Newer CNPG operators (the apps pin moved past 1.23) are
+not known to share the defect; the habit costs nothing. The roll tooling does not guard a reboot it does not run (infra #358): this page is the guard.
+
 ### A database left "Failing over" after the roll
 
 The roll finishes, the API never blinked, and minutes later a CNPG cluster sits

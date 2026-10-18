@@ -239,6 +239,14 @@ il dé-cordonne le nœud, liste les pods et refuse de continuer. À la main : dr
 `kubectl -n longhorn-system get pods -o wide | grep share-manager` doit montrer un autre nœud. Test hors ligne : `scripts/dev/test-rwx-drain-gate.sh`.
 Pas encore prouvé sur un cluster : qu'un nœud drainé redémarre ensuite en 1,5 minute environ (le dépôt apps raccourcit aussi les délais NFS RWX).
 
+### Ne jamais redémarrer sans drain un worker qui porte une instance CNPG
+
+Un redémarrage de nœud SANS drain laisse les pods d'instance CNPG de ce nœud en phase `Succeeded` (l'arrêt propre du kubelet arrête postgres avec le code 0) et
+CNPG 1.23.1 ne les redémarre jamais : les deux bases sont à l'arrêt, Zitadel et la Gateway répondent 503 (lab 11, plus de 30 minutes ; `docs/traps.md` côté apps). `cluster-roll`,
+`cluster-upgrade` et `cluster-shrink` drainent d'abord, donc sans risque ; un `talosctl reboot` ou `shutdown` tapé à la main non. Après un redémarrage sans drain :
+`kubectl get pods -A --field-selector=status.phase==Succeeded`, puis supprimer les pods CNPG listés (jamais leur PVC). Les opérateurs CNPG plus récents (le pin des apps a dépassé la 1.23) ne sont
+pas connus pour ce défaut ; l'habitude ne coûte rien. L'outillage de roll ne garde pas un redémarrage qu'il ne lance pas (infra #358) : cette page est le garde-fou.
+
 ### Une base restée en « Failing over » après le roll
 
 Le roll se termine, l'API n'a pas bronché, et quelques minutes plus tard un

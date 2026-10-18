@@ -50,6 +50,9 @@ ANSSI hardening work, not released yet. **Nothing here is a claim of compliance 
 
 ### Fixed
 
+- **The node roll docs warn about an undrained reboot of a worker with a CNPG instance (infra #358).** `docs/upgrade.md` (EN, FR): drain first; the roll commands do, a hand-typed
+  `talosctl reboot` does not; the recovery after one. No tooling guard was added (the roll tooling does not run that reboot).
+
 - **`s3-isolation-check.sh` asserts HeadBucket on each dedicated pair's own bucket (infra #356, #359).** A Scaleway pair without `ObjectStorageBucketsRead` and `s3:ListBucket`
   listed and wrote, passed the check, and then got a 403 on the first call of every barman-cloud WAL archive. The check now exits 1 naming HeadBucket and the IAM set to
   add; `docs/backup-policy.md` (EN, FR) states the rule and that OVH and Outscale are not verified. Tests in `test-s3-isolation.sh`.
