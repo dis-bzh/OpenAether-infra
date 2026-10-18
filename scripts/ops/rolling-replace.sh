@@ -87,10 +87,15 @@ case "$PROVIDER" in
   *) echo "✗ unknown provider: $PROVIDER (expected scaleway|ovh|outscale|proxmox)" >&2; exit 2 ;;
 esac
 # --upgrade has been exercised live on all three clouds (2026-08-13); the
-# REPLACEMENT path (no --upgrade) only ever on Scaleway. Warn about the one that
+# REPLACEMENT path (no --upgrade) on Scaleway, and for the control planes on OVH. Warn about the one that
 # is actually unproven, not about the whole script — the blanket warning
 # contradicted this file's own header and taught readers to ignore it.
-if [[ "$PROVIDER" != "scaleway" && "$UPGRADE" -eq 0 ]]; then
+if [[ "$PROVIDER" == "ovh" && "$UPGRADE" -eq 0 ]]; then
+  # --cp-only was exercised live on OVH (2026-10-17, three control planes in 12 min); a worker replacement was not
+  # (the capacity gate refused on two workers).
+  echo "⚠ ovh: only the control-plane REPLACEMENT has been exercised on a live cluster, not the" >&2
+  echo "  worker replacement — run --dry-run first and review the targets." >&2
+elif [[ "$PROVIDER" != "scaleway" && "$UPGRADE" -eq 0 ]]; then
   echo "⚠ ${PROVIDER}: the node-REPLACEMENT path has never been exercised on a live" >&2
   echo "  cluster (only --upgrade has) — run --dry-run first and review the targets." >&2
 fi
