@@ -511,7 +511,7 @@ tasks:
       # a failing verifier fails it, and only a passing one prints success (#84).
       - ./scripts/dev/test-cluster-up.sh
       # check-alerts does not call a metric blind when no series is its healthy state (#357).
-      - python3 -I scripts/dev/test-check-alert-metrics.py
+      - ./scripts/dev/test-check-alert-metrics.sh
       # A bootstrap the state forgot is imported only when a control plane already
       # has etcd members (#67); every other answer must change nothing. The second
       # harness runs the real talos provider offline, which the first can only assume.
