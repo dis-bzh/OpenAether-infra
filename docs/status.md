@@ -7,6 +7,8 @@ to pick up.
 Open work is **not** here — it is in the GitHub issues, each naming what closes it
 and the rung it needs. This file answers "what is true today", not "what is left".
 
+**0.3.0 (not released yet) is described by its `[0.3.0]` section of `CHANGELOG.md`: hardening options (all off by default), a 50 GB default system disk, and labs 11 to 15c on Scaleway, OVH and Outscale (2026-10-16 to 2026-10-18), each once. The table below is the older 0.2.0 measurement and is not re-measured by those labs.**
+
 **0.2.1 (a patch) is the infra half of the pair with OpenAether-apps 0.2.0; its real-cloud runs are in `CHANGELOG.md` under `[0.2.1]`
 (Scaleway, OVH, Outscale reduced profile, 2026-10-15, once by hand, with apps branches). The rest of this file still describes 0.2.0, which 0.2.1 does not change.**
 **0.2.0 is the release this file describes; 0.1.0, published 2026-08-20 as a pre-release, was the first to ship something proven.** Every 1.x tag was

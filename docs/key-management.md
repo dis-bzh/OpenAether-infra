@@ -12,7 +12,7 @@
 This page covers the keys of the platform underneath (Talos, the state, the buckets, the bastion) and lists
 the keys of the application layer in one line each. The application layer's own inventory, with the same
 columns and the replacement commands for OpenBao, restic, Zitadel and Longhorn, is
-`OpenAether-apps/docs/key-inventory.md` (it ships with the apps side of the same ANSSI work; apps 0.2.0 does not have it).
+`OpenAether-apps/docs/key-inventory.md` (it ships with the apps side of the same ANSSI work; apps 0.2.0 does not have it; apps 0.3.0 does).
 
 ## 1. Inventory: what each key is
 

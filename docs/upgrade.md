@@ -70,6 +70,24 @@ gated. Real numbers, 2026-10-03: 0 failed on Scaleway, 40 failed and 20 blind of
 1490 on Outscale (`docs/status.md`). How it works:
 [`cluster-upgrade.sh` § The service probe](../scripts/dev/cluster-upgrade.sh).
 
+## From 0.2.x to 0.3.0 (the platform, not Talos or Kubernetes)
+
+0.3.0 moves neither Talos (1.14.2) nor Kubernetes (1.37.1). What it changes on a running cluster, in this order:
+
+1. **Read the plan** (`task cluster-up` stops at it). With unchanged tfvars the one change you should see is the Scaleway system volumes going from 20 to 50 GB
+   **in place** (`scw_root_volume_size_gb`, default 50; no node is replaced) and a Talos machine config change. Pin `scw_root_volume_size_gb = 20` only to keep the old size,
+   which does not hold the application stack. On Outscale the root of a running VM is not resized in place: set `outscale_root_volume_size_gb` (and raise the root IOPS,
+   infra #376) and replace the workers one at a time with `task cluster-roll`. OVH and Proxmox: the flavour's disk and `root_disk_gb` (50).
+2. **Reboot the Scaleway workers one at a time, drained**, so Talos grows EPHEMERAL. Use `task cluster-roll`; a hand-typed `talosctl reboot` does not drain, and
+   a worker carrying a CNPG instance must never be rebooted undrained (see below).
+3. **Grow the disks before the application hops.** The 0.3.0 images are larger, and a 20 GB node reached DiskPressure after hours of hops (lab 15c).
+4. **Then move the apps side** one minor at a time where it says so: Longhorn 1.9 -> 1.10 -> 1.11 -> 1.12 (with the CRD conversion pre-step), cert-manager, the CNPG operator,
+   Kyverno, and the Loki chart procedure are in OpenAether-apps `docs/patching.md`. Take a CNPG Backup and a Longhorn backup first; Zitadel and Grafana migrations are forward-only.
+5. **Hardening options are off by default.** Turn them on one at a time (`docs/hardening.md`, `docs/security-architecture.md`); each plan is read before it is applied.
+   Options that change the Talos machine config (node filtering, baseline, log forwarding) are applied by the plan; if a change needs a reboot, do it with `task cluster-roll`.
+
+Not rehearsed in place: the Loki 6.55 -> 18 step, Grafana, Alloy, the Gateway API CRDs, Flux on the children. A fresh install of every version ran on the three clouds.
+
 ## Kubernetes first
 
 It reboots nothing, so it isolates the control-plane roll from the node roll.

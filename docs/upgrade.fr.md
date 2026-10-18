@@ -76,6 +76,24 @@ pas bloquante, et les chiffres réels du 2026-10-03 sont 0 échec sur Scaleway, 
 sur 1490 sur Outscale (`docs/status.md`).
 Fonctionnement : [`cluster-upgrade.sh` § The service probe](../scripts/dev/cluster-upgrade.sh).
 
+## De la 0.2.x à la 0.3.0 (la plateforme, pas Talos ni Kubernetes)
+
+La 0.3.0 ne change ni Talos (1.14.2) ni Kubernetes (1.37.1). Ce qu'elle change sur un cluster en marche, dans cet ordre :
+
+1. **Lire le plan** (`task cluster-up` s'arrête dessus). À tfvars inchangés, la seule modification attendue est le passage des volumes système Scaleway de 20 à 50 Go
+   **sur place** (`scw_root_volume_size_gb`, défaut 50 ; aucun nœud n'est remplacé) et un changement de la machine config Talos. N'épingler `scw_root_volume_size_gb = 20` que pour garder
+   l'ancienne taille, qui ne contient pas la pile applicative. Sur Outscale, le disque racine d'une VM en marche n'est pas redimensionné sur place : définir `outscale_root_volume_size_gb`
+   (et relever les IOPS racine, infra #376) puis remplacer les workers un à un avec `task cluster-roll`. OVH et Proxmox : le disque du gabarit et `root_disk_gb` (50).
+2. **Redémarrer les workers Scaleway un par un, drainés**, pour que Talos agrandisse EPHEMERAL. Utiliser `task cluster-roll` ; un `talosctl reboot` tapé à la main ne draine pas, et un
+   worker qui porte une instance CNPG ne doit jamais être redémarré sans drain (voir plus bas).
+3. **Agrandir les disques avant les montées de version des applications.** Les images de la 0.3.0 sont plus grosses ; un nœud de 20 Go a atteint DiskPressure après des heures de montées (lab 15c).
+4. **Puis la partie apps**, une version mineure à la fois là où c'est dit : Longhorn 1.9 -> 1.10 -> 1.11 -> 1.12 (avec l'étape préalable sur la conversion des CRD), cert-manager, l'opérateur CNPG,
+   Kyverno et la procédure du chart Loki sont dans `docs/patching.md` d'OpenAether-apps. Prendre d'abord une sauvegarde CNPG et une sauvegarde Longhorn ; les migrations de Zitadel et Grafana sont sans retour.
+5. **Les options de durcissement sont désactivées par défaut.** Les activer une à une (`docs/hardening.md`, `docs/security-architecture.md`) ; chaque plan est lu avant d'être appliqué.
+   Les options qui changent la machine config Talos (filtrage des nœuds, base de référence, transfert de journaux) passent par le plan ; si un changement exige un redémarrage, passer par `task cluster-roll`.
+
+Non répété sur place : l'étape Loki 6.55 -> 18, Grafana, Alloy, les CRD Gateway API, Flux sur les enfants. Une installation neuve de chaque version a tourné sur les trois clouds.
+
 ## Kubernetes d'abord
 
 Elle ne redémarre rien, ce qui isole le roulement du control plane de celui des

@@ -12,7 +12,107 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ---
 
-## [Unreleased]
+## [0.3.0] — unreleased (the date is set at the tag)
+
+0.3.0 is the second half of the pair with OpenAether-apps 0.3.0: a wave of **security hardening, all of it opt-in and off by default**, a larger
+default system disk, and the tooling to check and operate what it adds. The infra code moves no Talos or Kubernetes version (Talos 1.14.2 and
+Kubernetes 1.37.1, as in 0.2.0); the version upgrades of 0.3.0 are in the apps repository (table in its CHANGELOG).
+The project follows ANSSI recommendations as far as possible. **Nothing here is a claim of compliance with any ANSSI document**: each entry
+below names the requirements it addresses and the rung it reached (mocked, emulated, local Docker, or real cloud).
+
+### Summary
+
+- **Hardening, each option off by default:** node network filtering (`rules_only`, a per-port allow-list), node kernel/kubelet baseline and time sources,
+  node log forwarding and Hubble drop logs, bastion OS baseline, named bastion operators and an SSH CA, closed bastion Internet egress, bastion log upload,
+  an application load balancer source filter, dedicated key pairs and versioning for the backup stores, OpenPGP verification of the commit Flux applies,
+  named short-lived Kubernetes identities, passphrase hygiene for the state, OpenBao seal-key escrow and `rotate-secret`.
+- **Checks and tools:** `cluster-security`, `cluster-exposure`, `cluster-netcheck`, `rbac-review`, `s3-isolation-check`, `escrow`, `rotate-secret`,
+  `bastion-harden-check`, `bastion-logs-pull`, a patch-policy signal, the end-of-life calendar, SBOM, a committed provider lock.
+- **A 50 GB system disk by default** (see Changed).
+- **Documentation:** a security documentation set with a French twin per page (`security-architecture`, `key-management`, `backup-policy`, `hardening`,
+  `incident-response`, `threat-model`, `capacity`, `upgrade`, and others).
+
+### Changed (behaviour of an existing setup)
+
+- **Scaleway: the system volume of every node is 50 GB by default (`scw_root_volume_size_gb`, new variable; the 0.2.x default was 20 GB).**
+  At 20 GB the full application stack left about 15.6 GB usable; lab 12 saw DiskPressure and 25 Zitadel pods evicted, lab 15c saw it after hours of
+  in-place hops. A validation refuses less than 40 with `deploy_flux = true` (20 stays valid without Flux). An existing cluster gets an **in-place resize
+  of its `sbs_volumes` at the next apply (no node replaced)**; Talos grows EPHEMERAL at the node's next reboot, so reboot the workers one at a time,
+  drained, afterwards. Pin `scw_root_volume_size_gb = 20` in the tfvars to keep the old size (a full stack will not fit). Read the plan first:
+  lab 15c moving a 0.2.1 cluster to this branch with the same tfvars planned the six root volumes 20 -> 50 GB in place and a Talos machine config change.
+- **Outscale: `outscale_root_volume_size_gb` (new, default `null`)** sets the BSU root of **new** nodes only (the provider does not resize a running VM's
+  volume; `ignore_changes` keeps a running node from being replaced). `null` keeps the OMI's size (about 11-12 GiB), which does not hold the platform:
+  set 50, a `check` warns when `deploy_flux` is on and it is null. To grow a running cluster, replace the workers one at a time with `task cluster-roll`.
+  **Raise the root IOPS too** (gp2 50 GB = 150 IOPS saturated the node in lab 15b, infra #376).
+- **OVH:** the flavour's disk (`b3-8`, `c3-8`: 50 GB) is read from the account and a `check` warns below 40 GB. **Proxmox:** `root_disk_gb` default 50.
+- **Scaleway: the application load balancer ACLs are standalone `scaleway_lb_acl` resources** (see Fixed). An existing cluster with
+  `app_lb_allowed_cidrs` set sees them created at the next apply.
+- **The example tfvars carry `deploy_flux = true` and `deploy_app_lb = true`** (Proxmox: Flux only). A file copied from 0.2.x examples without them
+  built an infrastructure-only cluster; `check-doc-inputs.sh` now fails an example without them.
+- **`bastion_internet_egress = closed` together with `bastion_baseline` is refused at plan time** unless `audit_logging = false` and no collector is wanted (the
+  closed bastion cannot reach the package mirrors that auditd needs).
+- **Cluster-up and its checkpoints:** the human checkpoints are unchanged. `APPROVE=auto` is the documented unattended path (it applies the saved plan
+  files, never `-auto-approve`); without it the journey stops at three checkpoints and each says nothing was applied (`docs/first-cluster.md`, EN and FR).
+
+**BREAKING:** none for a tfvars that sets nothing new, except the 50 GB disk default above on Scaleway (a plan that resizes volumes in place) and the
+new `check`/validation on the disk with `deploy_flux`. Every hardening option defaults to the 0.2.1 behaviour; the default bastion render is byte for byte unchanged.
+
+### Upgrade notes (from 0.2.1)
+
+1. Read the plan: `task cluster-up` stops at it. Expect the volume resize on Scaleway; nothing else changes with unchanged tfvars.
+2. After the apply, reboot the Scaleway workers one at a time, **drained** (`task cluster-roll` does it; a hand-typed `talosctl reboot` does not drain, and a worker
+   that carries a CNPG instance must never be rebooted undrained, infra #358).
+3. The apps side of the pair (0.3.0) moves Longhorn, CNPG, cert-manager, Kyverno, Loki and Grafana across several minors. **Do the hops in the order and
+   with the pre-steps of `docs/upgrade.md` and of the apps `docs/patching.md`** (Longhorn 1.9 -> 1.10 -> 1.11 -> 1.12 with the CRD conversion pre-step; Loki chart
+   procedure; Kyverno per-namespace Enforce spelling; CNPG operator hops with the switchover method). Do not tag-pin an infra 0.3.0 `git_ref` before apps 0.3.0 exists.
+4. Turn on hardening options one at a time (the documents `docs/hardening.md` and `docs/security-architecture.md` list them with their rollback).
+5. Provision the owner-held inputs the options need (operator public keys, SSH CA public key, OpenBao recovery PGP public keys, dedicated S3 key pairs);
+   the full list of what an unattended run still needs from a person is in `docs/first-cluster.md`.
+
+### Known limitations
+
+None of these is hidden by a green check; each has an issue.
+
+- **OVH S3 has no bucket policies through the S3 API** (`PutBucketPolicy` answers NotImplemented); OVH runs on the operator's keys and `s3-isolation-check` exits 2
+  there. A dedicated pair needs the OVH API. Documented in `docs/backup-policy.md` (infra #379).
+- **Outscale: gp2 root and magnetic data volumes saturate under the full stack** (infra #376), and OOS refused the EIM keys of a dedicated pair (infra #377).
+- **CNPG `barmanObjectStore` is removed in CNPG 1.31** and **Kyverno `kyverno.io/v1` policies are removed in Kyverno 1.20** (apps #114, #113); 0.3.0 stays on CNPG 1.30.x and Kyverno 1.19.x.
+- **The history is unsigned for now** (infra #332, #333): Flux commit verification (`flux_git_verify`) exists but cannot be switched on until a signing key is
+  registered, and the GitHub rulesets do not require signatures or reviews yet. The maintainer will create a dedicated signing key later.
+- **In-place hops not rehearsed:** Loki chart 6.25 -> 18 and Grafana 11 -> 13 across the major steps, Alloy, the Gateway API CRDs, Flux on the children, Cilium and
+  Talos patch hops (apps #121). A fresh install lands on the new versions and was run (lab 12 onward).
+- **First install on Scaleway with the app load balancer allow-list needs two applies** (the ACL plan is inconsistent until the NAT address exists, infra #361).
+- **MinIO (local/dev profile) is archived upstream;** its waiver runs to 2026-12-31 (apps #104, the end-of-life calendar of the apps repository).
+- **Kubernetes 1.37 is outside the range the upstream projects test** (cert-manager, CNPG, Flux and others, apps #105, #120). The labs ran on it.
+- **OVH:** instances can go to ERROR at creation or stay ACTIVE but unreachable (infra #371, #362), the app LB pools have no health monitor (infra #375), and the OVH
+  column of the first labs never ran (infra #366).
+- **Not exercised since lab 11:** `rotate-secret --apply`, the Git break-glass, PKI revocation drill, FIDO hardware keys (infra #370); COMPLIANCE object lock is an owner decision (infra #369).
+- **Day-1 steps stay manual:** `seed-openbao.sh`, the PKI signing with an offline root (human by design) and the Zitadel MFA enrolment before the first Grafana login.
+
+### Validated on (all offline suites green on the head commit; the cloud runs are on earlier heads of this branch, the fixes found were re-run by the suites)
+
+Real clouds, with Talos 1.14.2 / Kubernetes 1.37.1, each once, by hand or by script, **never repeated for stability**:
+
+| Lab | Date | What |
+|---|---|---|
+| 11 | 2026-10-16 | Wave 2 options. Scaleway full DAG, Outscale reduced; OVH did not get past the first apply (platform no-egress, Octavia ERROR). 5 defects fixed. |
+| 12 | 2026-10-17 | Fresh install at the final versions. Scaleway full DAG converged (cluster-verify 16/16, cluster-security 34/36 + 2 n/a, strict plan clean); Outscale reduced. |
+| 13 | 2026-10-17 | Scaleway fresh install on the **defaults** (50 GB), bastion 37/37, isolation 10/10, RWX hang reproduced then fixed. |
+| 14 | 2026-10-17 | Scaleway 3 CP + 3 W, OVH reduced: Longhorn backup/restore, CNPG restore into a new cluster, drained reboot 66 s, checksums intact. |
+| 15a | 2026-10-17 | OVH complete: cluster-up 817 s, verify 16/16, security 33/36, bastion with closed egress, forward and reverse node filtering swaps, control planes replaced for real. |
+| 15b | 2026-10-18 | Outscale, two full clusters (3 CP + 3 W): cluster-up 805/817 s, verify 16/16, security 33/36, bastion 38/38. |
+| 15c | 2026-10-18 | Scaleway lifecycle from infra 0.2.1 + apps 0.2.0: 40 upgrade hops and drills over about 6.5 h; 20896 HTTP probe samples, 135 failed (0.65 %), one 73 s episode (a drain evicting the single Gateway pod). |
+
+Every lab was torn down and its provider account checked clean (`purge-orphans`, `verify-provider-clean`).
+
+**NOT run:** an etcd snapshot restore on a second cluster; a real node replacement through `cluster-roll` on Scaleway (printed only); the Istio hops; Alloy, Grafana,
+Gateway API CRD hops; the Flux (children) and Cilium/Talos patch hops; Zitadel -> Grafana interactive login (MFA, no browser); OpenBao raft snapshot restore; dedicated key
+pairs on OVH and Outscale; Loki retention expiry; FIDO keys; Proxmox; the signed-history path (no signing key yet); the cloud workflow of the CI. Nothing ran for days;
+the longest run is the 6.5 h of lab 15c.
+
+---
+
+### Detail of the 0.3.0 entries
 
 ANSSI hardening work, not released yet. **Nothing here is a claim of compliance with any ANSSI document**: each entry names the requirements it addresses and the rung it reached.
 

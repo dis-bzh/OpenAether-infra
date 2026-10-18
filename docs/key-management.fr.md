@@ -11,7 +11,7 @@
 Cette page couvre les clés de la plateforme sous-jacente (Talos, l'état, les buckets, le bastion) et liste les clés de la couche
 applicative en une ligne chacune. L'inventaire propre à la couche applicative, avec les mêmes colonnes et les commandes de
 remplacement pour OpenBao, restic, Zitadel et Longhorn, est `OpenAether-apps/docs/key-inventory.md` (il livre avec la moitié
-apps du même travail ANSSI ; apps 0.2.0 ne l'a pas).
+apps du même travail ANSSI ; apps 0.2.0 ne l'a pas ; apps 0.3.0 l'a).
 
 ## 1. Inventaire : ce qu'est chaque clé
 
