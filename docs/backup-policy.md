@@ -99,6 +99,13 @@ management buckets (`s3-isolation-check.sh`: 4 of 8 assertions failed); with an 
 (`OA_ISOLATION_REAL_VERSION=1`). So the recipe for a pair, which this repository does not apply for you (the providers' IAM is the operator's): create the
 application and its IAM policy, put the operator-only policy on every OTHER bucket, the pair's own policy on its bucket, then run the check. OVH and Outscale: not verified.
 
+**HeadBucket is the first call of every WAL archive and Loki flush, and its right is separate from list (infra #356, #359).** On Scaleway a pair needs
+BOTH the IAM set `ObjectStorageBucketsRead` AND `s3:ListBucket` in the bucket policy of its own bucket: a pair with only the three object sets lists and writes, yet
+barman-cloud gets a 403 on HeadBucket and every WAL archive fails (measured in a lab; the isolation check passed it, because it only listed). `s3-isolation-check.sh`
+now asserts `head-bucket` allowed on each dedicated pair's own bucket and exits 1 naming HeadBucket when it is denied. OVH: per-user policies need the OVH API (the S3 API
+answers NotImplemented), so the rule could not be read there. Outscale: dedicated EIM keys were refused by the store (infra #377). Neither is verified; the check is
+the test once a pair exists.
+
 ## 5. What is not done
 
 - Object lock and versioning are opt-in, and unverified on any provider; the default leaves a stolen S3 key able to delete backups. No policy for the limited pairs is shipped.

@@ -59,6 +59,14 @@ grep -qE 'OPSECRET|REPSECRET|LOKISK|BKPSK|BKRSK' <<<"$OUT" && bad "a secret was 
 grep -E ' (delete|put-)' "$FAKE_S3/calls.log" | grep -vE ' delete-object [^ ]+$|put-bucket|put-object-lock' | grep -q . && bad "an unexpected write" || ok "the only delete call is delete-object --version-id, on a numeric version that does not exist"
 grep -q "✓ $BK-backup list" <<<"$OUT" && ok "the replica pair is checked on the replica store" || bad "no replica check"
 
+echo "--- a pair that lists its bucket but is refused HeadBucket on it fails, naming HeadBucket (#356) ---"
+fresh; echo "An error occurred (403) when calling the HeadBucket operation: Forbidden" >"$FAKE_S3/refuse/head-bucket.$BK"
+OUT="$(check "${DED[@]}")"; RC=$?
+is "exit 1" 1 "$RC"
+grep -q "✗ $BK head-bucket *expected allowed *observed denied" <<<"$OUT" && grep -q 'HeadBucket is denied on this pair' <<<"$OUT" && ok "the line names HeadBucket and the IAM set to add" || bad "$OUT"
+fresh; OUT="$(check "${DED[@]}")"
+grep -q "✓ $BK head-bucket" <<<"$OUT" && grep -q "✓ $LG head-bucket" <<<"$OUT" && ok "a healthy pair is asserted allowed on HeadBucket of its own bucket" || bad "$OUT"
+
 echo "--- Loki with the operator's reach: the bucket it should not open is named ---"
 fresh; rm "$FAKE_S3/id/LOKIAK"
 OUT="$(check "${DED[@]}")"; RC=$?

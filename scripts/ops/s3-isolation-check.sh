@@ -7,6 +7,9 @@
 # Identities (a pair is skipped when its variables are unset): the operator's keys on each store, OA_LOKI_S3_*,
 # OA_BACKUP_S3_* (primary backups bucket), OA_BACKUP_REPLICA_S3_* (its -backup twin). Probes, all harmless:
 #   list    ListObjectsV2, one key: may this identity read the bucket at all?
+#   head    HeadBucket on the pair's OWN bucket (asserted allowed): barman-cloud and the Loki client call it first, and a pair
+#           without the bucket-read right (Scaleway: ObjectStorageBucketsRead and s3:ListBucket in the bucket policy) lists
+#           and writes fine yet fails every WAL archive with a 403 (infra #356).
 #   delver  DeleteObjectVersion on a version that does not exist: refused with AccessDenied = the policy withholds it
 #           (NoSuchVersion/NoSuchKey = the store was willing to look, so a real version would go). A store that rejects the
 #           made-up id as malformed (InvalidArgument) tells nothing about the policy: reported "inconclusive", not a pass.
@@ -58,11 +61,13 @@ REAL="${OA_ISOLATION_REAL_VERSION:-0}"
 ep_of() { [ "$1" = p ] && printf '%s' "$PRIMARY_EP" || printf '%s' "$REPLICA_EP"; }
 rg_of() { [ "$1" = p ] && printf '%s' "$PRIMARY_REGION" || printf '%s' "$REPLICA_REGION"; }
 
-# probe <ak> <sk> <store p|r> <list|delver> <bucket> -> allowed | denied | absent | error:<text>
+# probe <ak> <sk> <store p|r> <list|head|delver> <bucket> -> allowed | denied | absent | error:<text>
 probe() {
   local ak="$1" sk="$2" st="$3" what="$4" b="$5" out rc=0
   if [ "$what" = list ]; then
     out="$(_oa_s3api "$ak" "$sk" "$(ep_of "$st")" "$(rg_of "$st")" list-objects-v2 --bucket "$b" --max-keys 1 2>&1)" || rc=$?
+  elif [ "$what" = head ]; then
+    out="$(_oa_s3api "$ak" "$sk" "$(ep_of "$st")" "$(rg_of "$st")" head-bucket --bucket "$b" 2>&1)" || rc=$?
   else
     out="$(_oa_s3api "$ak" "$sk" "$(ep_of "$st")" "$(rg_of "$st")" delete-object --bucket "$b" \
             --key oa-isolation-probe --version-id "${REAL_VID:-4242424242424242}" 2>&1)" || rc=$?
@@ -103,6 +108,9 @@ check_identity() { # <name> <ak> <sk> <store p|r> <own bucket> <asserted 1|0> â€
     exp=denied; if [ "$asserted" = 0 ] || [ "$b" = "$own" ]; then exp=allowed; fi
     report "$b list" "$exp" "$obs" "$asserted"
     if [ "$asserted" = 1 ] && [ "$b" = "$own" ]; then
+      obs="$(probe "$ak" "$sk" "$st" head "$b")"
+      report "$b head-bucket" allowed "$obs" 1
+      [ "$obs" != denied ] || echo "    ^ HeadBucket is denied on this pair's own bucket: it lists and writes, yet barman-cloud / Loki fail on their first call. Scaleway: add ObjectStorageBucketsRead to the pair's IAM set and s3:ListBucket to the bucket policy (docs/backup-policy.md, section 4)."
       REAL_VID=""
       if [ "$REAL" = 1 ]; then
         oak="$OPAK"; osk="$OPSK"; [ "$st" = p ] || { oak="$RPAK"; osk="$RPSK"; }

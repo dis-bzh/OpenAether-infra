@@ -99,6 +99,13 @@ tous les autres buckets** du projet (état, artefacts, management, les jumeaux `
 version d'objet (`OA_ISOLATION_REAL_VERSION=1`). La recette pour une paire, que ce dépôt n'applique pas à votre place (l'IAM du fournisseur est à l'opérateur) : créer
 l'application et sa politique IAM, poser la politique réservée à l'opérateur sur tous les AUTRES buckets, la politique de la paire sur son bucket, puis lancer le contrôle. OVH et Outscale : non vérifié.
 
+**HeadBucket est le premier appel de chaque archivage WAL et de chaque envoi Loki, et son droit est distinct du listage (infra #356, #359).** Sur Scaleway, une paire a besoin
+des DEUX : le jeu IAM `ObjectStorageBucketsRead` ET `s3:ListBucket` dans la politique de son propre bucket : une paire avec seulement les trois jeux d'objets liste et écrit,
+mais barman-cloud reçoit un 403 sur HeadBucket et chaque archivage WAL échoue (mesuré en lab ; le contrôle d'isolation la laissait passer, car il ne faisait que lister).
+`s3-isolation-check.sh` vérifie désormais `head-bucket` autorisé sur le bucket propre de chaque paire dédiée et sort en 1 en nommant HeadBucket s'il est refusé. OVH : les politiques
+par utilisateur passent par l'API OVH (l'API S3 répond NotImplemented), la règle n'a donc pas pu y être lue. Outscale : les clés EIM dédiées ont été refusées par le stockage
+(infra #377). Aucun des deux n'est vérifié ; le contrôle est le test dès qu'une paire existe.
+
 ## 5. Ce qui n'est pas fait
 
 - Le verrou d'objet et le versionnement sont optionnels, et non vérifiés chez aucun provider ; le défaut laisse une clé S3 volée capable de supprimer des sauvegardes. Aucune politique pour les paires limitées n'est fournie.

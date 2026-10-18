@@ -50,6 +50,10 @@ ANSSI hardening work, not released yet. **Nothing here is a claim of compliance 
 
 ### Fixed
 
+- **`s3-isolation-check.sh` asserts HeadBucket on each dedicated pair's own bucket (infra #356, #359).** A Scaleway pair without `ObjectStorageBucketsRead` and `s3:ListBucket`
+  listed and wrote, passed the check, and then got a 403 on the first call of every barman-cloud WAL archive. The check now exits 1 naming HeadBucket and the IAM set to
+  add; `docs/backup-policy.md` (EN, FR) states the rule and that OVH and Outscale are not verified. Tests in `test-s3-isolation.sh`.
+
 - **`bastion-logs-pull.sh` shows tofu's error when it cannot read the backend (infra #352).** With `OA_LOGS_UPLOAD=1` and no saved copy, a tofu that could not
   initialise its backend printed "apply the infra first", which is wrong when the infra is applied. It now prints tofu's first lines and names the way out
   (the shell that applied the infra, `OA_TOFU_DIR`, or `OA_BACKUP_TARGETS_JSON`). Test case in `test-bastion-logs-pull.sh`.
