@@ -12,17 +12,29 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ---
 
-## [0.3.1] — unreleased
+## [0.3.1] — 2026-10-19
 
-Hotfix for the problems that block the goals of 0.4.0 (resilience and monitoring), the pair of OpenAether-apps 0.3.1. Rung reached: **mocked** (plan-level
-tests), not yet observed on a cloud.
+0.3.1 is a **patch release** of 0.3.0: no new scope, the hotfix for the problems that block the goals of 0.4.0 (resilience and monitoring). It pairs with
+OpenAether-apps 0.3.1. The `git_ref` default and the twelve `envs/*.tfvars.example` now pin OpenAether-apps `refs/tags/0.3.1` (they pinned `refs/tags/0.3.0`), so
+apps 0.3.1 must be tagged first. Rung reached: **mocked** (plan-level tests), then **observed on a real cloud** for the fix below, on OVH in lab 17 (2026-10-19, one cluster, 3 control planes and 3 workers, a
+reduced profile, torn down). Not a compliance claim.
 
 ### Fixed
 
 - **OVH: the application load balancer pools get a TCP health monitor** (#375): `http` and `https` each have one (5 s delay, 3 s timeout, 2 retries), so a worker that is down
-  leaves the pool in about 10 to 15 s instead of staying `NO_MONITOR`. Two plan-level tests (monitors present, absent without `deploy_app_lb`). It does not fix a drain:
-  the Gateway Service is `externalTrafficPolicy: Cluster`, a drained node that is still up still answers its NodePort. Scaleway and Outscale are untouched. `cluster-verify` does
-  not check `NO_MONITOR` yet.
+  is expected to leave the pool. **Result: PARTIAL.** Observed on OVH: after `tofu apply` both pools have the monitor and all three members are `ONLINE` (they show
+  `ERROR` until the Gateway NodePorts exist, never `NO_MONITOR`; with the monitor deleted by hand they show `NO_MONITOR` again). The **failure window of a hard reboot of one worker is
+  not shorter**: 23 s and 25 s with the monitor, 12 s and 23 s without it (n=2 each, curl at 1 Hz through the load balancer): the window follows the node's own downtime,
+  and with a 5 s delay and 3 failed checks the member leaves the pool about as late as a quick reboot ends. The monitor helps a node that stays down, not a quick reboot. A plain drain was
+  not measured. Two plan-level tests (monitors present, absent without `deploy_app_lb`). Scaleway and Outscale are untouched. `cluster-verify` does not check `NO_MONITOR` yet.
+
+### Known limitations
+
+- #375: the Gateway Service is `externalTrafficPolicy: Cluster`, so a drained node that is still up still answers its NodePort and the monitor cannot take it out of the pool.
+- #375 improvement over a quick reboot is not shown (see above); do not rely on the monitor to shorten it.
+- On OVH the first `cluster-up` again met the ACTIVE-but-unreachable fault of two nodes (#371); a provider hard reboot and a second `cluster-up` fixed it.
+- The OpenBao, CNPG and Flux fixes of 0.3.1 live in OpenAether-apps; their lab results are in its CHANGELOG.
+- Unchanged and still open: apps #134, #133, #124 and infra #42 (the issues list what each needs).
 
 ---
 

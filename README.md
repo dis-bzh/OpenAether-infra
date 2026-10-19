@@ -28,6 +28,8 @@ account.
 
 ## Version
 
+**Current release: 0.3.1**, a patch of 0.3.0 (hotfix, no new scope; pairs with OpenAether-apps 0.3.1; `CHANGELOG.md`, `[0.3.1]`). The 0.3.1 `git_ref` default and tfvars examples pin OpenAether-apps `refs/tags/0.3.1`. The description below is that of 0.3.0, which 0.3.1 keeps.
+
 **0.3.0** (released 2026-10-19; `CHANGELOG.md`, `[0.3.0]`) — a security hardening wave, every option off by default, and a 50 GB default system disk on Scaleway. It is the infra half of the pair with OpenAether-apps 0.3.0 (the component upgrades are in the apps repository). It follows ANSSI recommendations as far as possible and claims no compliance with any ANSSI document. Run on real clouds once by hand or script on Scaleway, OVH and Outscale (labs 11 to 15c); the history is unsigned for now. The CHANGELOG lists the known limitations and what was not run.
 
 **0.2.1** (a patch) — no new scope. It is the infra half of the pair with OpenAether-apps 0.2.0: Day-1 seeding without a root

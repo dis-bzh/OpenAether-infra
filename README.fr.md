@@ -27,6 +27,8 @@ fermer sans compte cloud.
 
 ## Version
 
+**Version courante : 0.3.1**, un correctif de 0.3.0 (hotfix, aucun nouveau périmètre ; couple avec OpenAether-apps 0.3.1 ; `CHANGELOG.md`, `[0.3.1]`). Le défaut de `git_ref` et les exemples tfvars de 0.3.1 pointent sur OpenAether-apps `refs/tags/0.3.1`. La description ci-dessous est celle de 0.3.0, que 0.3.1 conserve.
+
 **0.3.0** (publiée le 2026-10-19 ; `CHANGELOG.md`, `[0.3.0]`) — une vague de durcissement, chaque option désactivée par défaut, et un disque système de 50 Go par défaut sur Scaleway. C'est la moitié infra du couple avec OpenAether-apps 0.3.0 (les mises à jour de composants sont dans le dépôt apps). Elle suit les recommandations de l'ANSSI autant que possible et ne revendique aucune conformité à un document de l'ANSSI. Exécutée sur de vrais clouds une fois, à la main ou par script, sur Scaleway, OVH et Outscale (labs 11 à 15c) ; l'historique n'est pas signé pour l'instant. Le CHANGELOG liste les limites connues et ce qui n'a pas été exécuté.
 
 **0.2.1** (correctif) — pas de nouveau périmètre. C'est la moitié infra du couple avec OpenAether-apps 0.2.0 : seeding Day-1 sans
