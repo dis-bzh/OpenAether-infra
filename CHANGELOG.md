@@ -12,13 +12,16 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ---
 
-## [0.3.2] — unreleased
+## [0.3.2] — 2026-10-19
 
-0.3.2 is a **patch release** of 0.3.1: no new scope, only bug fixes, documentation corrections and safety nets, worked offline. It pairs with OpenAether-apps 0.3.2 (which holds the
-Longhorn and Zitadel fixes of the same series); the `git_ref` default and the twelve `envs/*.tfvars.example` will pin OpenAether-apps `refs/tags/0.3.2` in the last commit of the release,
-so apps 0.3.2 must be tagged first (they still pin `refs/tags/0.3.1` now). Rung reached: **mocked** (self-tests and doc checks); nothing here was observed on a cloud. It does not fix the
-two infra issues the series set out to look at: #42 (the API unreachable for seconds during a control-plane roll) and #375 (the OVH hard-reboot window) stay open for 0.4.0, see below.
-Not a compliance claim.
+0.3.2 is a **patch release** of 0.3.1: no new scope, only bug fixes, documentation corrections and safety nets. It pairs with OpenAether-apps 0.3.2 (which holds the
+Longhorn and Zitadel fixes of the same series, with the results of lab 18); the `git_ref` default and the twelve `envs/*.tfvars.example` pin OpenAether-apps `refs/tags/0.3.2`.
+Rung reached by the lines below: **mocked** (self-tests and doc checks); the infra items were not observed on a cloud. Lab 18 (Scaleway, infra 7e367d9 / apps 75e464f) ran a nominal
+`cluster-up` in 9 min 07 s with `cluster-verify` at 15 passed, 0 failed; it did not exercise #293 or #360. It does not fix the two infra issues the series set out to look at:
+#42 (the API unreachable for seconds during a control-plane roll) and #375 (the OVH hard-reboot window) stay open for 0.4.0, see below. Not a compliance claim.
+
+Previous releases, for clients who pin by commit SHA: infra 0.3.1 = `dd4eb7a1044f688994a794b933f55bc3cf0554b6`, apps 0.3.1 = `21bf02e95cdb89a736c3b054df1f8500577b7e89`. The 0.3.2 release
+commits are recorded in the GitHub release notes. Use infra 0.3.2 with apps 0.3.2.
 
 ### Fixed
 
@@ -26,13 +29,14 @@ Not a compliance claim.
   `${{` AND whose conclusion is `cancelled` (what editing a PR body while CI runs leaves behind). A successful run of that name and a cancelled plain unrequired one still fail. Three
   self-test cases, the first red without the change. Rung: mocked.
 - **Documentation: finish every bastion replacement with a plan that says `No changes`** (#360), EN and FR: on Outscale the public IP link did not always come back in the same run (lab 11). The
-  OVH and Scaleway equivalents are written as unchecked. No script changed.
+  OVH and Scaleway equivalents are written as unchecked, and the text was not checked on OVH or Scaleway (lab 18 did not replace a bastion). No script changed.
 
 ### Not fixed, on purpose
 
 - **#42 (API unreachable during a control-plane roll)** and **#375 (hard-reboot window behind the OVH load balancer)**: nothing safe is verifiable offline. The roll already hands etcd leadership over
   and gates on etcd 3/3; the remaining candidates (HTTPS health checks on `/readyz`, `--shutdown-delay-duration`, `externalTrafficPolicy: Local`) need a cluster and, for the first, the owner's decision on
   anonymous health endpoints. Both stay open, labelled for 0.4.0.
+- Apps-side open items (#134 partial, #143, #144) are described in the apps CHANGELOG.
 - **#286** looks fixed already on `main` (the harness unsets `VERSION` and has a case with a hostile `VERSION`): it is for closing after a Cléa run shows a verdict that comes from the dependency.
 
 ## [0.3.1] — 2026-10-19
