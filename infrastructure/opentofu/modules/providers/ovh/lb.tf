@@ -163,6 +163,21 @@ resource "openstack_lb_pool_v2" "http" {
   listener_id = openstack_lb_listener_v2.http[0].id
 }
 
+# A TCP monitor per pool (infra #375). Without one the members sit at NO_MONITOR and Octavia keeps sending connections to a worker
+# that is rebooting or dead: seconds of failed requests on every roll (lab 15A: about 15 s for a hard reboot). 5 s x 2 retries
+# plus the 3 s timeout takes a dead member out in about 10 to 15 s. LIMIT: the Gateway Service is externalTrafficPolicy Cluster,
+# so a NodePort answers on every node that is up, a drained one included: the monitor catches a node that is down, not a
+# node whose gateway pod is being evicted.
+resource "openstack_lb_monitor_v2" "http" {
+  count       = var.deploy_app_lb ? 1 : 0
+  name        = "http"
+  pool_id     = openstack_lb_pool_v2.http[0].id
+  type        = "TCP"
+  delay       = 5
+  timeout     = 3
+  max_retries = 2
+}
+
 resource "openstack_lb_member_v2" "http" {
   count   = var.deploy_app_lb ? var.worker_count : 0
   pool_id = openstack_lb_pool_v2.http[0].id
@@ -187,6 +202,21 @@ resource "openstack_lb_pool_v2" "https" {
   protocol    = "TCP"
   lb_method   = "ROUND_ROBIN"
   listener_id = openstack_lb_listener_v2.https[0].id
+}
+
+# A TCP monitor per pool (infra #375). Without one the members sit at NO_MONITOR and Octavia keeps sending connections to a worker
+# that is rebooting or dead: seconds of failed requests on every roll (lab 15A: about 15 s for a hard reboot). 5 s x 2 retries
+# plus the 3 s timeout takes a dead member out in about 10 to 15 s. LIMIT: the Gateway Service is externalTrafficPolicy Cluster,
+# so a NodePort answers on every node that is up, a drained one included: the monitor catches a node that is down, not a
+# node whose gateway pod is being evicted.
+resource "openstack_lb_monitor_v2" "https" {
+  count       = var.deploy_app_lb ? 1 : 0
+  name        = "https"
+  pool_id     = openstack_lb_pool_v2.https[0].id
+  type        = "TCP"
+  delay       = 5
+  timeout     = 3
+  max_retries = 2
 }
 
 resource "openstack_lb_member_v2" "https" {

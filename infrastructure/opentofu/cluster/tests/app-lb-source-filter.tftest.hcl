@@ -274,6 +274,63 @@ run "ovh_listeners_take_the_sorted_list" {
   }
 }
 
+# --- OVH health monitors (infra #375) ---
+# Without a monitor the pool members stay NO_MONITOR and Octavia keeps sending to a worker that is down.
+
+run "ovh_pools_have_a_tcp_health_monitor" {
+  command = plan
+
+  variables {
+    node_distribution = {
+      ovh = {
+        control_planes     = 3
+        workers            = 2
+        region             = "EU-WEST-PAR"
+        flavor_name        = "b3-8"
+        image_id           = "dummy-talos-ovh-image"
+        network_name       = "Ext-Net"
+        availability_zones = ["eu-west-par-a"]
+        k8s_lb_mode        = "vip"
+      }
+    }
+  }
+
+  assert {
+    condition     = alltrue([for k in ["http", "https"] : module.ovh[0].app_lb_monitors[k] != null && try(module.ovh[0].app_lb_monitors[k].type, "") == "TCP"])
+    error_message = "OVH: the http and https pools of the app LB must each have a TCP health monitor (members stay NO_MONITOR otherwise)."
+  }
+
+  assert {
+    condition     = alltrue([for k in ["http", "https"] : try(module.ovh[0].app_lb_monitors[k].timeout <= module.ovh[0].app_lb_monitors[k].delay && module.ovh[0].app_lb_monitors[k].delay <= 10 && module.ovh[0].app_lb_monitors[k].max_retries <= 3, false)])
+    error_message = "OVH: monitor timing must take a dead member out within about 15 s (timeout <= delay <= 10 s, at most 3 retries) and Octavia requires timeout <= delay."
+  }
+}
+
+run "ovh_no_app_lb_no_monitor" {
+  command = plan
+
+  variables {
+    deploy_app_lb = false
+    node_distribution = {
+      ovh = {
+        control_planes     = 3
+        workers            = 1
+        region             = "EU-WEST-PAR"
+        flavor_name        = "b3-8"
+        image_id           = "dummy-talos-ovh-image"
+        network_name       = "Ext-Net"
+        availability_zones = ["eu-west-par-a"]
+        k8s_lb_mode        = "vip"
+      }
+    }
+  }
+
+  assert {
+    condition     = module.ovh[0].app_lb_monitors.http == null && module.ovh[0].app_lb_monitors.https == null
+    error_message = "OVH: without deploy_app_lb there is no pool, hence no monitor."
+  }
+}
+
 # --- Outscale ---
 
 run "outscale_default_has_no_lb_rule" {

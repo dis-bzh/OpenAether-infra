@@ -12,6 +12,20 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ---
 
+## [0.3.1] — unreleased
+
+Hotfix for the problems that block the goals of 0.4.0 (resilience and monitoring), the pair of OpenAether-apps 0.3.1. Rung reached: **mocked** (plan-level
+tests), not yet observed on a cloud.
+
+### Fixed
+
+- **OVH: the application load balancer pools get a TCP health monitor** (#375): `http` and `https` each have one (5 s delay, 3 s timeout, 2 retries), so a worker that is down
+  leaves the pool in about 10 to 15 s instead of staying `NO_MONITOR`. Two plan-level tests (monitors present, absent without `deploy_app_lb`). It does not fix a drain:
+  the Gateway Service is `externalTrafficPolicy: Cluster`, a drained node that is still up still answers its NodePort. Scaleway and Outscale are untouched. `cluster-verify` does
+  not check `NO_MONITOR` yet.
+
+---
+
 ## [0.3.0] — 2026-10-19
 
 0.3.0 is the second half of the pair with OpenAether-apps 0.3.0: a wave of **security hardening, all of it opt-in and off by default**, a larger
