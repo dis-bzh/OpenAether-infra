@@ -12,16 +12,13 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ---
 
-## [0.3.2] — 2026-10-19
+## [Unreleased]
 
-0.3.2 is a **patch release** of 0.3.1: no new scope, only bug fixes, documentation corrections and safety nets. It pairs with OpenAether-apps 0.3.2 (which holds the
-Longhorn and Zitadel fixes of the same series, with the results of lab 18); the `git_ref` default and the twelve `envs/*.tfvars.example` pin OpenAether-apps `refs/tags/0.3.2`.
-Rung reached by the lines below: **mocked** (self-tests and doc checks); the infra items were not observed on a cloud. Lab 18 (Scaleway, infra 7e367d9 / apps 75e464f) ran a nominal
-`cluster-up` in 9 min 07 s with `cluster-verify` at 15 passed, 0 failed; it did not exercise #293 or #360. It does not fix the two infra issues the series set out to look at:
-#42 (the API unreachable for seconds during a control-plane roll) and #375 (the OVH hard-reboot window) stay open for 0.4.0, see below. Not a compliance claim.
-
-Previous releases, for clients who pin by commit SHA: infra 0.3.1 = `dd4eb7a1044f688994a794b933f55bc3cf0554b6`, apps 0.3.1 = `21bf02e95cdb89a736c3b054df1f8500577b7e89`. The 0.3.2 release
-commits are recorded in the GitHub release notes. Use infra 0.3.2 with apps 0.3.2.
+Bug fixes, documentation corrections and safety nets after 0.3.1, for the next release (a 0.3.2 patch was prepared and abandoned: there is no 0.3.2 tag, and `git_ref` still pins
+OpenAether-apps `refs/tags/0.3.1`). No new scope. Rung reached by the lines below: **mocked** (self-tests and doc checks); the infra items were not observed on a cloud. Lab 18 (Scaleway,
+infra 7e367d9 / apps 75e464f, on branches) ran a nominal `cluster-up` in 9 min 07 s with `cluster-verify` at 15 passed, 0 failed; it did not exercise #293 or #360. It does not fix the two
+infra issues the series set out to look at: #42 (the API unreachable for seconds during a control-plane roll) and #375 (the OVH hard-reboot window) stay open for 0.4.0, see below.
+Not a compliance claim. The apps-side results (#134 partial, #143, #144) are in the OpenAether-apps CHANGELOG.
 
 ### Fixed
 
@@ -36,7 +33,6 @@ commits are recorded in the GitHub release notes. Use infra 0.3.2 with apps 0.3.
 - **#42 (API unreachable during a control-plane roll)** and **#375 (hard-reboot window behind the OVH load balancer)**: nothing safe is verifiable offline. The roll already hands etcd leadership over
   and gates on etcd 3/3; the remaining candidates (HTTPS health checks on `/readyz`, `--shutdown-delay-duration`, `externalTrafficPolicy: Local`) need a cluster and, for the first, the owner's decision on
   anonymous health endpoints. Both stay open, labelled for 0.4.0.
-- Apps-side open items (#134 partial, #143, #144) are described in the apps CHANGELOG.
 - **#286** looks fixed already on `main` (the harness unsets `VERSION` and has a case with a hostile `VERSION`): it is for closing after a Cléa run shows a verdict that comes from the dependency.
 
 ## [0.3.1] — 2026-10-19
