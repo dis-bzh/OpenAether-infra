@@ -546,6 +546,9 @@ locals {
     # format from Longhorn — hence three keys rather than one.
     backup_s3_bucket   = local.backup_data_bucket
     backup_s3_endpoint = var.s3_primary_endpoint
+    # The replica copy: the `-backup` twin of the data bucket, on the replica store (the primary one when none is set).
+    backup_replica_s3_bucket   = "${local.backup_data_bucket}-backup"
+    backup_replica_s3_endpoint = var.s3_replica_endpoint != "" ? var.s3_replica_endpoint : var.s3_primary_endpoint
   })
 }
 

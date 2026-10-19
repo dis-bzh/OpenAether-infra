@@ -43,6 +43,11 @@ data:
   # CNPG wants the bucket and endpoint separately (barmanObjectStore).
   BACKUP_S3_BUCKET: ${backup_s3_bucket}
   BACKUP_S3_ENDPOINT: ${backup_s3_endpoint}
+  # The same archive on the replica store (the `-backup` twin bucket and the replica endpoint): the ObjectStores named *-replica
+  # in apps/base/cnpg read it for a recovery from the replica store. The copy itself is made by a job that reads these two
+  # values from OpenBao (backup/s3-replica), so a cluster whose ConfigMap predates them keeps its copy.
+  BACKUP_REPLICA_S3_BUCKET: ${backup_replica_s3_bucket}
+  BACKUP_REPLICA_S3_ENDPOINT: ${backup_replica_s3_endpoint}
 %{ if length(openbao_pgp_keys) > 0 ~}
 ---
 # OpenBao PRODUCTION bootstrap: the operators' PGP PUBLIC keys. openbao-init reads this ConfigMap and encrypts one

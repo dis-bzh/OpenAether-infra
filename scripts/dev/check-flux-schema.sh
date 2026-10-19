@@ -67,6 +67,8 @@ output "manifest" {
     backup_target_url = "s3://openaether-check@fr-par/"
     backup_s3_bucket  = "openaether-check"
     backup_s3_endpoint = "s3.fr-par.example.invalid"
+    backup_replica_s3_bucket   = "openaether-check-backup"
+    backup_replica_s3_endpoint = "s3.gra.example.invalid"
     openbao_pgp_keys  = var.keys
     openbao_threshold = 2
     flux_git_verify_enabled = var.verify
