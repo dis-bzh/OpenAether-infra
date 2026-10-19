@@ -27,7 +27,7 @@ fermer sans compte cloud.
 
 ## Version
 
-**0.3.0** (pas encore publiée ; `CHANGELOG.md`, `[0.3.0]`) — une vague de durcissement, chaque option désactivée par défaut, et un disque système de 50 Go par défaut sur Scaleway. C'est la moitié infra du couple avec OpenAether-apps 0.3.0 (les mises à jour de composants sont dans le dépôt apps). Elle suit les recommandations de l'ANSSI autant que possible et ne revendique aucune conformité à un document de l'ANSSI. Exécutée sur de vrais clouds une fois, à la main ou par script, sur Scaleway, OVH et Outscale (labs 11 à 15c) ; l'historique n'est pas signé pour l'instant. Le CHANGELOG liste les limites connues et ce qui n'a pas été exécuté.
+**0.3.0** (publiée le 2026-10-19 ; `CHANGELOG.md`, `[0.3.0]`) — une vague de durcissement, chaque option désactivée par défaut, et un disque système de 50 Go par défaut sur Scaleway. C'est la moitié infra du couple avec OpenAether-apps 0.3.0 (les mises à jour de composants sont dans le dépôt apps). Elle suit les recommandations de l'ANSSI autant que possible et ne revendique aucune conformité à un document de l'ANSSI. Exécutée sur de vrais clouds une fois, à la main ou par script, sur Scaleway, OVH et Outscale (labs 11 à 15c) ; l'historique n'est pas signé pour l'instant. Le CHANGELOG liste les limites connues et ce qui n'a pas été exécuté.
 
 **0.2.1** (correctif) — pas de nouveau périmètre. C'est la moitié infra du couple avec OpenAether-apps 0.2.0 : seeding Day-1 sans
 jeton root, un bucket dédié à Loki, une vérification de langue partagée avec les apps et la documentation Day-1 corrigée. Elle a été exécutée une

@@ -25,7 +25,7 @@ completion.
 | §4–§6 clouds | Labs 11 to 15c (2026-10-16 to 2026-10-18): Scaleway, OVH, Outscale, each once; see the `[0.3.0]` section of `CHANGELOG.md` for what ran and what did not. Run again with the **tags** pinned before tagging. |
 | §7 upgrade, growth, removal | Scaleway lifecycle from 0.2.1 + apps 0.2.0 (lab 15c); the etcd restore and real node replacement through the roll were **not run**. |
 | §8 mechanics, §9 stranger | To run at the cut. |
-| Before the tag | `git_ref` of the tfvars examples and of `variables.tf` points at `refs/tags/0.3.0` of OpenAether-apps, which must exist first. The history is unsigned for now (#332, #333). |
+| Before the tag | `git_ref` of the tfvars examples and of `variables.tf` points at `refs/tags/0.3.0` of OpenAether-apps, which exists (released first). The branch history is unsigned (squash merge, signed by GitHub; #332, #333). |
 
 ---|---|
 | §1 clean machine | Run at the release commit (the stranger clone of §9). |

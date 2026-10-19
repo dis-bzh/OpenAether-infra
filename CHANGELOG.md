@@ -12,7 +12,7 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ---
 
-## [0.3.0] — unreleased (the date is set at the tag)
+## [0.3.0] — 2026-10-19
 
 0.3.0 is the second half of the pair with OpenAether-apps 0.3.0: a wave of **security hardening, all of it opt-in and off by default**, a larger
 default system disk, and the tooling to check and operate what it adds. The infra code moves no Talos or Kubernetes version (Talos 1.14.2 and
@@ -64,7 +64,7 @@ new `check`/validation on the disk with `deploy_flux`. Every hardening option de
    that carries a CNPG instance must never be rebooted undrained, infra #358).
 3. The apps side of the pair (0.3.0) moves Longhorn, CNPG, cert-manager, Kyverno, Loki and Grafana across several minors. **Do the hops in the order and
    with the pre-steps of `docs/upgrade.md` and of the apps `docs/patching.md`** (Longhorn 1.9 -> 1.10 -> 1.11 -> 1.12 with the CRD conversion pre-step; Loki chart
-   procedure; Kyverno per-namespace Enforce spelling; CNPG operator hops with the switchover method). Do not tag-pin an infra 0.3.0 `git_ref` before apps 0.3.0 exists.
+   procedure; Kyverno per-namespace Enforce spelling; CNPG operator hops with the switchover method). The `git_ref` default and the twelve `envs/*.tfvars.example` pin OpenAether-apps `refs/tags/0.3.0`, released first.
 4. Turn on hardening options one at a time (the documents `docs/hardening.md` and `docs/security-architecture.md` list them with their rollback).
 5. Provision the owner-held inputs the options need (operator public keys, SSH CA public key, OpenBao recovery PGP public keys, dedicated S3 key pairs);
    the full list of what an unattended run still needs from a person is in `docs/first-cluster.md`.
