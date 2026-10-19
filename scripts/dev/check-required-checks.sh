@@ -136,6 +136,11 @@ def check_required(api, repo, ref, out):
     reported = {}
     for r in runs:
         need(isinstance(r.get("name"), str) and isinstance(r.get("app"), dict), "a check run without a name or an app")
+        # A run cancelled before its matrix expanded keeps the literal name (#293): editing a PR body while CI runs leaves
+        # `Emulated Cloud (${{ matrix.provider }})` behind. It never ran, so it is no check "nobody declared". Only a
+        # CANCELLED run with an unexpanded name is skipped: any other run of that name still counts.
+        if "${{" in r["name"] and r.get("conclusion") == "cancelled":
+            continue
         reported[(r["name"], r["app"].get("id"))] = r["app"].get("slug")
 
     for name, _ in sorted(required - set(reported)):
@@ -341,10 +346,11 @@ def self_test(fixture):
     def body(a, path):
         return a[R + path]["body"]
 
-    def add_run(a, name, app=ACTIONS_APP):
+    def add_run(a, name, app=ACTIONS_APP, conclusion="success"):
         for p in (RUNS, RUNS + "&page=2"):
             body(a, p)["total_count"] += 1
-        body(a, RUNS + "&page=2")["check_runs"].append({"name": name, "app": {"id": app, "slug": "other-app"}})
+        body(a, RUNS + "&page=2")["check_runs"].append({"name": name, "app": {"id": app, "slug": "other-app"},
+                                                         "conclusion": conclusion})
 
     def drop_run(a):
         for p in (RUNS, RUNS + "&page=2"):
@@ -377,6 +383,13 @@ def self_test(fixture):
         ("... and the tag ruleset's empty bypass list is read, not assumed", None, {}, 0, "no bypass actors"),
         ("an extra check reports (CodeQL-shaped)", lambda a: add_run(a, "Analyze (actions)"), {}, 1,
          "reported but not required: Analyze (actions)\n"),
+        ("a cancelled run with an unexpanded matrix name (a PR body edited while CI ran, #293)",
+         lambda a: add_run(a, "Emulated Cloud (${{ matrix.provider }})", conclusion="cancelled"), {}, 0, "all and only what reported"),
+        ("... but an unexpanded name that did NOT get cancelled still fails",
+         lambda a: add_run(a, "Emulated Cloud (${{ matrix.provider }})", conclusion="success"), {}, 1,
+         "reported but not required: Emulated Cloud (${{ matrix.provider }})"),
+        ("... and a cancelled run with a plain unrequired name still fails",
+         lambda a: add_run(a, "Analyze (actions)", conclusion="cancelled"), {}, 1, "reported but not required: Analyze (actions)"),
         ("a required name reported by another app", lambda a: add_run(a, "Lint & Format", 999), {}, 1,
          "reported but not required: Lint & Format (from app other-app"),
         ("a required check does not report", drop_run, {}, 1, "required but not reported by GitHub Actions: Analyze"),
