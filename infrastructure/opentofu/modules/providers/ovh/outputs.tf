@@ -59,6 +59,15 @@ output "app_lb_allowed_cidrs" {
   }
 }
 
+# Test-only: the health monitors of the app LB pools (infra #375); null = no monitor.
+output "app_lb_monitors" {
+  description = "health monitors of the app LB http and https pools, for tests"
+  value = {
+    for k, m in { http = openstack_lb_monitor_v2.http, https = openstack_lb_monitor_v2.https } :
+    k => one([for x in m : { type = x.type, delay = x.delay, timeout = x.timeout, max_retries = x.max_retries }])
+  }
+}
+
 # Test-only: the member-to-member rules in the shared list's notation ("TCP 6443", "ICMP -"), and whether the
 # two broad rules are still there.
 output "inter_node_rules" {

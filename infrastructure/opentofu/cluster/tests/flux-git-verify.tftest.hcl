@@ -130,7 +130,7 @@ run "default_renders_no_verification" {
     error_message = "with the flag off nothing about verification may be rendered"
   }
   assert {
-    condition     = strcontains(local.flux_bootstrap_manifest, "    name: refs/tags/0.3.0\n  timeout: 60s\n---\napiVersion: kustomize.toolkit.fluxcd.io/v1")
+    condition     = strcontains(local.flux_bootstrap_manifest, "    name: refs/tags/0.3.1\n  timeout: 60s\n---\napiVersion: kustomize.toolkit.fluxcd.io/v1")
     error_message = "the GitRepository must stay byte-identical to the released render"
   }
 }
