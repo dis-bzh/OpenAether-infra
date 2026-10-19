@@ -395,7 +395,7 @@ sécurité : fermer les tunnels (`scripts/bootstrap/talos-tunnels.sh close`), pu
 ressource d'instance `…bastion` du module provider (`module.scw[0].scaleway_instance_server.bastion`,
 `module.ovh[0].openstack_compute_instance_v2.bastion`, `module.outscale[0].outscale_vm.bastion`,
 `module.proxmox[0].proxmox_virtual_environment_vm.bastion[0]`), jamais pendant un bootstrap ou une montée de version (les tunnels
-tombent avec). L'IP publique est sa propre ressource et survit ; la clé d'hôte non (voir plus haut). Une chaîne d'image préparée puis
+tombent avec). L'IP publique est sa propre ressource et survit ; la clé d'hôte non (voir plus haut). Sur Outscale, le `outscale_public_ip_link` ne revient pas toujours dans la même exécution (vu au lab 11, infra #360 : le nouveau bastion était injoignable jusqu'à un second apply) : terminer tout `-replace` du bastion par un simple `tofu plan`, qui doit répondre `No changes` ; s'il montre le lien à créer, refaire un `tofu apply` avant `tunnels-up`. L'association d'IP flottante d'OVH et l'équivalent Scaleway n'ont pas été vérifiés pour le même défaut. Une chaîne d'image préparée puis
 remplacée ou un hôte de rebond éphémère ne sont pas construits. Pour rouvrir la sortie le temps d'une fenêtre, remettre le mode à
 `legacy` et remplacer le bastion. `BASTION_EGRESS=closed scripts/ops/bastion-harden-check.sh …` vérifie le résultat (80, 443, une
 autre adresse publique et 8200 refusés, outils absents, minuteurs de mise à jour éteints) ; sans la variable le contrôle attend l'état
