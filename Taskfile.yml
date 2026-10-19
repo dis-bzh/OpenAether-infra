@@ -504,6 +504,8 @@ tasks:
       # Which S3 identity opens which bucket (s3-isolation-check.sh), on a fake store: a dedicated pair that
       # reaches the backups, a key the store refuses, and "nothing dedicated" must each fail, never pass.
       - ./scripts/dev/test-s3-isolation.sh
+      # backup-key-recipe.sh (#368): the rights and policies of a dedicated pair, per kind, real bucket names only.
+      - ./scripts/dev/test-backup-key-recipe.sh
       # `task state` promises it never writes a state. Real task + real tofu on
       # a local-backend fixture; the state's bytes are compared before and after.
       - ./scripts/dev/test-state-task.sh

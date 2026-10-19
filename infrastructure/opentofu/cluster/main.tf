@@ -670,11 +670,11 @@ module "talos" {
   node_time_servers     = var.node_time_servers
   node_baseline         = var.node_baseline
 
+  talos_api_access_namespaces = var.etcd_snapshot_api_access ? ["foundation-databases"] : []
+
   disk_encryption_passphrase_length = var.disk_encryption_passphrase_length
 
   # Talos ingress firewall, per-port allow-list (batch B24): off by default, nothing is rendered.
-  talos_api_access_namespaces = var.etcd_snapshot_api_access ? ["foundation-databases"] : []
-
   node_firewall_mode  = var.node_firewall_mode
   node_firewall       = var.node_firewall
   node_firewall_ports = module.node_ports.talos_ports

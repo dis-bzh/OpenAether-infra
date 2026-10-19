@@ -20,6 +20,16 @@ infra 7e367d9 / apps 75e464f, on branches) ran a nominal `cluster-up` in 9 min 0
 infra issues the series set out to look at: #42 (the API unreachable for seconds during a control-plane roll) and #375 (the OVH hard-reboot window) stay open for 0.4.0, see below.
 Not a compliance claim. The apps-side results (#134 partial, #143, #144) are in the OpenAether-apps CHANGELOG.
 
+### Added (0.4.0, milestone M2: backups complete, replicated, verified)
+
+- **Talos API access for the scheduled etcd snapshot** (`etcd_snapshot_api_access`, default true): the control planes enable `machine.features.kubernetesTalosAPIAccess` with the single role `os:etcd:backup` for the namespace `foundation-databases`,
+  so the apps `etcd-snapshot` CronJob can take a snapshot without a credential on the bastion. On an existing cluster the next apply re-applies the control planes' machine configuration, one at a time; a reboot is not expected (UNVERIFIED on a
+  cluster); `false` keeps the configs as they were. `tofu test` in `modules/talos/tests/talos-api-access.tftest.hcl` (off renders nothing and keeps the replace trigger; on grants only that role, only on the control planes).
+- **`cluster-identity` carries `BACKUP_REPLICA_S3_BUCKET` and `BACKUP_REPLICA_S3_ENDPOINT`** (the `-backup` twin of the data bucket and the replica endpoint): the ObjectStores that read the CNPG archive copy from the replica store need them.
+- **`scripts/ops/backup-key-recipe.sh`** (#368): prints, for the primary, replica or Loki pair, the rights it needs, its own bucket policy and the operator-only policy of every other bucket, with the real bucket names and no identifier; `docs/backup-policy.md`
+  section 4 says how to use it (Scaleway measured, OVH and Outscale expectations, Outscale a source only while #377 stands).
+- Documentation (EN and FR): the etcd snapshot and CNPG archive rows of the backup policy (the CNPG archive has no client-side encryption, stated), a deviation row in the key management page, the etcd restore from the restic repository.
+
 ### Fixed
 
 - **The repository settings check no longer goes red on a cancelled, unexpanded matrix run** (#293): `check-required-checks.sh` skips a check run whose name still contains a literal
