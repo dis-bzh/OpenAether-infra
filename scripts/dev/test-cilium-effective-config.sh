@@ -66,6 +66,19 @@ out="$(python3 "$ROOT/scripts/ops/check-cilium-effective-config.py" 2>&1)"; rc=$
 [ "$rc" -eq 0 ] && ok "the committed production cilium.yaml passes (default path, no arg)" ||
   bad "the committed cilium.yaml failed its own effective-config check: ${out}"
 
+# Hubble variant: passes as committed; a widened allow-list, a listener or an empty field mask is refused.
+HV="$ROOT/infrastructure/opentofu/cluster/bootstrap-manifests/cilium-hubble-drops.yaml"
+out="$(python3 "$ROOT/scripts/ops/check-cilium-effective-config.py" "$HV" 2>&1)"; rc=$?
+[ "$rc" -eq 0 ] && ok "the committed dropped-flow variant passes" || bad "the dropped-flow variant failed: ${out}"
+for mut in 's|hubble-export-allowlist: .*|hubble-export-allowlist: "{\"verdict\":[\"FORWARDED\",\"DROPPED\"]}"|' \
+           's|hubble-listen-address: ""|hubble-listen-address: ":4244"|' \
+           's|hubble-export-fieldmask: .*|hubble-export-fieldmask: ""|' \
+           's|hubble-export-file-path: .*|hubble-export-file-path: "/var/run/cilium/hubble/events.log"|'; do
+  sed "$mut" "$HV" >"$TMP/hv-mut.yaml"
+  python3 "$ROOT/scripts/ops/check-cilium-effective-config.py" "$TMP/hv-mut.yaml" >/dev/null 2>&1 &&
+    bad "a widened Hubble export went undetected (${mut%%|*})" || ok "a widened Hubble export is refused"
+done
+
 echo
 echo "=== check-cilium-parity.py: a --set typo is a hard failure, not a skip ==="
 

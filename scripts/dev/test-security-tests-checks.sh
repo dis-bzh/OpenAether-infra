@@ -32,7 +32,11 @@ case "$*" in
   *"configmap openbao-escrow-ack"*"{.data.seal-key-sha256}"*) printf '%s' "${STUB_ACK_SHA:-}"; exit 0 ;;
   *"configmap openbao-escrow-ack"*"{.data.holders}"*) printf '%s' "${STUB_ACK_N:-}"; exit 0 ;;
   *"secret openbao-seal-key"*) [ "${STUB_SEAL:-}" = 1 ] && exit 0; exit 1 ;;
+  *"get namespace istio-system"*) [ "${STUB_MESH:-}" = absent ] && { echo 'Error from server (NotFound): namespaces "istio-system" not found' >&2; exit 1; }; [ "${STUB_MESH:-}" = error ] && { echo 'Unable to connect to the server: TLS handshake timeout' >&2; exit 1; }; echo namespace/istio-system; exit 0 ;;
+  *"get helmrelease istiod"*"-o name"*) [ "${STUB_MESH:-}" = absent ] && { echo 'error: the server doesn'"'"'t have a resource type "helmrelease"' >&2; exit 1; }; echo helmrelease/istiod; exit 0 ;;
+  *"get gateways.gateway.networking.k8s.io"*) [ "${STUB_MESH:-}" = absent ] && { echo 'error: the server doesn'"'"'t have a resource type "gateways"' >&2; exit 1; }; exit 0 ;;
   *"get secret"*) exit 1 ;;
+  "get clusterrolebinding -o json"*) [ -n "${STUB_CRB+x}" ] && printf '%s' "$STUB_CRB"; exit 0 ;;
 esac
 exit 0
 STUB
@@ -54,6 +58,17 @@ run
 verdict "1.8" "❌" && ok "no cilium-config at all FAILS (never a pass)" || bad "absent config passed: $(line 1.8)"
 STUB_WG_CFG=true STUB_EXEC_FAIL=1 run
 verdict "1.8" "⏭" && ok "config on but the agent unreadable is SKIPPED, not green" || bad "unreadable agent: $(line 1.8)"
+
+echo "=== 3.7 cluster-admin bindings ==="
+crb() { printf '{"items":[{"metadata":{"name":"%s"},"roleRef":{"name":"%s"},"subjects":%s}]}' "$1" "$2" "$3"; }
+STUB_CRB="$(crb oa-admins cluster-admin '[{"kind":"Group","name":"oa:admins"}]')" run
+verdict "3.7" "✅" && ok "the platform-rbac binding oa-admins (Group oa:admins) is allowed" || bad "oa-admins: $(line 3.7)"
+STUB_CRB="$(crb oa-admins cluster-admin '[{"kind":"Group","name":"oa:admins"},{"kind":"User","name":"mallory"}]')" run
+verdict "3.7" "❌" && ok "...but not with an extra subject" || bad "oa-admins + user passed: $(line 3.7)"
+STUB_CRB="$(crb oa-admins cluster-admin '[{"kind":"Group","name":"other:group"}]')" run
+verdict "3.7" "❌" && ok "...nor bound to another group" || bad "oa-admins other group passed: $(line 3.7)"
+STUB_CRB="$(crb oncall-admins cluster-admin '[{"kind":"Group","name":"oa:admins"}]')" run
+verdict "3.7" "❌" && ok "another binding name to cluster-admin still FAILS" || bad "oncall-admins passed: $(line 3.7)"
 
 echo "=== 4.6 development bootstrap ==="
 STUB_DEV=1 OA_ENVIRONMENT=prod run
@@ -96,6 +111,11 @@ STUB_ESCROWED=x STUB_ACK_AT=$TODAY STUB_ACK_SHA=$SEAL_SHA STUB_ACK_N=2 STUB_SEAL
 verdict "4.7" "❌" && grep -q 'cannot read the live seal key' <<<"$OUT" && ok "a live key that cannot be read is a FAIL, not a pass" || bad "unreadable key: $(line 4.7)"
 STUB_SEAL=1 OA_ENVIRONMENT=dev OA_ESCROW_ANNOTATION_CHECK=1 run
 verdict "4.7" "⏭" && ok "a dev cluster is skipped" || bad "dev: $(line 4.7)"
+# Lab 11: the opt-in alone looked like it had been ignored. The skip names both switches and the environment it saw.
+grep -q "OA_ESCROW_ANNOTATION_CHECK=1 is set but OA_ENVIRONMENT is 'dev'" <<<"$OUT" && grep -q 'ENVIRONMENT=prod task cluster-security' <<<"$OUT" \
+  && ok "…and the skip says that the opt-in needs prod, with the command" || bad "dev skip text: $(line 4.7)"
+STUB_SEAL=1 OA_ESCROW_ANNOTATION_CHECK=1 run
+verdict "4.7" "⏭" && grep -q "OA_ENVIRONMENT is 'unset'" <<<"$OUT" && ok "an unset environment is named as unset in the skip" || bad "unset skip text: $(line 4.7)"
 OA_ENVIRONMENT=prod OA_ESCROW_ANNOTATION_CHECK=1 run
 verdict "4.7" "⏭" && ok "no seal-key Secret (static seal not in use) is a skip" || bad "no seal key: $(line 4.7)"
 
@@ -113,6 +133,15 @@ verdict "4.8" "✅" && verdict "4.9" "⏭" && ok "own bucket but the backups' ke
 grep -qF "$BK" <<<"$OUT" && bad "an encoded key was printed" || ok "no secret value in the output"
 run
 verdict "4.8" "⏭" && ok "neither Secret found is a skip" || bad "absent: $(line 4.8)"
+
+echo "=== 2.x mesh checks: not applicable only when the API says there is no mesh ==="
+STUB_MESH=absent run
+ok_all=1; for n in 2.1 2.2 2.3 2.5; do verdict "$n" "⏭️" || { ok_all=0; bad "$n not skipped without a mesh: $(line $n)"; }; done
+[ "$ok_all" = 1 ] && ok "2.1, 2.2, 2.3 and 2.5 are skipped (not applicable) when istio-system and istiod do not exist"
+STUB_MESH=present run
+for n in 2.1 2.3; do verdict "$n" "❌" && ok "$n still FAILS on a cluster with a mesh and no policy" || bad "$n with a mesh: $(line $n)"; done
+STUB_MESH=error run
+for n in 2.1 2.3; do verdict "$n" "❌" && ok "$n is judged (fails) when the API cannot be asked: an error is not 'absent'" || bad "$n on API error: $(line $n)"; done
 
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$PASS" -gt 0 ] && [ "$FAIL" -eq 0 ]

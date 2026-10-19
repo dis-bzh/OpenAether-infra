@@ -5,6 +5,12 @@
 # No user_data — Talos configuration is applied via the Talos API after provisioning.
 # ==============================================================================
 
+# Root disk of the node flavour, read only for the root's check (docs/capacity.md: the application stack needs ~11 GB per node).
+data "openstack_compute_flavor_v2" "node" {
+  count = var.look_up_flavor_disk ? 1 : 0
+  name  = var.flavor_name
+}
+
 # Looked up by name only when image_id is left unset — mirrors the Scaleway
 # module's data.scaleway_instance_image (the talos-image root publishes under
 # this same name convention; see talos-image/main.tf's local.image_name).

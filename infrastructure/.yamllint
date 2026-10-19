@@ -9,6 +9,7 @@ ignore: |
   **/bootstrap-manifests/flux-install.yaml
   **/bootstrap-manifests/cilium.yaml
   **/bootstrap-manifests/cilium-local.yaml
+  **/bootstrap-manifests/cilium-hubble-drops.yaml
 
 rules:
   document-start: disable

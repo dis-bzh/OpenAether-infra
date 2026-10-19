@@ -217,6 +217,9 @@ do_attest() {
   local r="$FROM/$RECEIPT" holders sha_now
   holders="${HOLDERS:-$(jq -r .holders "$r")}"
   [[ "$holders" =~ ^[0-9]+$ ]] && [ "$holders" -ge 2 ] || die "holders must be an integer >= 2 (a single custodian is a single point of loss); got '$holders'" 1
+  # The receipt lists who the key was encrypted to: a declared number above that would attest custodians who cannot decrypt.
+  local rec; rec="$(jq -r .holders "$r")"
+  [[ "$rec" =~ ^[0-9]+$ ]] && [ "$holders" -le "$rec" ] || die "--holders $holders is more than the $rec recipient(s) in the receipt: nobody else can decrypt the escrow" 1
   sha_now="$(jq -r .seal_key_sha256 "$r")"
   # The same two records as the Day 0 step 5 of the apps vault README: the ConfigMap the CronJob reads, the annotation check 4.7 reads.
   kubectl -n "$NS" create configmap openbao-escrow-ack --from-literal=escrowed-at="$(date -u +%F)" \

@@ -47,7 +47,9 @@ case "$*" in
     if [ "${OA_STUB_NO_SA:-0}" = 1 ]; then echo 'Error from server (NotFound): serviceaccounts "openbao-seeder" not found' >&2; exit 1; fi
     printf 'jwt-STUB-SA-TOKEN' ;;
   "get externalsecrets"*) printf 'observability alertmanager-slack\nbackup restic\n' ;;
-  "get clusters.postgresql.cnpg.io"*) printf 'foundation-databases grafana-db\nfoundation-databases zitadel-db\n' ;;
+  "get clusters.postgresql.cnpg.io"*)
+    if [ "${OA_STUB_NO_CNPG:-0}" = 1 ]; then echo 'error: the server doesn'"'"'t have a resource type "clusters"' >&2; exit 1; fi
+    printf 'foundation-databases grafana-db\nfoundation-databases zitadel-db\n' ;;
   "annotate clusters.postgresql.cnpg.io"*) ;;
   "annotate externalsecret"*) ;;
   "exec -i openbao-0 -n foundation-vault -- sh -c "*)
@@ -103,6 +105,13 @@ grep -q "does NOT protect them from a compromised one" <<<"$OUT" && ok "without 
 grep -q "placeholders" <<<"$OUT" && ok "no alerting URLs in scope: it SAYS placeholders were seeded" || bad "silent placeholders: $OUT"
 grep -q "seed-openbao/synced-at=" "$LOG" && ok "ExternalSecrets are nudged to re-read" || bad "no annotate call recorded"
 [ "$(grep -c 'annotate clusters.postgresql.cnpg.io .* cnpg.io/reloadedAt=' "$LOG")" = 2 ] && ok "the CloudNativePG clusters are reloaded so that a late S3 Secret is picked up" || bad "no cnpg reload recorded: $(grep annotate "$LOG")"
+
+echo "--- a reduced profile has no CloudNativePG CRD: the seed still completes ---"
+SAVED_EXTRA="$ENV_EXTRA"; ENV_EXTRA="$BASE OA_STUB_NO_CNPG=1"
+OUT_NC="$(run)"; RC_NC=$?
+ENV_EXTRA="$SAVED_EXTRA"
+is "the script completes without the CNPG CRD" 0 "$RC_NC"
+grep -q "Day-1 secrets seeded" <<<"$OUT_NC" && ok "…and says so" || bad "no completion line: $OUT_NC"
 
 echo "--- Loki with a key pair of its own: that pair is seeded, and the warning is gone ---"
 ENV_EXTRA="$BASE OA_LOKI_S3_ACCESS_KEY_ID=STUB-LOKI-AK OA_LOKI_S3_SECRET_ACCESS_KEY=STUB-LOKI-SK"

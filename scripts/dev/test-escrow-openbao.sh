@@ -119,6 +119,8 @@ grep -q "seal-key-sha256=$SEALSHA" <<<"$CMC" && grep -q 'holders=2' <<<"$CMC" &&
   && ok "…with the date, the hash and holders=2 the CronJob parses" || bad "configmap args: $CMC"
 run attest --from "$E" --holders 1
 [ "$RC" -ne 0 ] && grep -q 'integer >= 2' <<<"$OUT" && ! grep -q 'APPLIED' "$STUB_LOG" && ok "holders 1 is refused, nothing written" || bad "holders 1: rc=$RC $OUT"
+run attest --from "$E" --holders 5
+[ "$RC" -ne 0 ] && grep -q 'more than the 2 recipient' <<<"$OUT" && ! grep -q 'APPLIED' "$STUB_LOG" && ok "--holders above the receipt's recipients is refused, nothing written" || bad "holders 5: rc=$RC $OUT"
 GNUPGHOME="$SB/gnupg-bob" run verify --from "$E"
 [ "$RC" = 0 ] && ok "verify works on bob's machine alone" || bad "bob verify: rc=$RC $OUT"
 GNUPGHOME="$SB/gnupg-none" run verify --from "$E"

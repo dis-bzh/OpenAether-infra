@@ -4,12 +4,13 @@
 #
 # OpenTofu variables:
 #   ${git_repo_url}   — e.g. https://github.com/dis-bzh/OpenAether.git
-#   ${git_ref}        — e.g. refs/tags/0.2.0, or refs/heads/main
+#   ${git_ref}        — e.g. refs/tags/0.3.0, or refs/heads/main
 #   ${cluster_role}   — e.g. management (→ apps/flux/management)
 #   ${cluster_id}     — e.g. openaether-dev-ovh (the cluster's UNIQUE identity)
 #   ${backup_target_url} — e.g. s3://s3-openaether-ovh-backups-dev@eu-west-par/
 #   ${backup_s3_bucket} ${backup_s3_endpoint} — same destination, CNPG format
 #   ${namespace}      — e.g. flux-system
+#   flux_git_verify_enabled / flux_git_verify_keys — OPT-IN OpenPGP verification of the commit at HEAD (default off, then NOTHING of it is rendered).
 #   openbao_pgp_keys, openbao_threshold — recovery-share holders (list of base64 PGP public keys; quorum). Not interpolated: a list.
 ---
 # Cluster identity, consumed through `postBuild.substituteFrom` by the bricks
@@ -68,6 +69,26 @@ data:
   pgp-${i + 1}: "${k}"
 %{ endfor ~}
 %{ endif ~}
+%{ if flux_git_verify_enabled ~}
+---
+# OPT-IN (flux_git_verify): armored OpenPGP PUBLIC keys of the people and bots whose commits Flux may apply, including
+# GitHub's web-flow key for squash merges. It sits BEFORE the GitRepository in this same manifest, so the first
+# reconcile finds it. Public data. The apps repo must carry the same spec.verify (components/git-verify), or the
+# first reconcile adds or removes the block (gitception).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: git-signers
+  namespace: ${namespace}
+  labels:
+    openaether.io/managed: "true"
+type: Opaque
+stringData:
+%{ for i, k in flux_git_verify_keys ~}
+  signer-${i + 1}.asc: |
+    ${indent(4, trimspace(k))}
+%{ endfor ~}
+%{ endif ~}
 ---
 apiVersion: source.toolkit.fluxcd.io/v1
 kind: GitRepository
@@ -80,6 +101,12 @@ spec:
   ref:
     name: ${git_ref}
   timeout: 60s
+%{ if flux_git_verify_enabled ~}
+  verify:
+    mode: HEAD
+    secretRef:
+      name: git-signers
+%{ endif ~}
 ---
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization

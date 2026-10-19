@@ -6,8 +6,8 @@ Les opérations manuelles post-déploiement d'un cluster portant la **plateforme
 applicative**, dans l'ordre : tout cluster construit avec `deploy_flux = true`. Un
 cluster construit avec `deploy_flux = false` (le défaut) n'en exécute rien, et rien
 de ce qui suit ne s'applique. Sur un cluster `deploy_flux = true`, `task cluster-up`
-se termine quand même en rouge, par construction (le vérificateur affirme que Flux
-est absent), et Flux reste à 29 Kustomizations sur 35 tant que le § 3 n'a pas
+se termine au vert (le vérificateur exige alors Flux et le load balancer applicatif),
+mais Flux reste sous son nombre complet de Kustomizations tant que le § 3 n'a pas
 tourné : c'est attendu, et le § 3 est le remède.
 Convention : `KC=infrastructure/opentofu/cluster/kubeconfig`.
 
@@ -182,8 +182,11 @@ ssh -i <clé bastion> -L 8443:<IP gateway>:443 bastion@<IP bastion> -N
 # /etc/hosts : 127.0.0.1 grafana.openaether.local zitadel… vault…
 ```
 
-Importer la root CA dans le navigateur. Sans TLS, pour dépanner :
-`./scripts/ops/local-admin-portforward.sh`.
+⚠️ **Ce forward est refusé par le bastion tel que livré** : son `PermitOpen` liste 6443 et 50000 (et 8200 sur l'egress historique), pas 443 ; ssh répond
+`administratively prohibited`. Le dépôt n'offre aucun interrupteur pour ouvrir 443 ; élargir `PermitOpen` est une décision à prendre et à documenter (`hardening.fr.md`, section 2).
+Non exécuté sur un cloud depuis la rédaction de cette note : à vérifier sur le premier cluster. Ce qui passe par le tunnel 6443 :
+`./scripts/ops/local-admin-portforward.sh` (kubectl port-forward vers OpenBao, Flux et Grafana sur 127.0.0.1, sans TLS ni routage par Host).
+Si vous ouvrez 443, importer la root CA dans le navigateur.
 
 **Il n'y a pas de root token OpenBao à utiliser au quotidien** : il est révoqué à l'amorçage, et un jeton de secours demande un quorum de porteurs de parts de
 récupération (apps `vault/README.md`). Une personne nommée travaille par une identité de ServiceAccount, échangée dans le pod contre un jeton qui dure quelques heures : `bao_admin`
@@ -232,12 +235,23 @@ avec lui, alors que `talosctl get machineconfig` est refusé. En émettre un et 
 réutiliser jusqu'à son expiration plutôt qu'un par exécution : émettre est une
 écriture sur l'API Talos, et une lecture ne devrait pas en demander.
 
+**Identités nommées et de courte durée (`task kubeconfig-new`).** Pour le travail courant, ne pas porter le fichier partagé : tunnels ouverts,
+`task kubeconfig-new PROVIDER=… NAME=alice` dépose une CertificateSigningRequest (signataire `kubernetes.io/kube-apiserver-client`,
+`expirationSeconds`, 8 h par défaut, de 10 min à 24 h acceptés) pour `CN=alice`, `O=oa:readers`, et écrit un kubeconfig en 0600 hors du dépôt
+(`~/.kube/oa-alice-reader.kubeconfig` ; un chemin dans le dépôt est refusé). `ACCESS=admin` demande `O=oa:admins` (cluster-admin via le
+groupe). La clé privée est générée sur votre machine ; le fichier `system:masters` ne sert qu'à déposer et approuver la demande, et reste le
+credential de secours sous séquestre, pas le routinier. Ce que chaque groupe peut faire est dans la brique apps `platform-rbac` (`oa-admins` vers `cluster-admin`,
+`oa-readers` vers `view`) : un certificat portant un groupe qu'aucun binding ne nomme ne peut rien faire. Révoquer une personne avant l'expiration du certificat
+= supprimer ou restreindre le binding de son groupe (effet immédiat, le certificat reste valide mais est refusé) ; un binding de groupe ne peut pas viser un seul porteur,
+donc pour une révocation par personne lier l'utilisateur par son nom (`rbac-review` le signale, à consigner). `rbac-review` et `cluster-security` 3.7 autorisent exactement ces deux bindings et rien d'autre sous ces noms.
+Pas encore joué sur un cloud : les vérifications sont dans la checklist du labo. Cela n'ajoute ni OIDC, ni MFA, ni acheminement de l'audit : le journal d'audit de l'apiserver reste sur le plan de contrôle.
+
 **Revue à chaque changement de personnel.** Quand quelqu'un arrive ou part, lancer `task rbac-review` (un `kubectl` en
 lecture seule, `KUBECONFIG` posé) : il liste chaque binding et ses sujets dans `rbac-review/rbac-review-<date>.tsv` et signale
 un User/Group nommé, un binding anonyme et un `cluster-admin` hors liste d'autorisation (celle de `cluster-security-tests.sh`
-3.7). Aujourd'hui la réponse attendue est « rien de signalé » : l'accès humain est le certificat partagé ci-dessus, donc une
-ligne signalée est une décision à consigner ou un binding à supprimer. Révoquer une personne reste faire tourner la CA ; la
-revue ne fait que trouver ce qui d'autre lui donne accès.
+3.7). Là où la brique apps `platform-rbac` est réconciliée, les deux bindings ci-dessus ne sont pas signalés ; la réponse attendue est
+sinon « rien de signalé », donc une ligne signalée est une décision à consigner ou un binding à supprimer. Révoquer le certificat partagé reste faire tourner la CA ; la
+revue ne fait que trouver ce qui d'autre donne accès.
 Côté réseau, `task cluster-exposure PROVIDER=…` sonde les adresses publiques (à lancer une fois depuis une adresse absente de
 `admin_ip` avec `FROM=denied` : 22 et 6443 doivent alors être fermés) et `task cluster-netcheck PROVIDER=…` envoie du trafic que
 les politiques doivent rejeter. `task cluster-security` accepte `ENVIRONMENT=prod` pour échouer sur un Secret `openbao-recovery-dev`.
@@ -274,10 +288,13 @@ Changer l'un ou l'autre remplace le bastion, comme ci-dessus. Associer chaque cl
 tfvars (`ssh-keygen -lf <clé>.pub` donne l'empreinte que porte la ligne de connexion `Accepted publickey ... SHA256:<empreinte>`).
 
 Les journaux meurent avec la VM : `scripts/ops/bastion-logs-pull.sh <ip> bastion <clé>` copie le journal (ssh, sudo, rejets nft ;
-incrémental) et le journal d'audit hors de la VM, chiffrés si `OA_LOGS_PASSPHRASE` est posée, et avec `OA_LOGS_UPLOAD=1` déposés dans le bucket d'artefacts des deux stockages objet
+incrémental) et le journal d'audit hors de la VM (avec `audit_logging = false` il n'y a pas de journal d'audit : seul le journal est exporté et le script dit que la partie audit a été sautée ; un compte qui ne peut pas lire le journal est refusé avec la raison), chiffrés si `OA_LOGS_PASSPHRASE` est posée, et avec `OA_LOGS_UPLOAD=1` déposés dans le bucket d'artefacts des deux stockages objet
 (section suivante). Les pistes d'audit côté cloud et le syslog d'un hôte Proxmox sont à part et rien ici ne les exporte.
 
-Vérifier un bastion déployé avec `BASTION_BASELINE=1 scripts/ops/bastion-harden-check.sh <ip> bastion <clé> [<ip nœud>]`. Avant
+Vérifier un bastion déployé avec `BASTION_BASELINE=1 scripts/ops/bastion-harden-check.sh <ip> bastion <clé> [<ip d'un control plane>]` ; ajouter
+`BASTION_AUDIT=0` quand le bastion a `audit_logging = false` (imposé par la sortie fermée) : auditd n'est alors pas vérifié, puisqu'il n'est pas
+installé, mais le journal persistant, les groupes `adm` / `systemd-journal` et la ligne d'empreinte de connexion le restent (aucun paquet requis).
+Avant
 de dépenser quoi que ce soit, `task bastion-baseline-check` exécute les fichiers rendus sur Ubuntu 22.04 et 24.04 dans Docker
 (une vraie connexion sshd, les tunnels via `PermitOpen`, les clés révoquées, les règles de pare-feu chargées, les noms sysctl,
 la syntaxe des règles d'audit).
@@ -374,7 +391,7 @@ restent joignables sur le port 80 (cloud-init et les agents du provider en ont b
 l'activation du pare-feu. Le bastion Proxmox n'a pas de security group : seules les règles dans la VM s'y appliquent.
 
 **C'est le compromis : un bastion fermé ne se met pas à jour sur place.** On le corrige en le remplaçant, à échéance ou sur avis de
-sécurité : fermer les tunnels (`scripts/bootstrap/talos-tunnels.sh close`), puis `tofu apply -replace=<adresse>` avec l'adresse de la
+sécurité : fermer les tunnels (`scripts/bootstrap/talos-tunnels.sh close`), puis `TF_VAR_skip_health_check=true tofu apply -replace=<adresse>` (le contrôle de santé a besoin des tunnels qu'on vient de fermer et échoue après ses 15 minutes, vu sur OVH le 2026-10-17 ; le remplacement lui-même a pris moins d'une minute) avec l'adresse de la
 ressource d'instance `…bastion` du module provider (`module.scw[0].scaleway_instance_server.bastion`,
 `module.ovh[0].openstack_compute_instance_v2.bastion`, `module.outscale[0].outscale_vm.bastion`,
 `module.proxmox[0].proxmox_virtual_environment_vm.bastion[0]`), jamais pendant un bootstrap ou une montée de version (les tunnels
@@ -386,7 +403,7 @@ legacy, où 80/443 sont ouverts par construction (il attendait le port 80 bloqu�
 
 **Le premier démarrage ne peut pas installer de paquet :** le groupe de sécurité est fermé dès la création du bastion, aucun miroir n'est
 joignable. C'est pourquoi `closed` avec `bastion_baseline` est refusé au plan, sauf `audit_logging = false` et `time_servers` vide (auditd et
-chrony ne seraient jamais installés ; un vrai run OVH a fini avec cloud-init en erreur et sans auditd). `curl`, `netcat` et `tcpdump` sont
+chrony ne seraient jamais installés ; un vrai run OVH a fini avec cloud-init en erreur et sans auditd). `curl`, `wget` (livré par l'image), `netcat` et `tcpdump` sont
 purgés hors ligne ; les avoir fermé suppose une image qui embarque déjà ce qu'il faut.
 
 **Journaux hors de la VM et qui se cache derrière une connexion.** `scripts/ops/bastion-logs-pull.sh <ip> <utilisateur> <clé>` tire le

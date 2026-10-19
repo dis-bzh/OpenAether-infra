@@ -147,6 +147,12 @@ variable "bastion_image_id" {
   default     = "Ubuntu 22.04"
 }
 
+variable "look_up_flavor_disk" {
+  description = "Read the root disk size of flavor_name from the account (flavor_disk_gb output), for the root's disk-size check. Off by default: no API call."
+  type        = bool
+  default     = false
+}
+
 variable "bastion_flavor_name" {
   description = "OpenStack flavor for the bastion host (jump box; the default is the minimum recommended)."
   type        = string
@@ -215,4 +221,18 @@ variable "app_lb_allowed_cidrs" {
   description = "Source CIDRs allowed to reach the application LB (80/443). Empty = no filter (the historical behaviour). Non-empty = only these, plus the cluster's own egress address; see the root variable of the same name."
   type        = list(string)
   default     = []
+}
+
+variable "restrict_inter_node" {
+  description = <<-EOT
+    false (default): the node group keeps its all-protocol "inter_node" rule between members and the
+    UDP 51820 "wireguard" rule, exactly as before. true: both are replaced by one rule per entry of the
+    shared list (modules/providers/_shared/node-ports: apid, trustd, etcd, kubelet, Cilium vxlan,
+    WireGuard 51871, health, ICMP, metrics), the same list Scaleway and the Talos rules use (ANSSI
+    PA-022 R17/R20, batch B24 stage 1). The swap is not atomic: a few seconds can lack the new rules while
+    the old ones are gone, and established flows stay tracked. Try it on a throwaway cluster first
+    (LAB-CHECKLIST B24).
+  EOT
+  type        = bool
+  default     = false
 }

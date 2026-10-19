@@ -110,6 +110,12 @@ ap="$(grep -n '^tofu apply up-' "$W/calls.log" | head -1 | cut -d: -f1)"
 { [ "$(calls '^refuse-node-deletes.sh up-')" = 2 ] && [ "$(calls '^refuse-node-deletes.sh phase2-')" = 1 ]; } \
   && ok "the guard is called by cluster-up and infra-apply on the phase-1 plan, and by phase 2 on its own" \
   || bad "the guard was called: $(grep '^refuse-node-deletes' "$W/calls.log" | tr '\n' '|')"
+# Without a terminal the phase-1 checkpoint is the end of the road for cluster-up (infra #381): its stop message must name the
+# command that reaches phase 2, and phase 2's own stop must name what follows it.
+grep -q 'task bootstrap-phase2 ROLE={{.ROLE}} PROVIDER={{.PROVIDER}}' Taskfile.yml \
+  && grep -q "Then: task kubeconfig" Taskfile.yml \
+  && ok "both no-terminal stop messages name the next command (task bootstrap-phase2, then task kubeconfig)" \
+  || bad "a no-terminal stop message does not name the next command"
 [ "$(calls '^infra-verify.sh ')" = 1 ] && grep -qx 'infra-verify.sh scaleway management' "$W/calls.log" \
   && ok "the verifier ran once, for scaleway/management — it is what failed the run" \
   || bad "the verifier was not what failed: $(tail_of)"

@@ -234,6 +234,17 @@ grep -q 'worker_data\[w0-d0\]' <<<"$OUT" \
   || ok "the unquoted form is gone"
 
 
+echo "--- Scaleway app LB ACL on a fresh account: say it landed, and to re-run ---"
+printf '{"resources":[]}\n' >"$SB/state.json"; stub
+{ printf '│ Error: Provider produced inconsistent final plan\n│ When expanding the plan for\n│ module.scw[0].scaleway_lb_acl.app_allow["https"] to include new values\n│ .match[0].ip_subnet: was null, but now cty.ListVal\n'; } >"$LOG"
+OUT="$(run)"
+grep -q 'could not be planned on a fresh account' <<<"$OUT" && grep -q 're-run the same command' <<<"$OUT" \
+  && ok "the inconsistent final plan on scaleway_lb_acl is explained, with the re-run" || bad "the ACL shape was not printed"
+printf '│ Error: Provider produced inconsistent final plan\n│ module.ovh[0].openstack_networking_port_v2.x\n' >"$LOG"
+OUT="$(run)"
+grep -q 'could not be planned on a fresh account' <<<"$OUT" && bad "another provider's inconsistent plan was blamed on the Scaleway ACL" \
+  || ok "an inconsistent plan on another resource stays quiet"
+
 echo "--- the bastion changed under the tunnels: say the change landed, and to re-run ---"
 # Needs both lines of the transcript; a refused port alone, or a bastion change alone, is not this shape.
 printf '{"resources":[]}\n' >"$SB/state.json"; stub
@@ -293,7 +304,8 @@ WIRED="$(awk '
   /^  [a-zA-Z0-9_-]+:$/          { t=$1; sub(/:$/,"",t) }
   t != "" && /defer:.*explain-failure\.sh/ { print t }
 ' Taskfile.yml | sort -u)"
-for T in infra-apply infra-plan; do
+# bootstrap-phase2 (lab 11): its failures ("time is not in sync yet" on OVH) printed no hint at all.
+for T in infra-apply infra-plan bootstrap-phase2; do
   grep -qx "$T" <<<"$WIRED" \
     && ok "$T defers to the explainer" \
     || bad "$T no longer defers to the explainer — a failure there explains nothing"

@@ -9,7 +9,9 @@
 #   ./cluster-security-tests.sh
 #   KUBECONFIG=/path/to/kubeconfig ./cluster-security-tests.sh
 #   OA_ENVIRONMENT=prod ./cluster-security-tests.sh      # the OpenBao bootstrap checks (4.6, 4.7) are strict on prod
-#   OA_ESCROW_ANNOTATION_CHECK=1 ./cluster-security-tests.sh   # also require the seal-key escrow record (4.7: annotation, hash of the live key, two holders)
+#   OA_ESCROW_ANNOTATION_CHECK=1 OA_ENVIRONMENT=prod ./cluster-security-tests.sh   # also require the seal-key escrow record (4.7: annotation,
+#                                                    # hash of the live key, two holders). BOTH are needed: the record is required on prod only,
+#                                                    # on any other environment 4.7 is a skip that says so (task cluster-security: ENVIRONMENT=prod)
 # ══════════════════════════════════════════════════════════════════════════════
 
 set -euo pipefail
@@ -187,12 +189,29 @@ fi
 
 header "2. ZERO-TRUST (Istio)"
 
+# The reduced profile (no service mesh, no Gateway) has nothing to judge here. Lab 12 (Outscale) reported 2.1, 2.2, 2.3 and 2.5
+# as failures there; they are not applicable. The mesh counts as absent only when the API SAYS so (NotFound / no such resource
+# type) for both the istio-system namespace and the istiod HelmRelease; any other answer, an error included, means "judge it".
+not_found() { # <kubectl get args…> — true when the API answers that the object or its type does not exist
+  local out
+  out="$(kubectl get "$@" -o name 2>&1)" && return 1
+  case "$out" in *NotFound* | *"not found"* | *"doesn't have a resource type"* | *"no matches for kind"*) return 0 ;; esac
+  return 1
+}
+MESH_ABSENT=0
+if not_found namespace istio-system && not_found helmrelease istiod -n foundation-service-mesh; then MESH_ABSENT=1; fi
+MESH_NA="no service mesh on this cluster (no istio-system namespace, no istiod HelmRelease): the reduced profile, not applicable"
+
 # 2.1 mTLS STRICT mesh-wide
+if [ "$MESH_ABSENT" = 1 ]; then
+  skip "2.1 mTLS STRICT mesh-wide" "$MESH_NA"
+else
 PA_STRICT=$(kubectl get peerauthentication -n istio-system -o jsonpath='{.items[0].spec.mtls.mode}' 2>/dev/null || echo "")
 if [ "$PA_STRICT" = "STRICT" ]; then
   pass "2.1 mTLS STRICT mesh-wide"
 else
   fail "2.1 mTLS STRICT mesh-wide" "PeerAuthentication mode='$PA_STRICT' (expected STRICT)"
+fi
 fi
 
 # 2.2 Default-deny authz on every ambient namespace (spec: {} = allow-nothing)
@@ -205,6 +224,9 @@ fi
 # covered — and from a git worktree, where ../OpenAether-apps does not exist, it
 # skipped entirely and the run still said 25/31 passed.
 # The cluster cannot go stale when a file moves, and it cannot be absent.
+if [ "$MESH_ABSENT" = 1 ]; then
+  skip "2.2 Default-deny authz per ambient ns" "$MESH_NA"
+else
 AMBIENT_NS=$(kubectl get ns -l istio.io/dataplane-mode=ambient -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null)
 if [ -z "$AMBIENT_NS" ]; then
   skip "2.2 Default-deny authz per ambient ns" "no namespace is labelled istio.io/dataplane-mode=ambient"
@@ -223,13 +245,18 @@ else
     fail "2.2 Default-deny authz per ambient ns" "no default-deny-all in:$MISSING"
   fi
 fi
+fi
 
 # 2.3 TrustDomain = cluster.local
+if [ "$MESH_ABSENT" = 1 ]; then
+  skip "2.3 TrustDomain = cluster.local" "$MESH_NA"
+else
 TD=$(kubectl get helmrelease istiod -n foundation-service-mesh -o jsonpath='{.spec.values.meshConfig.trustDomain}' 2>/dev/null || echo "")
 if [ "$TD" = "cluster.local" ]; then
   pass "2.3 TrustDomain = cluster.local"
 else
   fail "2.3 TrustDomain = cluster.local" "trustDomain='$TD' (expected cluster.local)"
+fi
 fi
 
 # 2.4 No openaether.local principal in the AuthorizationPolicies
@@ -248,6 +275,12 @@ else
 fi
 
 # 2.5 Gateway TLS : HTTPRoute redirect + certificate
+GW_NONE=0
+if not_found gateways.gateway.networking.k8s.io -A; then GW_NONE=1
+elif GW_OUT="$(kubectl get gateways.gateway.networking.k8s.io -A -o name 2>/dev/null)" && [ -z "$GW_OUT" ]; then GW_NONE=1; fi
+if [ "$MESH_ABSENT" = 1 ] && [ "$GW_NONE" = 1 ]; then
+  skip "2.5 Gateway TLS" "no Gateway object and no mesh on this cluster: the reduced profile, not applicable"
+else
 REDIRECT_EXISTS=$(kubectl get httproute -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -c redirect || true)
 REDIRECT_EXISTS=${REDIRECT_EXISTS:-0}
 CERT_EXISTS=$(kubectl get certificate -A --no-headers 2>/dev/null | wc -l || true)
@@ -256,6 +289,7 @@ if [ "$REDIRECT_EXISTS" -gt 0 ] && [ "$CERT_EXISTS" -gt 0 ]; then
   pass "2.5 Gateway TLS (redirect + certificate present)"
 else
   fail "2.5 Gateway TLS" "redirect=$REDIRECT_EXISTS, certs=$CERT_EXISTS"
+fi
 fi
 
 # 2.6 Waypoint actif
@@ -385,9 +419,14 @@ EXCLUDE_PREFIXES=('system:', 'cnpg-', 'external-secrets-', 'longhorn-', 'istio-'
 # 'cluster-reconciler' is how Flux works: kustomize-controller and
 # helm-controller apply arbitrary manifests and cannot do it with less.
 EXCLUDE_EXACT=('cluster-admin', 'cluster-reconciler')
+# 'oa-admins' is the platform-rbac brick's binding for named operators (kubeconfig-new.sh): allowed only as exactly
+# Group oa:admins -> cluster-admin; any other subject under that name still counts as custom.
+def platform(b):
+  return b['metadata']['name']=='oa-admins' and [(x.get('kind'),x.get('name')) for x in (b.get('subjects') or [])]==[('Group','oa:admins')]
 custom=[b for b in bindings
   if b['roleRef'].get('name')=='cluster-admin'
   and b['metadata']['name'] not in EXCLUDE_EXACT
+  and not platform(b)
   and not any(b['metadata']['name'].startswith(p) for p in EXCLUDE_PREFIXES)]
 print(len(custom))
 " 2>/dev/null || echo "0")
@@ -492,7 +531,8 @@ fi
 if [ "${OA_ESCROW_ANNOTATION_CHECK:-}" != "1" ]; then
   skip "4.7 Seal-key escrow recorded" "opt-in (OA_ESCROW_ANNOTATION_CHECK=1) until the escrow step that sets openaether.io/escrowed-at is in your apps ref"
 elif [ "$OA_ENV" != "prod" ]; then
-  skip "4.7 Seal-key escrow recorded" "strict only with OA_ENVIRONMENT=prod"
+  # The opt-in alone is not enough, by design (a dev cluster has no escrow to attest): say so instead of looking like a failed opt-in.
+  skip "4.7 Seal-key escrow recorded" "OA_ESCROW_ANNOTATION_CHECK=1 is set but OA_ENVIRONMENT is '${OA_ENV:-unset}': the escrow record is required on prod only; run ENVIRONMENT=prod task cluster-security (or OA_ENVIRONMENT=prod)"
 elif ! kubectl -n foundation-vault get secret openbao-seal-key &>/dev/null; then
   skip "4.7 Seal-key escrow recorded" "no openbao-seal-key Secret (static seal not in use)"
 else

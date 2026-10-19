@@ -375,6 +375,17 @@ tasks:
     cmds:
       - python3 scripts/ops/purge-orphans/{{.PROVIDER}}.py {{if .APPLY}}--apply{{end}}
 
+  egress-probe:
+    desc: >-
+      OVH only: does a private network behind a SNAT router reach the Internet? Builds the minimum
+      (network, router, one small instance), reads its console, removes everything, exits 0 (yes),
+      1 (no) or 2 (could not conclude). Run it BEFORE `task cluster-up` on a project that has no
+      cluster. Usage: task egress-probe [DRY=1] (DRY=1 only lists what it would create).
+    vars:
+      DRY: '{{.DRY | default ""}}'
+    cmds:
+      - python3 scripts/ops/egress-probe.py {{if .DRY}}--dry-run{{end}}
+
   check-jsonpath:
     desc: >-
       Parse every jsonpath the scripts use, with kubectl itself, offline. A
@@ -442,6 +453,8 @@ tasks:
       - ./scripts/dev/check-jsonpath.sh
       - ./scripts/dev/test-rolling-replace.sh
       - ./scripts/dev/test-shrink-nodes.sh
+      - ./scripts/dev/test-rwx-drain-gate.sh
+      - ./scripts/dev/test-egress-probe.sh
       - ./scripts/dev/test-tunnel-guard.sh
       # The one test that runs talos-tunnels.sh itself: every other harness stubs it (#65).
       - ./scripts/dev/test-talos-tunnels.sh
@@ -497,6 +510,8 @@ tasks:
       # `cluster-up` from first guard to last line, real go-task, stubbed leaves:
       # a failing verifier fails it, and only a passing one prints success (#84).
       - ./scripts/dev/test-cluster-up.sh
+      # check-alerts does not call a metric blind when no series is its healthy state (#357).
+      - ./scripts/dev/test-check-alert-metrics.sh
       # A bootstrap the state forgot is imported only when a control plane already
       # has etcd members (#67); every other answer must change nothing. The second
       # harness runs the real talos provider offline, which the first can only assume.
@@ -575,6 +590,8 @@ tasks:
       # (#132) — proves a malformed rev-range fails loud instead of reading
       # as zero commits, none of them tool-authored.
       - ./scripts/dev/test-commit-authors.sh
+      # Unsigned or badly signed commits are reported (a warning until every maintainer signs): docs/signed-commits.md.
+      - ./scripts/dev/test-check-commit-signatures.sh
       # feint.sh checked `running` once, immediately after `feint start`
       # returned, with no retry — raced on a GitHub-hosted runner and failed
       # CI once with no code change (#169). A stub feint puts the startup
@@ -607,11 +624,15 @@ tasks:
       - ./scripts/dev/test-cluster-netcheck.sh
       - ./scripts/dev/test-exposure-scan.sh
       - ./scripts/dev/test-rbac-review.sh
+      # Named, short-lived Kubernetes certificates through the CSR API (stub kubectl, real openssl).
+      - ./scripts/dev/test-kubeconfig-new.sh
       # The bastion scripts: harden-check (egress probes, opt-in baseline section, host key), the log pull (and its
       # upload) and the fingerprint-to-person table.
       - ./scripts/dev/test-bastion-harden-check.sh
       - ./scripts/dev/test-bastion-logs-pull.sh
       - ./scripts/dev/test-bastion-fingerprints.sh
+      # etcd-snapshot-cron.sh with two runs at once: the one that loses the lock cleans up nothing of the winner's.
+      - ./scripts/dev/test-etcd-snapshot-cron.sh
       # grow-nodes.sh (#59): machines, then tunnels, then only the new nodes' configuration.
       - ./scripts/dev/test-grow-nodes.sh
       - ./scripts/dev/test-refuse-node-deletes.sh
@@ -669,7 +690,8 @@ tasks:
     desc: >-
       Run runtime security validation tests on the cluster. ENVIRONMENT=prod makes the OpenBao bootstrap
       checks strict (no openbao-recovery-dev); OA_ESCROW_ANNOTATION_CHECK=1 adds the seal-key escrow
-      record (annotation, hash of the live key, two holders).
+      record (annotation, hash of the live key, two holders) and only counts together with ENVIRONMENT=prod
+      (on any other environment 4.7 is skipped, and says so).
     env:
       OA_ENVIRONMENT: '{{.ENVIRONMENT | default ""}}'
     cmds:
@@ -881,7 +903,10 @@ tasks:
             echo "✗ no terminal, and no APPROVE=auto — nothing was applied." >&2
             echo "  The plan above is saved. Read it, then land exactly it:" >&2
             echo "    task infra-apply ROLE={{.ROLE}} PROVIDER={{.PROVIDER}} KEY={{.KEY}} PLAN=$PLANFILE" >&2
-            echo "  Or re-run the whole journey unattended: task cluster-up … APPROVE=auto" >&2
+            echo "  Then phase 2 (do NOT re-run cluster-up: it stops here again, even on No changes):" >&2
+            echo "    task bootstrap-phase2 ROLE={{.ROLE}} PROVIDER={{.PROVIDER}} KEY={{.KEY}}" >&2
+            echo "  If the plan above says No changes, skip the apply: run task bootstrap-phase2 directly." >&2
+            echo "  Or run the whole journey unattended: task cluster-up … APPROVE=auto" >&2
             exit 1
           fi
         fi
@@ -1210,6 +1235,12 @@ tasks:
       APPROVE: '{{.APPROVE | default "ask"}}'
     env: *provider-env
     cmds:
+      # Dropped first, like `infra-apply`: the explainer below reads this transcript, and a stale one would diagnose the
+      # run before this one. Lab 11: a phase-2 failure ("time is not in sync yet", OVH) printed no hint although the
+      # OVH no-egress one exists, because only `infra-apply` was wired to the explainer. Phase 2 is the cluster-up
+      # phase that bootstraps Talos, and the one that waits on the nodes' clock.
+      - rm -f .tofu-run.log
+      - defer: '{{if .EXIT_CODE}}../../../scripts/internal/explain-failure.sh .{{else}}true{{end}}'
       - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
       - SSH_KEY="{{.KEY}}" ../../../scripts/bootstrap/talos-tunnels.sh open .
       # A bootstrap the state forgot would be re-sent below at a live etcd. Needs
@@ -1233,7 +1264,10 @@ tasks:
         # so this gate is the only one — and OpenTofu refuses a saved plan whose
         # state has moved, which is what makes "what I read is what ran" true.
         PLANFILE="phase2-{{.ROLE}}-{{.PROVIDER}}.tfplan"
-        tofu plan -out="$PLANFILE" -var-file="envs/{{.ROLE}}-{{.PROVIDER}}.tfvars" -var talos_bootstrap=true
+        # tee + pipefail: the transcript is what the explainer reads, and pipefail keeps tofu's status through the pipe.
+        set -o pipefail
+        tofu plan -out="$PLANFILE" -var-file="envs/{{.ROLE}}-{{.PROVIDER}}.tfvars" \
+          -var talos_bootstrap=true 2>&1 | tee -a .tofu-run.log
         ../../../scripts/internal/refuse-node-deletes.sh "$PLANFILE" || exit 1
         if [ "{{.APPROVE}}" != auto ]; then
           if [ -t 0 ]; then
@@ -1246,11 +1280,13 @@ tasks:
             echo "  Phase 1 is already applied; this only bootstraps Talos on it." >&2
             echo "  The plan above is saved. Read it, then land exactly it:" >&2
             echo "    cd infrastructure/opentofu/cluster && tofu apply $PLANFILE" >&2
+            echo "  Then: task kubeconfig PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}" >&2
+            echo "  and: task cluster-verify PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}" >&2
             echo "  Or re-run the journey unattended: task cluster-up PROVIDER={{.PROVIDER}} … APPROVE=auto" >&2
             exit 1
           fi
         fi
-        tofu apply "$PLANFILE"
+        tofu apply "$PLANFILE" 2>&1 | tee -a .tofu-run.log
         rm -f "$PLANFILE"
       - task: _backup-state
         vars: {PROVIDER: "{{.PROVIDER}}"}
@@ -1529,6 +1565,33 @@ tasks:
         TALOSCONFIG="$PWD/talosconfig" ../../../scripts/ops/talosconfig-new.sh \
           {{.PROVIDER}} --roles {{.ROLES}} --ttl {{.TTL}}
 
+  kubeconfig-new:
+    desc: >-
+      Issue a short-lived, NAMED Kubernetes client certificate (CertificateSigningRequest, CN=<NAME>, group
+      oa:readers or oa:admins) into a 0600 kubeconfig OUTSIDE the repository. The shared system:masters
+      kubeconfig is only used to file and approve the request. Needs the apps platform-rbac brick for the
+      group to be allowed anything.
+      Usage: task kubeconfig-new PROVIDER=scaleway NAME=alice [ROLE=management] [ACCESS=reader|admin]
+      [TTL=8h] [OUT=PATH]
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER, NAME]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+      ACCESS: '{{.ACCESS | default "reader"}}'
+      TTL: '{{.TTL | default "8h"}}'
+    env: *provider-env
+    # Not run on a cloud: the Kubernetes API is reached through the bastion, so `task tunnels-up PROVIDER=…`
+    # first (docs/admin-access.md, section 7).
+    cmds:
+      - task: kubeconfig
+        vars: {ROLE: '{{.ROLE}}', PROVIDER: '{{.PROVIDER}}'}
+      # Pinned like talosconfig-new: an exported KUBECONFIG would file the request on another cluster.
+      - |
+        KUBECONFIG="$PWD/kubeconfig" ../../../scripts/ops/kubeconfig-new.sh {{.NAME}} \
+          --role {{.ACCESS}} --ttl {{.TTL}} {{if .OUT}}--out {{.OUT}}{{end}}
+
   backup-state:
     desc: >-
       Replicate the (encrypted) tfstate to the -backup store (post-apply), with dated generations beside it. Set
@@ -1681,9 +1744,12 @@ tasks:
       - ../../../scripts/ops/backup-state.sh .
 
   render-manifests:
-    desc: Render/update bootstrap manifests (Cilium + Flux)
+    desc: Render/update bootstrap manifests (Cilium, its dropped-flow variant, Flux lock)
     cmds:
       - ./scripts/bootstrap/render-bootstrap-manifests.sh
+      # The opt-in variant is a second committed artifact in the lock: rendering only the first after a Cilium bump left
+      # the lock with the OLD variant hash and `render-check` red. Both renders, so a bump is one command.
+      - ./scripts/bootstrap/render-bootstrap-manifests.sh --hubble-drops
 
   check-alerts:
     desc: >-
@@ -1707,6 +1773,10 @@ tasks:
       # render against itself, so regenerating after a typo is green too.
       # This reads the EFFECTIVE settings the committed ConfigMap carries.
       - python3 scripts/ops/check-cilium-effective-config.py
+      # The opt-in dropped-flow variant carries its own required keys (no listener, DROPPED/ERROR only, field mask).
+      - >-
+        python3 scripts/ops/check-cilium-effective-config.py
+        infrastructure/opentofu/cluster/bootstrap-manifests/cilium-hubble-drops.yaml
 
   check-flux-digests:
     desc: >-
@@ -1902,7 +1972,8 @@ tasks:
     desc: >-
       Ask the CLUSTER whether it is what this release promises: apiserver up, every node Ready, the
       requested number of control planes (not all in one zone or host), Cilium on
-      each, CoreDNS serving, no Flux, no app load balancer, the Talos and Kubernetes versions the
+      each, CoreDNS serving, no Flux and no app load balancer unless deploy_flux / deploy_app_lb
+      ask for them (then Flux Available and the balancer present), the Talos and Kubernetes versions the
       config pins, the schematic it pins, and a tfstate replica in the backup store.
       Usage: task verify PROVIDER=scaleway [ROLE=management]
     # See backup-state above: the *provider-env anchor needs this dir, and the

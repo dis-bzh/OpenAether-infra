@@ -27,6 +27,8 @@ fermer sans compte cloud.
 
 ## Version
 
+**0.3.0** (publiée le 2026-10-19 ; `CHANGELOG.md`, `[0.3.0]`) — une vague de durcissement, chaque option désactivée par défaut, et un disque système de 50 Go par défaut sur Scaleway. C'est la moitié infra du couple avec OpenAether-apps 0.3.0 (les mises à jour de composants sont dans le dépôt apps). Elle suit les recommandations de l'ANSSI autant que possible et ne revendique aucune conformité à un document de l'ANSSI. Exécutée sur de vrais clouds une fois, à la main ou par script, sur Scaleway, OVH et Outscale (labs 11 à 15c) ; l'historique n'est pas signé pour l'instant. Le CHANGELOG liste les limites connues et ce qui n'a pas été exécuté.
+
 **0.2.1** (correctif) — pas de nouveau périmètre. C'est la moitié infra du couple avec OpenAether-apps 0.2.0 : seeding Day-1 sans
 jeton root, un bucket dédié à Loki, une vérification de langue partagée avec les apps et la documentation Day-1 corrigée. Elle a été exécutée une
 fois à la main (Scaleway et OVH avec le tag apps 0.2.0 tel qu'épinglé, Outscale avec le profil réduit des apps sur une branche) ; voir `CHANGELOG.md` pour ce qui a été observé ou non. Un cluster construit par la
@@ -237,8 +239,8 @@ n'est pas le tien.
 
 ```bash
 # Quotas : OVH et Outscale uniquement — le script ne couvre pas Scaleway.
-# Sur Scaleway, vérifie la console : 3 control planes + 2 workers demandent
-# 5 instances du type de ton tfvars, et un compte neuf peut être plafonné à 1.
+# Sur Scaleway, vérifie la console : 3 control planes + 3 workers demandent
+# 6 instances du type de ton tfvars, et un compte neuf peut être plafonné à 1.
 task preflight-quotas PROVIDER=ovh
 
 task cluster-up ROLE=management PROVIDER=scaleway KEY=~/.ssh/yourkey
@@ -353,6 +355,7 @@ task security            # contrôles de durcissement
 |---------|----------|--------|
 | **0.1.0** | Un cluster Talos + Cilium sur Scaleway, OVH ou Outscale, état et artefacts chiffrés, upgrades en place | ✅ publiée le 2026-08-20 (pré-version) |
 | 0.2.0 | Talos v1.14 et Kubernetes v1.37 sur les trois clouds, ajout et retrait de nœuds sur un cluster vivant, le contrôle des domaines de panne | ✅ voir la section `[0.2.0]` de [`CHANGELOG.md`](CHANGELOG.md), qui dit aussi ce qu'elle ne revendique pas |
+| 0.3.0 | Durcissement (optionnel), disque système de 50 Go par défaut, contrôles et outillage ; couple avec apps 0.3.0 | 🔜 empaquetée, en attente de l'accord du propriétaire : voir la section `[0.3.0]` du [`CHANGELOG.md`](CHANGELOG.md) |
 | ensuite | Flux redevenu un choix utilisateur, puis la pioche modulaire dans `OpenAether-apps` | ⏳ prévu |
 | plus tard | Surcouche CAPI : un cluster de management pilotant des enfants | ⏳ prévu |
 | ouvert | Proxmox sur matériel réel, le failover cross-provider complet, le retour arrière d'un upgrade (#270), le Net Outscale que seul le provider peut supprimer | ⏳ |

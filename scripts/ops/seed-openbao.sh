@@ -241,7 +241,7 @@ kubectl get clusters.postgresql.cnpg.io -A -o jsonpath='{range .items[*]}{.metad
   while read -r ns name; do
     [ -n "$ns" ] && kubectl annotate clusters.postgresql.cnpg.io "$name" -n "$ns" \
       "cnpg.io/reloadedAt=$(date -u +%Y-%m-%dT%H:%M:%SZ)" --overwrite >/dev/null 2>&1 || true
-  done
+  done || true   # a reduced profile has no CNPG CRD: `kubectl get` fails and, under pipefail, would end the seed here (lab 11, Outscale)
 
 echo "✓ Day-1 secrets seeded. Still manual, and neither blocks the DAG:"
 echo "    - sign the PKI intermediate offline (admin-access.md § 2)"

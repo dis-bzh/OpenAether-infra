@@ -21,13 +21,13 @@ users:
     groups: [bastion-admins%{ if !baseline.enabled }, sudo%{ endif }]
     shell: /bin/bash
     lock_passwd: true
-    sudo: false
+    sudo: %{ if baseline.enabled }null # `false` is deprecated since cloud-init 22.2 (status "degraded"); null = no sudoers entry%{ else }false%{ endif }
 %{ for name, a in admins ~}
   - name: ${name}
     groups: [bastion-admins]
     shell: /bin/bash
     lock_passwd: true
-    sudo: false
+    sudo: %{ if baseline.enabled }null # `false` is deprecated since cloud-init 22.2 (status "degraded"); null = no sudoers entry%{ else }false%{ endif }
 %{ endfor ~}
 
 ssh_pwauth: false
@@ -348,8 +348,10 @@ write_files:
       -a always,exit -F arch=b32 -S init_module -S finit_module -S delete_module -k bastion-modules
       -a always,exit -F arch=b64 -S ptrace -k bastion-ptrace
       -a always,exit -F arch=b32 -S ptrace -k bastion-ptrace
+%{ endif ~}
 
-  # The sshd login line carries the key fingerprint (LogLevel VERBOSE): keep it, capped, across reboots.
+  # The sshd login line carries the key fingerprint (LogLevel VERBOSE): keep it, capped, across reboots. No package is
+  # needed, so it is there with or without audit_logging (closed egress forces it off): bastion-logs-pull.sh reads this journal.
   - path: /etc/systemd/journald.conf.d/50-bastion.conf
     permissions: '0644'
     content: |
@@ -357,7 +359,6 @@ write_files:
       Storage=persistent
       SystemMaxUse=200M
       MaxRetentionSec=90day
-%{ endif ~}
 %{ if length(baseline.time_servers) > 0 ~}
 
   # Same time sources as the nodes: a chrony source file; the image's default pools are commented out by runcmd.
@@ -419,10 +420,11 @@ runcmd:
       rm -f /etc/ssh/sshd_config.d/98-bastion-baseline.conf
       [ -f /etc/ssh/sshd_config.pre-baseline ] && cp -p /etc/ssh/sshd_config.pre-baseline /etc/ssh/sshd_config
     fi
-%{ if baseline.audit_logging ~}
+  # The journal needs no package: readable by the shared account (adm, systemd-journal) with or without auditd.
   - usermod -aG adm,systemd-journal ${bastion_user} || usermod -aG adm ${bastion_user} || true
   - mkdir -p /var/log/journal && systemd-tmpfiles --create --prefix /var/log/journal || true
   - systemctl restart systemd-journald || true
+%{ if baseline.audit_logging ~}
   - sed -i -e 's/^log_group.*/log_group = adm/' -e 's/^max_log_file .*/max_log_file = 8/' -e 's/^num_logs.*/num_logs = 5/' /etc/audit/auditd.conf || true
   - augenrules --load || true
   - systemctl enable --now auditd || true
@@ -439,9 +441,11 @@ runcmd:
 %{ if egress.mode == "closed" ~}
   # No mirror is reachable any more: leave the update timers off instead of failing every day. Patching = replacing the bastion.
   - systemctl disable --now apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service 2>/dev/null || true
-  # The image ships these; with the Internet closed they are only tools for someone already on the host. Purging is a dpkg
-  # operation: it needs no mirror.
-  - DEBIAN_FRONTEND=noninteractive apt-get purge -y netcat-openbsd netcat-traditional tcpdump curl 2>/dev/null || true
+  # The image ships these; with the Internet closed they are only tools for someone already on the host. dpkg itself, not
+  # apt-get: on Ubuntu 24.04 an apt purge of curl and wget also wants to REMOVE ubuntu-minimal/-standard/-server and to
+  # INSTALL 30 perl packages, fetches them from a mirror that is no longer reachable, fails and removes nothing (lab 12,
+  # Outscale). --force-depends leaves the meta packages' dependency unmet, which nothing on a closed bastion resolves.
+  - dpkg --purge --force-depends netcat-openbsd netcat-traditional tcpdump curl wget 2>/dev/null || true
 %{ else ~}
   # unattended-upgrades
   - systemctl enable --now unattended-upgrades

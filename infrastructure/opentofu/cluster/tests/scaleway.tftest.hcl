@@ -608,3 +608,51 @@ run "verify_outscale_bastion_egress_closed" {
     error_message = "closed Outscale bastion egress is not the reviewed list: ${jsonencode(module.outscale[0].bastion_egress_rules)}."
   }
 }
+
+# ==============================================================================
+# System volume size (infra #364): 50 GB by default, at least 40 with the application stack
+# ==============================================================================
+
+run "verify_scw_root_volume_default" {
+  command = plan
+
+  assert {
+    condition     = var.scw_root_volume_size_gb == 50
+    error_message = "The default Scaleway system volume must stay 50 GB: the full stack puts ~11 GB of images on a node (lab 12)."
+  }
+}
+
+run "verify_scw_root_volume_too_small_for_flux" {
+  command = plan
+
+  variables {
+    deploy_flux             = true
+    scw_root_volume_size_gb = 30
+  }
+
+  expect_failures = [var.scw_root_volume_size_gb]
+}
+
+run "verify_scw_root_volume_small_allowed_without_flux" {
+  command = plan
+
+  variables {
+    deploy_flux             = false
+    scw_root_volume_size_gb = 20
+  }
+
+  assert {
+    condition     = var.scw_root_volume_size_gb == 20
+    error_message = "20 GB must stay accepted when deploy_flux is off (a bare cluster, existing clusters)."
+  }
+}
+
+run "verify_outscale_root_volume_range" {
+  command = plan
+
+  variables {
+    outscale_root_volume_size_gb = 5
+  }
+
+  expect_failures = [var.outscale_root_volume_size_gb]
+}

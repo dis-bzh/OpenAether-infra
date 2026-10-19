@@ -41,6 +41,11 @@ cluster_role       = "management"
 # talos_version / kubernetes_version: leave unset to inherit the tracked defaults of
 # cluster/variables.tf (the pair each release measures); pin them here only to hold a cluster back.
 talos_bootstrap    = true
+# The platform, not only the machines. Both default to FALSE: a copy of this file WITHOUT these lines builds an
+# infrastructure-only cluster (Talos + Cilium: no Flux, no apps, no public load balancer), and `task cluster-verify`
+# then reports flux-system as red. Set them as shown for the platform; the Day-1 seeding follows (scripts/ops/seed-openbao.sh).
+deploy_flux     = true
+# deploy_app_lb has no effect on Proxmox (no cloud load balancer); expose the Gateway NodePorts yourself.
 
 node_distribution = {
   proxmox = {
@@ -90,6 +95,25 @@ node_distribution = {
 #   { address = "149.112.112.112", tls_server_name = "dns.quad9.net" },
 # ]
 
+# Node and flow logs (optional, ANSSI PA-012 R9; off by default). Rules, plaintext caveat and
+# rollout order: modules/talos/variables.tf and docs/hardening.md.
+# node_log_forwarding    = { endpoint = "tcp://127.0.0.1:5170" }   # receiver on every node (hostNetwork)
+# cilium_hubble_drop_log = true                                    # policy denials in the cilium-agent log
+
+# Node baseline and time sources (optional, ANSSI BP-028 R9/R12 and PA-012 R5; off by default). Risks, prerequisites
+# and the deviation table: modules/talos/variables.tf and docs/hardening.md. Try on a throwaway cluster first.
+# node_baseline     = { sysctls = true, worker_default_seccomp = true, pod_pids_limit = 4096 }
+# node_time_servers = ["YOUR_NTP_1", "YOUR_NTP_2", "YOUR_NTP_3"]   # also in bastion_baseline.time_servers
+
+# Node network filtering (optional, ANSSI PA-022 R17/R20; both off by default).
+# restrict_inter_node has no effect here (OVH and Outscale only; Proxmox has no security-group layer), so it is not offered.
+# node_firewall_mode = "port_allowlist" is NOT inert: each listed port (apid, kube-apiserver, kubelet, etcd, ...) accepts
+# ONLY the listed sources and drops the rest (ports that are not listed stay open). A source missing from node_firewall
+# (the load balancer range, a second subnet, a wrong pod range) breaks the cluster. Per-rule sources: docs/network.md 6.
+# Read docs/network.md section 6 and LAB-CHECKLIST B24 first; a throwaway cluster first.
+# node_firewall_mode  = "port_allowlist"
+# node_firewall       = { node_cidrs = ["YOUR_NODE_SUBNET"], bastion_cidrs = ["YOUR_BASTION_SUBNET"] }
+
 admin_ip = ["YOUR_IP/32"]
 
 # Not used with host-as-bastion (no bastion VM). Only needed if enable_bastion = true.
@@ -98,7 +122,7 @@ admin_ip = ["YOUR_IP/32"]
 git_repo_url = "https://github.com/dis-bzh/OpenAether-apps.git"
 # Pin the platform: a commit on a branch would otherwise reach a running
 # cluster within the reconcile interval. refs/heads/<branch> to test.
-git_ref          = "refs/tags/0.2.0"
+git_ref          = "refs/tags/0.3.0"
 
 # OpenBao recovery-share holders (only read when deploy_flux = true). OpenBao unseals itself; what the operators hold are
 # RECOVERY shares, for an emergency root token. Each key is a person's PGP PUBLIC key, `gpg --export <id> | base64 -w0`
@@ -113,6 +137,9 @@ git_ref          = "refs/tags/0.2.0"
 # ]
 # openbao_recovery_threshold = 2   # default: a majority
 
+# Flux Git source verification: OPT-IN, default off. See management-scaleway.tfvars.example and docs/signed-commits.md.
+# flux_git_verify = { enabled = true, public_keys = ["-----BEGIN PGP PUBLIC KEY BLOCK-----\n...\n-----END PGP PUBLIC KEY BLOCK-----"] }
+
 # --- Backup / DR object stores (any S3-compatible store) ----------------------
 # Proxmox has no native object storage — point these at an external S3 (e.g. a
 # Scaleway/OVH bucket). Each store is opened with the keys of the cloud that
@@ -121,3 +148,7 @@ s3_primary_endpoint = "https://s3.fr-par.scw.cloud"
 s3_primary_region   = "fr-par"
 s3_replica_endpoint = "https://s3.fr-par.scw.cloud"
 s3_replica_region   = "fr-par"
+
+# --- Node system disk --------------------------------------------------------
+# root_disk_gb (node_distribution, default 50 GiB): the application stack puts ~11 GB of images on each node. With
+# deploy_flux a `check` warns below 40.

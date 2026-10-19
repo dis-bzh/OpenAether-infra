@@ -1,8 +1,8 @@
-# Release checklist — 0.2.1
+# Release checklist — 0.3.0
 
 English only: rewritten each release, and two copies would drift.
 
-What to run before tagging 0.2.1 and telling anyone about it. Ordered by what
+What to run before tagging 0.3.0 and telling anyone about it. Ordered by what
 fails cheapest. **Stop at the first red** — every later step assumes the earlier
 ones held.
 
@@ -15,12 +15,19 @@ commit, it moves. Name the rung every claim reached: mocked, emulated, local
 Docker, or real cloud — once by hand, or repeated. Nothing has run unattended to
 completion.
 
-**0.2.1 is a patch, and the sections below were written for 0.2.0.** It adds no scope: the Day-1 seeding without a root token, a
-bucket of its own for Loki, `ensure-buckets` accepting a retried create, the shared language check, the Day-1 documentation, and
-the pin of OpenAether-apps 0.2.0. What was run for it, and what was not:
+**0.3.0 is a hardening and upgrade release, and the sections below were written for 0.2.0.** What was run for it before the tag, and what was not:
 
-| Section | 0.2.1 |
+| Section | 0.3.0 |
 |---|---|
+| §1 clean machine | To run at the release commit (the stranger clone of §9). |
+| §2 local Docker | **Not run**: the kernel of the maintainer's host is older than 6.15 (`check-host-overlay-fd.sh`). |
+| §3 emulated cloud | CI lane only; not run by hand for 0.3.0. |
+| §4–§6 clouds | Labs 11 to 15c (2026-10-16 to 2026-10-18): Scaleway, OVH, Outscale, each once; see the `[0.3.0]` section of `CHANGELOG.md` for what ran and what did not. Run again with the **tags** pinned before tagging. |
+| §7 upgrade, growth, removal | Scaleway lifecycle from 0.2.1 + apps 0.2.0 (lab 15c); the etcd restore and real node replacement through the roll were **not run**. |
+| §8 mechanics, §9 stranger | To run at the cut. |
+| Before the tag | `git_ref` of the tfvars examples and of `variables.tf` points at `refs/tags/0.3.0` of OpenAether-apps, which exists (released first). The branch history is unsigned (squash merge, signed by GitHub; #332, #333). |
+
+---|---|
 | §1 clean machine | Run at the release commit (the stranger clone of §9). |
 | §2 local Docker | **Not run**: the kernel of the maintainer's host is older than 6.15 (`check-host-overlay-fd.sh`). |
 | §3 emulated cloud | **Not run** for 0.2.1: nothing in it changes the emulated lane. |
@@ -168,7 +175,7 @@ for each old image the retention destroys (§7, image lane).
       role only) and **bastion hardening**,
       `scripts/ops/bastion-harden-check.sh <bastion_ip> <bastion_user> <ssh_key>`
       (never against the reference cluster; `BASTION_BASELINE=1` adds the checks of the opt-in
-      `bastion_baseline`, and `task bastion-baseline-check` is the offline proof to run first).
+      `bastion_baseline`, `BASTION_AUDIT=0` with `audit_logging = false`, and `task bastion-baseline-check` is the offline proof to run first).
 
 ## 5. Cloud — OVH
 
@@ -417,7 +424,7 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       out, including what you chose not to fix (`CLAUDE.md`: an audit is not a
       PR). Never write a closing keyword before an issue number in a commit, PR
       or the notes: GitHub reads prose, and an open issue was closed that way.
-- [ ] `CHANGELOG.md`: `[0.2.1]` carries its date and anything merged since
+- [ ] `CHANGELOG.md`: `[0.3.0]` carries its date and anything merged since
       the text was written is folded into it (`[Unreleased]` stays empty), in the
       voice of 0.1.0: what it claims **and** what it does not, each with its rung,
       no hand-typed counts. Upgrade notes: unset pins inherit the new default and

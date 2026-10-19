@@ -33,7 +33,7 @@ control planes / workers, D = entrées de `worker_storage.disks`.
 | | Scaleway | OVH | Outscale | Proxmox |
 |---|---|---|---|---|
 | Instances | CP+W + bastion `DEV1-S` (2 vCPU / 2 Go) | CP+W + bastion `b3-8` (2 vCPU / 8 Go) | CP+W + bastion `tinav5.c2r2p2` (2 vCPU / 2 Go) | CP+W ; + bastion (1 vCPU / 1 Gio / 10 Gio) seulement avec `enable_bastion` |
-| Disque système | 20 Go `sbs_volume` chacun | celui du flavour | celui de l'OMI | `root_disk_gb` (20 Gio) chacun |
+| Disque système | 50 Go `sbs_volume` chacun (`scw_root_volume_size_gb` ; 40 au moins avec `deploy_flux`, imposé) | celui du flavour (50 Go au moins ; un `check` avertit sous 40) | celui de l'OMI (~11-12 Gio) : `outscale_root_volume_size_gb = 50` (un `check` avertit) | `root_disk_gb` (50 Gio) chacun (un `check` avertit sous 40) |
 | Volumes de données | W × D | W × D | W × D | W × D, sur `datastore_id` |
 | IP publiques | 3 : bastion, public gateway, LB de l'API | 2 flottantes : bastion, LB de l'API | 2 : bastion, NAT | aucune — `host_public_ip` est la tienne |
 | Load balancers | 1 | 1 (Octavia) | 1 (LBU) | aucun — VIP Talos |
@@ -52,9 +52,9 @@ script ne vérifie IP, LB ni security groups.
 
 | Exemple | Nœuds × type (vCPU / RAM) | Inst. | vCPU | RAM | Au plancher ? | `task preflight-quotas PROVIDER=… --` |
 |---|---|---|---|---|---|---|
-| `management-`, `failover-scaleway` | 3+2 × `POP2-4C-16G` (4 / 16 Go) | 6 | 22 | 82 Go | Type oui ; marge sur 2 workers non mesurée | pas de backend Scaleway |
+| `management-`, `failover-scaleway` | 3+3 × `POP2-4C-16G` (4 / 16 Go) | 7 | 26 | 98 Go | Oui ; déroulable, voir le calcul plus bas | pas de backend Scaleway |
 | `workload-scaleway` | 3+3 × `POP2-4C-16G` | 7 | 26 | 98 Go | Oui | pas de backend Scaleway |
-| `management-`, `failover-ovh` | 3+2 × `c3-8` (4 / 8 Go) | 6 | 22 | 48 Go | Type oui ; marge sur 2 workers non mesurée | `--add-vms 6 --add-cores 22 --add-ram-gb 48` |
+| `management-`, `failover-ovh` | 3+3 × `c3-8` (4 / 8 Go) | 7 | 26 | 56 Go | Oui ; déroulable, voir le calcul plus bas | `--add-vms 7 --add-cores 26 --add-ram-gb 56` |
 | `workload-ovh` | 3+3 × `c3-8` | 7 | 26 | 56 Go | Oui | `--add-vms 7 --add-cores 26 --add-ram-gb 56` |
 | `management-`, `failover-outscale` | 3+2 × `tinav5.c2r4p1` (2 / 4 Go) | 6 | 12 | 22 Go | **Non, volontairement** — voir plus bas | `--add-vms 6 --add-cores 12 --add-ram-gb 22` |
 | `workload-outscale` | 3+3 × `tinav5.c2r4p1` | 7 | 14 | 26 Go | **Non, volontairement** | `--add-vms 7 --add-cores 14 --add-ram-gb 26` |
@@ -79,3 +79,47 @@ script ne vérifie IP, LB ni security groups.
   Outscale change `vm_type` par un stop/start — un nœud à la fois.
 - Les runs sur cloud réel de [`status.md`](status.md) ne consignent le type d'instance
   que pour Outscale (`tinav5.c2r4p1`) : ceux de Scaleway et d'OVH n'établissent aucun plancher.
+
+## Le cluster peut-il perdre un worker, et être déroulé ? (infra #378)
+
+`cluster-roll` refuse de démarrer quand les requêtes CPU de tous les workers, chacune en pourcentage de son propre nœud, dépassent
+(workers - 1) x 100 % : la charge demandée d'un nœud doit tenir sur les autres (`worker_cpu_requests` / `preflight_roll`,
+`scripts/lib/roll-gates.sh`). **Mesuré** au lab 16, pile applicative complète, cluster de management, requêtes en % du CPU allouable d'un worker :
+
+| Profil (tel que livré avant) | Workers | Demandé | Limite | Verdict |
+|---|---|---|---|---|
+| Scaleway 3+2 `POP2-4C-16G` | 82 % + 90 % | 172 % | 100 % | refusé |
+| OVH 3+2 `c3-8` | 81 % + 91 % | 172 % | 100 % | refusé |
+| Outscale 3+3 `tinav5.c3r6p2` (3 vCPU) | 239 % au total | 239 % | 200 % | refusé |
+
+Calcul (dérivé de ces chiffres, en prenant l'allouable d'un worker à peu près égal à son nombre de vCPU) : sur 4 vCPU, 172 % font environ
+6,9 vCPU au total ; sur 3 vCPU, 239 % font environ 7,2 vCPU. Les requêtes valent donc à peu près 6,3 vCPU de déploiements fixes plus 0,3 vCPU
+de DaemonSets par worker (estimation à partir de deux points, pas une mesure de chacun). Avec n workers de 4 vCPU, la porte exige
+6,3 + 0,3n <= 4(n - 1) : n = 3 donne 7,2 contre 8 (environ 90 % de la limite, 180 % contre 200 %) ; n = 4 donne 7,5 contre 12. Les exemples
+Scaleway et OVH livrent donc **3 workers**. La marge à 3 est mince : une pile plus lourde peut la rompre, et la porte le dit avant de toucher quoi que ce soit.
+Ce n'est que la porte CPU : les réplicas à répartition obligatoire (les trois pods OpenBao, par exemple) restent incomplets pendant qu'un worker est
+absent, et le comportement de la perte d'un nœud sous charge relève de la 0.4.0 (résilience), pas de ce tableau.
+
+Outscale : aucune forme ne tient dans le quota par défaut de 20 vCPU et passe la porte. 3 workers de 3 vCPU échouent (ci-dessus), et 4 workers de
+3 vCPU demandent 3 + 4 nœuds x 3 + 2 (bastion) = 23 vCPU. La plus petite forme qui passe sur le papier est 3+3 `tinav5.c4r8p2` (4 vCPU / 8 Go) : 26 vCPU
+avec le bastion, donc une hausse de quota d'abord. Elle n'a pas été exécutée sur Outscale. Les nœuds de 6 Go du lab 16 sont aussi tombés dans une cascade
+d'E/S et de mémoire après une sauvegarde-restauration et un redémarrage drainé (#376) ; le volume racine est gp2 (type non configurable ici), et un passage
+manuel en `io1 3000` ne l'a pas arrêtée. L'exemple fixe maintenant `outscale_root_volume_size_gb = 50` au lieu de le laisser en commentaire.
+
+## Disque système et pile applicative complète (tous les providers)
+
+Talos garde sa partition EPHEMERAL (kubelet, images containerd, journaux) sur le volume système, environ 4 Go de moins que sa taille. Avec toute la
+pile applicative à ses versions actuelles, un worker portait environ 11 Go d'images (lab 12, Scaleway), pour environ 15,6 Go d'espace éphémère sur un
+volume de 20 Go : DiskPressure, pods évincés (25 pods Zitadel dans les premières minutes) et délais de création de conteneurs.
+
+**Minimum : 40 Go par nœud avec la pile applicative ; le défaut est 50 Go** (environ 46 Go utilisables) : les ~11 Go d'images, le second jeu qu'une mise
+à jour de chart tire avant le ramasse-miettes de l'ancien (le kubelet lance le GC des images à 85 %), les journaux et de la marge. Par provider :
+Scaleway `scw_root_volume_size_gb` (50 ; une validation refuse moins de 40 avec `deploy_flux = true`) ; OVH le flavour (`b3-8` : 50 Go ; un `check`
+avertit sous 40 Go) ; Outscale `outscale_root_volume_size_gb` (null = la taille de l'OMI, l'image Talos brute, ~11-12 Gio, **insuffisant** ; un `check`
+avertit avec `deploy_flux`, ne vaut que pour les nœuds créés ensuite) ; Proxmox `root_disk_gb` (50 Gio ; un `check` avertit sous 40).
+
+Augmenter la valeur Scaleway sur un cluster existant redimensionne le `sbs_volume` sur place (lab 12 : plan « 10 to change », aucun nœud remplacé) ;
+Talos agrandit EPHEMERAL au redémarrage suivant du nœud : drainer et redémarrer les workers un par un ensuite (15,6 Go vers 35,6 Go ; voir l'avertissement RWX
+de [`upgrade.fr.md`](upgrade.fr.md)). Un cluster construit à 20 sans l'épingler dans son tfvars verra ce redimensionnement au prochain plan ; épingler
+`scw_root_volume_size_gb = 20` garde l'ancienne taille (la pile complète n'y tient pas). Chez Outscale et Proxmox ce code ne redimensionne pas le disque
+racine sur place : remplacer les nœuds un par un (`task cluster-roll`). Non mesuré : l'espace utile d'Outscale et d'OVH avec la pile complète.

@@ -45,7 +45,25 @@ for bin in task tofu talosctl aws gpg; do
   command -v "$bin" >/dev/null 2>&1 || { log "✗ outil absent du PATH : $bin"; exit 1; }
 done
 
-# 3. Close the tunnels whatever happens.
+# 3. Until the lock is ours there is nothing of ours to clean up: a run that LOSES the lock must not close the tunnels of the
+# run that holds it, nor print "complete" (lab 11 read the first as a bug). This trap only says that a run died early.
+trap 'rc=$?; [ "$rc" -eq 0 ] || log "✗ failed (code $rc) before the lock — etcd snapshot $PROVIDER"' EXIT
+
+# 4. Lock: never two runs in parallel.
+# Not in /tmp: a predictable name in a shared directory lets another local user
+# plant a symlink that the redirection below would create or truncate as us.
+# One fixed place, not $XDG_RUNTIME_DIR: cron has none and an SSH session has one, so two lock (or pid) files would let a
+# cron run and a manual run go in parallel, and --stop from another environment would not find the pids.
+STATE_DIR="${HOME:?}/.cache/openaether"
+mkdir -p -m 700 "$STATE_DIR"
+LOCK="$STATE_DIR/etcd-snapshot-${PROVIDER}.lock"
+exec 9>"$LOCK"
+if ! flock -n 9; then
+  log "⚠ a run is already in progress ($LOCK) — aborting"
+  exit 0
+fi
+
+# 5. The lock is ours: from here, close the tunnels whatever happens (they are this run's).
 cleanup() {
   local rc=$?
   "$ROOT/scripts/bootstrap/talos-tunnels.sh" close "$ROOT/infrastructure/opentofu/cluster" >/dev/null 2>&1 || true
@@ -53,14 +71,6 @@ cleanup() {
   exit "$rc"
 }
 trap cleanup EXIT
-
-# 4. Lock: never two runs in parallel.
-LOCK="/tmp/openaether-etcd-snapshot-${PROVIDER}.lock"
-exec 9>"$LOCK"
-if ! flock -n 9; then
-  log "⚠ a run is already in progress ($LOCK) — aborting"
-  exit 0
-fi
 
 log "▶ snapshot etcd — provider=$PROVIDER keep=$KEEP"
 cd "$ROOT"

@@ -98,6 +98,20 @@ output "inline_manifest_names" {
 }
 
 output "appended_documents" {
-  description = "The ResolverConfig (and TimeSyncConfig) appended to every node's config, empty when node_nameservers is. Exposed because the rendered configs are unknown at plan."
+  description = "The documents appended to every node's config (KmsgLogConfig first when node_log_forwarding is set, then the node firewall documents when node_firewall_mode is not off, then ResolverConfig and TimeSyncConfig), empty when neither node_log_forwarding nor node_nameservers is. Exposed because the rendered configs are unknown at plan."
   value       = local.appended_documents
+}
+
+output "node_log_patch" {
+  description = "The machine.logging patch merged into every node's machine config, empty when node_log_forwarding is null."
+  value       = local.node_log_machine_patch
+}
+
+output "node_baseline_patch" {
+  description = "The machine.sysctls and kubelet settings node_baseline merges per role (sysctls and control-plane kubelet extras, worker machine patch), all empty when node_baseline is null."
+  value = {
+    sysctls               = local.baseline_sysctls
+    control_plane_kubelet = local.baseline_kubelet_cp
+    worker                = local.baseline_machine_worker
+  }
 }

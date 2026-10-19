@@ -3,9 +3,10 @@
 # rbac-review.sh — who can do what, as a dated file a human reads (ANSSI/NSA hardening AUTH-03)
 #
 # Lists every (Cluster)RoleBinding with its subjects, writes it to rbac-review-<UTC date>.tsv, and FLAGS:
-#   HUMAN  a User or Group subject that is not a built-in system: identity — there is no named-human
-#          access on this platform today (the admin kubeconfig is a shared system:masters certificate),
-#          so any such binding is either a new decision or something to remove
+#   HUMAN  a User or Group subject that is not a built-in system: identity. The shared admin kubeconfig is a
+#          system:masters certificate; named people come through kubeconfig-new.sh and the two bindings of the apps
+#          platform-rbac brick (oa-admins -> cluster-admin for Group oa:admins, oa-readers -> view for Group oa:readers),
+#          which are the only ones not flagged. Any other such binding is a new decision or something to remove
 #   ANON   system:anonymous or system:unauthenticated bound to anything
 #   ADMIN  cluster-admin granted by a binding outside the allowlist below
 # Exit 1 when anything is flagged. READ-ONLY: kubectl get, and one file written locally.

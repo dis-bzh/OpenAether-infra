@@ -14,18 +14,21 @@ has been measured, on which cloud and when — and what has not.
 
 ## What you get, and what you do not
 
-A single Talos Linux cluster: 3 control planes, 2 workers, Cilium as the CNI, an
+A single Talos Linux cluster: 3 control planes, 3 workers, Cilium as the CNI, an
 apiserver load balancer ACL'd to your IP, a bastion, and an OpenTofu state
 encrypted on your side before it reaches S3.
 
-No applications, no GitOps, no ingress. Flux exists in the code and is **off**
-(`deploy_flux = false`); it returns as a choice in a later release. Cilium does
-not need it — Talos delivers Cilium itself, as an inline manifest, before
-anything else runs.
+The example file as shipped sets `deploy_flux = true` and `deploy_app_lb = true`: Flux then
+installs the platform from the OpenAether-apps repository (`git_repo_url`, `git_ref`) and an
+application load balancer fronts the gateway. Remove those two lines and you get the
+infrastructure only: no applications, no GitOps, no ingress (`deploy_flux` defaults to
+`false`). Cilium does not need Flux — Talos delivers Cilium itself, as an inline manifest,
+before anything else runs. A cluster with Flux has a Day-1 step once `cluster-up` has
+ended (seeding OpenBao, signing the PKI intermediate): [`admin-access.md`](admin-access.md).
 
 ## Before you start
 
-- A Scaleway account, and the quota to run **5 instances** of the type in your
+- A Scaleway account, and the quota to run **6 instances** of the type in your
   tfvars. A new account may be capped at 1 — Console → Quotas. There is no
   preflight script for Scaleway (`preflight-quotas.py` covers OVH and Outscale
   only), so this check is yours to make. The bastion adds one `DEV1-S`; what
@@ -149,8 +152,9 @@ $EDITOR management-scaleway.tfvars
 | `control_planes` | 3 — **inside `node_distribution.<provider>`**, not a top-level field, and `bastion_ssh_keys` is a map keyed by provider the same way. Nothing validates the count; `2` silently builds a two-member etcd |
 | `node_nameservers` / `node_dns_boot_timeout` | optional: the nodes' own resolver over DNS-over-TLS or -HTTPS (Talos 1.14+), all encrypted or all plain. Run on OVH (applies without a reboot); a list no node can reach is only found at the next reboot, and that node then has no Talos API. Rules, trade-offs and how to check a node: `modules/talos/variables.tf` |
 
-`git_repo_url`, `git_ref`, `flux_namespace` and `apps_profile` are inert while
-Flux is off. Leave them.
+`git_repo_url`, `git_ref` and `flux_namespace` tell Flux where to read the platform from (the
+example names the apps release that goes with this one); `apps_profile` is inert. They are
+inert altogether when you remove `deploy_flux = true`. Leave them unless you fork the apps.
 
 Before you spend anything: `task preflight`. Lint, render, validate, unit tests
 and script tests — everything provable without a cloud account, in about four
@@ -173,6 +177,17 @@ phase-1 plan on its own, save it:
 `task infra-plan ROLE=management PROVIDER=scaleway OUT=tfplan`, read it, then
 `task infra-apply PROVIDER=scaleway PLAN=tfplan`. PROVIDER is required on both —
 it used to default to Scaleway, which is the wrong cloud to guess.)
+
+**The unattended path is one command, `APPROVE=auto`.** `task cluster-up ROLE=management PROVIDER=… KEY=… APPROVE=auto` plans, runs
+the node-delete guard, and applies *the saved plan file* of each phase (it never uses `-auto-approve`), then converges and verifies;
+a run that stopped can be repeated as is. Without it and without a terminal the journey stops at three checkpoints, each saying
+"nothing was applied": phase-1 plan (`task infra-apply PLAN=up-<role>-<provider>.tfplan`), then — `task cluster-up` stops at that same
+checkpoint on every re-run, even when its plan says "No changes", so do not repeat it — `task bootstrap-phase2 PROVIDER=…`, which writes
+the phase-2 plan, then `cd infrastructure/opentofu/cluster && tofu apply phase2-<role>-<provider>.tfplan`, then `task kubeconfig` and
+`task cluster-verify`. Measured on OVH, lab 16: 21 minutes for this path against about 8 of applies. A coding agent whose
+harness refuses a blind apply therefore needs the owner's explicit permission for the `APPROVE=auto` command; that decision is the
+owner's, not the repository's. Copy the `deploy_flux = true` and `deploy_app_lb = true` lines of the example: without them the cluster
+is infrastructure only (the verifier reports flux-system as red by design).
 
 In order it creates the four state and artifact buckets (the credential check
 above), builds the Talos image and uploads it — **measured at 52 s on Scaleway,
@@ -289,7 +304,7 @@ task cluster-verify PROVIDER=scaleway
 It asks the cluster, not the tool: the apiserver answers, every node is Ready, the
 number of control planes matches what you asked for and they are not all in one
 zone or host, Cilium runs on each of them, CoreDNS serves,
-there is no `flux-system`, no application load balancer, a state replica
+Flux and the application load balancer are present when the file says `deploy_flux` and `deploy_app_lb` (and absent when it does not), a state replica
 exists in the backup store — and the first 4 KB of that object is
 opened and must be an OpenTofu `encrypted_data` envelope rather than readable
 state. Outside `dev`, the replica must also be off the primary's cloud (for an

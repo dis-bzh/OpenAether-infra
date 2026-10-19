@@ -76,6 +76,24 @@ pas bloquante, et les chiffres réels du 2026-10-03 sont 0 échec sur Scaleway, 
 sur 1490 sur Outscale (`docs/status.md`).
 Fonctionnement : [`cluster-upgrade.sh` § The service probe](../scripts/dev/cluster-upgrade.sh).
 
+## De la 0.2.x à la 0.3.0 (la plateforme, pas Talos ni Kubernetes)
+
+La 0.3.0 ne change ni Talos (1.14.2) ni Kubernetes (1.37.1). Ce qu'elle change sur un cluster en marche, dans cet ordre :
+
+1. **Lire le plan** (`task cluster-up` s'arrête dessus). À tfvars inchangés, la seule modification attendue est le passage des volumes système Scaleway de 20 à 50 Go
+   **sur place** (`scw_root_volume_size_gb`, défaut 50 ; aucun nœud n'est remplacé) et un changement de la machine config Talos. N'épingler `scw_root_volume_size_gb = 20` que pour garder
+   l'ancienne taille, qui ne contient pas la pile applicative. Sur Outscale, le disque racine d'une VM en marche n'est pas redimensionné sur place : définir `outscale_root_volume_size_gb`
+   (et relever les IOPS racine, infra #376) puis remplacer les workers un à un avec `task cluster-roll`. OVH et Proxmox : le disque du gabarit et `root_disk_gb` (50).
+2. **Redémarrer les workers Scaleway un par un, drainés**, pour que Talos agrandisse EPHEMERAL. Utiliser `task cluster-roll` ; un `talosctl reboot` tapé à la main ne draine pas, et un
+   worker qui porte une instance CNPG ne doit jamais être redémarré sans drain (voir plus bas).
+3. **Agrandir les disques avant les montées de version des applications.** Les images de la 0.3.0 sont plus grosses ; un nœud de 20 Go a atteint DiskPressure après des heures de montées (lab 15c).
+4. **Puis la partie apps**, une version mineure à la fois là où c'est dit : Longhorn 1.9 -> 1.10 -> 1.11 -> 1.12 (avec l'étape préalable sur la conversion des CRD), cert-manager, l'opérateur CNPG,
+   Kyverno et la procédure du chart Loki sont dans `docs/patching.md` d'OpenAether-apps. Prendre d'abord une sauvegarde CNPG et une sauvegarde Longhorn ; les migrations de Zitadel et Grafana sont sans retour.
+5. **Les options de durcissement sont désactivées par défaut.** Les activer une à une (`docs/hardening.md`, `docs/security-architecture.md`) ; chaque plan est lu avant d'être appliqué.
+   Les options qui changent la machine config Talos (filtrage des nœuds, base de référence, transfert de journaux) passent par le plan ; si un changement exige un redémarrage, passer par `task cluster-roll`.
+
+Non répété sur place : l'étape Loki 6.55 -> 18, Grafana, Alloy, les CRD Gateway API, Flux sur les enfants. Une installation neuve de chaque version a tourné sur les trois clouds.
+
 ## Kubernetes d'abord
 
 Elle ne redémarre rien, ce qui isole le roulement du control plane de celui des
@@ -227,6 +245,25 @@ NAME:.metadata.name,PRIMARY:.status.currentPrimary,READY:.status.readyInstances
 # et, pour une base en détail (plugin installé par `task setup`)
 kubectl cnpg status <cluster> -n <ns>
 ```
+
+### Ne jamais redémarrer un nœud qui héberge encore un volume Longhorn RWX
+
+Un worker qui héberge à la fois le pod share-manager d'un volume RWX et un pod qui le monte n'a pas fini un `talosctl reboot` propre au lab 12
+(Scaleway, Longhorn 1.12.1, Talos 1.14, apps #124) : Talos est resté dans `unmountPodMounts` (`nfs: server ... not responding`) plus de
+12 minutes, deux fois, et seul un reset matériel par le fournisseur y a mis fin. **Ne jamais redémarrer, éteindre ni faire `talosctl upgrade`
+d'un tel nœud sans drain.** `cordon_drain` (utilisé par `cluster-roll`, `cluster-upgrade`, `cluster-shrink`) attend désormais, après le drain,
+qu'il ne reste sur le nœud ni pod share-manager ni pod montant une claim Longhorn RWX (`RWX_CLEAR_TIMEOUT`, 300 s par défaut) ; s'il en reste,
+il dé-cordonne le nœud, liste les pods et refuse de continuer. À la main : drainer, puis
+`kubectl -n longhorn-system get pods -o wide | grep share-manager` doit montrer un autre nœud. Test hors ligne : `scripts/dev/test-rwx-drain-gate.sh`.
+Pas encore prouvé sur un cluster : qu'un nœud drainé redémarre ensuite en 1,5 minute environ (le dépôt apps raccourcit aussi les délais NFS RWX).
+
+### Ne jamais redémarrer sans drain un worker qui porte une instance CNPG
+
+Un redémarrage de nœud SANS drain laisse les pods d'instance CNPG de ce nœud en phase `Succeeded` (l'arrêt propre du kubelet arrête postgres avec le code 0) et
+CNPG 1.23.1 ne les redémarre jamais : les deux bases sont à l'arrêt, Zitadel et la Gateway répondent 503 (lab 11, plus de 30 minutes ; la page des pièges du dépôt OpenAether-apps). `cluster-roll`,
+`cluster-upgrade` et `cluster-shrink` drainent d'abord, donc sans risque ; un `talosctl reboot` ou `shutdown` tapé à la main non. Après un redémarrage sans drain :
+`kubectl get pods -A --field-selector=status.phase==Succeeded`, puis supprimer les pods CNPG listés (jamais leur PVC). Les opérateurs CNPG plus récents (le pin des apps a dépassé la 1.23) ne sont
+pas connus pour ce défaut ; l'habitude ne coûte rien. L'outillage de roll ne garde pas un redémarrage qu'il ne lance pas (infra #358) : cette page est le garde-fou.
 
 ### Une base restée en « Failing over » après le roll
 

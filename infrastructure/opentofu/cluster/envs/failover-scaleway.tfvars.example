@@ -32,7 +32,7 @@ talos_bootstrap    = false # Set to true after infra is up
 node_distribution = {
   scaleway = {
     control_planes = 3
-    workers        = 2
+    workers        = 3 # not 2: lab 16 measured 172% of one worker's CPU requested on 2 (cluster-roll refuses above (n-1)*100%); 3 gives ~90%, docs/capacity.md
     region         = "fr-par"
     zone           = "fr-par-1"
     instance_type  = "POP2-4C-16G" # meets the sizing floor, see docs/capacity.md
@@ -67,7 +67,7 @@ bastion_ssh_keys = {
 git_repo_url     = "https://github.com/dis-bzh/OpenAether-apps.git"
 # Pin the platform: a commit on a branch would otherwise reach a running
 # cluster within the reconcile interval. refs/heads/<branch> to test.
-git_ref          = "refs/tags/0.2.0"
+git_ref          = "refs/tags/0.3.0"
 
 # --- Backup / DR object stores ------------------------------------------------
 # Derived buckets (you don't set them) — parts come from this file,
@@ -81,3 +81,8 @@ s3_primary_endpoint = "https://s3.fr-par.scw.cloud"
 s3_primary_region   = "fr-par"
 s3_replica_endpoint = "https://s3.gra.io.cloud.ovh.net" # OVH: prod crosses providers, or drop to environment = "dev"
 s3_replica_region   = "gra"
+
+# --- Node system disk --------------------------------------------------------
+# 50 GB per node by default (scw_root_volume_size_gb): the application stack puts ~11 GB of images on a node and Talos
+# keeps them on the system volume, ~4 GB under its size. With deploy_flux the value must be at least 40 (validated).
+# scw_root_volume_size_gb = 50

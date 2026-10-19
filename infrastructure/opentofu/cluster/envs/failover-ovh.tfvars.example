@@ -32,7 +32,9 @@ talos_bootstrap    = false # Set to true after infra is up
 node_distribution = {
   ovh = {
     control_planes     = 3
-    workers            = 2
+    workers            = 3
+    # 3 workers, not 2: lab 16 measured 82% + 91% = 172% of one worker's CPU requested on 2 c3-8, and `cluster-roll`
+    # refuses above (workers - 1) x 100%. With 3 the same load is about 90% of that limit (docs/capacity.md).
     region             = "EU-WEST-PAR"
     # c3-8 (4 vCPU / 8 GB), not b3-8 (2 vCPU): measured 2026-08-15, three b3-8
     # workers sit at ~99% of CPU requests with the platform on them, so no node
@@ -76,7 +78,7 @@ bastion_ssh_keys = {
 git_repo_url     = "https://github.com/dis-bzh/OpenAether-apps.git"
 # Pin the platform: a commit on a branch would otherwise reach a running
 # cluster within the reconcile interval. refs/heads/<branch> to test.
-git_ref          = "refs/tags/0.2.0"
+git_ref          = "refs/tags/0.3.0"
 
 # --- Backup / DR object stores ------------------------------------------------
 # This failover cluster runs when your primary provider is DOWN, so its PRIMARY
@@ -91,3 +93,7 @@ s3_primary_endpoint = "https://s3.gra.io.cloud.ovh.net" # failover state on OVH 
 s3_primary_region   = "gra"
 s3_replica_endpoint = "https://s3.fr-par.scw.cloud"     # replicate back to Scaleway on recovery
 s3_replica_region   = "fr-par"
+
+# --- Node system disk --------------------------------------------------------
+# The root disk is the flavour's. The application stack needs ~11 GB of images per node: pick a flavour with at least
+# 50 GB (b3-8 has 50); with deploy_flux a `check` warns when the flavour's disk is below 40 GB.

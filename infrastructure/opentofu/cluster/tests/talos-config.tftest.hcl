@@ -459,3 +459,91 @@ run "node_nameservers_alone_get_the_default_boot_wait" {
     error_message = "the root default for node_dns_boot_timeout must stay the module's (90s)."
   }
 }
+
+# --- node and flow logs (batch B22), mocked ------------------------------------
+
+run "node_logs_and_hubble_are_off_by_default" {
+  command = plan
+
+  variables {
+    cilium_manifest = null
+  }
+
+  assert {
+    condition     = output.cilium_manifest_file == "cilium.yaml"
+    error_message = "cilium_hubble_drop_log must default to false: the default boot manifest is cilium.yaml, unchanged."
+  }
+  assert {
+    condition     = length(module.talos.node_log_patch) == 0
+    error_message = "node_log_forwarding must default to null at the cluster root: opt-in, and no node's config changes."
+  }
+}
+
+run "the_hubble_variant_is_selected_by_its_switch" {
+  command = plan
+
+  variables {
+    cilium_manifest        = null
+    cilium_hubble_drop_log = true
+  }
+
+  assert {
+    condition     = output.cilium_manifest_file == "cilium-hubble-drops.yaml"
+    error_message = "cilium_hubble_drop_log = true must boot Cilium from cilium-hubble-drops.yaml."
+  }
+}
+
+run "an_explicit_manifest_wins_over_the_hubble_switch" {
+  command = plan
+
+  variables {
+    cilium_hubble_drop_log = true
+  }
+
+  assert {
+    condition     = output.cilium_manifest_file == "(override)"
+    error_message = "cilium_manifest, when set, must stay the manifest used."
+  }
+}
+
+run "node_log_forwarding_reaches_the_talos_module" {
+  command = plan
+
+  variables {
+    node_log_forwarding = { endpoint = "tcp://127.0.0.1:5170" }
+  }
+
+  assert {
+    condition     = module.talos.node_log_patch.logging.destinations[0].endpoint == "tcp://127.0.0.1:5170" && yamldecode(module.talos.appended_documents[0]).kind == "KmsgLogConfig"
+    error_message = "node_log_forwarding must be passed to the talos module, where the rules and their tests live."
+  }
+}
+
+# --- node baseline and node time sources (batch B23), mocked ------------------------
+
+run "node_baseline_and_time_servers_are_off_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(module.talos.node_baseline_patch.sysctls) == 0 && length(module.talos.node_baseline_patch.worker) == 0 && length(module.talos.node_baseline_patch.control_plane_kubelet) == 0
+    error_message = "node_baseline must default to null at the cluster root: opt-in, and no node's config changes."
+  }
+}
+
+run "node_baseline_and_time_servers_reach_the_talos_module" {
+  command = plan
+
+  variables {
+    node_baseline     = { sysctls = true, pod_pids_limit = 4096 }
+    node_time_servers = ["192.0.2.10"]
+  }
+
+  assert {
+    condition     = module.talos.node_baseline_patch.sysctls["kernel.sysrq"] == "0" && module.talos.node_baseline_patch.worker.kubelet.extraConfig.podPidsLimit == 4096
+    error_message = "node_baseline must be passed to the talos module, where the rules and their tests live."
+  }
+  assert {
+    condition     = yamldecode(module.talos.appended_documents[length(module.talos.appended_documents) - 1]).ntp.servers == ["192.0.2.10"]
+    error_message = "node_time_servers must be passed to the talos module."
+  }
+}

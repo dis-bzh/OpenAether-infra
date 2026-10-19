@@ -7,8 +7,15 @@
 # Identities (a pair is skipped when its variables are unset): the operator's keys on each store, OA_LOKI_S3_*,
 # OA_BACKUP_S3_* (primary backups bucket), OA_BACKUP_REPLICA_S3_* (its -backup twin). Probes, all harmless:
 #   list    ListObjectsV2, one key: may this identity read the bucket at all?
+#   head    HeadBucket on the pair's OWN bucket (asserted allowed): barman-cloud and the Loki client call it first, and a pair
+#           without the bucket-read right (Scaleway: ObjectStorageBucketsRead and s3:ListBucket in the bucket policy) lists
+#           and writes fine yet fails every WAL archive with a 403 (infra #356).
 #   delver  DeleteObjectVersion on a version that does not exist: refused with AccessDenied = the policy withholds it
-#           (anything else = the store was willing to look, so a real version would go). Nothing is ever deleted.
+#           (NoSuchVersion/NoSuchKey = the store was willing to look, so a real version would go). A store that rejects the
+#           made-up id as malformed (InvalidArgument) tells nothing about the policy: reported "inconclusive", not a pass.
+#           OA_ISOLATION_REAL_VERSION=1 settles it: the operator's keys write one tiny probe object in the pair's own
+#           bucket, the pair tries to delete that real version, and the operator removes what is left. This WRITES (one
+#           object, one version) and is off by default.
 # Expected: a dedicated pair lists its own bucket and nothing else; with backup_immutability not off it may not call
 # DeleteObjectVersion on it (OA_EXPECT_NO_VERSION_DELETE=0/1 overrides). The operator's keys are listed for contrast and
 # never asserted. A bucket that does not exist is skipped, not counted as "denied".
@@ -47,29 +54,38 @@ OPAK="$(s3_cred "$PROVIDER" primary ak)"; OPSK="$(s3_cred "$PROVIDER" primary sk
 RPAK="$(s3_cred "$PROVIDER" backup ak "$REPLICA_EP")"; RPSK="$(s3_cred "$PROVIDER" backup sk "$REPLICA_EP")"
 [ -n "$OPAK" ] || { echo "✗ no S3 credentials for '$PROVIDER' in this shell (source .env.sh)" >&2; exit 1; }
 
-FAILS=0; ASSERTED=0
+FAILS=0; ASSERTED=0; UNVERIFIED=0; REAL_VID=""
+# aws CLI v2 refuses `--body /dev/null` ("Blob values must be a path to a file"): the real-version probe needs a regular file.
+PROBE_BODY="$(mktemp)"; trap 'rm -f "$PROBE_BODY"' EXIT; printf 'oa-isolation-probe\n' > "$PROBE_BODY"
+REAL="${OA_ISOLATION_REAL_VERSION:-0}"
 ep_of() { [ "$1" = p ] && printf '%s' "$PRIMARY_EP" || printf '%s' "$REPLICA_EP"; }
 rg_of() { [ "$1" = p ] && printf '%s' "$PRIMARY_REGION" || printf '%s' "$REPLICA_REGION"; }
 
-# probe <ak> <sk> <store p|r> <list|delver> <bucket> -> allowed | denied | absent | error:<text>
+# probe <ak> <sk> <store p|r> <list|head|delver> <bucket> -> allowed | denied | absent | error:<text>
 probe() {
   local ak="$1" sk="$2" st="$3" what="$4" b="$5" out rc=0
   if [ "$what" = list ]; then
     out="$(_oa_s3api "$ak" "$sk" "$(ep_of "$st")" "$(rg_of "$st")" list-objects-v2 --bucket "$b" --max-keys 1 2>&1)" || rc=$?
+  elif [ "$what" = head ]; then
+    out="$(_oa_s3api "$ak" "$sk" "$(ep_of "$st")" "$(rg_of "$st")" head-bucket --bucket "$b" 2>&1)" || rc=$?
   else
-    out="$(_oa_s3api "$ak" "$sk" "$(ep_of "$st")" "$(rg_of "$st")" delete-object-version --bucket "$b" \
-            --key oa-isolation-probe --version-id oa-isolation-probe-no-such-version 2>&1)" || rc=$?
+    out="$(_oa_s3api "$ak" "$sk" "$(ep_of "$st")" "$(rg_of "$st")" delete-object --bucket "$b" \
+            --key oa-isolation-probe --version-id "${REAL_VID:-4242424242424242}" 2>&1)" || rc=$?
   fi
   if [ "$rc" -eq 0 ]; then echo allowed
   elif grep -qiE 'InvalidAccessKeyId|SignatureDoesNotMatch|AuthFailure|InvalidToken' <<<"$out"; then echo "error:the store does not accept this key"
   elif grep -qiE 'AccessDenied|Forbidden|\(403\)' <<<"$out"; then echo denied
   elif grep -qiE 'NoSuchBucket|\(404\).*(Not Found)' <<<"$out" && ! grep -qi 'NoSuchVersion\|NoSuchKey' <<<"$out"; then echo absent
-  elif [ "$what" = delver ] && grep -qiE 'NoSuchVersion|NoSuchKey|InvalidArgument|InvalidVersion' <<<"$out"; then echo allowed
+  elif [ "$what" = delver ] && [ -z "${REAL_VID:-}" ] && grep -qiE 'InvalidArgument|InvalidVersion' <<<"$out"; then echo inconclusive
+  elif [ "$what" = delver ] && grep -qiE 'NoSuchVersion|NoSuchKey' <<<"$out"; then echo allowed
   else echo "error:$(_oa_first_line "$out")"; fi
 }
 
 report() { # <label> <expected> <observed> <asserted 0|1>
   local mark="·" extra=""
+  if [ "$3" = inconclusive ]; then
+    UNVERIFIED=$((UNVERIFIED + 1)); printf '  ? %-34s expected %-7s observed inconclusive (the store rejects a made-up version id; OA_ISOLATION_REAL_VERSION=1 tests a real one)\n' "$1" "$2"; return 0
+  fi
   if [ "$4" = 1 ]; then
     ASSERTED=$((ASSERTED + 1))
     if [ "$2" = "$3" ]; then mark="✓"; else mark="✗"; FAILS=$((FAILS + 1)); fi
@@ -92,8 +108,25 @@ check_identity() { # <name> <ak> <sk> <store p|r> <own bucket> <asserted 1|0> �
     exp=denied; if [ "$asserted" = 0 ] || [ "$b" = "$own" ]; then exp=allowed; fi
     report "$b list" "$exp" "$obs" "$asserted"
     if [ "$asserted" = 1 ] && [ "$b" = "$own" ]; then
+      obs="$(probe "$ak" "$sk" "$st" head "$b")"
+      report "$b head-bucket" allowed "$obs" 1
+      [ "$obs" != denied ] || echo "    ^ HeadBucket is denied on this pair's own bucket: it lists and writes, yet barman-cloud / Loki fail on their first call. Scaleway: add ObjectStorageBucketsRead to the pair's IAM set and s3:ListBucket to the bucket policy (docs/backup-policy.md, section 4)."
+      REAL_VID=""
+      if [ "$REAL" = 1 ]; then
+        oak="$OPAK"; osk="$OPSK"; [ "$st" = p ] || { oak="$RPAK"; osk="$RPSK"; }
+        REAL_VID="$(_oa_s3api "$oak" "$osk" "$(ep_of "$st")" "$(rg_of "$st")" put-object --bucket "$b" --key oa-isolation-probe \
+                      --body "$PROBE_BODY" 2>/dev/null | jq -r '.VersionId // empty' 2>/dev/null)" || REAL_VID=""
+        [ -n "$REAL_VID" ] || echo "  · $b: the operator could not write a probe version; falling back to the made-up id"
+      fi
       obs="$(probe "$ak" "$sk" "$st" delver "$b")"
       report "$b delete-version" denied "$obs" "$EXPECT_NOVD"
+      if [ -n "$REAL_VID" ]; then
+        _oa_s3api "$oak" "$osk" "$(ep_of "$st")" "$(rg_of "$st")" delete-object --bucket "$b" --key oa-isolation-probe \
+          --version-id "$REAL_VID" --bypass-governance-retention >/dev/null 2>&1 || \
+        _oa_s3api "$oak" "$osk" "$(ep_of "$st")" "$(rg_of "$st")" delete-object --bucket "$b" --key oa-isolation-probe \
+          --version-id "$REAL_VID" >/dev/null 2>&1 || echo "  ⚠ $b: the probe version $REAL_VID could not be removed; delete it by hand"
+        REAL_VID=""
+      fi
     fi
   done
 }
@@ -141,5 +174,12 @@ if [ "$DEDICATED" -eq 0 ]; then
   [ "$FAILS" -eq 0 ] || { echo "✗ $FAILS problem(s) above (a half pair, or a bucket setting that differs from backup_immutability)"; exit 1; }
   exit 2
 fi
-if [ "$FAILS" -gt 0 ]; then echo "✗ $FAILS of $((ASSERTED + PROT_BAD)) assertion(s) did not hold"; exit 1; fi
+if [ "$FAILS" -gt 0 ]; then
+  echo "✗ $FAILS of $((ASSERTED + PROT_BAD)) assertion(s) did not hold"
+  echo "  Scaleway: the IAM permission sets of a dedicated pair are project-wide, so only BUCKET POLICIES isolate it, and a bucket"
+  echo "  WITHOUT a policy is open to the pair (lab 12: 4 of 8 failed until every other bucket had an operator-only policy)."
+  echo "  Put an operator-only policy on the state, artifact, management and every other bucket (docs/backup-policy.md, section 4)."
+  exit 1
+fi
 echo "✓ $ASSERTED assertion(s) held"
+[ "$UNVERIFIED" -eq 0 ] || echo "? $UNVERIFIED delete-version probe(s) inconclusive: this store rejects a made-up version id. Rerun with OA_ISOLATION_REAL_VERSION=1 (writes one probe object per dedicated bucket) to test a real one."

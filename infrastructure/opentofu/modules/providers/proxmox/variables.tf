@@ -76,9 +76,9 @@ variable "memory_mb" {
 }
 
 variable "root_disk_gb" {
-  description = "System disk size (GiB) per node"
+  description = "System disk size (GiB) per node. 50 by default: the full application stack puts ~11 GB of images on each node (lab 12, measured on Scaleway) and a 20 GiB disk leaves ~15 GiB to Talos."
   type        = number
-  default     = 20
+  default     = 50
 }
 
 # --- Networking (static, no cloud LB/NAT) ------------------------------------

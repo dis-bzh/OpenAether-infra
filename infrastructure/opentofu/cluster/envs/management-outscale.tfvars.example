@@ -29,6 +29,11 @@ cluster_name    = "openaether"
 environment     = "dev"
 cluster_role    = "management"
 talos_bootstrap = true
+# The platform, not only the machines. Both default to FALSE: a copy of this file WITHOUT these lines builds an
+# infrastructure-only cluster (Talos + Cilium: no Flux, no apps, no public load balancer), and `task cluster-verify`
+# then reports flux-system as red. Set them as shown for the platform; the Day-1 seeding follows (scripts/ops/seed-openbao.sh).
+deploy_flux     = true
+deploy_app_lb   = true
 # talos_version / kubernetes_version: leave unset to inherit the tracked
 # defaults from cluster/variables.tf. The image is resolved by NAME from
 # talos_version (same as Scaleway) unless image_id below is set, and it is the
@@ -46,6 +51,11 @@ node_distribution = {
     region             = "eu-west-2"
     # Deliberately below the sizing floor (docs/capacity.md): the default Outscale quota is 20 vCPU / 40 GB,
     # and 5 nodes of 4 vCPU / 8 GB do not fit it. Enough for a bare cluster (Talos + Cilium); raise the quota first for the platform.
+    # With the platform, NO profile that fits 20 vCPU can be rolled or lose a worker: lab 16 measured 239% of one worker's
+    # CPU requested on 3 x tinav5.c3r6p2 (3 vCPU), above the 200% that `cluster-roll` allows for 3 workers, and 6 GB nodes fell
+    # into an IO and memory cascade after one backup+restore and one drained reboot (#376). The smallest shape that passes
+    # the gate on the arithmetic is 3 + 3 of tinav5.c4r8p2 (4 vCPU / 8 GB): 26 vCPU with the bastion, so ask for a quota of
+    # at least 26 vCPU / 56 GB first. That shape has NOT been run on Outscale.
     instance_type      = "tinav5.c2r4p1"
     # image_id optional — defaults to looking up "talos-outscale-amd64-<talos_version>" by
     # name (published by talos-image). Override only if you use a different name/OMI:
@@ -80,6 +90,26 @@ node_distribution = {
 #   { address = "149.112.112.112", tls_server_name = "dns.quad9.net" },
 # ]
 
+# Node and flow logs (optional, ANSSI PA-012 R9; off by default). Rules, plaintext caveat and
+# rollout order: modules/talos/variables.tf and docs/hardening.md.
+# node_log_forwarding    = { endpoint = "tcp://127.0.0.1:5170" }   # receiver on every node (hostNetwork)
+# cilium_hubble_drop_log = true                                    # policy denials in the cilium-agent log
+
+# Node baseline and time sources (optional, ANSSI BP-028 R9/R12 and PA-012 R5; off by default). Risks, prerequisites
+# and the deviation table: modules/talos/variables.tf and docs/hardening.md. Try on a throwaway cluster first.
+# node_baseline     = { sysctls = true, worker_default_seccomp = true, pod_pids_limit = 4096 }
+# node_time_servers = ["YOUR_NTP_1", "YOUR_NTP_2", "YOUR_NTP_3"]   # also in bastion_baseline.time_servers
+
+# Node network filtering (optional, ANSSI PA-022 R17/R20; both off by default).
+# restrict_inter_node (OVH and Outscale only) swaps the all-protocol rule between nodes for an explicit port list.
+# node_firewall_mode = "port_allowlist" is NOT inert: each listed port (apid, kube-apiserver, kubelet, etcd, ...) accepts
+# ONLY the listed sources and drops the rest (ports that are not listed stay open). A source missing from node_firewall
+# (the load balancer range, a second subnet, a wrong pod range) breaks the cluster. Per-rule sources: docs/network.md 6.
+# Read docs/network.md section 6 and LAB-CHECKLIST B24 first; a throwaway cluster first.
+# restrict_inter_node = true
+# node_firewall_mode  = "port_allowlist"
+# node_firewall       = { node_cidrs = ["YOUR_NODE_SUBNET"], bastion_cidrs = ["YOUR_BASTION_SUBNET"] }
+
 admin_ip = ["YOUR_IP/32"]
 
 bastion_ssh_keys = {
@@ -89,7 +119,7 @@ bastion_ssh_keys = {
 git_repo_url     = "https://github.com/dis-bzh/OpenAether-apps.git"
 # Pin the platform: a commit on a branch would otherwise reach a running
 # cluster within the reconcile interval. refs/heads/<branch> to test.
-git_ref          = "refs/tags/0.2.0"
+git_ref          = "refs/tags/0.3.0"
 
 # OpenBao recovery-share holders (only read when deploy_flux = true). OpenBao unseals itself; what the operators hold are
 # RECOVERY shares, for an emergency root token. Each key is a person's PGP PUBLIC key, `gpg --export <id> | base64 -w0`
@@ -104,6 +134,15 @@ git_ref          = "refs/tags/0.2.0"
 # ]
 # openbao_recovery_threshold = 2   # default: a majority
 
+# --- Flux Git source verification (OPT-IN, default off) ---------------------------
+# Flux then applies only a HEAD commit signed by one of these OpenPGP keys (gpg --armor --export <id>), GitHub's
+# web-flow key included if you squash-merge. Read docs/signed-commits.md first; the apps overlay must carry the
+# same block (components/git-verify). Public keys only.
+# flux_git_verify = {
+#   enabled     = true
+#   public_keys = ["-----BEGIN PGP PUBLIC KEY BLOCK-----\n...\n-----END PGP PUBLIC KEY BLOCK-----"]
+# }
+
 # --- Backup / DR object stores (Outscale OOS, S3-compatible) ------------------
 # Derived buckets (you don't set them) — parts come from this file,
 # and each has a "-backup" twin:
@@ -117,3 +156,11 @@ s3_primary_endpoint = "https://oos.eu-west-2.outscale.com"
 s3_primary_region   = "eu-west-2"
 s3_replica_endpoint = "https://oos.eu-west-2.outscale.com" # prod: e.g. SCW https://s3.fr-par.scw.cloud
 s3_replica_region   = "eu-west-2"                           # prod: e.g. fr-par
+
+# --- Node system disk --------------------------------------------------------
+# A node's root disk is the OMI's (the raw Talos image, ~11-12 GiB): too small for the application stack (~11 GB of
+# images per node). With deploy_flux a `check` warns until this is set; it applies to nodes created afterwards.
+# Set (not commented): the platform (deploy_flux) does not fit the OMI's own ~11-12 GiB. The root is
+# gp2, whose IOPS grow with its size (150 IOPS measured at 50 GB, saturated by the full stack in lab 16, #376); a larger
+# size gives more IOPS, but that was NOT shown to prevent the cascade, and changing the type to io1 did not.
+outscale_root_volume_size_gb = 50

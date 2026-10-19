@@ -96,6 +96,8 @@ case "$argv" in
   *" get pv -o json "*)
     k=$(( $(cat "$ST/pv.calls" 2>/dev/null || echo 0) + 1 )); echo "$k" >"$ST/pv.calls"
     if [ "$k" -gt "${STUB_PV_AFTER:-0}" ]; then cat "${STUB_PV_FILE:-/dev/null}" 2>/dev/null || echo '{"items":[]}'; else echo '{"items":[]}'; fi ;;
+  *" get persistentvolumes -o json "*) echo '{"items":[]}' ;;
+  *" get pods -A --field-selector spec.nodeName="*) echo '{"items":[]}' ;;
   *" get pods -A --field-selector status.phase=Pending "*) printf '%s' "${STUB_PENDING:-}" ;;
   *" get pdb -A -l cnpg.io/cluster "*) [ "$(cat "$ST/cnpg.pdb" 2>/dev/null || echo true)" = true ] && printf 'db/pg-primary ' ;;
   *" get pdb "*) echo '{"items":[]}' ;;

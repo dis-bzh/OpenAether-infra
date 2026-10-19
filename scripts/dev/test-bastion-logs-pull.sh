@@ -20,6 +20,8 @@ cat >"$TMP/bin/ssh" <<'STUB'
 cmd="${*: -1}"
 echo "$cmd" >>"$SSH_LOG"
 case "$cmd" in
+  "id -nG"*) [ "${STUB_NOGROUPS:-}" = 1 ] && printf 'bastion\n1001\n' || printf 'bastion adm systemd-journal\n1001\n'
+             [ "${STUB_AUDITDIR:-yes}" = yes ] && echo audit-yes || echo audit-no ;;
   journalctl*) [ "${STUB_EMPTY:-}" = 1 ] && exit 0
                printf '__CURSOR=s=aaa\nMESSAGE=Accepted publickey for bastion ssh2: ED25519 SHA256:abc\n\n__CURSOR=s=bbb\nMESSAGE=second\n\n' ;;
   tar*) [ "${STUB_NOAUDIT:-}" = 1 ] && exit 0; printf 'FAKE-TARBALL' ;;
@@ -46,6 +48,19 @@ run STUB_EMPTY=1
 grep -q 'nothing new' <<<"$OUT" && [ "$(cat "$TMP/out/.journal-cursor")" = "s=bbb" ] && ok "an empty journal answer keeps the watermark" || bad "empty journal: $OUT"
 run STUB_NOAUDIT=1
 [ "$RC" = 1 ] && grep -q 'audit: the bastion returned nothing' <<<"$OUT" && ok "an empty audit answer FAILS (auditd absent or user not in adm)" || bad "no audit: rc=$RC $OUT"
+
+echo "=== audit_logging=false: a journal-only bastion (closed egress forces it) ==="
+# Lab 11: the audit tarball was unconditional (tar: /var/log/audit: Cannot open, rc 2, nothing written) and the journal was unreadable.
+rm -rf "$TMP/out"; : >"$SSH_LOG"
+run STUB_AUDITDIR=no
+[ "$RC" = 0 ] && ls "$TMP"/out/journal-*.export >/dev/null 2>&1 && ! ls "$TMP"/out/audit-* >/dev/null 2>&1 && grep -q 'audit: skipped' <<<"$OUT" && ! grep -q '^tar ' "$SSH_LOG" \
+  && ok "without /var/log/audit the journal is exported, the audit part is skipped with a message, rc 0, no tar is run" || bad "journal-only pull: rc=$RC $OUT"
+rm -rf "$TMP/out"
+run STUB_AUDITDIR=no STUB_EMPTY=1
+[ "$RC" = 0 ] && grep -q 'nothing new' <<<"$OUT" && grep -q 'audit: skipped' <<<"$OUT" && ok "nothing to pull on a journal-only bastion ends rc 0 with both reasons said" || bad "empty journal-only pull: rc=$RC $OUT"
+rm -rf "$TMP/out"
+run STUB_NOGROUPS=1
+[ "$RC" = 1 ] && grep -q 'not in adm or systemd-journal' <<<"$OUT" && ! ls "$TMP"/out/journal-* >/dev/null 2>&1 && ok "an account that cannot read the journal is refused with the reason, not read as an empty journal" || bad "no groups: rc=$RC $OUT"
 
 echo "=== encrypted ==="
 rm -rf "$TMP/out"
@@ -100,6 +115,13 @@ upl() { OUT="$(env PATH="$TMP/bin:$PATH" STUB_X=1 OA_LOGS_UPLOAD=1 OA_LOGS_PASSP
 OUT="$(env PATH="$TMP/bin:$PATH" OA_LOGS_UPLOAD=1 OA_BACKUP_TARGETS_JSON="$TMP/targets.json" bash "$SUT" 192.0.2.10 bastion "$TMP/key" "$TMP/up" 2>&1)"; RC=$?
 [ "$RC" = 2 ] && grep -q 'never uploaded in clear' <<<"$OUT" && [ ! -s "$SSH_LOG" ] && [ ! -d "$S3DIR" ] \
   && ok "an upload without a passphrase is refused before any connection and nothing leaves" || bad "clear upload: rc=$RC $OUT"
+
+# #352: a tofu that cannot read its backend must show ITS error, not "apply the infra first".
+printf '#!/usr/bin/env bash\necho "Error: Backend initialization required, please run tofu init" >&2\nexit 1\n' >"$TMP/bin/tofu"; chmod +x "$TMP/bin/tofu"
+OUT="$(env PATH="$TMP/bin:$PATH" OA_LOGS_UPLOAD=1 OA_LOGS_PASSPHRASE="$PP" bash "$SUT" 192.0.2.10 bastion "$TMP/key" "$TMP/up" 2>&1)"; RC=$?
+[ "$RC" = 2 ] && grep -q 'Backend initialization required' <<<"$OUT" && grep -q 'OA_BACKUP_TARGETS_JSON' <<<"$OUT" && ! grep -q 'apply the infra first' <<<"$OUT" \
+  && ok "a backend tofu cannot read shows tofu's error and the way out, not 'apply the infra first'" || bad "tofu error hidden: rc=$RC $OUT"
+rm -f "$TMP/bin/tofu"
 
 upl; N1="$(ngpg "$PRIM")"
 if [ "$RC" = 0 ] && [ "$N1" = 2 ] && [ "$(ngpg "$REPL")" = 2 ] && [ "$(cat "$PRIM/.journal-cursor")" = "s=bbb" ] && [ "$(cat "$REPL/.journal-cursor")" = "s=bbb" ]; then

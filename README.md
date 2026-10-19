@@ -28,6 +28,8 @@ account.
 
 ## Version
 
+**0.3.0** (released 2026-10-19; `CHANGELOG.md`, `[0.3.0]`) — a security hardening wave, every option off by default, and a 50 GB default system disk on Scaleway. It is the infra half of the pair with OpenAether-apps 0.3.0 (the component upgrades are in the apps repository). It follows ANSSI recommendations as far as possible and claims no compliance with any ANSSI document. Run on real clouds once by hand or script on Scaleway, OVH and Outscale (labs 11 to 15c); the history is unsigned for now. The CHANGELOG lists the known limitations and what was not run.
+
 **0.2.1** (a patch) — no new scope. It is the infra half of the pair with OpenAether-apps 0.2.0: Day-1 seeding without a root
 token, a bucket of its own for Loki, a language check shared with the apps, and the Day-1 documentation corrected. It was run on real clouds by
 hand once (Scaleway and OVH with the apps 0.2.0 tag as pinned, Outscale with the reduced apps profile on a branch); see `CHANGELOG.md` for what was and was not observed. A cluster built by 0.2.0 (apps 0.1.0) cannot be moved to
@@ -232,7 +234,7 @@ ours, and its `apps/clusters` is not yours.
 
 ```bash
 # Quotas: OVH and Outscale only — the script does not cover Scaleway.
-# On Scaleway, check the console: 3 control planes + 2 workers needs 5 instances
+# On Scaleway, check the console: 3 control planes + 3 workers needs 6 instances
 # of the type in your tfvars, and a new account may be capped at 1.
 task preflight-quotas PROVIDER=ovh
 
@@ -346,6 +348,7 @@ task security            # hardening checks
 |---------|-------------|--------|
 | **0.1.0** | One Talos cluster + Cilium on Scaleway, OVH or Outscale, encrypted state and artifacts, in-place upgrades | ✅ published 2026-08-20 (pre-release) |
 | 0.2.0 | Talos v1.14 and Kubernetes v1.37 on all three clouds, adding and removing nodes on a live cluster, the failure-domain check | ✅ see the `[0.2.0]` section of [`CHANGELOG.md`](CHANGELOG.md), which also lists what it does not claim |
+| 0.3.0 | Security hardening (opt-in), a 50 GB default system disk, checks and tooling; pairs with apps 0.3.0 | 🔜 packaged, awaiting the owner's go: see the `[0.3.0]` section of [`CHANGELOG.md`](CHANGELOG.md) |
 | after | Flux back as a user choice, then the modular pick from `OpenAether-apps` | ⏳ planned |
 | later | CAPI overlay: a management cluster driving children | ⏳ planned |
 | open | Proxmox on real hardware, the full cross-provider failover, rolling an upgrade back (#270), the Outscale Net only the provider can delete | ⏳ |

@@ -70,6 +70,24 @@ gated. Real numbers, 2026-10-03: 0 failed on Scaleway, 40 failed and 20 blind of
 1490 on Outscale (`docs/status.md`). How it works:
 [`cluster-upgrade.sh` § The service probe](../scripts/dev/cluster-upgrade.sh).
 
+## From 0.2.x to 0.3.0 (the platform, not Talos or Kubernetes)
+
+0.3.0 moves neither Talos (1.14.2) nor Kubernetes (1.37.1). What it changes on a running cluster, in this order:
+
+1. **Read the plan** (`task cluster-up` stops at it). With unchanged tfvars the one change you should see is the Scaleway system volumes going from 20 to 50 GB
+   **in place** (`scw_root_volume_size_gb`, default 50; no node is replaced) and a Talos machine config change. Pin `scw_root_volume_size_gb = 20` only to keep the old size,
+   which does not hold the application stack. On Outscale the root of a running VM is not resized in place: set `outscale_root_volume_size_gb` (and raise the root IOPS,
+   infra #376) and replace the workers one at a time with `task cluster-roll`. OVH and Proxmox: the flavour's disk and `root_disk_gb` (50).
+2. **Reboot the Scaleway workers one at a time, drained**, so Talos grows EPHEMERAL. Use `task cluster-roll`; a hand-typed `talosctl reboot` does not drain, and
+   a worker carrying a CNPG instance must never be rebooted undrained (see below).
+3. **Grow the disks before the application hops.** The 0.3.0 images are larger, and a 20 GB node reached DiskPressure after hours of hops (lab 15c).
+4. **Then move the apps side** one minor at a time where it says so: Longhorn 1.9 -> 1.10 -> 1.11 -> 1.12 (with the CRD conversion pre-step), cert-manager, the CNPG operator,
+   Kyverno, and the Loki chart procedure are in OpenAether-apps `docs/patching.md`. Take a CNPG Backup and a Longhorn backup first; Zitadel and Grafana migrations are forward-only.
+5. **Hardening options are off by default.** Turn them on one at a time (`docs/hardening.md`, `docs/security-architecture.md`); each plan is read before it is applied.
+   Options that change the Talos machine config (node filtering, baseline, log forwarding) are applied by the plan; if a change needs a reboot, do it with `task cluster-roll`.
+
+Not rehearsed in place: the Loki 6.55 -> 18 step, Grafana, Alloy, the Gateway API CRDs, Flux on the children. A fresh install of every version ran on the three clouds.
+
 ## Kubernetes first
 
 It reboots nothing, so it isolates the control-plane roll from the node roll.
@@ -211,6 +229,25 @@ NAME:.metadata.name,PRIMARY:.status.currentPrimary,READY:.status.readyInstances
 # and, for one database in detail (plugin installed by `task setup`)
 kubectl cnpg status <cluster> -n <ns>
 ```
+
+### Never reboot a node that still hosts a Longhorn RWX volume
+
+A worker that hosts both the share-manager pod of an RWX volume and a pod mounting it did not finish a graceful `talosctl reboot` in lab 12
+(Scaleway, Longhorn 1.12.1, Talos 1.14, apps #124): Talos stayed in `unmountPodMounts` (`nfs: server ... not responding`) for more than
+12 minutes, twice, and only a provider hard reset ended it. So **never reboot, shut down or `talosctl upgrade` such a node undrained**.
+`cordon_drain` (used by `cluster-roll`, `cluster-upgrade`, `cluster-shrink`) now waits, after the drain, until no share-manager pod and
+no pod mounting a Longhorn RWX claim is left on the node (`RWX_CLEAR_TIMEOUT`, 300 s by default); when something stays it uncordons the
+node, lists the pods and refuses to go on. By hand: drain, then
+`kubectl -n longhorn-system get pods -o wide | grep share-manager` must show another node. Offline test: `scripts/dev/test-rwx-drain-gate.sh`.
+Not yet proven on a cluster: that a drained node then reboots in about 1.5 minutes (the apps repo also shortens the RWX NFS timeouts).
+
+### Never reboot a worker undrained when it carries a CNPG instance
+
+A node reboot WITHOUT a drain leaves the CNPG instance pods of that node in phase `Succeeded` (the kubelet's graceful shutdown stops postgres with exit 0) and
+CNPG 1.23.1 never restarts them: both databases down, Zitadel and the Gateway answer 503 (lab 11, 30+ minutes; the traps page of the OpenAether-apps repository). `cluster-roll`,
+`cluster-upgrade` and `cluster-shrink` drain first, so they are safe; a hand-typed `talosctl reboot` or `shutdown` is not. After an undrained reboot:
+`kubectl get pods -A --field-selector=status.phase==Succeeded`, then delete the CNPG pods listed (never their PVC). Newer CNPG operators (the apps pin moved past 1.23) are
+not known to share the defect; the habit costs nothing. The roll tooling does not guard a reboot it does not run (infra #358): this page is the guard.
 
 ### A database left "Failing over" after the roll
 

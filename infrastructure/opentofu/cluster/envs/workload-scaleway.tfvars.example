@@ -9,6 +9,11 @@ cluster_role       = "workload"
 # talos_version / kubernetes_version: leave unset to inherit the tracked defaults of
 # cluster/variables.tf (the pair each release measures); pin them here only to hold a cluster back.
 talos_bootstrap    = true
+# The platform, not only the machines. Both default to FALSE: a copy of this file WITHOUT these lines builds an
+# infrastructure-only cluster (Talos + Cilium: no Flux, no apps, no public load balancer), and `task cluster-verify`
+# then reports flux-system as red. Set them as shown for the platform; the Day-1 seeding follows (scripts/ops/seed-openbao.sh).
+deploy_flux     = true
+deploy_app_lb   = true
 
 node_distribution = {
   scaleway = {
@@ -48,7 +53,7 @@ bastion_ssh_keys = {
 git_repo_url     = "https://github.com/dis-bzh/OpenAether-apps.git"
 # Pin the platform: a commit on a branch would otherwise reach a running
 # cluster within the reconcile interval. refs/heads/<branch> to test.
-git_ref          = "refs/tags/0.2.0"
+git_ref          = "refs/tags/0.3.0"
 
 # --- Backup / DR object stores ------------------------------------------------
 # Derived buckets (you don't set them) — parts come from this file,
@@ -63,3 +68,8 @@ s3_primary_endpoint = "https://s3.fr-par.scw.cloud"
 s3_primary_region   = "fr-par"
 s3_replica_endpoint = "https://s3.gra.io.cloud.ovh.net" # OVH: prod crosses providers, or drop to environment = "dev"
 s3_replica_region   = "gra"
+
+# --- Node system disk --------------------------------------------------------
+# 50 GB per node by default (scw_root_volume_size_gb): the application stack puts ~11 GB of images on a node and Talos
+# keeps them on the system volume, ~4 GB under its size. With deploy_flux the value must be at least 40 (validated).
+# scw_root_volume_size_gb = 50

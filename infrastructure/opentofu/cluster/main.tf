@@ -145,7 +145,7 @@ locals {
     apiserver_vip_interface = "eth0"
     cpu_cores               = 4
     memory_mb               = 8192
-    root_disk_gb            = 20
+    root_disk_gb            = 50
     control_plane_ip_offset = 10
     worker_ip_offset        = 20
     nameservers             = ["1.1.1.1", "8.8.8.8"]
@@ -217,6 +217,31 @@ check "compliance_lock_on_dev" {
   }
 }
 
+# A warning, not a failure: the root disk of an Outscale node is the OMI's (the raw Talos image, ~11-12 GiB), and the full
+# application stack puts ~11 GB of images on each worker (lab 12, measured on Scaleway). Not yet measured on Outscale.
+check "outscale_root_volume_for_platform" {
+  assert {
+    condition     = !(var.deploy_flux && local.osc_dist.control_planes + local.osc_dist.workers > 0) || (var.outscale_root_volume_size_gb != null && var.outscale_root_volume_size_gb >= 40)
+    error_message = "deploy_flux on Outscale with outscale_root_volume_size_gb below 40 (or null = the OMI's size, ~11-12 GiB): the application stack needs ~11 GB of images per node and the nodes will hit DiskPressure. Set outscale_root_volume_size_gb = 50 (docs/capacity.md)."
+  }
+}
+
+# A warning, not a failure: a Proxmox disk below 40 GiB cannot hold the application stack's images (~11 GB per node).
+check "proxmox_root_disk_for_platform" {
+  assert {
+    condition     = !(var.deploy_flux && local.pmx_dist.control_planes + local.pmx_dist.workers > 0) || local.pmx_dist.root_disk_gb >= 40
+    error_message = "deploy_flux on Proxmox with root_disk_gb below 40: the application stack needs ~11 GB of images per node (docs/capacity.md). Use 50 (the default)."
+  }
+}
+
+# A warning, not a failure: the OVH root disk is the flavour's (the module looks it up when deploy_flux is on). b3-8 has 50 GB.
+check "ovh_flavor_disk_for_platform" {
+  assert {
+    condition     = !var.deploy_flux || one(module.ovh[*].flavor_disk_gb) == null || coalesce(one(module.ovh[*].flavor_disk_gb), 0) >= 40
+    error_message = "deploy_flux on OVH with a flavour whose root disk is below 40 GB: the application stack needs ~11 GB of images per node (docs/capacity.md). Pick a flavour with at least 50 GB (b3-8 has 50)."
+  }
+}
+
 # ==============================================================================
 # Scaleway Infrastructure
 # ==============================================================================
@@ -243,6 +268,8 @@ module "scw" {
 
   worker_storage = var.worker_storage
 
+  root_volume_size_gb = var.scw_root_volume_size_gb
+
   admin_ip         = var.admin_ip
   bastion_ssh_keys = lookup(var.bastion_ssh_keys, "scaleway", [])
   bastion_baseline = var.bastion_baseline
@@ -267,15 +294,17 @@ module "ovh" {
   control_plane_count = local.ovh_dist.control_planes
   worker_count        = local.ovh_dist.workers
 
-  region             = local.ovh_dist.region
-  flavor_name        = local.ovh_dist.flavor_name
-  image_id           = local.ovh_dist.image_id
-  image_name         = local.ovh_image_name
-  network_name       = local.ovh_dist.network_name
-  availability_zones = local.ovh_dist.availability_zones
-  bastion_image_id   = local.ovh_dist.bastion_image_id
-  k8s_lb_mode        = local.ovh_dist.k8s_lb_mode
-  deploy_app_lb      = var.deploy_app_lb
+  region              = local.ovh_dist.region
+  flavor_name         = local.ovh_dist.flavor_name
+  look_up_flavor_disk = var.deploy_flux
+  image_id            = local.ovh_dist.image_id
+  image_name          = local.ovh_image_name
+  network_name        = local.ovh_dist.network_name
+  availability_zones  = local.ovh_dist.availability_zones
+  bastion_image_id    = local.ovh_dist.bastion_image_id
+  k8s_lb_mode         = local.ovh_dist.k8s_lb_mode
+  deploy_app_lb       = var.deploy_app_lb
+  restrict_inter_node = var.restrict_inter_node
 
   app_lb_allowed_cidrs = var.app_lb_allowed_cidrs
 
@@ -305,13 +334,15 @@ module "outscale" {
   control_plane_count = local.osc_dist.control_planes
   worker_count        = local.osc_dist.workers
 
-  instance_type      = local.osc_dist.instance_type
-  image_id           = local.osc_dist.image_id
-  image_name         = local.osc_image_name
-  availability_zones = local.osc_dist.availability_zones
-  bastion_image_id   = local.osc_dist.bastion_image_id
-  k8s_lb_mode        = local.osc_dist.k8s_lb_mode
-  deploy_app_lb      = var.deploy_app_lb
+  instance_type       = local.osc_dist.instance_type
+  root_volume_size_gb = var.outscale_root_volume_size_gb
+  image_id            = local.osc_dist.image_id
+  image_name          = local.osc_image_name
+  availability_zones  = local.osc_dist.availability_zones
+  bastion_image_id    = local.osc_dist.bastion_image_id
+  k8s_lb_mode         = local.osc_dist.k8s_lb_mode
+  deploy_app_lb       = var.deploy_app_lb
+  restrict_inter_node = var.restrict_inter_node
 
   app_lb_allowed_cidrs = var.app_lb_allowed_cidrs
 
@@ -477,7 +508,8 @@ locals {
 # ==============================================================================
 
 locals {
-  cilium_manifest = var.cilium_manifest != null ? var.cilium_manifest : file("${path.module}/bootstrap-manifests/cilium.yaml")
+  cilium_manifest_file = var.cilium_manifest != null ? "(override)" : (var.cilium_hubble_drop_log ? "cilium-hubble-drops.yaml" : "cilium.yaml")
+  cilium_manifest      = var.cilium_manifest != null ? var.cilium_manifest : file("${path.module}/bootstrap-manifests/${local.cilium_manifest_file}")
   # deploy_flux=false yields "", which modules/talos already reads as "no Flux"
   # (main.tf:116) — the same path infrastructure/opentofu-local drives through
   # this very module on every `task local-up`. Locals only: no resource address
@@ -500,6 +532,9 @@ locals {
     git_ref      = var.git_ref
     cluster_role = var.cluster_role
     cluster_id   = local.cluster_id
+    # Opt-in commit-signature verification (default off: the rendered manifest is then unchanged).
+    flux_git_verify_enabled = var.flux_git_verify.enabled
+    flux_git_verify_keys    = var.flux_git_verify.public_keys
     # Recovery-share holders of OpenBao (openbao-keys.tf). Empty list = the ConfigMap is not rendered.
     openbao_pgp_keys  = local.openbao_pgp_keys
     openbao_threshold = local.openbao_threshold
@@ -562,6 +597,11 @@ resource "terraform_data" "talos_tunnels" {
 # Talos Cluster (secrets, config, bootstrap, kubeconfig)
 # ==============================================================================
 
+# The shared node port list, handed to the Talos ingress rules (the providers read it themselves).
+module "node_ports" {
+  source = "../modules/providers/_shared/node-ports"
+}
+
 module "talos" {
   source = "../modules/talos"
 
@@ -623,6 +663,17 @@ module "talos" {
 
   node_nameservers      = var.node_nameservers
   node_dns_boot_timeout = var.node_dns_boot_timeout
+  node_log_forwarding   = var.node_log_forwarding
+  node_time_servers     = var.node_time_servers
+  node_baseline         = var.node_baseline
+
+  disk_encryption_passphrase_length = var.disk_encryption_passphrase_length
+
+  # Talos ingress firewall, per-port allow-list (batch B24): off by default, nothing is rendered.
+  node_firewall_mode  = var.node_firewall_mode
+  node_firewall       = var.node_firewall
+  node_firewall_ports = module.node_ports.talos_ports
+  node_firewall_scope = module.node_ports.talos_scope
 
   # The provider modules are DELIBERATELY not listed here. A module-level
   # depends_on makes every resource in this module depend on every resource in

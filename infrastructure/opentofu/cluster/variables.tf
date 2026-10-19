@@ -256,7 +256,7 @@ variable "node_distribution" {
     apiserver_vip_interface = optional(string, "eth0")
     cpu_cores               = optional(number, 4)
     memory_mb               = optional(number, 8192)
-    root_disk_gb            = optional(number, 20)
+    root_disk_gb            = optional(number, 50)
     control_plane_ip_offset = optional(number, 10)
     worker_ip_offset        = optional(number, 20)
     nameservers             = optional(list(string), ["1.1.1.1", "8.8.8.8"])
@@ -271,6 +271,45 @@ variable "node_distribution" {
   validation {
     condition     = alltrue([for d in values(var.node_distribution) : d.control_planes > 0 || d.workers == 0])
     error_message = "node_distribution: workers without control planes is not a cluster. Set control_planes to 1 or 3, or workers to 0."
+  }
+}
+
+variable "scw_root_volume_size_gb" {
+  description = <<-EOT
+    Scaleway only: size in GB of the system volume of every node (default 50). Talos keeps its EPHEMERAL partition
+    (kubelet, containerd images, logs) there, about 4 GB under this value. Lab 12 measured ~11 GB of images on a worker
+    with the whole application stack and 15.6 GB usable at 20 GB: DiskPressure, 25 Zitadel pods evicted. 50 leaves ~46 GB
+    usable: the images, the second set a chart upgrade pulls before the old one is garbage-collected (kubelet image GC
+    starts at 85% use), logs and margin. With deploy_flux the value must be at least 40. A cluster built at 20 gets an
+    in-place resize of its sbs_volumes at the next apply (no node replaced); Talos grows EPHEMERAL at the node's next
+    reboot, so reboot the workers one at a time (drained) afterwards. Pin 20 in the tfvars to keep the old size.
+  EOT
+  type        = number
+  default     = 50
+  validation {
+    condition     = var.scw_root_volume_size_gb >= 20 && var.scw_root_volume_size_gb <= 500
+    error_message = "scw_root_volume_size_gb must be between 20 and 500."
+  }
+  validation {
+    condition     = !var.deploy_flux || var.scw_root_volume_size_gb >= 40
+    error_message = "scw_root_volume_size_gb must be at least 40 with deploy_flux = true: the application stack puts ~11 GB of images on each node and 20 GB left 15.6 GB usable (lab 12: DiskPressure, evictions, CreateContainer timeouts). Use 50 (the default)."
+  }
+}
+
+variable "outscale_root_volume_size_gb" {
+  description = <<-EOT
+    Outscale only: size in GB of the root (BSU) volume of every NEW node. null (the default) keeps the size of the OMI, which is
+    the raw Talos image rounded up to a GiB (about 11-12): Talos then has only a few GB of EPHEMERAL, which the full application
+    stack (~11 GB of images per worker) does not fit. Set 50 for a cluster that carries the platform; a `check` warns when
+    deploy_flux is on and this is null. Applies to nodes created after the change only (the volume of an existing VM
+    is not resized in place by this provider; `ignore_changes` keeps a running node from being replaced): to grow a running
+    cluster, replace its workers one at a time with `task cluster-roll`.
+  EOT
+  type        = number
+  default     = null
+  validation {
+    condition     = var.outscale_root_volume_size_gb == null || (var.outscale_root_volume_size_gb >= 20 && var.outscale_root_volume_size_gb <= 14901)
+    error_message = "outscale_root_volume_size_gb must be null or between 20 and 14901."
   }
 }
 
@@ -331,6 +370,62 @@ variable "node_dns_boot_timeout" {
   description = "How long a booting node waits for time sync when node_nameservers is encrypted (\"\" keeps Talos's endless wait). Trade-off: modules/talos/variables.tf."
   type        = string
   default     = "90s"
+}
+
+variable "node_log_forwarding" {
+  description = <<-EOT
+    Ships the nodes' Talos service and kernel logs over plain TCP to a receiver the host can
+    reach. Null (default) changes nothing. { endpoint = "tcp://host:port", kernel = true,
+    kernel_endpoint = "" }; the rules and the trade-offs (plaintext, ClusterIP unreachable from
+    the host, applied to every node by one apply) are on the variable of the same name in modules/talos/variables.tf.
+  EOT
+  type = object({
+    endpoint        = string
+    kernel          = optional(bool, true)
+    kernel_endpoint = optional(string, "")
+  })
+  default = null
+}
+
+variable "node_time_servers" {
+  description = <<-EOT
+    NTP sources of the Talos nodes (ANSSI PA-012 R5). Empty (default) keeps Talos's single built-in
+    server. Several independent hosts or addresses; plain NTP, udp/123. Mirror it in
+    bastion_baseline.time_servers. Rules and caveats: the variable of the same name in modules/talos/variables.tf.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
+variable "node_baseline" {
+  description = <<-EOT
+    Opt-in kernel/kubelet baseline of the nodes (ANSSI BP-028 R9/R12/R13). Null (default) changes nothing.
+    { sysctls, sysctls_extra, panic_on_oops, worker_default_seccomp, pod_pids_limit, kubelet_server_tls },
+    all off/empty/0 by default; what each does, its risk and its prerequisite are on the variable of the
+    same name in modules/talos/variables.tf and in docs/hardening.md. Try it on a throwaway cluster first.
+  EOT
+  type = object({
+    sysctls                = optional(bool, false)
+    sysctls_extra          = optional(map(string), {})
+    panic_on_oops          = optional(bool, false)
+    worker_default_seccomp = optional(bool, false)
+    pod_pids_limit         = optional(number, 0)
+    kubelet_server_tls     = optional(bool, false)
+  })
+  default = null
+}
+
+variable "cilium_hubble_drop_log" {
+  description = <<-EOT
+    Boots Cilium from bootstrap-manifests/cilium-hubble-drops.yaml: the Hubble SERVER only (no relay, no UI,
+    no TCP listener) exporting DROPPED/ERROR flows, field-masked, to the agent's stdout so that policy denials
+    reach the pod-log collector (ANSSI PA-012 R9). False (default) keeps cilium.yaml, byte for byte. It is a
+    bootstrap manifest: it reaches an EXISTING cluster as a Talos inline-manifest change (agents restart
+    one node at a time); read LAB-CHECKLIST B22 and try it on a throwaway cluster first. Ignored when
+    cilium_manifest is set.
+  EOT
+  type        = bool
+  default     = false
 }
 
 variable "admin_ip" {
@@ -591,7 +686,7 @@ variable "git_repo_url" {
 }
 
 # The default and the examples pin the OpenAether-apps tag this release was cut with
-# (refs/tags/0.2.0 for infra 0.2.1), which exists before the infra tag that points at
+# (refs/tags/0.3.0 for infra 0.2.1), which exists before the infra tag that points at
 # it: a commit on a branch would otherwise reach a running cluster within the
 # reconcile interval. Moving the default is part of cutting a release, never of a
 # change in between. Set refs/heads/<branch> to develop against apps; a branch also
@@ -599,11 +694,44 @@ variable "git_repo_url" {
 variable "git_ref" {
   description = "Git ref OpenAether-apps is tracked at, fully qualified: refs/heads/<branch> to develop, refs/tags/<version> to deploy"
   type        = string
-  default     = "refs/tags/0.2.0"
+  default     = "refs/tags/0.3.0"
 
   validation {
     condition     = can(regex("^refs/(heads|tags)/.+$", var.git_ref))
     error_message = "git_ref must be fully qualified: refs/tags/<version> or refs/heads/<branch>."
+  }
+}
+
+# Opt-in verification of the commit Flux applies (ANSSI SSDLC-CICD-AIP-03, SSDLC-CONT-REC06). Off = the bootstrap manifest
+# is byte-identical to the one before this variable existed. This repository wires OpenPGP keys only; the vendored Flux would also take SSH keys (.sshpub), not wired here.
+variable "flux_git_verify" {
+  description = <<-EOT
+    Flux Git source verification. enabled = false (default): nothing changes. enabled = true: the bootstrap manifest gets
+    the Secret `git-signers` (one `signer-N.asc` per armored PUBLIC key in public_keys, which must include GitHub's
+    web-flow key if squash merges are used) and `spec.verify {mode: HEAD, secretRef: git-signers}` on the GitRepository.
+    A commit not signed by one of these keys is NOT applied (the GitRepository goes NotReady, the last good artifact
+    stays). Enable it on the apps side too (apps/flux/components/git-verify) and read docs/signed-commits.md first.
+    Fingerprints are NOT checked here: compare them to the published signer table before applying.
+  EOT
+  type = object({
+    enabled     = optional(bool, false)
+    public_keys = optional(list(string), [])
+  })
+  default = {}
+
+  validation {
+    condition     = !var.flux_git_verify.enabled || length(var.flux_git_verify.public_keys) > 0
+    error_message = "flux_git_verify: enabled = true needs at least one armored public key (an empty signer set would reject every commit)."
+  }
+  validation {
+    condition = alltrue([for k in var.flux_git_verify.public_keys :
+      startswith(trimspace(k), "-----BEGIN PGP PUBLIC KEY BLOCK-----") && endswith(trimspace(k), "-----END PGP PUBLIC KEY BLOCK-----")
+    ])
+    error_message = "flux_git_verify.public_keys: each entry is an ARMORED PGP PUBLIC key block (gpg --armor --export <id>); never a private key."
+  }
+  validation {
+    condition     = length(distinct([for k in var.flux_git_verify.public_keys : trimspace(k)])) == length(var.flux_git_verify.public_keys)
+    error_message = "flux_git_verify.public_keys: the same key twice."
   }
 }
 
@@ -841,4 +969,70 @@ variable "talos_installer_schematic_id" {
   EOT
   type        = string
   default     = "613e1592b2da41ae5e265e8789429f22e121aab91cb4deb6bc3c0b6262961245"
+}
+
+variable "restrict_inter_node" {
+  description = <<-EOT
+    OVH and Outscale only (Scaleway already lists its ports; Proxmox and local have no security group).
+    false (default): the cluster group keeps its all-protocol rule between members. true: replaced by the
+    explicit port list shared with Scaleway and the Talos rules (ANSSI PA-022 R17/R20, batch B24 stage 1).
+    Rules and caveats: the variable of the same name in modules/providers/ovh/variables.tf.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "node_firewall_mode" {
+  description = <<-EOT
+    Talos ingress firewall of the nodes (ANSSI PA-022 R17/R20, batch B24 stage 2). "off" (default)
+    renders nothing: the generated configs are byte-identical. "port_allowlist" appends one NetworkRuleConfig
+    per flow of the shared port list plus NetworkDefaultActionConfig ingress: accept. A rule is a per-port
+    allow-list even with that default: each listed port ACCEPTS ONLY THE LISTED SOURCES (node_firewall) and
+    drops the rest, ports that are not listed stay open, and a source missing from node_firewall is cut off
+    (a broken cluster: not inert, measured on live nodes, lab 11). No mode with a blocking default action
+    exists. Rehearse on a throwaway cluster (docs/network.md section 6, LAB-CHECKLIST B24). Needs
+    node_firewall.node_cidrs.
+  EOT
+  type        = string
+  default     = "off"
+
+  validation {
+    condition     = contains(["off", "port_allowlist"], var.node_firewall_mode)
+    error_message = "node_firewall_mode must be \"off\" or \"port_allowlist\" (no mode with a blocking default action exists)."
+  }
+}
+
+variable "node_firewall" {
+  description = <<-EOT
+    Source ranges of the Talos ingress rules, used only when node_firewall_mode is not "off".
+      node_cidrs     the node subnet(s) (required): see docs/network.md for each provider's value
+      bastion_cidrs  the bastion subnet (default: none; the bastion then reaches apid only if it is in node_cidrs)
+      pod_cidrs      the pod network (default 10.244.0.0/16, Talos's default)
+      lb_cidrs       load balancer carrier/backend sources (default 100.64.0.0/10)
+    Subnets, never node addresses, so a replaced node needs no change.
+  EOT
+  type = object({
+    node_cidrs    = optional(list(string), [])
+    bastion_cidrs = optional(list(string), [])
+    pod_cidrs     = optional(list(string), ["10.244.0.0/16"])
+    lb_cidrs      = optional(list(string), ["100.64.0.0/10"])
+  })
+  default = {}
+}
+
+variable "disk_encryption_passphrase_length" {
+  description = <<-EOT
+    Length of the generated LUKS2 passphrase (disk encryption at rest). Default 32 keeps the released
+    value (62^32, about 190 bits). 33 or more gives at least 192 bits (62^33 is about 196 bits) of entropy (ANSSI PG-083 symmetric key size).
+    FOR A NEW CLUSTER ONLY: changing it on a live cluster replaces the passphrase in the state, and the
+    nodes' STATE/EPHEMERAL partitions are sealed with the old one; Talos has no re-keying step here, so a reboot
+    would not unlock them. Raise it before the first apply, or not at all.
+  EOT
+  type        = number
+  default     = 32
+
+  validation {
+    condition     = var.disk_encryption_passphrase_length >= 32 && var.disk_encryption_passphrase_length <= 128 && var.disk_encryption_passphrase_length == floor(var.disk_encryption_passphrase_length)
+    error_message = "disk_encryption_passphrase_length: a whole number from 32 (the released value) to 128."
+  }
 }

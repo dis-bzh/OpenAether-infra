@@ -32,5 +32,29 @@ OUT="$(bash "$SUT" -f "$TMP/empty.json" 2>&1)"; RC=$?
 [ "$RC" = 0 ] && grep -q 'no key in the state' <<<"$OUT" && ok "an empty state says so instead of printing nothing" || bad "empty: rc=$RC $OUT"
 bash "$SUT" -f "$TMP/missing.json" >/dev/null 2>&1; [ "$?" = 2 ] && ok "a missing file is refused" || bad "missing file accepted"
 
+
+# Without -f the keys come from tofu. Lab 11: a shell without the backend settings got "apply the infra first", the real error swallowed.
+mkdir -p "$TMP/bin"
+cat >"$TMP/bin/tofu" <<'STUB'
+#!/usr/bin/env bash
+case "${STUB_TOFU:-ok}" in
+  ok) cat "$STUB_KEYS" ;;
+  backend) echo "Error: Failed to load state: operation error S3: GetObject, https response error StatusCode: 403, api error InvalidAccessKeyId" >&2; exit 1 ;;
+  missing) echo "Error: Output \"bastion_access_keys\" not found" >&2; exit 1 ;;
+  null) echo null ;;
+esac
+STUB
+chmod +x "$TMP/bin/tofu"
+tf() { OUT="$(env PATH="$TMP/bin:$PATH" STUB_KEYS="$TMP/keys.json" "$@" bash "$SUT" 2>&1)"; RC=$?; }
+tf STUB_TOFU=ok
+[ "$RC" = 0 ] && grep -q '^alice' <<<"$OUT" && ok "keys are read from tofu when it answers" || bad "tofu path: rc=$RC $OUT"
+tf STUB_TOFU=backend
+[ "$RC" = 2 ] && grep -q 'InvalidAccessKeyId' <<<"$OUT" && grep -q 'could not read the state' <<<"$OUT" && grep -q -- '-f keys.json' <<<"$OUT" && ! grep -q 'apply the infra first' <<<"$OUT" \
+  && ok "a backend that cannot be read shows tofu's own error and the way out (-f), not 'apply the infra first'" || bad "backend error: rc=$RC $OUT"
+tf STUB_TOFU=missing
+[ "$RC" = 2 ] && grep -q 'apply the infra first' <<<"$OUT" && ok "a state without the output still says to apply the infra" || bad "missing output: rc=$RC $OUT"
+tf STUB_TOFU=null
+[ "$RC" = 2 ] && grep -q 'apply the infra first' <<<"$OUT" && ok "a null output says to apply the infra" || bad "null output: rc=$RC $OUT"
+
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$PASS" -gt 0 ] && [ "$FAIL" -eq 0 ]

@@ -45,6 +45,31 @@ REQUIRED: dict[str, str] = {
 }
 
 
+# With Hubble on (the opt-in dropped-flow variant, cilium-hubble-drops.yaml) the export must stay the narrow one:
+# only DROPPED/ERROR flows, a field mask (no payload), stdout (collected as a pod log) and no TCP listener on the host.
+HUBBLE_REQUIRED: dict[str, str] = {
+    "hubble-export-file-path": "stdout",
+    "hubble-listen-address": "",
+    "hubble-disable-tls": "true",
+}
+
+
+def hubble_problems(data: dict) -> list[str]:
+    if data.get("enable-hubble") != "true":
+        return []
+    out = []
+    for key, want in HUBBLE_REQUIRED.items():
+        got = data.get(key)
+        if got != want:
+            out.append(f'  `{key}` = {got!r} with Hubble on — expected "{want}"')
+    allow = data.get("hubble-export-allowlist", "")
+    if "DROPPED" not in allow or "FORWARDED" in allow or "TRACED" in allow:
+        out.append(f"  `hubble-export-allowlist` = {allow!r} — expected only DROPPED/ERROR verdicts")
+    if not data.get("hubble-export-fieldmask", "").strip():
+        out.append("  `hubble-export-fieldmask` is empty — the export would carry whole flows")
+    return out
+
+
 def load_configmap(path: pathlib.Path) -> dict:
     for doc in yaml.safe_load_all(path.read_text()):
         if not isinstance(doc, dict):
@@ -69,6 +94,7 @@ def main() -> int:
         elif got != want:
             problems.append(f'  `{key}` = "{got}" — expected "{want}"')
 
+    problems += hubble_problems(data)
     if problems:
         print("❌ cilium-config's effective settings do not match what the cluster must run:")
         print("\n".join(problems))

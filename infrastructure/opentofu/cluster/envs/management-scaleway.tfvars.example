@@ -24,6 +24,11 @@ cluster_name    = "openaether"
 environment     = "dev"
 cluster_role    = "management"
 talos_bootstrap = true
+# The platform, not only the machines. Both default to FALSE: a copy of this file WITHOUT these lines builds an
+# infrastructure-only cluster (Talos + Cilium: no Flux, no apps, no public load balancer), and `task cluster-verify`
+# then reports flux-system as red. Set them as shown for the platform; the Day-1 seeding follows (scripts/ops/seed-openbao.sh).
+deploy_flux     = true
+deploy_app_lb   = true
 # talos_version / kubernetes_version: leave unset to inherit the tracked
 # defaults from cluster/variables.tf (Renovate keeps those current) — a
 # stale copy here once caused a real deploy failure (image_name below
@@ -31,7 +36,7 @@ talos_bootstrap = true
 node_distribution = {
   scaleway = {
     control_planes = 3 # HA needs 3; new Scaleway accounts may have a per-type quota of 1 — request an increase (Console → Quotas) or start with 1
-    workers        = 2
+    workers        = 3 # not 2: lab 16 measured 172% of one worker's CPU requested on 2 (cluster-roll refuses above (n-1)*100%); 3 gives ~90%, docs/capacity.md
     region         = "fr-par"
     zone           = "fr-par-1"
     instance_type  = "POP2-4C-16G" # 4 vCPU / 16 GB: meets the sizing floor (docs/capacity.md). Block-storage, dedicated CPU, in all 3 fr-par zones (DEV1-M is l_ssd + not in fr-par-3; DEV1-L isn't in fr-par-3 either — verify any instance_type change against the API before assuming 3-zone coverage)
@@ -64,6 +69,25 @@ node_distribution = {
 #   { address = "149.112.112.112", tls_server_name = "dns.quad9.net" },
 # ]
 
+# Node and flow logs (optional, ANSSI PA-012 R9; off by default). Rules, plaintext caveat and
+# rollout order: modules/talos/variables.tf and docs/hardening.md.
+# node_log_forwarding    = { endpoint = "tcp://127.0.0.1:5170" }   # receiver on every node (hostNetwork)
+# cilium_hubble_drop_log = true                                    # policy denials in the cilium-agent log
+
+# Node baseline and time sources (optional, ANSSI BP-028 R9/R12 and PA-012 R5; off by default). Risks, prerequisites
+# and the deviation table: modules/talos/variables.tf and docs/hardening.md. Try on a throwaway cluster first.
+# node_baseline     = { sysctls = true, worker_default_seccomp = true, pod_pids_limit = 4096 }
+# node_time_servers = ["YOUR_NTP_1", "YOUR_NTP_2", "YOUR_NTP_3"]   # also in bastion_baseline.time_servers
+
+# Node network filtering (optional, ANSSI PA-022 R17/R20; both off by default).
+# restrict_inter_node has no effect here (OVH and Outscale only; no security-group layer to swap), so it is not offered.
+# node_firewall_mode = "port_allowlist" is NOT inert: each listed port (apid, kube-apiserver, kubelet, etcd, ...) accepts
+# ONLY the listed sources and drops the rest (ports that are not listed stay open). A source missing from node_firewall
+# (the load balancer range, a second subnet, a wrong pod range) breaks the cluster. Per-rule sources: docs/network.md 6.
+# Read docs/network.md section 6 and LAB-CHECKLIST B24 first; a throwaway cluster first.
+# node_firewall_mode  = "port_allowlist"
+# node_firewall       = { node_cidrs = ["YOUR_NODE_SUBNET"], bastion_cidrs = ["YOUR_BASTION_SUBNET"] }
+
 admin_ip = ["YOUR_IP/32"]
 
 bastion_ssh_keys = {
@@ -73,7 +97,7 @@ bastion_ssh_keys = {
 git_repo_url     = "https://github.com/dis-bzh/OpenAether-apps.git"
 # Pin the platform: a commit on a branch would otherwise reach a running
 # cluster within the reconcile interval. refs/heads/<branch> to test.
-git_ref          = "refs/tags/0.2.0"
+git_ref          = "refs/tags/0.3.0"
 
 # OpenBao recovery-share holders (only read when deploy_flux = true). OpenBao unseals itself; what the operators hold are
 # RECOVERY shares, for an emergency root token. Each key is a person's PGP PUBLIC key, `gpg --export <id> | base64 -w0`
@@ -87,6 +111,15 @@ git_ref          = "refs/tags/0.2.0"
 #   "mQGNBF...",   # operator 3
 # ]
 # openbao_recovery_threshold = 2   # default: a majority
+
+# --- Flux Git source verification (OPT-IN, default off) ---------------------------
+# Flux then applies only a HEAD commit signed by one of these OpenPGP keys (gpg --armor --export <id>), GitHub's
+# web-flow key included if you squash-merge. Read docs/signed-commits.md first; the apps overlay must carry the
+# same block (components/git-verify). Public keys only.
+# flux_git_verify = {
+#   enabled     = true
+#   public_keys = ["-----BEGIN PGP PUBLIC KEY BLOCK-----\n...\n-----END PGP PUBLIC KEY BLOCK-----"]
+# }
 
 # --- Backup / DR object stores ------------------------------------------------
 # Derived buckets (you don't set them) — parts come from this file,
@@ -105,3 +138,8 @@ s3_primary_endpoint = "https://s3.fr-par.scw.cloud"
 s3_primary_region   = "fr-par"
 s3_replica_endpoint = "https://s3.fr-par.scw.cloud" # prod: e.g. OVH https://s3.gra.io.cloud.ovh.net
 s3_replica_region   = "fr-par"                       # prod: e.g. gra
+
+# --- Node system disk --------------------------------------------------------
+# 50 GB per node by default (scw_root_volume_size_gb): the application stack puts ~11 GB of images on a node and Talos
+# keeps them on the system volume, ~4 GB under its size. With deploy_flux the value must be at least 40 (validated).
+# scw_root_volume_size_gb = 50

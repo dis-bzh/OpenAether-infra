@@ -11,6 +11,9 @@ APPLY = '--apply' in sys.argv
 # Exit 2, not the 1 callers read as "leftovers found": nothing was asked.
 try:
     base = os.environ['OS_AUTH_URL'].rstrip('/')
+    if not base.startswith("https://"):   # the password goes in this request
+        print("✗ OS_AUTH_URL must be https:// — the password would travel in clear. Nothing was sent.", file=sys.stderr)
+        sys.exit(2)
     url = base + ('/auth/tokens' if base.endswith('/v3') else '/v3/auth/tokens')
     auth = {"auth": {"identity": {"methods": ["password"], "password": {"user": {
         "name": os.environ['OS_USERNAME'], "password": os.environ['OS_PASSWORD'],

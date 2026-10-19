@@ -56,8 +56,16 @@ grep -q "assertion(s) held" <<<"$OUT" && ok "and it says how many" || bad "$OUT"
 grep -q "✓ $LG list" <<<"$OUT" && grep -q "✓ $ST list" <<<"$OUT" && ok "Loki lists its own bucket (✓ allowed) and not the state bucket (✓ denied)" || bad "$OUT"
 grep -q "operator, primary store" <<<"$OUT" && grep -q "· $ST list" <<<"$OUT" && ok "the operator's reach is shown for contrast and not asserted" || bad "no operator block"
 grep -qE 'OPSECRET|REPSECRET|LOKISK|BKPSK|BKRSK' <<<"$OUT" && bad "a secret was printed" || ok "no secret in the output"
-grep -E ' (delete|put-)' "$FAKE_S3/calls.log" | grep -vE 'delete-object-version|put-bucket|put-object-lock' | grep -q . && bad "an unexpected write" || ok "the only delete call is delete-object-version, on a version that does not exist"
+grep -E ' (delete|put-)' "$FAKE_S3/calls.log" | grep -vE ' delete-object [^ ]+$|put-bucket|put-object-lock' | grep -q . && bad "an unexpected write" || ok "the only delete call is delete-object --version-id, on a numeric version that does not exist"
 grep -q "✓ $BK-backup list" <<<"$OUT" && ok "the replica pair is checked on the replica store" || bad "no replica check"
+
+echo "--- a pair that lists its bucket but is refused HeadBucket on it fails, naming HeadBucket (#356) ---"
+fresh; echo "An error occurred (403) when calling the HeadBucket operation: Forbidden" >"$FAKE_S3/refuse/head-bucket.$BK"
+OUT="$(check "${DED[@]}")"; RC=$?
+is "exit 1" 1 "$RC"
+grep -q "✗ $BK head-bucket *expected allowed *observed denied" <<<"$OUT" && grep -q 'HeadBucket is denied on this pair' <<<"$OUT" && ok "the line names HeadBucket and the IAM set to add" || bad "$OUT"
+fresh; OUT="$(check "${DED[@]}")"
+grep -q "✓ $BK head-bucket" <<<"$OUT" && grep -q "✓ $LG head-bucket" <<<"$OUT" && ok "a healthy pair is asserted allowed on HeadBucket of its own bucket" || bad "$OUT"
 
 echo "--- Loki with the operator's reach: the bucket it should not open is named ---"
 fresh; rm "$FAKE_S3/id/LOKIAK"
@@ -104,6 +112,20 @@ fresh; rm -rf "${FAKE_S3:?}/buckets/$BK-backup"
 OUT="$(check "${DED[@]}")"; RC=$?
 is "exit 1" 1 "$RC"
 grep -q "✗ $BK-backup list" <<<"$OUT" && ok "named" || bad "$OUT"
+
+echo "--- a store that rejects a made-up version id: inconclusive by default, settled with a real version ---"
+fresh; : >"$FAKE_S3/strict-vid"; limit LOKIAK "$LG" keep-vd
+OUT2="$(check "${DED[@]}")"
+grep -q "? $LG delete-version.*inconclusive" <<<"$OUT2" && ok "the made-up id gives 'inconclusive', not a pass" || bad "$OUT2"
+grep -q "inconclusive: this store rejects\|probe(s) inconclusive" <<<"$OUT2" && ok "the summary says how to settle it" || bad "$OUT2"
+fresh; : >"$FAKE_S3/strict-vid"
+OUT="$(check "${DED[@]}" OA_ISOLATION_REAL_VERSION=1)"; RC=$?
+is "real version, pairs refused: exit 0" 0 "$RC"
+grep -q "✓ $LG delete-version" <<<"$OUT" && ok "denied on a real version" || bad "$OUT"
+fresh; : >"$FAKE_S3/strict-vid"; limit LOKIAK "$LG" keep-vd
+OUT="$(check "${DED[@]}" OA_ISOLATION_REAL_VERSION=1)"; RC=$?
+is "real version, Loki may delete: exit 1" 1 "$RC"
+grep -q "✗ $LG delete-version *expected denied *observed allowed" <<<"$OUT" && ok "caught only with a real version" || bad "$OUT"
 
 echo
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"

@@ -526,6 +526,18 @@ expect_2 "outscale.py without OUTSCALE_SECRET_KEY" $? "$out" "OUTSCALE_SECRET_KE
 out="$(run_403 ovh.py OS_AUTH_URL=https://stub.invalid/v3 OS_USERNAME=s OS_PASSWORD=s \
        OS_PROJECT_ID=s OS_REGION_NAME=s)"
 expect_2 "ovh.py with its authentication refused" $? "$out" "refused"
+out="$(env OS_AUTH_URL=http://stub.invalid/v3 OS_USERNAME=s OS_PASSWORD=s OS_PROJECT_ID=s OS_REGION_NAME=s \
+       python3 "$ROOT/scripts/ops/purge-orphans/ovh.py" 2>&1)"
+expect_2 "ovh.py refuses a clear-text OS_AUTH_URL" $? "$out" "must be https"
+# The same three-line guard sits in four more scripts that send the Keystone password: prove it in each, not by reading.
+for spec in "verify-provider-clean.py x openstack" "delete-openstack-resource.py network id1" \
+            "ensure-capo-fip.py x" "preflight-quotas.py ovh"; do
+  # shellcheck disable=SC2086
+  set -- $spec; script="$1"; shift
+  out="$(env -i PATH="$PATH" OS_AUTH_URL=http://stub.invalid/v3 OS_USERNAME=s OS_PASSWORD=s OS_PROJECT_ID=s \
+         OS_REGION_NAME=s python3 "$ROOT/scripts/ops/$script" "$@" 2>&1)"
+  expect_2 "$script refuses a clear-text OS_AUTH_URL" $? "$out" "must be https"
+done
 out="$(OVH_REGION=GRA9 run_403_ovh_partial)"; expect_2 "ovh.py, region absent from the catalog" $? "$out" "gra9"
 
 # --apply that deleted what it could see while another endpoint refused: not

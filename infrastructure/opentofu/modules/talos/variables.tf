@@ -330,3 +330,203 @@ variable "node_dns_boot_timeout" {
     error_message = "node_dns_boot_timeout must be empty or a positive whole number of seconds, minutes or hours: 90s, 2m."
   }
 }
+
+variable "node_log_forwarding" {
+  description = <<-EOT
+    Ships the nodes' Talos service logs (machine.logging, json_lines) and, unless
+    `kernel = false`, the kernel log (KmsgLogConfig) to a receiver, so that node events
+    outlive the node (ANSSI PA-012 R9, batch B22). Null (default) renders nothing and
+    leaves every node's config byte-identical.
+      endpoint        tcp://host:port. TCP only (a UDP log is lost silently). PLAINTEXT:
+                      acceptable only on the private network, and the logs hold node
+                      and service events, not secrets. The host network sends it, not a
+                      pod: a ClusterIP does NOT work from the host under Cilium
+                      (socketLB.hostNamespaceOnly), so use a receiver on every node
+                      (hostNetwork, tcp://127.0.0.1:<port>) or a fixed LB address.
+      kernel          Also send the kernel log (default true).
+      kernel_endpoint Another receiver for the kernel log (default: endpoint).
+    An unreachable receiver drops logs; whether it also delays a boot is a lab check
+    (LAB-CHECKLIST B22). The setting is global (there is no per-node switch): one apply re-applies the machine configuration of EVERY node, so try it on a throwaway cluster first. The receiver is not part of this repo's
+    default: a hostNetwork collector must exist before this is switched on.
+  EOT
+  type = object({
+    endpoint        = string
+    kernel          = optional(bool, true)
+    kernel_endpoint = optional(string, "")
+  })
+  default = null
+
+  validation {
+    condition     = var.node_log_forwarding == null || can(regex("^tcp://[A-Za-z0-9.-]+:[0-9]{1,5}/?$|^tcp://\\[[0-9A-Fa-f:]+\\]:[0-9]{1,5}/?$", var.node_log_forwarding.endpoint))
+    error_message = "node_log_forwarding.endpoint must be tcp://host:port (TCP only, no path, no udp://)."
+  }
+  validation {
+    condition     = var.node_log_forwarding == null || var.node_log_forwarding.kernel_endpoint == "" || can(regex("^tcp://[A-Za-z0-9.-]+:[0-9]{1,5}/?$|^tcp://\\[[0-9A-Fa-f:]+\\]:[0-9]{1,5}/?$", var.node_log_forwarding.kernel_endpoint))
+    error_message = "node_log_forwarding.kernel_endpoint must be empty or tcp://host:port."
+  }
+  validation {
+    condition     = var.node_log_forwarding == null || var.node_log_forwarding.kernel || var.node_log_forwarding.kernel_endpoint == ""
+    error_message = "node_log_forwarding.kernel_endpoint is set while kernel = false: it would be ignored."
+  }
+}
+
+variable "node_time_servers" {
+  description = <<-EOT
+    NTP sources of the Talos nodes, rendered as `ntp.servers` of the TimeSyncConfig document
+    (ANSSI PA-012 R5 / HYG-42 M36, batch B23). Empty (default) renders no source: Talos keeps its
+    built-in single default server, byte for byte as before. Give several independent hosts. Plain NTP
+    over udp/123 only (Talos has no NTS); names resolve through node_nameservers, so with an encrypted
+    resolver list prefer address literals or check `talosctl get timestatus` after the apply. The same
+    list belongs in bastion_baseline.time_servers so that nodes and bastion agree. A change is applied
+    to every node without a reboot; a list no node can reach leaves the clock unsynchronised
+    (`talosctl get timestatus`), so try it on a throwaway cluster first (LAB-CHECKLIST B23).
+  EOT
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for t in var.node_time_servers : can(regex("^[A-Za-z0-9.:-]+$", t))])
+    error_message = "node_time_servers: host names or addresses only (no scheme, no port, no spaces)."
+  }
+  validation {
+    condition     = length(var.node_time_servers) == length(distinct(var.node_time_servers))
+    error_message = "node_time_servers: duplicate entries."
+  }
+}
+
+variable "node_baseline" {
+  description = <<-EOT
+    Opt-in kernel and kubelet baseline of the Talos nodes (ANSSI BP-028 R9/R12/R13, batch B23). Null
+    (default) renders nothing and leaves every node's config byte-identical.
+      sysctls                 Set machine.sysctls on every node: kernel.sysrq=0, perf sampling limits,
+                              no ICMP redirects / source routing (IPv4 and IPv6), tcp_syncookies=1,
+                              tcp_rfc1337=1. rp_filter, ip_forward and the module/pid settings are NOT
+                              touched (Cilium and Kubernetes need them: docs/hardening.md deviation table).
+      sysctls_extra           More or overriding sysctls (strings), merged last. Operator responsibility.
+      panic_on_oops           Also set kernel.panic_on_oops=1. Off even with `sysctls`: with the kernel's
+                              panic timeout at 0 a panic HANGS the node instead of rebooting it. Check
+                              `talosctl read /proc/sys/kernel/panic` first (LAB-CHECKLIST B23).
+      worker_default_seccomp  Set kubelet defaultRuntimeSeccompProfileEnabled on the workers, as the
+                              control planes already have it: pods without a seccompProfile get RuntimeDefault
+                              when they next start. A workload that needs a blocked syscall breaks then.
+      pod_pids_limit          kubelet podPidsLimit on every node (0 = unset, Kubernetes default: unlimited).
+                              A pod over the limit cannot fork; size above your largest legitimate pod.
+      kubelet_server_tls      kubelet serverTLSBootstrap: serving certificates come from the cluster CA
+                              through CSRs. Needs a kubelet-serving CSR approver (OpenAether-apps does not
+                              ship one yet): until the CSRs are approved the kubelet keeps a self-signed
+                              certificate. Do not enable without that approver.
+    Kubelet settings are written into machine.kubelet.extraConfig; the kubelet restarts on apply.
+  EOT
+  type = object({
+    sysctls                = optional(bool, false)
+    sysctls_extra          = optional(map(string), {})
+    panic_on_oops          = optional(bool, false)
+    worker_default_seccomp = optional(bool, false)
+    pod_pids_limit         = optional(number, 0)
+    kubelet_server_tls     = optional(bool, false)
+  })
+  default = null
+
+  validation {
+    condition     = var.node_baseline == null || (var.node_baseline.pod_pids_limit == 0 || (var.node_baseline.pod_pids_limit >= 64 && var.node_baseline.pod_pids_limit == floor(var.node_baseline.pod_pids_limit)))
+    error_message = "node_baseline.pod_pids_limit must be 0 (unset) or a whole number of at least 64."
+  }
+  validation {
+    condition     = var.node_baseline == null || alltrue([for k, v in var.node_baseline.sysctls_extra : can(regex("^[a-z0-9_]+(\\.[A-Za-z0-9_-]+)+$", k))])
+    error_message = "node_baseline.sysctls_extra keys must be dotted sysctl names such as net.ipv4.tcp_syncookies."
+  }
+  validation {
+    condition     = var.node_baseline == null || var.node_baseline.sysctls || !var.node_baseline.panic_on_oops
+    error_message = "node_baseline.panic_on_oops only applies with sysctls = true; use sysctls_extra for a lone key."
+  }
+}
+
+# ==============================================================================
+# Node ingress firewall (batch B24, stage 2). Off: nothing is rendered.
+# ==============================================================================
+
+variable "node_firewall_mode" {
+  description = <<-EOT
+    "off" (default): no firewall document, every node config byte-identical. "port_allowlist": one
+    NetworkRuleConfig per flow of node_firewall_ports plus NetworkDefaultActionConfig ingress: accept.
+    A NetworkRuleConfig is an allow-list for its port even with that default action: each listed port
+    ACCEPTS ONLY THE LISTED SOURCES and DROPS the others (live nft chain, lab 11); ports that are not
+    listed stay open. A source that is missing from node_firewall (a new subnet, a load balancer or
+    health-check range, a wrong pod range) is cut off: the cluster breaks. Not inert, not a monitor.
+    No mode with a blocking default action exists. LAB-CHECKLIST B24. A change is applied without a reboot.
+  EOT
+  type        = string
+  default     = "off"
+
+  validation {
+    condition     = contains(["off", "port_allowlist"], var.node_firewall_mode)
+    error_message = "node_firewall_mode must be \"off\" or \"port_allowlist\" (no mode with a blocking default action exists)."
+  }
+}
+
+variable "node_firewall" {
+  description = "Source ranges of the rules (node_cidrs required when the mode is not off; bastion_cidrs, pod_cidrs, lb_cidrs). Subnets only, never node addresses."
+  type = object({
+    node_cidrs    = optional(list(string), [])
+    bastion_cidrs = optional(list(string), [])
+    pod_cidrs     = optional(list(string), ["10.244.0.0/16"])
+    lb_cidrs      = optional(list(string), ["100.64.0.0/10"])
+  })
+  default = {}
+
+  validation {
+    condition = alltrue([for c in concat(var.node_firewall.node_cidrs, var.node_firewall.bastion_cidrs, var.node_firewall.pod_cidrs, var.node_firewall.lb_cidrs) :
+    can(cidrhost(c, 0)) && !contains(["0.0.0.0/0", "::/0"], c)])
+    error_message = "node_firewall: every entry must be a CIDR and none may be the whole Internet (0.0.0.0/0)."
+  }
+  validation {
+    condition     = var.node_firewall_mode == "off" || length(var.node_firewall.node_cidrs) > 0
+    error_message = "node_firewall.node_cidrs is required when node_firewall_mode is not \"off\"."
+  }
+}
+
+variable "node_firewall_ports" {
+  description = "name => { protocol (TCP|UDP|ICMP), ports (\"6443\", \"2379-2381\", null for ICMP) }: the shared list of modules/providers/_shared/node-ports (between_members)."
+  type        = map(object({ protocol = string, ports = optional(string) }))
+  default     = {}
+}
+
+variable "node_firewall_scope" {
+  description = "name => source groups (nodes, bastion, pods, lb) allowed for each entry of node_firewall_ports (output scope of the shared list)."
+  type        = map(list(string))
+  default     = {}
+
+  validation {
+    condition     = alltrue([for k, v in var.node_firewall_scope : alltrue([for g in v : contains(["nodes", "bastion", "pods", "lb"], g)])])
+    error_message = "node_firewall_scope: groups are nodes, bastion, pods, lb."
+  }
+  # An empty source list on a rule would drop every source of that port: a broken cluster, caught at plan.
+  validation {
+    condition = var.node_firewall_mode == "off" || alltrue([for k, v in var.node_firewall_scope :
+      length(distinct(flatten([for g in v : lookup({
+        nodes   = var.node_firewall.node_cidrs
+        bastion = var.node_firewall.bastion_cidrs
+        pods    = var.node_firewall.pod_cidrs
+        lb      = var.node_firewall.lb_cidrs
+      }, g, [])]))) > 0
+    ])
+    error_message = "node_firewall_scope: a rule would have no source at all (its groups are all empty in node_firewall); that rule would cut every source off its port."
+  }
+}
+
+variable "disk_encryption_passphrase_length" {
+  description = <<-EOT
+    Length of the generated LUKS2 passphrase (disk encryption at rest). Default 32 keeps the released
+    value (62^32, about 190 bits). 33 or more gives at least 192 bits (62^33 is about 196 bits) of entropy (ANSSI PG-083 symmetric key size).
+    FOR A NEW CLUSTER ONLY: changing it on a live cluster replaces the passphrase in the state, and the
+    nodes' STATE/EPHEMERAL partitions are sealed with the old one; Talos has no re-keying step here, so a reboot
+    would not unlock them. Raise it before the first apply, or not at all.
+  EOT
+  type        = number
+  default     = 32
+
+  validation {
+    condition     = var.disk_encryption_passphrase_length >= 32 && var.disk_encryption_passphrase_length <= 128 && var.disk_encryption_passphrase_length == floor(var.disk_encryption_passphrase_length)
+    error_message = "disk_encryption_passphrase_length: a whole number from 32 (the released value) to 128."
+  }
+}

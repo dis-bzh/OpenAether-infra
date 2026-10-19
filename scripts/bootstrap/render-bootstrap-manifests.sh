@@ -10,6 +10,7 @@ set -euo pipefail
 # Usage:
 #   ./scripts/bootstrap/render-bootstrap-manifests.sh           # production
 #   ./scripts/bootstrap/render-bootstrap-manifests.sh --local   # local Docker testing
+#   ./scripts/bootstrap/render-bootstrap-manifests.sh --hubble-drops  # production + dropped-flow log (opt-in variant)
 #   ./scripts/bootstrap/render-bootstrap-manifests.sh --check   # writes NOTHING: checks
 #                                                     # that the committed artifacts
 #                                                     # match the generator
@@ -29,6 +30,15 @@ MANIFESTS_DIR="${OPENAETHER_MANIFESTS_DIR:-${SCRIPT_DIR}/../../infrastructure/op
 LOCAL_MODE=false
 if [[ "${1:-}" == "--local" ]]; then
   LOCAL_MODE=true
+  shift
+fi
+
+# Opt-in production variant (ANSSI PA-012 R9 / HYG-42 M36, batch B22): the same Cilium with the Hubble SERVER on and a
+# static export of DROPPED/ERROR flows to the agent's stdout, so the pod-log collector sees every policy denial. It is a
+# second committed artifact (cilium-hubble-drops.yaml), selected by `cilium_hubble_drop_log`; the default cilium.yaml is untouched.
+HUBBLE_DROPS=false
+if [[ "${1:-}" == "--hubble-drops" ]]; then
+  HUBBLE_DROPS=true
   shift
 fi
 
@@ -76,13 +86,14 @@ if [[ "${1:-}" == "--check" ]]; then
   echo "🔍 Checking the committed artifacts against the generator…"
   OPENAETHER_MANIFESTS_DIR="$tmp" OPENAETHER_SKIP_FLUX=1 "$0" >/dev/null
   OPENAETHER_MANIFESTS_DIR="$tmp" OPENAETHER_SKIP_FLUX=1 "$0" --local >/dev/null
+  OPENAETHER_MANIFESTS_DIR="$tmp" OPENAETHER_SKIP_FLUX=1 "$0" --hubble-drops >/dev/null
   # helm's raw render carries trailing whitespace; the committed artifact has
   # been through the pre-commit hooks (`trim trailing whitespace`,
   # `fix end of files`). Comparing them as-is would keep the check permanently
   # red — so we normalise BOTH sides, exactly like the hook does.
   norm() { sed -e 's/[[:space:]]*$//' "$1"; }
   drift=0
-  for f in cilium.yaml cilium-local.yaml; do
+  for f in cilium.yaml cilium-local.yaml cilium-hubble-drops.yaml; do
     # cilium-local.yaml is gitignored on purpose — it is rendered on demand by
     # `task local-up`, never committed. On a fresh checkout (CI) it is absent, and
     # comparing against it made this check die on every run instead of passing.
@@ -151,6 +162,9 @@ mkdir -p "${MANIFESTS_DIR}"
 if [[ "$LOCAL_MODE" == "true" ]]; then
   CILIUM_OUTPUT="${MANIFESTS_DIR}/cilium-local.yaml"
   echo "🔧 Rendering Cilium ${CILIUM_VERSION} manifest (LOCAL mode — simplified for Docker)..."
+elif [[ "$HUBBLE_DROPS" == "true" ]]; then
+  CILIUM_OUTPUT="${MANIFESTS_DIR}/cilium-hubble-drops.yaml"
+  echo "🔧 Rendering Cilium ${CILIUM_VERSION} manifest (PRODUCTION mode, dropped-flow log)..."
 else
   CILIUM_OUTPUT="${MANIFESTS_DIR}/cilium.yaml"
   echo "🔧 Rendering Cilium ${CILIUM_VERSION} manifest (PRODUCTION mode)..."
@@ -208,6 +222,24 @@ else
   #    ztunnel, services-gateway and istio-authorizationpolicies stuck in turn;
   #  - socketLB.hostNamespaceOnly=true: without it the socket-LB short-circuits
   #    the ambient redirection for host-network processes.
+  # Hubble: off by default. The variant runs the SERVER only: no relay, no UI, no TLS material (a render stays
+  # deterministic), and an EMPTY listen address so no TCP port opens on the host (the unix socket stays). Only
+  # dropped/errored flows are exported, field-masked to who/what/why (no payload), to stdout: the cilium-agent
+  # logs are already collected by the pod-log Alloy.
+  HUBBLE_ARGS=(--set hubble.enabled=false)
+  if [[ "$HUBBLE_DROPS" == "true" ]]; then
+    HUBBLE_ARGS=(
+      --set hubble.enabled=true
+      --set hubble.relay.enabled=false
+      --set hubble.ui.enabled=false
+      --set hubble.tls.enabled=false
+      --set hubble.listenAddress=
+      --set hubble.export.static.enabled=true
+      --set hubble.export.static.filePath=stdout
+      --set-json 'hubble.export.static.allowList=["{\"verdict\":[\"DROPPED\",\"ERROR\"]}"]'
+      --set 'hubble.export.static.fieldMask={time,verdict,drop_reason_desc,IP,l4,source.namespace,source.labels,destination.namespace,destination.labels,traffic_direction,node_name}'
+    )
+  fi
   helm template cilium cilium/cilium \
     --version "${CILIUM_VERSION}" \
     --namespace kube-system \
@@ -223,7 +255,7 @@ else
     --set cgroup.hostRoot=/sys/fs/cgroup \
     --set k8sServiceHost=localhost \
     --set k8sServicePort=7445 \
-    --set hubble.enabled=false \
+    "${HUBBLE_ARGS[@]}" \
     --set prometheus.enabled=true \
     --set operator.prometheus.enabled=true \
     --set operator.replicas=1 \
@@ -232,7 +264,7 @@ else
     --set securityContext.capabilities.ciliumAgent="{CHOWN,KILL,NET_ADMIN,NET_RAW,IPC_LOCK,SYS_ADMIN,SYS_RESOURCE,DAC_OVERRIDE,FOWNER,SETGID,SETUID}" \
     --set securityContext.capabilities.cleanCiliumState="{NET_ADMIN,SYS_ADMIN,SYS_RESOURCE}" \
     > "${CILIUM_OUTPUT}"
-  echo "  ✅ Written to bootstrap-manifests/cilium.yaml"
+  echo "  ✅ Written to bootstrap-manifests/$(basename "${CILIUM_OUTPUT}")"
 fi
 
 # helm leaves trailing whitespace; the `trim trailing whitespace` pre-commit
@@ -270,7 +302,8 @@ fi
 # that never holds flux-install.yaml, and cilium-local.yaml is gitignored —
 # neither belongs in a lock committed alongside the production artifacts.
 if [[ "$LOCAL_MODE" == "false" && "${OPENAETHER_SKIP_FLUX:-0}" != "1" ]]; then
-  (cd "${MANIFESTS_DIR}" && sha256sum cilium.yaml flux-install.yaml > upstream-artifacts.lock)
+  # The variant is in the lock once committed; a lock written before it exists stays the two-file one.
+  (cd "${MANIFESTS_DIR}" && sha256sum cilium.yaml flux-install.yaml $([ -f cilium-hubble-drops.yaml ] && echo cilium-hubble-drops.yaml) > upstream-artifacts.lock)
   echo "  🔒 upstream-artifacts.lock regenerated"
 fi
 

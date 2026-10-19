@@ -51,6 +51,21 @@ variable "root_volume_type" {
   default     = "sbs_volume"
 }
 
+variable "root_volume_size_gb" {
+  description = <<-EOT
+    Size of the system volume of every node, in GB. Talos puts its EPHEMERAL partition (kubelet, containerd images, logs)
+    on it, about 4 GB less than this value. 50 by default: the images of the full application stack (~11 GB per
+    worker) do not fit in the ~15.6 GB left by 20 (lab 12: DiskPressure and evictions). Raising it is an in-place resize
+    of an sbs_volume; Talos grows the partition on reboot.
+  EOT
+  type        = number
+  default     = 50
+  validation {
+    condition     = var.root_volume_size_gb >= 20 && var.root_volume_size_gb <= 500
+    error_message = "root_volume_size_gb must be between 20 and 500."
+  }
+}
+
 variable "worker_storage" {
   description = <<-EOT
     Dedicated data disks per worker. Each `disks` entry creates one SBS block

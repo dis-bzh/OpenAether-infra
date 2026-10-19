@@ -3,7 +3,7 @@
 # creates them, so that docs/network.md cannot say anything the rules do not. test-flow-matrix.sh compares
 # this output with the table between the markers of docs/network.md and docs/network.fr.md.
 #
-#   scw      the `node_inbound_ports` map of scw/security.tf (the one tests/scaleway.tftest.hcl pins), plus the LB carrier rule
+#   scw      the shared list `inbound` of _shared/node-ports/main.tf (the one tests/scaleway.tftest.hcl pins), plus the LB carrier rule
 #   ovh      every ingress openstack_networking_secgroup_rule_v2 of ovh/security.tf
 #   outscale every Inbound outscale_security_group_rule of outscale/security.tf
 #
@@ -24,11 +24,13 @@ render() {
 case "$PROV" in
   scw)
     F="$DIR/scw/security.tf"
+    L="$DIR/_shared/node-ports/main.tf"
     [ -f "$F" ] || { echo "✗ $F not found" >&2; exit 1; }
+    [ -f "$L" ] || { echo "✗ $L not found" >&2; exit 1; }
     echo "$HDR"
-    # Inside `node_inbound_ports = { ... }`, one rule per line: name = { protocol = "X", ports = "Y" | null }
+    # Inside `inbound = { ... }` of the shared list, one rule per line: name = { protocol = "X", ports = "Y" | null }
     awk '
-      /node_inbound_ports = \{/ { inmap = 1; next }
+      /^  inbound = \{/ { inmap = 1; next }
       inmap && /^  \}/ { inmap = 0 }
       inmap && /= \{ protocol = / {
         name = $1
@@ -37,7 +39,7 @@ case "$PROV" in
         if (match($0, /ports = "[^"]+"/)) ports = substr($0, RSTART + 9, RLENGTH - 10)
         printf "| `%s` | %s | %s | node subnet (`scw_subnet_in_use`) | always |\n", name, proto, ports
       }
-    ' "$F"
+    ' "$L"
     # The gateway ports and the carrier-range rule are derived from variables, not listed in the map.
     grep -q 'gateway-\${k}' "$F" && echo '| `gateway-<name>` | TCP | `var.app_lb_node_ports` | node subnet (`scw_subnet_in_use`) | `deploy_app_lb` |'
     grep -q 'carrier-' "$F" && echo '| `carrier-<name>` | TCP | the k8s API port when `k8s_lb_mode = "managed"`, and the gateway ports | `100.64.0.0/10` | the matching load balancer exists |'
@@ -50,6 +52,7 @@ case "$PROV" in
       function reset() { name = ""; ing = 0; proto = "all"; pmin = ""; pmax = ""; src = "-"; cond = "always"; cidr = ""; app = 0 }
       function emit(   ports) {
         if (!ing || name == "") return
+        if (name == "inter_node_ports") { printf "| `%s` | each of the list | the shared list (`_shared/node-ports`) | cluster SG members | %s |\n", name, cond; return }
         ports = (pmin == "" ? "all" : (pmin == pmax ? pmin : pmin "-" pmax))
         if (ports ~ /var\./) ports = "`" ports "`"
         printf "| `%s` | %s | %s | %s | %s |\n", name, proto, ports, src, cond
@@ -71,6 +74,9 @@ case "$PROV" in
       # The group of the rule itself is a 2-space attribute; the group it admits is `remote_group_id` or a deeper `security_group_id`.
       /remote_group_id|^ {4,}security_group_id/ { s = srcfrom($0); if (s != "") src = s }
       /count += +var\.deploy_app_lb/ { cond = "`deploy_app_lb`" }
+      # restrict_inter_node swaps the two broad rules for the explicit list: count flips one way, for_each the other.
+      /count += +var\.restrict_inter_node/ { cond = "not `restrict_inter_node`" }
+      /for_each += +var\.restrict_inter_node/ { cond = "`restrict_inter_node`" }
       /for_each += +toset\(var\.admin_ip\)/ { src = "`admin_ip`" }
       # Opt-in public clients of the app LB: the set is empty unless the list is given.
       /for_each += +local\.app_lb_sources/ { app = 1; src = "`app_lb_allowed_cidrs`, cluster egress"; cond = "`deploy_app_lb` and `app_lb_allowed_cidrs`" }
@@ -92,7 +98,10 @@ if [ "$FR" = 1 ]; then
     -e 's/the k8s API port when `k8s_lb_mode = "managed"`, and the gateway ports/le port de l'"'"'API k8s quand `k8s_lb_mode = "managed"`, et les ports de la passerelle/' \
     -e 's/the matching load balancer exists/le load balancer correspondant existe/' \
     -e 's/`deploy_app_lb` and `app_lb_allowed_cidrs`/`deploy_app_lb` et `app_lb_allowed_cidrs`/' \
-    -e 's/, cluster egress/, sortie du cluster/'
+    -e 's/, cluster egress/, sortie du cluster/' \
+    -e 's/each of the list/chaque entrée de la liste/' \
+    -e 's/the shared list/la liste partagée/' \
+    -e 's/not `restrict_inter_node`/pas `restrict_inter_node`/'
 else
   render
 fi

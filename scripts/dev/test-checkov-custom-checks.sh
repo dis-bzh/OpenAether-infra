@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Unit tests for #123: the checkov-custom-checks/ policies (CKV_OA_1, CKV_OA_2).
+# Unit tests for #123: the checkov-custom-checks/ policies (CKV_OA_1, CKV_OA_2, CKV_OA_3).
 #
 # Mutates REAL tracked files under a trap that always restores them, rather
 # than a synthetic fixture repo: a custom check keys on exact resource types
@@ -16,6 +16,7 @@ cd "$ROOT" || exit 1
 CHECKS_DIR="infrastructure/opentofu/checkov-custom-checks"
 SCW_MAIN="infrastructure/opentofu/modules/providers/scw/main.tf"
 SCW_SECURITY="infrastructure/opentofu/modules/providers/scw/security.tf"
+OSC_SECURITY="infrastructure/opentofu/modules/providers/outscale/security.tf"
 
 PASS=0
 FAIL=0
@@ -25,20 +26,22 @@ bad() { printf '  \033[31m✗\033[0m %s\n' "$*"; FAIL=$((FAIL + 1)); }
 TMP="$(mktemp -d)"
 cp "$SCW_MAIN" "$TMP/scw-main.tf.orig"
 cp "$SCW_SECURITY" "$TMP/scw-security.tf.orig"
+cp "$OSC_SECURITY" "$TMP/osc-security.tf.orig"
 restore() {
   cp "$TMP/scw-main.tf.orig" "$SCW_MAIN"
   cp "$TMP/scw-security.tf.orig" "$SCW_SECURITY"
+  cp "$TMP/osc-security.tf.orig" "$OSC_SECURITY"
   [ -f "$TMP/init.py.bak" ] && mv "$TMP/init.py.bak" "$CHECKS_DIR/__init__.py"
   rm -rf "$TMP"
 }
 trap restore EXIT
 
-run() { checkov -d infrastructure/opentofu --external-checks-dir "$CHECKS_DIR" --check CKV_OA_1,CKV_OA_2 2>/dev/null; }
+run() { checkov -d infrastructure/opentofu --external-checks-dir "$CHECKS_DIR" --check CKV_OA_1,CKV_OA_2,CKV_OA_3 2>/dev/null; }
 
 echo "=== the real, unmodified tree passes both custom checks ==="
 
 out="$(run)"
-grep -qE 'Passed checks: 16, Failed checks: 0' <<<"$out" && ok "16 passed, 0 failed (8 node resources + 4 bastions x2 checks, 4 security groups x1 check)" ||
+grep -qE 'Passed checks: 34, Failed checks: 0' <<<"$out" && ok "34 passed, 0 failed (8 node resources + 4 bastions x2 checks, 4 security groups x1 check, 18 Outscale rules x1 check)" ||
   bad "unexpected result on the real tree: $(grep -E 'Passed checks|Failed checks' <<<"$out")"
 
 echo
@@ -99,10 +102,21 @@ grep -q 'CKV_OA_2' <<<"$out" && grep -q 'FAILED for resource: module.scw.scalewa
 cp "$TMP/scw-security.tf.orig" "$SCW_SECURITY"
 
 echo
-echo "=== the tree is clean again after both mutations ==="
+echo "=== CKV_OA_3: a literal /0 on an Outscale inbound rule is caught ==="
+
+sed -i '0,/ip_range          = each.value/s//ip_range          = "0.0.0.0\/0"/' "$OSC_SECURITY"
+out="$(run)"
+grep -q 'CKV_OA_3' <<<"$out" && grep -q 'FAILED for resource: module.outscale.outscale_security_group_rule.k8s_api_admin' <<<"$out" &&
+  ok "the world-open admin rule is named FAILED under CKV_OA_3" ||
+  bad "the literal /0 inbound rule was not caught: $(grep -E 'Passed checks|Failed checks' <<<"$out")"
+
+cp "$TMP/osc-security.tf.orig" "$OSC_SECURITY"
+
+echo
+echo "=== the tree is clean again after all mutations ==="
 
 out="$(run)"
-grep -qE 'Passed checks: 16, Failed checks: 0' <<<"$out" && ok "back to 16 passed, 0 failed" ||
+grep -qE 'Passed checks: 34, Failed checks: 0' <<<"$out" && ok "back to 34 passed, 0 failed" ||
   bad "restore left the tree dirty: $(grep -E 'Passed checks|Failed checks' <<<"$out")"
 
 echo
@@ -110,7 +124,7 @@ echo "=== missing __init__.py is the documented false-green trap, guarded by its
 
 mv "$CHECKS_DIR/__init__.py" "$TMP/init.py.bak"
 out="$(run)"
-grep -q 'CKV_OA_1\|CKV_OA_2' <<<"$out" &&
+grep -q 'CKV_OA_1\|CKV_OA_2\|CKV_OA_3' <<<"$out" &&
   bad "a directory with no __init__.py still registered a check — the guard comment is now wrong" ||
   ok "with no __init__.py, checkov finds neither check (registers nothing) — exactly why the file must stay"
 mv "$TMP/init.py.bak" "$CHECKS_DIR/__init__.py"

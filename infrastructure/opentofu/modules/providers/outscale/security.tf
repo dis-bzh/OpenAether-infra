@@ -3,6 +3,11 @@
 # inbound_default = drop. Only required ports explicitly opened.
 # ==============================================================================
 
+# The list shared with Scaleway and the Talos ingress rules.
+module "node_ports" {
+  source = "../_shared/node-ports"
+}
+
 resource "outscale_security_group" "this" {
   description         = "OpenAether cluster nodes - least-privilege inbound"
   security_group_name = "${var.cluster_name}-cluster-sg"
@@ -99,7 +104,9 @@ resource "outscale_security_group_rule" "app_lb_https" {
 }
 
 # WireGuard — Cilium inter-node encryption (UDP 51820)
+# Replaced, with restrict_inter_node, by the shared list (51871 is where Cilium's WireGuard listens).
 resource "outscale_security_group_rule" "wireguard" {
+  count             = var.restrict_inter_node ? 0 : 1
   flow              = "Inbound"
   security_group_id = outscale_security_group.this.security_group_id
 
@@ -115,6 +122,7 @@ resource "outscale_security_group_rule" "wireguard" {
 
 # Inter-node — full mesh (etcd, kubelet, Cilium)
 resource "outscale_security_group_rule" "inter_node" {
+  count             = var.restrict_inter_node ? 0 : 1
   flow              = "Inbound"
   security_group_id = outscale_security_group.this.security_group_id
 
@@ -124,4 +132,31 @@ resource "outscale_security_group_rule" "inter_node" {
       security_group_id = outscale_security_group.this.security_group_id
     }
   }
+}
+
+# Inter-node, explicit (restrict_inter_node): one rule per entry of the shared list, members only.
+# ICMP carries -1 for both ends of the port range.
+resource "outscale_security_group_rule" "inter_node_ports" {
+  for_each          = var.restrict_inter_node ? module.node_ports.between_members : {}
+  flow              = "Inbound"
+  security_group_id = outscale_security_group.this.security_group_id
+
+  rules {
+    from_port_range = each.value.ports == null ? -1 : tonumber(split("-", each.value.ports)[0])
+    to_port_range   = each.value.ports == null ? -1 : tonumber(reverse(split("-", each.value.ports))[0])
+    ip_protocol     = lower(each.value.protocol)
+    security_groups_members {
+      security_group_id = outscale_security_group.this.security_group_id
+    }
+  }
+}
+
+# The two rules gained a count: keep their state (no destroy and recreate on a deployed cluster).
+moved {
+  from = outscale_security_group_rule.wireguard
+  to   = outscale_security_group_rule.wireguard[0]
+}
+moved {
+  from = outscale_security_group_rule.inter_node
+  to   = outscale_security_group_rule.inter_node[0]
 }

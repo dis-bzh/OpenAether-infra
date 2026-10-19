@@ -60,7 +60,8 @@ resource "random_bytes" "etcd_encryption_secret" {
 # Uses random_password (returns plain string) rather than random_bytes to avoid
 # double-encoding issues with base64encode().
 resource "random_password" "disk_encryption_secret" {
-  length  = 32
+  # 32 chars of [A-Za-z0-9] is about 190 bits; var.disk_encryption_passphrase_length (new clusters only) lifts it.
+  length  = var.disk_encryption_passphrase_length
   special = false
 }
 
@@ -196,6 +197,142 @@ locals {
 }
 
 # ==============================================================================
+# node_log_forwarding: Talos service logs (machine.logging, json_lines) and, unless
+# kernel = false, the kernel log (KmsgLogConfig) pushed over plain TCP to a receiver
+# the HOST can reach (ANSSI PA-012 R9, batch B22). Unset (default) renders neither,
+# so every node's config stays byte-identical. Machine.logging lives in v1alpha1, so it
+# is merged into the machine patch; the kernel document is appended with the others.
+# ==============================================================================
+
+locals {
+  node_log_machine_patch = var.node_log_forwarding == null ? {} : {
+    logging = {
+      destinations = [{
+        endpoint = var.node_log_forwarding.endpoint
+        format   = "json_lines"
+      }]
+    }
+  }
+
+  node_log_kmsg_documents = var.node_log_forwarding == null || !var.node_log_forwarding.kernel ? [] : [yamlencode({
+    apiVersion = "v1alpha1"
+    kind       = "KmsgLogConfig"
+    name       = "openaether-kernel"
+    url        = var.node_log_forwarding.kernel_endpoint != "" ? var.node_log_forwarding.kernel_endpoint : var.node_log_forwarding.endpoint
+  })]
+
+  # Folded into machine_config_version so an existing cluster actually gets a change.
+  node_log_signature = var.node_log_forwarding == null ? "" : sha256(jsonencode(local.node_log_machine_patch))
+}
+
+# ==============================================================================
+# node_baseline (batch B23): machine.sysctls and kubelet settings, opt-in. Unset, every local is
+# {} and the patches below merge nothing, so the generated configs stay byte-identical. The values
+# follow BP-028 where Cilium/Kubernetes allow; the exceptions are written in docs/hardening.md.
+# ==============================================================================
+
+locals {
+  # Same object type on both sides, so the conditionals below stay type-consistent.
+  nb = var.node_baseline == null ? {
+    sysctls                = false
+    sysctls_extra          = {}
+    panic_on_oops          = false
+    worker_default_seccomp = false
+    pod_pids_limit         = 0
+    kubelet_server_tls     = false
+  } : var.node_baseline
+
+  baseline_sysctls_set = local.nb.sysctls ? merge(
+    {
+      "kernel.sysrq"                              = "0"
+      "kernel.perf_cpu_time_max_percent"          = "1"
+      "kernel.perf_event_max_sample_rate"         = "1"
+      "net.ipv4.conf.all.accept_redirects"        = "0"
+      "net.ipv4.conf.default.accept_redirects"    = "0"
+      "net.ipv4.conf.all.secure_redirects"        = "0"
+      "net.ipv4.conf.default.secure_redirects"    = "0"
+      "net.ipv4.conf.all.send_redirects"          = "0"
+      "net.ipv4.conf.default.send_redirects"      = "0"
+      "net.ipv4.conf.all.accept_source_route"     = "0"
+      "net.ipv4.conf.default.accept_source_route" = "0"
+      "net.ipv6.conf.all.accept_redirects"        = "0"
+      "net.ipv6.conf.default.accept_redirects"    = "0"
+      "net.ipv6.conf.all.accept_source_route"     = "0"
+      "net.ipv6.conf.default.accept_source_route" = "0"
+      "net.ipv4.tcp_syncookies"                   = "1"
+      "net.ipv4.tcp_rfc1337"                      = "1"
+    },
+    local.nb.panic_on_oops ? { "kernel.panic_on_oops" = "1" } : {},
+  ) : {}
+  baseline_sysctls = merge(local.baseline_sysctls_set, local.nb.sysctls_extra)
+
+  # kubelet extraConfig shared by every role; the worker seccomp flag is separate (CPs have it already).
+  baseline_kubelet_extra = merge(
+    local.nb.pod_pids_limit > 0 ? { podPidsLimit = local.nb.pod_pids_limit } : {},
+    local.nb.kubelet_server_tls ? { serverTLSBootstrap = true } : {},
+  )
+  baseline_kubelet_worker = merge(
+    local.nb.worker_default_seccomp ? { defaultRuntimeSeccompProfileEnabled = true } : {},
+    length(local.baseline_kubelet_extra) > 0 ? { extraConfig = local.baseline_kubelet_extra } : {},
+  )
+  baseline_kubelet_cp = length(local.baseline_kubelet_extra) > 0 ? { extraConfig = local.baseline_kubelet_extra } : {}
+
+  baseline_machine_common = length(local.baseline_sysctls) > 0 ? { sysctls = local.baseline_sysctls } : {}
+  baseline_machine_worker = merge(local.baseline_machine_common, length(local.baseline_kubelet_worker) > 0 ? { kubelet = local.baseline_kubelet_worker } : {})
+
+  # Folded into machine_config_version so an existing cluster actually gets a change.
+  node_baseline_signature = length(local.baseline_machine_common) + length(local.baseline_kubelet_cp) + length(local.baseline_machine_worker) == 0 ? "" : sha256(jsonencode([local.baseline_machine_common, local.baseline_kubelet_cp, local.baseline_machine_worker]))
+}
+
+# ==============================================================================
+# node_firewall_mode (batch B24): Talos ingress firewall, per-port allow-list. "off" renders nothing. With
+# "port_allowlist" every flow of the shared port list becomes a NetworkRuleConfig. A NetworkRuleConfig is
+# an ALLOW-LIST FOR ITS PORT even when the default action is accept (measured on a live node, lab 11: the
+# nft ingress chain holds one `drop ... dport N if saddr not in {listed subnets}` per rule). So packets ARE
+# dropped: the listed ports accept only the listed sources, ports that are not listed stay open, and a
+# source that is missing from a list is cut off (a broken cluster). Inspect it with
+# `talosctl -n <node> get nftableschain ingress -o yaml`. Sources are subnets, never node addresses.
+# Appended like the other documents, so they also change machine_config_version.
+# ==============================================================================
+
+locals {
+  fw_groups = {
+    nodes   = var.node_firewall.node_cidrs
+    bastion = var.node_firewall.bastion_cidrs
+    pods    = var.node_firewall.pod_cidrs
+    lb      = var.node_firewall.lb_cidrs
+  }
+
+  node_firewall_documents = var.node_firewall_mode == "off" ? [] : concat(
+    # The default action stays Talos's own (accept): it is what keeps every port that is NOT listed open.
+    [yamlencode({
+      apiVersion = "v1alpha1"
+      kind       = "NetworkDefaultActionConfig"
+      ingress    = "accept"
+    })],
+    # ICMP has no document: Talos requires `portSelector.ports` on EVERY NetworkRuleConfig (a real node refused the ICMP one,
+    # "portSelector.ports is required", lab 11, 2026-10-16) and its own firewall already allows ICMP and ICMPv6 explicitly (rate
+    # limited) whenever the default action blocks. The shared list still carries ICMP for the providers' security groups.
+    [for name in sort(keys(var.node_firewall_ports)) : yamlencode(merge(
+      {
+        apiVersion = "v1alpha1"
+        kind       = "NetworkRuleConfig"
+        name       = "openaether-${name}"
+        portSelector = {
+          protocol = lower(var.node_firewall_ports[name].protocol)
+          ports    = [try(tonumber(var.node_firewall_ports[name].ports), var.node_firewall_ports[name].ports)]
+        }
+      },
+      {
+        ingress = [for c in distinct(flatten([for g in lookup(var.node_firewall_scope, name, ["nodes"]) : local.fw_groups[g]])) : { subnet = c }]
+      },
+      ))
+      if var.node_firewall_ports[name].ports != null
+    ],
+  )
+}
+
+# ==============================================================================
 # node_nameservers: ResolverConfig (+ TimeSyncConfig if encrypted) appended to
 # every config, not config_patches: provider 0.11 rejects `protocol` and
 # `tlsServerName` there (#241). No `hostDNS`: v1alpha1 already sets it.
@@ -204,7 +341,14 @@ locals {
 locals {
   encrypted_dns = anytrue([for n in var.node_nameservers : n.protocol != "Do53"])
 
+  time_sync_body = merge(
+    local.encrypted_dns && var.node_dns_boot_timeout != "" ? { bootTimeout = var.node_dns_boot_timeout } : {},
+    length(var.node_time_servers) > 0 ? { ntp = { servers = var.node_time_servers } } : {},
+  )
+
   appended_documents = concat(
+    local.node_log_kmsg_documents,
+    local.node_firewall_documents,
     length(var.node_nameservers) == 0 ? [] : [yamlencode({
       apiVersion = "v1alpha1"
       kind       = "ResolverConfig"
@@ -213,11 +357,11 @@ locals {
         n.protocol == "Do53" ? {} : { protocol = n.protocol, tlsServerName = n.tls_server_name },
       )]
     })],
-    local.encrypted_dns && var.node_dns_boot_timeout != "" ? [yamlencode({
-      apiVersion  = "v1alpha1"
-      kind        = "TimeSyncConfig"
-      bootTimeout = var.node_dns_boot_timeout
-    })] : [],
+    # One TimeSyncConfig document: bootTimeout (encrypted DNS) and/or ntp.servers (node_time_servers).
+    local.time_sync_body == {} ? [] : [yamlencode(merge({
+      apiVersion = "v1alpha1"
+      kind       = "TimeSyncConfig"
+    }, local.time_sync_body))],
   )
   resolver_tail = join("", [for d in local.appended_documents : "---\n${d}"])
   # Unset: both are "" and a generated config passes through untouched (byte-identical).
@@ -256,9 +400,9 @@ data "talos_machine_configuration" "control_plane" {
             compact([var.k8s_lb_ip]),
             var.control_plane_ips
           )
-          kubelet = {
+          kubelet = merge({
             defaultRuntimeSeccompProfileEnabled = true
-          }
+          }, local.baseline_kubelet_cp)
           features = merge({
             diskQuotaSupport = true
             kubePrism = {
@@ -298,7 +442,9 @@ data "talos_machine_configuration" "control_plane" {
             image = local.installer_image
           }
         },
-        local.apiserver_vip_network_patch
+        local.apiserver_vip_network_patch,
+        local.node_log_machine_patch,
+        local.baseline_machine_common
       )
       cluster = merge(
         {
@@ -428,7 +574,9 @@ data "talos_machine_configuration" "worker" {
             wipe  = true
             image = local.installer_image
           }
-        }
+        },
+        local.node_log_machine_patch,
+        local.baseline_machine_worker
       )
       cluster = {
         network = {
@@ -515,12 +663,12 @@ resource "terraform_data" "talos_port_ready_worker" {
   }
 }
 
-# Carries the version pair and a hash of the appended resolver documents (none
-# when unset, so the input is unchanged there), and exists only to be referenced
+# Carries the version pair and a hash of the appended documents and of the node log
+# forwarding (none when unset, so the input is unchanged there), and exists only to be referenced
 # by the two `replace_triggered_by` below. See the comment on them.
 resource "terraform_data" "machine_config_version" {
   count = local.do_apply ? 1 : 0
-  input = "${var.talos_version}/${var.kubernetes_version}${local.resolver_tail == "" ? "" : "/${sha256(local.resolver_tail)}"}"
+  input = "${var.talos_version}/${var.kubernetes_version}${local.resolver_tail == "" ? "" : "/${sha256(local.resolver_tail)}"}${local.node_log_signature == "" ? "" : "/${local.node_log_signature}"}${local.node_baseline_signature == "" ? "" : "/${local.node_baseline_signature}"}"
 }
 
 resource "talos_machine_configuration_apply" "control_plane" {

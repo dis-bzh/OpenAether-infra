@@ -27,6 +27,8 @@ while [ $# -gt 0 ]; do
     --versioning-configuration) cfg="$2"; shift 2 ;;
     --lifecycle-configuration | --object-lock-configuration) cfg="$2"; shift 2 ;;
     --create-bucket-configuration) shift 2 ;;
+    # aws CLI v2: a blob parameter must be a path to a regular file (`--body /dev/null` is refused; found by lab 12)
+    --body) if [ ! -f "$2" ]; then echo "aws: [ERROR]: An error occurred (ParamValidation): Error parsing parameter '--body': Blob values must be a path to a file." >&2; exit 252; fi; shift 2 ;;
     --object-lock-enabled-for-bucket) lockflag=1; shift ;;
     --key) key="$2"; shift 2 ;;
     --version-id) vid="$2"; shift 2 ;;
@@ -45,7 +47,7 @@ if [ -f "$FAKE_S3/id/$ak" ]; then
   grep -qx invalid "$FAKE_S3/id/$ak" && fail InvalidAccessKeyId "The access key does not exist"
   if [ -d "$B" ]; then
     grep -qx "bucket $bucket" "$FAKE_S3/id/$ak" || fail AccessDenied "Access Denied"
-    if [ "$op" = delete-object-version ] && grep -qx no-version-delete "$FAKE_S3/id/$ak"; then fail AccessDenied "Access Denied"; fi
+    if [ "$op" = delete-object ] && [ -n "$vid" ] && grep -qx no-version-delete "$FAKE_S3/id/$ak"; then fail AccessDenied "Access Denied"; fi
   fi
 fi
 
@@ -72,8 +74,16 @@ case "$op" in
     if [ -s "$B/lock.json" ]; then jq -c '{ObjectLockConfiguration: .}' "$B/lock.json"
     else echo '{"ObjectLockConfiguration":{"ObjectLockEnabled":"Enabled"}}'; fi ;;
   list-objects-v2) echo '{}' ;;
-  delete-object-version) [ -n "$key" ] && [ -n "$vid" ] || fail InvalidArgument "key and version id are required"
-                         fail NoSuchVersion "The specified version does not exist" ;;
+  # The real CLI has no `delete-object-version`: it exits 252 with this message (a probe that used it passed its test here and
+  # failed on Scaleway, 2026-10-16). A version is deleted with `delete-object --version-id`, and a store that allows it answers
+  # success for a version that does not exist; a non-numeric id is refused as InvalidArgument (Scaleway).
+  delete-object-version) echo "aws: [ERROR]: argument operation: Invalid choice, valid choices are: delete-object, delete-objects" >&2; exit 252 ;;
+  delete-object) [ -n "$key" ] && [ -n "$vid" ] || fail InvalidArgument "key and version id are required"
+                 case "$vid" in *[!0-9]*) fail InvalidArgument "Invalid version id specified" ;; esac
+                 # strict-vid: like Scaleway, only a version id the store issued is well formed
+                 if [ -f "$FAKE_S3/strict-vid" ] && [ "$vid" != "$(cat "$FAKE_S3/last-vid" 2>/dev/null)" ]; then fail InvalidArgument "Invalid version id specified"; fi
+                 echo "{\"VersionId\": \"$vid\"}" ;;
+  put-object) echo 1234567890123456 >"$FAKE_S3/last-vid"; echo '{"VersionId": "1234567890123456"}' ;;
   *) echo "fake aws: unsupported operation $op" >&2; exit 2 ;;
 esac
 exit 0

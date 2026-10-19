@@ -46,6 +46,9 @@ Optional app-LB input, default `[]` (no filter, nothing changes): `app_lb_allowe
 filters its public 80/443 to that list plus the cluster's own egress address, as an in-place update of the load balancer (a replacement
 would change the public IP); a module without one (Proxmox, local) does not declare it, and the root only hands it to `scw`, `ovh`, `outscale`.
 
+Optional node-filter input, default `false` (nothing changes): `restrict_inter_node`, declared by `ovh` and `outscale` only. `true` replaces the
+all-protocol rule between cluster members by one rule per entry of `_shared/node-ports`, the list Scaleway already holds; the root hands it to those two only.
+
 ## Rules
 
 1. **No Talos logic** — Provider modules MUST NOT contain `data.talos_machine_configuration`,

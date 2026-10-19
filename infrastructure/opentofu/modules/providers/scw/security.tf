@@ -7,24 +7,16 @@
 # and never open every port (#79).
 # ==============================================================================
 
+# One list for the three layers that filter node traffic (modules/providers/_shared/node-ports).
+module "node_ports" {
+  source = "../_shared/node-ports"
+}
+
 locals {
   # What reaches a node over the private network, from its own subnet.
   # tests/scaleway.tftest.hcl and k8s-lb-mode.tftest.hcl pin the resulting
-  # rules: change them together.
-  node_inbound_ports = {
-    kube-apiserver   = { protocol = "TCP", ports = "6443" }      # kubelets, bastion tunnel, VIP, k8s LB
-    talos-apid       = { protocol = "TCP", ports = "50000" }     # bastion tunnels, apid proxying between nodes
-    talos-trustd     = { protocol = "TCP", ports = "50001" }     # workers fetch certificates from control planes
-    etcd             = { protocol = "TCP", ports = "2379-2381" } # client, peer, metrics (modules/talos)
-    kubelet          = { protocol = "TCP", ports = "10250" }     # apiserver -> kubelet
-    cilium-vxlan     = { protocol = "UDP", ports = "8472" }      # routing-mode tunnel, vxlan
-    cilium-wireguard = { protocol = "UDP", ports = "51871" }     # encryption.type=wireguard
-    cilium-health    = { protocol = "TCP", ports = "4240" }      # enable-health-checking
-    cilium-icmp      = { protocol = "ICMP", ports = null }       # cilium-health probes, path MTU discovery
-    cilium-metrics   = { protocol = "TCP", ports = "9962-9964" } # agent, operator, envoy hostPorts
-    node-exporter    = { protocol = "TCP", ports = "9100" }      # apps layer (hostNetwork), unverified here
-    dhcp             = { protocol = "UDP", ports = "68" }        # private network IPAM leases, unverified
-  }
+  # rules: change them together (the list itself is in _shared/node-ports).
+  node_inbound_ports = module.node_ports.inbound
 
   # The App LB's backends and their default TCP health check. Both LBs forward
   # over the private network to IPAM addresses (lb.tf): their source is this subnet.

@@ -12,7 +12,114 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ---
 
-## [Unreleased]
+## [0.3.0] — 2026-10-19
+
+0.3.0 is the second half of the pair with OpenAether-apps 0.3.0: a wave of **security hardening, all of it opt-in and off by default**, a larger
+default system disk, and the tooling to check and operate what it adds. The infra code moves no Talos or Kubernetes version (Talos 1.14.2 and
+Kubernetes 1.37.1, as in 0.2.0); the version upgrades of 0.3.0 are in the apps repository (table in its CHANGELOG).
+The project follows ANSSI recommendations as far as possible. **Nothing here is a claim of compliance with any ANSSI document**: each entry
+below names the requirements it addresses and the rung it reached (mocked, emulated, local Docker, or real cloud).
+
+### Summary
+
+- **Hardening, each option off by default:** node network filtering (`rules_only`, a per-port allow-list), node kernel/kubelet baseline and time sources,
+  node log forwarding and Hubble drop logs, bastion OS baseline, named bastion operators and an SSH CA, closed bastion Internet egress, bastion log upload,
+  an application load balancer source filter, dedicated key pairs and versioning for the backup stores, OpenPGP verification of the commit Flux applies,
+  named short-lived Kubernetes identities, passphrase hygiene for the state, OpenBao seal-key escrow and `rotate-secret`.
+- **Checks and tools:** `cluster-security`, `cluster-exposure`, `cluster-netcheck`, `rbac-review`, `s3-isolation-check`, `escrow`, `rotate-secret`,
+  `bastion-harden-check`, `bastion-logs-pull`, a patch-policy signal, the end-of-life calendar, SBOM, a committed provider lock.
+- **A 50 GB system disk by default** (see Changed).
+- **Documentation:** a security documentation set with a French twin per page (`security-architecture`, `key-management`, `backup-policy`, `hardening`,
+  `incident-response`, `threat-model`, `capacity`, `upgrade`, and others).
+
+### Changed (behaviour of an existing setup)
+
+- **Scaleway: the system volume of every node is 50 GB by default (`scw_root_volume_size_gb`, new variable; the 0.2.x default was 20 GB).**
+  At 20 GB the full application stack left about 15.6 GB usable; lab 12 saw DiskPressure and 25 Zitadel pods evicted, lab 15c saw it after hours of
+  in-place hops. A validation refuses less than 40 with `deploy_flux = true` (20 stays valid without Flux). An existing cluster gets an **in-place resize
+  of its `sbs_volumes` at the next apply (no node replaced)**; Talos grows EPHEMERAL at the node's next reboot, so reboot the workers one at a time,
+  drained, afterwards. Pin `scw_root_volume_size_gb = 20` in the tfvars to keep the old size (a full stack will not fit). Read the plan first:
+  lab 15c moving a 0.2.1 cluster to this branch with the same tfvars planned the six root volumes 20 -> 50 GB in place and a Talos machine config change.
+- **Outscale: `outscale_root_volume_size_gb` (new, default `null`)** sets the BSU root of **new** nodes only (the provider does not resize a running VM's
+  volume; `ignore_changes` keeps a running node from being replaced). `null` keeps the OMI's size (about 11-12 GiB), which does not hold the platform:
+  set 50, a `check` warns when `deploy_flux` is on and it is null. To grow a running cluster, replace the workers one at a time with `task cluster-roll`.
+  **Raise the root IOPS too** (gp2 50 GB = 150 IOPS saturated the node in lab 15b, infra #376).
+- **OVH:** the flavour's disk (`b3-8`, `c3-8`: 50 GB) is read from the account and a `check` warns below 40 GB. **Proxmox:** `root_disk_gb` default 50.
+- **Scaleway: the application load balancer ACLs are standalone `scaleway_lb_acl` resources** (see Fixed). An existing cluster with
+  `app_lb_allowed_cidrs` set sees them created at the next apply.
+- **The example tfvars carry `deploy_flux = true` and `deploy_app_lb = true`** (Proxmox: Flux only). A file copied from 0.2.x examples without them
+  built an infrastructure-only cluster; `check-doc-inputs.sh` now fails an example without them.
+- **`bastion_internet_egress = closed` together with `bastion_baseline` is refused at plan time** unless `audit_logging = false` and no collector is wanted (the
+  closed bastion cannot reach the package mirrors that auditd needs).
+- **Cluster-up and its checkpoints:** the human checkpoints are unchanged. `APPROVE=auto` is the documented unattended path (it applies the saved plan
+  files, never `-auto-approve`); without it the journey stops at three checkpoints and each says nothing was applied (`docs/first-cluster.md`, EN and FR).
+
+**BREAKING:** none for a tfvars that sets nothing new, except the 50 GB disk default above on Scaleway (a plan that resizes volumes in place) and the
+new `check`/validation on the disk with `deploy_flux`. Every hardening option defaults to the 0.2.1 behaviour; the default bastion render is byte for byte unchanged.
+
+### Upgrade notes (from 0.2.1)
+
+1. Read the plan: `task cluster-up` stops at it. Expect the volume resize on Scaleway; nothing else changes with unchanged tfvars.
+2. After the apply, reboot the Scaleway workers one at a time, **drained** (`task cluster-roll` does it; a hand-typed `talosctl reboot` does not drain, and a worker
+   that carries a CNPG instance must never be rebooted undrained, infra #358).
+3. The apps side of the pair (0.3.0) moves Longhorn, CNPG, cert-manager, Kyverno, Loki and Grafana across several minors. **Do the hops in the order and
+   with the pre-steps of `docs/upgrade.md` and of the apps `docs/patching.md`** (Longhorn 1.9 -> 1.10 -> 1.11 -> 1.12 with the CRD conversion pre-step; Loki chart
+   procedure; Kyverno per-namespace Enforce spelling; CNPG operator hops with the switchover method). The `git_ref` default and the twelve `envs/*.tfvars.example` pin OpenAether-apps `refs/tags/0.3.0`, released first.
+4. Turn on hardening options one at a time (the documents `docs/hardening.md` and `docs/security-architecture.md` list them with their rollback).
+5. Provision the owner-held inputs the options need (operator public keys, SSH CA public key, OpenBao recovery PGP public keys, dedicated S3 key pairs);
+   the full list of what an unattended run still needs from a person is in `docs/first-cluster.md`.
+
+### Known limitations
+
+None of these is hidden by a green check; each has an issue.
+
+- **OVH S3 has no bucket policies through the S3 API** (`PutBucketPolicy` answers NotImplemented); OVH runs on the operator's keys and `s3-isolation-check` exits 2
+  there. A dedicated pair needs the OVH API. Documented in `docs/backup-policy.md` (infra #379).
+- **Outscale does not pass the stability criteria with the full stack (lab 16, infra #376).** On 3 CP + 3 W of 3 vCPU / 6 GB (the largest shape the 20 vCPU quota allows, 50 GB gp2 roots) a fresh
+  install converged and passed the first hour; then a backup and restore, and later one drained worker reboot, started an IO and memory-pressure cascade (nodes NotReady in turn, pressure above 97%) that did
+  not settle in an hour. A live change to `io1 3000` did not stop it. Probable cause (not isolated): the 6 GB nodes and the shared root disk (Longhorn, etcd and images on one volume); the examples now set the root size, but a shape that
+  passes was NOT run on Outscale: it needs a larger quota (3+3 of 4 vCPU, `docs/capacity.md`). OOS also refused the EIM keys of a dedicated pair (infra #377).
+- **The checkpoints of `cluster-up` stay in 0.3.0 (infra #381).** Without a terminal it stops at the phase-1 checkpoint on every run; `task bootstrap-phase2` is the way on (the messages name it now), and
+  `APPROVE=auto` is the one-command path. Removing them is a later decision. Time to a working platform was 16 to 29 minutes in lab 16 (budget and phases: infra #374, 0.5.0).
+- **The CPU gate of `cluster-roll` is all that is checked about losing a worker (infra #378).** Replicas with a required spread (OpenBao) stay short while a worker is out; the behaviour of losing nodes under load is 0.4.0.
+- **CNPG `barmanObjectStore` is removed in CNPG 1.31** and **Kyverno `kyverno.io/v1` policies are removed in Kyverno 1.20** (apps #114, #113); 0.3.0 stays on CNPG 1.30.x and Kyverno 1.19.x.
+- **The history is unsigned for now** (infra #332, #333): Flux commit verification (`flux_git_verify`) exists but cannot be switched on until a signing key is
+  registered, and the GitHub rulesets do not require signatures or reviews yet. The maintainer will create a dedicated signing key later.
+- **In-place hops not rehearsed:** Loki chart 6.25 -> 18 and Grafana 11 -> 13 across the major steps, Alloy, the Gateway API CRDs, Flux on the children, Cilium and
+  Talos patch hops (apps #121). A fresh install lands on the new versions and was run (lab 12 onward).
+- **First install on Scaleway with the app load balancer allow-list needs two applies** (the ACL plan is inconsistent until the NAT address exists, infra #361).
+- **MinIO (local/dev profile) is archived upstream;** its waiver runs to 2026-12-31 (apps #104, the end-of-life calendar of the apps repository).
+- **Kubernetes 1.37 is outside the range the upstream projects test** (cert-manager, CNPG, Flux and others, apps #105, #120). The labs ran on it.
+- **OVH:** instances can go to ERROR at creation or stay ACTIVE but unreachable (infra #371, #362), the app LB pools have no health monitor (infra #375), and the OVH
+  column of the first labs never ran (infra #366).
+- **Not exercised since lab 11:** `rotate-secret --apply`, the Git break-glass, PKI revocation drill, FIDO hardware keys (infra #370); COMPLIANCE object lock is an owner decision (infra #369).
+- **Day-1 steps stay manual:** `seed-openbao.sh`, the PKI signing with an offline root (human by design) and the Zitadel MFA enrolment before the first Grafana login.
+
+### Validated on (all offline suites green on the head commit; the cloud runs are on earlier heads of this branch, the fixes found were re-run by the suites)
+
+Real clouds, with Talos 1.14.2 / Kubernetes 1.37.1, each once, by hand or by script, **never repeated for stability**:
+
+| Lab | Date | What |
+|---|---|---|
+| 11 | 2026-10-16 | Wave 2 options. Scaleway full DAG, Outscale reduced; OVH did not get past the first apply (platform no-egress, Octavia ERROR). 5 defects fixed. |
+| 12 | 2026-10-17 | Fresh install at the final versions. Scaleway full DAG converged (cluster-verify 16/16, cluster-security 34/36 + 2 n/a, strict plan clean); Outscale reduced. |
+| 13 | 2026-10-17 | Scaleway fresh install on the **defaults** (50 GB), bastion 37/37, isolation 10/10, RWX hang reproduced then fixed. |
+| 14 | 2026-10-17 | Scaleway 3 CP + 3 W, OVH reduced: Longhorn backup/restore, CNPG restore into a new cluster, drained reboot 66 s, checksums intact. |
+| 15a | 2026-10-17 | OVH complete: cluster-up 817 s, verify 16/16, security 33/36, bastion with closed egress, forward and reverse node filtering swaps, control planes replaced for real. |
+| 15b | 2026-10-18 | Outscale, two full clusters (3 CP + 3 W): cluster-up 805/817 s, verify 16/16, security 33/36, bastion 38/38. |
+| 15c | 2026-10-18 | Scaleway lifecycle from infra 0.2.1 + apps 0.2.0: 40 upgrade hops and drills over about 6.5 h; 20896 HTTP probe samples, 135 failed (0.65 %), one 73 s episode (a drain evicting the single Gateway pod). |
+| 16 | 2026-10-18 | Final validation, from the shipped example files, unattended apart from what is named. Scaleway (3 CP + 2 W): two `cluster-up` commands (the known first-install ACL error), 54/54 Flux objects Ready 23.5 min after the start, verify 16/16, security 34/36, bastion 37/37, isolation 12/12, Longhorn backup and restore, CNPG restore into a new cluster, Kyverno enforce, TLS 1.3 with a hybrid group, drained and control-plane reboots. OVH (3 CP + 2 W, checkpointed path, 21 min of which about 13 are checkpoints): the same checks passed except the dedicated pair (not possible there). **Outscale (3 CP + 3 W of 3 vCPU / 6 GB) FAILED stability** after the first hour (see Known limitations); control-plane reboot, alert drill and final acceptance were not run there. On Scaleway and OVH `cluster-roll` refused the 2-worker shapes (172% of CPU requested): the examples now ship 3 workers, **not re-run**. |
+
+Every lab was torn down and its provider account checked clean (`purge-orphans`, `verify-provider-clean`).
+
+**NOT run (lab 16 added):** the break-glass and escrow drills, `rotate-secret`, Loki chunk deletion, bastion replacement, node add, and the webhook-receiver leg of the alert drill (alertmanager egress is default-deny); a roll that passes its capacity gate was not run on any cloud. Also not run: an etcd snapshot restore on a second cluster; a real node replacement through `cluster-roll` on Scaleway (printed only); the Istio hops; Alloy, Grafana,
+Gateway API CRD hops; the Flux (children) and Cilium/Talos patch hops; Zitadel -> Grafana interactive login (MFA, no browser); OpenBao raft snapshot restore; dedicated key
+pairs on OVH and Outscale; Loki retention expiry; FIDO keys; Proxmox; the signed-history path (no signing key yet); the cloud workflow of the CI. Nothing ran for days;
+the longest run is the 6.5 h of lab 15c.
+
+---
+
+### Detail of the 0.3.0 entries
 
 ANSSI hardening work, not released yet. **Nothing here is a claim of compliance with any ANSSI document**: each entry names the requirements it addresses and the rung it reached.
 
@@ -50,6 +157,49 @@ ANSSI hardening work, not released yet. **Nothing here is a claim of compliance 
 
 ### Fixed
 
+- **The shipped Scaleway and OVH examples can lose a worker and be rolled (#378, lab 16).** With the full stack, two 4 vCPU workers carried 172% of one worker's CPU requests (Scaleway 82% + 90%, OVH
+  81% + 91%) and `cluster-roll` refuses above (workers - 1) x 100%. The management and failover examples now ship 3 workers (6 instances on Scaleway, 7 on OVH, 26 vCPU on both;
+  quota flags and `first-cluster.md` updated, EN and FR). `docs/capacity.md` shows the arithmetic: about 90% of the limit at 3 workers, an estimate from two measured points, not run again. Outscale cannot
+  reach a rollable shape inside the 20 vCPU quota (239% on 3 x 3 vCPU against 200%): its examples say so and name the smallest shape that passes on paper (3+3 of 4 vCPU, 26 vCPU), which was not run there.
+  `check-doc-inputs.sh` fails on a 2-worker example.
+- **The Outscale examples set `outscale_root_volume_size_gb = 50` (#376, #364).** It was commented out although `deploy_flux = true` needs it. The root volume type is fixed to gp2 in the module (no type or IOPS
+  variable) and an `io1 3000` change by hand did not stop lab 16's IO and memory cascade on 6 GB nodes, so nothing here claims the cascade is cured: the examples and `capacity.md` say what was and was not shown.
+
+- **The no-terminal stop of `cluster-up` names the command that goes on (#381, lab 16 on OVH).** Without a terminal and without `APPROVE=auto`, `cluster-up` stops at its phase-1 checkpoint
+  on every re-run, even on a plan that says "No changes"; only `task bootstrap-phase2` reaches phase 2, and no message said so (three redundant stops, about 13 of 21 minutes). The stop message now
+  names `task bootstrap-phase2` after the apply (and says a "No changes" plan needs no apply), and phase 2's own stop names `task kubeconfig` and `task cluster-verify`. The checkpoints themselves are
+  kept for 0.3.0 on purpose (`APPROVE=auto` stays the unattended path); `docs/first-cluster.md` already described the sequence. `test-cluster-up.sh` fails without the messages.
+
+- **`test-kubeconfig-new.sh` runs on OpenSSL 3.0 (found by CI on the 0.3.0 pull request).** The stub signer used `openssl x509 -not_after` (OpenSSL 3.4 and later) and the test read the
+  subject in the 3.4 spelling; the CI image has 3.0. The stub signs with `openssl ca -enddate` and the subject is normalised. Run on 3.0.13 (a container) and 3.5.7.
+
+- **The node roll docs warn about an undrained reboot of a worker with a CNPG instance (infra #358).** `docs/upgrade.md` (EN, FR): drain first; the roll commands do, a hand-typed
+  `talosctl reboot` does not; the recovery after one. No tooling guard was added (the roll tooling does not run that reboot).
+
+- **`s3-isolation-check.sh` asserts HeadBucket on each dedicated pair's own bucket (infra #356, #359).** A Scaleway pair without `ObjectStorageBucketsRead` and `s3:ListBucket`
+  listed and wrote, passed the check, and then got a 403 on the first call of every barman-cloud WAL archive. The check now exits 1 naming HeadBucket and the IAM set to
+  add; `docs/backup-policy.md` (EN, FR) states the rule and that OVH and Outscale are not verified. Tests in `test-s3-isolation.sh`.
+
+- **`bastion-logs-pull.sh` shows tofu's error when it cannot read the backend (infra #352).** With `OA_LOGS_UPLOAD=1` and no saved copy, a tofu that could not
+  initialise its backend printed "apply the infra first", which is wrong when the infra is applied. It now prints tofu's first lines and names the way out
+  (the shell that applied the infra, `OA_TOFU_DIR`, or `OA_BACKUP_TARGETS_JSON`). Test case in `test-bastion-logs-pull.sh`.
+
+- **`bastion-harden-check.sh` says which check it skipped (infra #372).** Without a control plane address (4th argument, `OA_CP_IP`, or the tofu output, which
+  needs the shell that applied the infra) check 5 is skipped as before, but the summary now lists it (`SKIPPED: 5 (...)`), and `BASTION_REQUIRE_ALL=1`
+  turns it into a failure for CI or an unattended entity. Test cases added to `test-bastion-harden-check.sh`.
+
+- **`task check-alerts` no longer calls `kube_job_failed` and the volume stats blind (infra #357).** They have no series while the platform is healthy
+  (a failed Job, a CSI-mounted volume), so they are printed apart as "healthy state" and never fail `--strict`; a metric nobody produces is still
+  reported. Test `scripts/dev/test-check-alert-metrics.py` (in `task test-scripts`).
+
+- **The example tfvars set the platform switches, and the unattended path is written down (lab 15c).** The management and workload examples
+  of the four providers now carry `deploy_flux = true` and `deploy_app_lb = true` (Proxmox: Flux only): an entity that copied the file got
+  an infrastructure-only cluster. `check-doc-inputs.sh` fails an example without them. `docs/first-cluster.md` (EN, FR) names
+  `APPROVE=auto` as the one-command unattended path (it applies the saved plan files, never `-auto-approve`), the three checkpoints
+  without it, and that a harness that refuses a blind apply needs the owner's permission for that command. The approval gates themselves are
+  unchanged (skipping the question for a plan that changes nothing was considered and left to the owner). #361 keeps its hint: the
+  two-phase ACL needs a real Scaleway apply to prove.
+
 Found by the labs above, each with the rung it reached after the fix (mocked tests plus the real run that found it).
 
 - **Scaleway: the app LB ACLs are standalone `scaleway_lb_acl` resources.** With the list in the frontend's inline `acl` block a real apply
@@ -70,8 +220,77 @@ Found by the labs above, each with the rung it reached after the fix (mocked tes
   and cloud-init ended in error. Closed mode now purges `nc`, `curl` and `tcpdump` offline. The documentation said first boot was unaffected;
   it is corrected (EN and FR).
 - **`explain-failure.sh`** explains a replaced bastion that ends as a cluster health check failure, like the refused-port shape.
+- **Bastion with the baseline: `cloud-init status` says `done`, not `degraded` (lab 11, Scaleway and Outscale).** The baseline render writes `sudo: null` for the shared and named accounts (cloud-init 22.2 deprecates `false`; `null` also means "no sudoers entry"). The render without the baseline keeps `sudo: false`, byte for byte, because a changed user data replaces the bastion on OVH and Outscale (the released hash is pinned by `test-cluster-checks.sh`). Rung: render tests; `cloud-init schema` on a real image not run here.
+- **A bastion without `audit_logging` can be read and pulled (lab 11, Scaleway and Outscale; closed egress forces `audit_logging = false`).** The persistent journald drop-in, `/var/log/journal` and the `adm` / `systemd-journal` membership of the shared account need no package and moved out of the `audit_logging` conditional of the baseline cloud-init (the render without the baseline, and the audit-on render apart from comments, are unchanged). `bastion-logs-pull.sh` checks what the account can read first (a denied `journalctl` used to read as "nothing new"), refuses with the reason when it is outside both groups, and skips the audit tarball with a message when `/var/log/audit` is absent (exit 0; it used to end `tar: Cannot open`, rc 2, nothing written). `bastion-harden-check.sh` with `BASTION_AUDIT=0` now skips only auditd and still asserts the journal, groups and login line; `BASTION_AUDIT=0` is documented in `docs/admin-access.md`. Rung: render tests and stub harnesses; a bastion built before this keeps the old template until it is replaced.
+- **`task cluster-verify` can be green on a `deploy_flux = true` cluster (lab 11, Scaleway and Outscale).** The floor checks followed the infra-only default whatever the config said, so a seeded full-DAG cluster always ended `14 passed, 2 failed` ("flux-system exists", "an application load balancer exists and is billed"), with a message that called the first red "expected until the Day-1 seeding" (it is not). `infra-verify.sh` now reads `deploy_flux`, `deploy_app_lb` and `flux_namespace` (`TF_VAR_*`, else the env file; anything but `true` is false): asked for, Flux must exist with every controller Available and the balancer must be in the state; not asked for, Flux or a balancer still FAILS, with a message that names the variable. `.receipts/` is git-ignored, so the red run's receipt never dirtied the worktree; a green run now records rc 0. Rung: stub harness (`test-cluster-checks.sh`), not run on a cluster.
+- **`bastion-fingerprints.sh` no longer says "apply the infra first" when it simply cannot read the backend (lab 11).** tofu's stderr was thrown away (`2>/dev/null || echo null`). It now keeps it: a state that cannot be read prints tofu's own last lines and the way out (the backend credentials and `TF_DATA_DIR` of the cluster exported, or `-f keys.json`); only a missing or null output says to apply the infra. Rung: stub tofu in `test-bastion-fingerprints.sh`. `bastion-logs-pull.sh` has the same pattern for `backup_targets` (unchanged here).
+- **`etcd-snapshot-cron.sh`: a run that loses the lock no longer closes the winner's tunnels (lab 11).** The EXIT trap that closes the tunnels and prints "complete" was armed before the `flock`, so a second run (a cron run during a manual one) ended by closing the first run's tunnels and announcing a snapshot it never took. The cleanup trap is armed after the lock is acquired; before it, a trap only reports an early failure. New `test-etcd-snapshot-cron.sh` runs two real processes against one lock (stub `task`, tunnels and tools). Rung: stub harness.
+- **Closed bastion egress also purges `wget` (lab 11).** The Ubuntu image ships it and the offline purge list (`curl`, `netcat`, `tcpdump`) left a downloader on a bastion whose point is that nothing leaves it. The closed render purges it too, and `bastion-harden-check.sh` (closed) now fails when `wget` is still there. Other tools on the image that can open a connection (`python3` and bash's `/dev/tcp`, which the check itself uses, `openssl`, the `ssh`/`scp`/`sftp` client) are not purged: they are needed by cloud-init, the checks or access, and a firewall in the VM is what closes the egress. Rung: render and stub tests; the purge itself was not run on a real image.
+- **`cluster-security` 4.7: `OA_ESCROW_ANNOTATION_CHECK=1` alone is skipped on purpose, and now says so (lab 11).** The seal-key escrow record is required on `prod` only (the existing test "a dev cluster is skipped" is that intent), so the opt-in needs `ENVIRONMENT=prod` (`OA_ENVIRONMENT`) too. The skip used to read "strict only with OA_ENVIRONMENT=prod", which looked like an ignored opt-in; it now names both switches, the environment it saw (`unset` included) and the command. The header of the script and the task description say "both". Behaviour unchanged. Rung: stub harness.
+- **`cluster-up` explains a failure of its second phase too (lab 11, OVH).** `bootstrap-phase2` failed with "Error bootstrapping node ... time is not in sync yet" and printed no hint, although `explain-failure.sh` knows the OVH router-without-egress shape: only `infra-apply` and `infra-plan` were wired to it. Phase 2 now drops the transcript first, tees its plan and apply into `.tofu-run.log` under `pipefail`, and defers to the explainer on failure; `test-explain-failure.sh` pins the wiring (it also checks that every deferring task tees). `grow-nodes.sh` runs tofu too but keeps its own tail-on-failure log, and `converge-versions.sh` runs none. Rung: Taskfile wiring tests and the real go-task harness (`test-cluster-up.sh`); not run on a cluster.
 
 ### Security
+
+- **Review fixes of the first and second ANSSI waves (infra review of B10-B30). Static / mocked, not run on a cluster.**
+  - `check-commit-signatures.sh` skips merge commits: on a PR run HEAD is GitHub's unsigned synthetic merge commit, so the documented `--strict`
+    switch-on would have failed every PR. Its test now has a merge-commit case and expired-key/signature cases (status X/Y, throwaway key signed in the past).
+  - `docs/signed-commits.md` (+ `.fr.md`) and the `flux_git_verify` comment no longer say Flux checks OpenPGP only: the vendored Flux also takes
+    SSH keys (`.sshpub`). OpenPGP is this repository's choice, and SSH keys are NOT wired (the validation and the Secret take armored OpenPGP keys).
+  - `kubeconfig-new.sh` no longer needs GNU `realpath -m`, `base64 -w0` or `date -d` (macOS operators); its test now checks that the temporary directory
+    holding the private key is removed. The tests still run on Linux only, so the macOS path is untested.
+  - `rotate-secret.sh --restart` waits only for the ExternalSecrets that read the rotated path, not every ExternalSecret of the cluster.
+  - `task render-manifests` renders the dropped-flow Cilium variant too and `task render-check` runs the effective-config check on it (a Cilium bump no
+    longer leaves the lock with the old variant hash).
+  - The pid and lock files of `etcd-snapshot-cron.sh` and `local-admin-portforward.sh` live in `~/.cache/openaether` only (cron has no runtime dir, an
+    SSH session has one: two lock files let a cron run and a manual run overlap).
+  - `escrow-openbao.sh attest` refuses `--holders` above the receipt's recipients; the https-only Keystone guard is now tested in all five scripts.
+  - Wording: `node_log_forwarding` is global (one apply re-applies every node; there is no "one node first"); the 192-bit passphrase threshold is 33, not 40;
+    the Proxmox and Scaleway examples no longer offer `restrict_inter_node`, the Outscale one gained the `flux_git_verify` block.
+  - It does NOT: add SSH signature support, a per-node switch for the log forwarding or the node baseline, or run anything on a cluster.
+
+- **Critic follow-ups and the ops scripts that hold provider admin keys (B28, infra half). Static / mocked, not run on a cloud.**
+  - `CKV_OA_3` (new Checkov custom check): an Outscale inbound `outscale_security_group_rule` with a literal `/0` range fails the hard gate.
+    CKV_OA_2 cannot cover Outscale (no default-policy attribute), so such a rule used to pass unseen. Tested by mutating the real tree
+    (`test-checkov-custom-checks.sh`). It reads literals only: a range coming from `admin_ip` is not judged, and Proxmox is still uncovered.
+  - The five OpenStack-facing ops scripts (`purge-orphans/ovh.py`, `verify-provider-clean.py`, `delete-openstack-resource.py`, `ensure-capo-fip.py`,
+    `preflight-quotas.py`) refuse an `OS_AUTH_URL` that is not `https://` (exit 2, nothing sent): the Keystone request carries the account password.
+  - `local-admin-portforward.sh` and `etcd-snapshot-cron.sh` keep their pid and lock files under `~/.cache/openaether` (mode 0700; first written with `$XDG_RUNTIME_DIR` as an option, then fixed, see the review entry below)
+    instead of a fixed name in `/tmp`, where another local user could plant a symlink (the lock redirection) or a pid list (`--stop` kills what it lists).
+  - `disk_encryption_passphrase_length` (default 32, the released value, about 190 bits): 33 or more reaches the 192 bits the critic measured against
+    PG-083's symmetric key size. For a NEW cluster only; on a live one it would replace the LUKS passphrase. Does not re-key an existing cluster.
+  - Corrected a documentation defect: `docs/admin-access.md` told operators to forward `-L 8443:<gateway>:443`, which the bastion's `PermitOpen` refuses.
+    The page now says so instead of promising a path that was never run. It does not open 443.
+
+- **`flux_git_verify`: opt-in OpenPGP verification of the commit Flux applies, and a signature report in CI (default off; ANSSI SSDLC-CICD-AIP-03, SSDLC-CONT-REC06, B27).**
+  `flux_git_verify = {enabled, public_keys}` makes the bootstrap manifest carry the Secret `git-signers` before the GitRepository and
+  `spec.verify {mode: HEAD, secretRef: git-signers}` on it; off, the render is byte-identical (asserted). Validation refuses an empty
+  key list, a non-armored or private key and a duplicate. `check-commit-signatures.sh` reports unsigned commits of a PR as a warning
+  (`--strict` fails); CODEOWNERS names `.github/` and the bootstrap manifests; `docs/signed-commits.md` (+ `.fr.md`) holds the standard
+  and the break-glass. Rung: mocked/static (`tofu test`, throwaway-key script test), not run on a cluster. It does NOT change any
+  GitHub ruleset, check fingerprints, verify tags, or make the apps side carry the block (its component `git-verify` must be used too).
+
+- **Named, short-lived Kubernetes identities through the CSR API, and an RBAC review that knows them (addresses ANSSI PA-022 R38/R40, PG-078 R15, NSA-12 AUTH-02/AUTH-03; audit B26, infra half: F04, F13, F20).** Rung: **mocked/static (`test-kubeconfig-new.sh` with a stub kubectl and the real openssl, `test-rbac-review.sh`, `test-security-tests-checks.sh`), not run on a cluster.**
+  - `scripts/ops/kubeconfig-new.sh` and `task kubeconfig-new` (new, additive: nothing existing changes): files a CertificateSigningRequest (`kubernetes.io/kube-apiserver-client`, `expirationSeconds`, default 8 h, 10 min to 24 h accepted) for `CN=<name>`, `O=oa:readers` (default) or `O=oa:admins` (`ACCESS=admin`), using the `system:masters` kubeconfig only to file and approve it; key generated locally; request deleted afterwards; 0600 file outside the repository (a path inside it is refused); a signer that grants more than asked is refused. The groups mean nothing without the apps `platform-rbac` brick.
+  - `rbac-review` and `cluster-security` 3.7 allow exactly the brick's two bindings (`oa-admins`: Group `oa:admins` to `cluster-admin`; `oa-readers`: Group `oa:readers` to `view`, cluster scope) and nothing else under those names (an extra subject, another group, another role or a RoleBinding is still flagged).
+  - It does NOT: add OIDC or MFA (`apiserver_oidc` is not implemented: it needs a stable external issuer and can lock out the control plane, see the issue list of the batch), ship the apiserver audit log, revoke a single holder of a group before expiry (delete the group binding, or bind the user by name), remove or shorten the `system:masters` kubeconfig, or make anything compliant.
+
+- **Node network filtering, explicit, a per-port allow-list, both off by default (addresses ANSSI PA-022 R16/R17/R19/R20; audit B24 OSN/F13 and ADM/F07).** Rung: **mocked/static (`tofu test`, `test-flow-matrix.sh`), not run on a cluster**.
+  - One port list: the Scaleway `node_inbound_ports` map moved unchanged to `modules/providers/_shared/node-ports`, a locals-only module that Scaleway, OVH, Outscale and the Talos module all read, so the layers cannot drift. `tests/node-firewall.tftest.hcl` pins the four against it.
+  - `restrict_inter_node` (new, default `false`, OVH and Outscale): `true` replaces the all-protocol `inter_node` rule and the `wireguard` rule (which named 51820 while Cilium listens on 51871) by one rule per entry of the list, members only, no DHCP. The two rules gained a `count` with `moved` blocks, so a default plan shows no change. The swap is not atomic.
+  - `node_firewall_mode` (new, default `"off"`, byte-identical configs) with `node_firewall` (source CIDRs; `node_cidrs` required): `"port_allowlist"` (first named `rules_only`, renamed before any release because it promised a rule that drops nothing) appends a `NetworkDefaultActionConfig` with `ingress: accept` and one `NetworkRuleConfig` per flow, sources by subnet (nodes, bastion, pods, LB range), and changes `machine_config_version` so existing nodes receive the documents (config apply, no reboot expected).
+  - It is NOT inert (lab 11, live nftables on Outscale nodes): a `NetworkRuleConfig` is an allow-list for its port even beside a default action of `accept`, so each listed port drops every source outside its listed subnets, ports that are not listed stay open, and a source missing from a list breaks the cluster. The sources per rule are in `docs/network.md` section 6; `etcd` is split so that the metrics port 2381 also admits the pod range (vmagent scrapes it from a pod). A rule with no source at all is refused at plan.
+  - It does NOT: have a blocking default action (no such mode exists), filter Scaleway's private network, narrow etcd/kubelet to control planes, cover Talos services while Cilium is down (no Cilium host firewall), filter egress, or change `k8s_lb_mode`. Where a load balancer's health checks come from is unconfirmed per provider (listed in `docs/network.md`). `docs/network.md` section 5 and 6 and `LAB-CHECKLIST` B24 say what a cluster must show first.
+
+- **Node logs and network-policy drops can leave the node, opt-in and off by default (addresses ANSSI PA-012 R2/R9, HYG-42 M36, BP-028 R71; audit B22, infra half).** Rung: **mocked/static, not run on a cluster.**
+  - `node_log_forwarding` (new, default `null`): Talos service logs (`machine.logging`, `json_lines`) and, unless `kernel = false`, the kernel log (a `KmsgLogConfig`) sent over TCP to `endpoint`. TCP only (a UDP endpoint is refused at plan); the transport is **plaintext**, so private network only, and the receiver must be reachable from the host network (a ClusterIP is not, under `socketLB.hostNamespaceOnly`): a `hostNetwork` receiver on every node, or a fixed LB address. A hash of the settings is in `machine_config_version`, so an existing cluster actually receives them; unset, the machine configs and that trigger are byte-identical (tested).
+  - `cilium_hubble_drop_log` (new, default `false`) boots Cilium from the new committed `cilium-hubble-drops.yaml`: the Hubble server only (no relay, no UI, no TLS material, **no TCP listener**), exporting only DROPPED/ERROR flows, field-masked (no payload), to the agent's stdout, where the existing pod-log collector reads it. `render-bootstrap-manifests.sh --hubble-drops` renders it, `--check` and `upstream-artifacts.lock` cover it, `check-cilium-effective-config.py` refuses a widened export. `cilium.yaml` is unchanged byte for byte.
+  - It does NOT: ship anything by itself (the receiver and the Loki side live in OpenAether-apps), change the kube-apiserver audit policy (Talos's default Metadata policy stays; the file is collected by the apps opt-in collector), add a second sink outside the cluster, or touch the bastion. The `hubble-peer` Service and a declared (not listening) `hostPort` 4244 come with the chart.
+
+- **Node kernel/kubelet baseline and node time sources, opt-in and off by default (addresses ANSSI BP-028 R9/R12/R13, PA-012 R5; audit B23, infra half: F18, F03, F19, F10, LOG-09, TLS-11, F14).** Rung: **mocked/static (`tofu test`, 63 runs in the talos module when written, 71 after B24/B28), not run on a cluster.**
+  - `node_baseline` (new, default `null`): `sysctls` writes `machine.sysctls` on every node (`kernel.sysrq=0`, perf sampling limits, no ICMP/secure redirects or source routing in IPv4 and IPv6, `tcp_syncookies=1`, `tcp_rfc1337=1`), `sysctls_extra` adds or overrides, `panic_on_oops` is its own switch (a panic with a zero panic timeout hangs the node); `worker_default_seccomp` gives the workers the RuntimeDefault seccomp default the control planes already had; `pod_pids_limit` sets the kubelet `podPidsLimit`; `kubelet_server_tls` sets `serverTLSBootstrap`. A hash is in `machine_config_version`; unset (or all-default), configs and that trigger are byte-identical (tested).
+  - `node_time_servers` (new, default `[]`): several NTP sources as `ntp.servers`, merged with the encrypted-DNS `bootTimeout` into the one `TimeSyncConfig` document. The bastion half already exists (`bastion_baseline.time_servers`).
+  - `docs/hardening.md` (EN/FR): the sysctl deviation table (`ip_forward`, `rp_filter`, `pid_max`, `modules_disabled`, IPv6 kept) and a decision note on SELinux, sandboxed runtimes and `hostUsers`.
+  - It does NOT: enable SELinux enforcing or mitigation kernel arguments (decision note; schematic change, not run), ship a kubelet-serving CSR approver (so `kubelet_server_tls` must stay off until the apps side has one; the `insecureSkipVerify` scrapes, Postgres `sslmode`, Istio TLS floor, LimitRange/ResourceQuota and the clock-skew alert are apps work), add NTS (Talos has none), or set `rp_filter`/`ip_forward`/`pid_max`.
 
 - **Bastion OS baseline, opt-in: sysctl, auditd, journald, sshd directives, mounts, root-owned `authorized_keys.d`, in-VM nftables logging, key-type validation (ANSSI BP-028 R9/R11/R12/R14/R28/R29/R36/R38/R58/R73, NT-007 R14/R15/R23/R24/R26, NT-006 R3/R6, NT-SSH R8/R10; addresses the audit's F16, F04, F05, F07, F09, F03, TLS-15 and LOG-08).**
   New variable `bastion_baseline` (`enabled` default **false**; `audit_logging` default true; `restrict_ssh_source`, `time_servers`, `revoked_keys` default off/empty). With it off the cloud-init is **byte for byte

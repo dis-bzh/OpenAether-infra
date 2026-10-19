@@ -3,7 +3,13 @@
 # bastion-harden-check.sh — Post-deploy hardening validation for OpenAether bastion
 #
 # Usage:
-#   ./scripts/ops/bastion-harden-check.sh <bastion_ip> <bastion_user> <ssh_key>
+#   ./scripts/ops/bastion-harden-check.sh <bastion_ip> <bastion_user> <ssh_key> [control_plane_private_ip]
+#
+#   The 4th argument must be a CONTROL PLANE address: check 5 probes TCP 6443 from the bastion, and only control
+#   planes serve it (a worker address FAILS the check, lab 12). Left out, it is read from the tofu output
+#   control_plane_private_ips of the cluster root (first entry; OA_CP_IP overrides); when neither answers, check 5 is
+#   skipped and says so (BASTION_REQUIRE_ALL=1 makes it a FAIL; the summary always lists the skipped checks). The tofu read
+#   needs the cluster root's backend: run it from the shell that applied the infra (TF_DATA_DIR, S3 credentials).
 #
 # Checks (in order):
 #   1. SSH tunnel non-regression: 6443 + 50000 reachable via bastion
@@ -11,14 +17,17 @@
 #   3. sshd: PermitRootLogin no + PasswordAuthentication no
 #   4. nftables egress DROP. BASTION_EGRESS=legacy (default, what is deployed unless bastion_internet_egress is set):
 #      an arbitrary port on the Internet must time out (80/443 are open by design there). BASTION_EGRESS=closed:
-#      80, 443 and a second public address must time out, 8200 to the node too, nc/curl/tcpdump must be absent and
+#      80, 443 and a second public address must time out, 8200 to the node too, nc/curl/wget/tcpdump must be absent and
 #      the update timers off
 #   5. nftables egress ALLOW: nc to cluster private on 6443 must pass (if node IP given)
 #   6. ss -tlnp: only :22 listening externally
 #   7. bastion-admins group exists and user is a member
 #   8. SSH-CA placeholder files present
 #   9. (BASTION_BASELINE=1) the opt-in bastion_baseline: sshd directives, sysctl, auditd, journald,
-#      mounts, ownership of authorized_keys.d, sudo mode, umask, the key fingerprint in the login log
+#      mounts, ownership of authorized_keys.d, sudo mode, umask, the key fingerprint in the login log.
+#      BASTION_AUDIT=0 for a bastion with bastion_baseline.audit_logging=false (closed egress forces it): auditd
+#      is then not asserted, because it is not installed. The persistent journal, the adm / systemd-journal
+#      groups and the login line are still asserted: they need no package and are there with or without audit.
 #
 # Egress probes use bash's /dev/tcp, not nc: the baseline no longer installs netcat.
 #
@@ -35,10 +44,14 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib/bastion-hostkey.sh"
 # \$ and \" are for the REMOTE shell; the host and port are expanded here.
 probe_cmd() { printf 'timeout %s bash -c "</dev/tcp/%s/%s" >/dev/null 2>&1; echo exit:$?' "$3" "$1" "$2"; }
 
-BASTION_IP="${1:?Usage: $0 <bastion_ip> <bastion_user> <ssh_key> [node_private_ip]}"
+BASTION_IP="${1:?Usage: $0 <bastion_ip> <bastion_user> <ssh_key> [control_plane_private_ip]  (a CONTROL PLANE address: workers do not serve 6443)}"
 BASTION_USER="${2:?}"
 SSH_KEY="${3:?}"
-NODE_IP="${4:-}"
+NODE_IP="${4:-${OA_CP_IP:-}}"
+if [ -z "${NODE_IP}" ] && command -v tofu >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+  NODE_IP="$(timeout 30 tofu -chdir="$(dirname "${BASH_SOURCE[0]}")/../../infrastructure/opentofu/cluster" output -json control_plane_private_ips 2>/dev/null |
+    jq -r '.[0] // empty' 2>/dev/null)" || NODE_IP=""
+fi
 
 OA_KH_TEMP=""; oa_bastion_oneshot_opts "${BASTION_IP}"
 trap '[ "${OA_KH_TEMP:-}" = 1 ] && rm -f "${OA_KH}"' EXIT
@@ -48,6 +61,7 @@ case "${EGRESS_MODE}" in legacy|closed) ;; *) echo "BASTION_EGRESS is legacy or 
 SSH_CMD="ssh ${SSH_OPTS} ${BASTION_USER}@${BASTION_IP}"
 
 PASS=0
+SKIPPED=""
 FAIL=0
 
 ok()   { echo "  [PASS] $*"; PASS=$((PASS + 1)); }
@@ -137,8 +151,8 @@ if [ "${EGRESS_MODE}" = closed ]; then
   blocked closed 1.1.1.1 443
   blocked closed 9.9.9.9 443
   [ -n "${NODE_IP}" ] && blocked closed "${NODE_IP}" 8200
-  TOOLS=$(${SSH_CMD} 'for c in nc ncat curl tcpdump; do command -v "$c" >/dev/null 2>&1 && echo "$c"; done; true' || true)
-  if [ -z "${TOOLS}" ]; then ok "closed: no nc, curl or tcpdump on the bastion"; else fail "closed: tools still installed: $(echo "${TOOLS}" | tr '\n' ' ')"; fi
+  TOOLS=$(${SSH_CMD} 'for c in nc ncat curl wget tcpdump; do command -v "$c" >/dev/null 2>&1 && echo "$c"; done; true' || true)
+  if [ -z "${TOOLS}" ]; then ok "closed: no nc, curl, wget or tcpdump on the bastion"; else fail "closed: tools still installed: $(echo "${TOOLS}" | tr '\n' ' ')"; fi
   TIMER=$(${SSH_CMD} 'systemctl is-enabled apt-daily-upgrade.timer 2>/dev/null; true' || true)
   if echo "${TIMER}" | grep -q "^enabled"; then fail "closed: apt-daily-upgrade.timer is still enabled (no mirror is reachable: patching is replacing the bastion)"; else ok "closed: the update timer is off (${TIMER:-not present})"; fi
 else
@@ -156,7 +170,11 @@ if [ -n "${NODE_IP}" ]; then
     fail "Egress to ${NODE_IP}:6443 blocked — check nftables private_cidr + node is up"
   fi
 else
-  info "Skipping cluster egress test (no NODE_IP provided)"
+  info "Skipping cluster egress test: no control plane address (4th argument, OA_CP_IP, or the tofu output control_plane_private_ips)"
+  info "  the tofu output needs the cluster root's backend: run from the shell that applied it (TF_DATA_DIR and the S3 credentials exported)"
+  SKIPPED="${SKIPPED}5 (egress ALLOW to the cluster: no control plane address) "
+  # BASTION_REQUIRE_ALL=1 turns a skipped check into a failure (CI, an unattended entity): 35 passes instead of 37 was a pass.
+  [ "${BASTION_REQUIRE_ALL:-0}" = 1 ] && fail "check 5 was skipped and BASTION_REQUIRE_ALL=1: give the control plane address (4th argument or OA_CP_IP)"
 fi
 
 # --------------------------------------------------------------------------
@@ -246,16 +264,13 @@ want "no passwordless sudo for ${BASTION_USER}" SUDON no
 if fact GROUPS | grep -qw sudo; then fail "${BASTION_USER} is in the sudo group"; else ok "${BASTION_USER} is not in the sudo group"; fi
 if fact VARTMP | grep -q noexec; then ok "/var/tmp is mounted noexec ($(fact VARTMP))"; else fail "/var/tmp is not mounted noexec"; fi
 if [ "${BASTION_AUDIT:-1}" = 0 ]; then info "auditd not asserted (BASTION_AUDIT=0: bastion_baseline.audit_logging is off)"; else want "auditd is active" AUDITD active; fi
+# The persistent journal and the log-reader groups need no package: the template sets them with or without audit_logging, so they
+# are asserted in both modes (that is what lets bastion-logs-pull.sh read the journal). Only auditd depends on BASTION_AUDIT.
 want "the journal is persistent" JOURNAL persistent
-if [ "${BASTION_AUDIT:-1}" = 0 ]; then
-  # audit_logging = false: the account is not added to adm / systemd-journal, so the journal cannot be read without root.
-  info "log-reader groups and the login fingerprint line not asserted (BASTION_AUDIT=0)"
-else
 if fact GROUPS | grep -qw adm && fact GROUPS | grep -qw systemd-journal; then ok "${BASTION_USER} can read the audit and journal logs (adm, systemd-journal)"
 else fail "${BASTION_USER} is missing adm or systemd-journal: $(fact GROUPS)"; fi
 if [ "$(fact FP)" -ge 1 ] 2>/dev/null; then ok "the login log shows an Accepted publickey line with a SHA256 fingerprint"
 else fail "no 'Accepted publickey ... SHA256' line in the ssh journal of the last 10 minutes"; fi
-fi
 info "not asserted (needs root on the bastion): auditctl -s, nft list ruleset (log rule), the AcceptEnv comment-out"
 fi
 
@@ -265,6 +280,7 @@ sep "SUMMARY"
 echo ""
 echo "  PASSED: ${PASS}"
 echo "  FAILED: ${FAIL}"
+echo "  SKIPPED: ${SKIPPED:-none}"
 echo ""
 if [ "${FAIL}" -eq 0 ]; then
   echo "  Bastion hardening: ALL CHECKS PASSED"

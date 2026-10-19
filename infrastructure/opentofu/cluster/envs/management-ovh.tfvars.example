@@ -34,6 +34,11 @@ cluster_name    = "openaether"
 environment     = "dev"
 cluster_role    = "management"
 talos_bootstrap = true
+# The platform, not only the machines. Both default to FALSE: a copy of this file WITHOUT these lines builds an
+# infrastructure-only cluster (Talos + Cilium: no Flux, no apps, no public load balancer), and `task cluster-verify`
+# then reports flux-system as red. Set them as shown for the platform; the Day-1 seeding follows (scripts/ops/seed-openbao.sh).
+deploy_flux     = true
+deploy_app_lb   = true
 # talos_version / kubernetes_version: leave unset to inherit the tracked
 # defaults from cluster/variables.tf. The image is resolved by NAME from
 # talos_version (same as Scaleway) unless image_id below is set, and it is the
@@ -47,7 +52,9 @@ talos_bootstrap = true
 node_distribution = {
   ovh = {
     control_planes     = 3
-    workers            = 2
+    workers            = 3
+    # 3 workers, not 2: lab 16 measured 82% + 91% = 172% of one worker's CPU requested on 2 c3-8, and `cluster-roll`
+    # refuses above (workers - 1) x 100%. With 3 the same load is about 90% of that limit (docs/capacity.md).
     region             = "EU-WEST-PAR"
     # c3-8 (4 vCPU / 8 GB), not b3-8 (2 vCPU): measured 2026-08-15, three b3-8
     # workers sit at ~99% of CPU requests with the platform on them, so no node
@@ -89,6 +96,26 @@ node_distribution = {
 #   { address = "149.112.112.112", tls_server_name = "dns.quad9.net" },
 # ]
 
+# Node and flow logs (optional, ANSSI PA-012 R9; off by default). Rules, plaintext caveat and
+# rollout order: modules/talos/variables.tf and docs/hardening.md.
+# node_log_forwarding    = { endpoint = "tcp://127.0.0.1:5170" }   # receiver on every node (hostNetwork)
+# cilium_hubble_drop_log = true                                    # policy denials in the cilium-agent log
+
+# Node baseline and time sources (optional, ANSSI BP-028 R9/R12 and PA-012 R5; off by default). Risks, prerequisites
+# and the deviation table: modules/talos/variables.tf and docs/hardening.md. Try on a throwaway cluster first.
+# node_baseline     = { sysctls = true, worker_default_seccomp = true, pod_pids_limit = 4096 }
+# node_time_servers = ["YOUR_NTP_1", "YOUR_NTP_2", "YOUR_NTP_3"]   # also in bastion_baseline.time_servers
+
+# Node network filtering (optional, ANSSI PA-022 R17/R20; both off by default).
+# restrict_inter_node (OVH and Outscale only) swaps the all-protocol rule between nodes for an explicit port list.
+# node_firewall_mode = "port_allowlist" is NOT inert: each listed port (apid, kube-apiserver, kubelet, etcd, ...) accepts
+# ONLY the listed sources and drops the rest (ports that are not listed stay open). A source missing from node_firewall
+# (the load balancer range, a second subnet, a wrong pod range) breaks the cluster. Per-rule sources: docs/network.md 6.
+# Read docs/network.md section 6 and LAB-CHECKLIST B24 first; a throwaway cluster first.
+# restrict_inter_node = true
+# node_firewall_mode  = "port_allowlist"
+# node_firewall       = { node_cidrs = ["YOUR_NODE_SUBNET"], bastion_cidrs = ["YOUR_BASTION_SUBNET"] }
+
 admin_ip = ["YOUR_IP/32"]
 
 bastion_ssh_keys = {
@@ -98,7 +125,7 @@ bastion_ssh_keys = {
 git_repo_url     = "https://github.com/dis-bzh/OpenAether-apps.git"
 # Pin the platform: a commit on a branch would otherwise reach a running
 # cluster within the reconcile interval. refs/heads/<branch> to test.
-git_ref          = "refs/tags/0.2.0"
+git_ref          = "refs/tags/0.3.0"
 
 # OpenBao recovery-share holders (only read when deploy_flux = true). OpenBao unseals itself; what the operators hold are
 # RECOVERY shares, for an emergency root token. Each key is a person's PGP PUBLIC key, `gpg --export <id> | base64 -w0`
@@ -113,6 +140,9 @@ git_ref          = "refs/tags/0.2.0"
 # ]
 # openbao_recovery_threshold = 2   # default: a majority
 
+# Flux Git source verification: OPT-IN, default off. See management-scaleway.tfvars.example and docs/signed-commits.md.
+# flux_git_verify = { enabled = true, public_keys = ["-----BEGIN PGP PUBLIC KEY BLOCK-----\n...\n-----END PGP PUBLIC KEY BLOCK-----"] }
+
 # --- Backup / DR object stores (OVH S3-compatible Object Storage) -------------
 # Derived buckets (you don't set them) — parts come from this file,
 # and each has a "-backup" twin:
@@ -126,3 +156,7 @@ s3_primary_endpoint = "https://s3.gra.io.cloud.ovh.net"
 s3_primary_region   = "gra"
 s3_replica_endpoint = "https://s3.gra.io.cloud.ovh.net" # prod: e.g. SCW https://s3.fr-par.scw.cloud
 s3_replica_region   = "gra"                              # prod: e.g. fr-par
+
+# --- Node system disk --------------------------------------------------------
+# The root disk is the flavour's. The application stack needs ~11 GB of images per node: pick a flavour with at least
+# 50 GB (b3-8 has 50); with deploy_flux a `check` warns when the flavour's disk is below 40 GB.

@@ -47,8 +47,8 @@ sed 's/| 6443 |/| 6444 |/' "$TMP/gen.scw.en" >"$TMP/mutated"
 diff -q "$TMP/mutated" "$TMP/gen.scw.en" >/dev/null && bad "a changed port was not noticed" || ok "a changed port makes the tables differ"
 # Mutating the Terraform: a rule added to the map must appear in the output.
 mkdir -p "$TMP/tree/infrastructure/opentofu/modules/providers"
-cp -r "$ROOT/infrastructure/opentofu/modules/providers/scw" "$TMP/tree/infrastructure/opentofu/modules/providers/scw"
-sed -i 's|^    dhcp  *= { protocol = "UDP", ports = "68" }|    dhcp             = { protocol = "UDP", ports = "68" }\n    extra-test-rule  = { protocol = "TCP", ports = "9999" }|' "$TMP/tree/infrastructure/opentofu/modules/providers/scw/security.tf"
+cp -r "$ROOT/infrastructure/opentofu/modules/providers/scw" "$ROOT/infrastructure/opentofu/modules/providers/_shared" "$TMP/tree/infrastructure/opentofu/modules/providers/"
+sed -i 's|^    dhcp  *= { protocol = "UDP", ports = "68" }|    dhcp             = { protocol = "UDP", ports = "68" }\n    extra-test-rule  = { protocol = "TCP", ports = "9999" }|' "$TMP/tree/infrastructure/opentofu/modules/providers/_shared/node-ports/main.tf"
 mutated_out="$("$GEN" scw "$TMP/tree")"
 grep -q 'extra-test-rule' <<<"$mutated_out" && ok "a rule added to the Terraform shows up in the generated table" || bad "a rule added to the Terraform was not picked up"
 

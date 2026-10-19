@@ -32,7 +32,8 @@ case "$cmd" in
   *"/dev/tcp/1.1.1.1/"*|*"/dev/tcp/9.9.9.9/"*) echo "exit:${STUB_EGRESS:-124}" ;;
   *"/dev/tcp/10.0.0.5/8200"*) echo "exit:${STUB_8200:-124}" ;;
   *"/dev/tcp/"*) echo "exit:${STUB_NODE:-0}" ;;
-  *"command -v"*) printf '%s' "${STUB_TOOLS:-}" ;;
+  # Only the tools the check actually asks about are found, like the real host: a name missing from its loop is not reported.
+  *"command -v"*) for t in ${STUB_TOOLS:-}; do case "$cmd" in *" $t "*) echo "$t" ;; esac; done ;;
   *"is-enabled apt-daily"*) echo "${STUB_TIMER:-disabled}" ;;
   *"ss -tlnp"*) echo "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*" ;;
   *"getent group"*) echo "bastion-admins:x:1001:bastion" ;;
@@ -42,6 +43,13 @@ case "$cmd" in
 esac
 STUB
 chmod +x "$TMP/bin/ssh"
+# tofu: answers control_plane_private_ips from STUB_TOFU (a JSON list), else fails like an undeployed root.
+cat >"$TMP/bin/tofu" <<'STUB'
+#!/usr/bin/env bash
+[ -n "${STUB_TOFU:-}" ] && { echo "$STUB_TOFU"; exit 0; }
+exit 1
+STUB
+chmod +x "$TMP/bin/tofu"
 
 GOOD_FACTS='DROPIN=LogLevel VERBOSE;StrictModes yes;PermitUserEnvironment no;PermitEmptyPasswords no;AllowStreamLocalForwarding no;GatewayPorts no;RevokedKeys /etc/ssh/revoked_keys;
 PTRACE=1
@@ -83,7 +91,7 @@ grep -q 'FAIL.*10.0.0.5:6443 blocked' <<<"$OUT" && ok "a node port that times ou
 echo "=== BASTION_EGRESS=closed ==="
 run BASTION_EGRESS=closed
 [ "$RC" = 0 ] && grep -q 'closed: egress to 1.1.1.1:80 blocked' <<<"$OUT" && grep -q 'closed: egress to 1.1.1.1:443 blocked' <<<"$OUT" && grep -q 'closed: egress to 9.9.9.9:443 blocked' <<<"$OUT" \
-  && grep -q 'closed: egress to 10.0.0.5:8200 blocked' <<<"$OUT" && grep -q 'no nc, curl or tcpdump' <<<"$OUT" && grep -q 'update timer is off' <<<"$OUT" \
+  && grep -q 'closed: egress to 10.0.0.5:8200 blocked' <<<"$OUT" && grep -q 'no nc, curl, wget or tcpdump' <<<"$OUT" && grep -q 'update timer is off' <<<"$OUT" \
   && ok "closed, good facts: 80, 443, another public address and 8200 blocked; no tools; timers off" || bad "closed good run: rc=$RC $OUT"
 run BASTION_EGRESS=closed STUB_EGRESS=0
 [ "$RC" != 0 ] && grep -q 'FAIL.*closed: egress to 1.1.1.1:443 NOT blocked' <<<"$OUT" && ok "closed: an open 443 FAILS" || bad "closed with open 443 passed: rc=$RC"
@@ -91,6 +99,9 @@ run BASTION_EGRESS=closed STUB_8200=0
 [ "$RC" != 0 ] && grep -q 'FAIL.*closed: egress to 10.0.0.5:8200 NOT blocked' <<<"$OUT" && ok "closed: 8200 reachable on a node FAILS" || bad "closed with open 8200 passed: rc=$RC"
 run BASTION_EGRESS=closed STUB_TOOLS=curl
 [ "$RC" != 0 ] && grep -q 'FAIL.*tools still installed: curl' <<<"$OUT" && ok "closed: curl still installed FAILS" || bad "closed with curl passed: rc=$RC"
+# Lab 11: the Ubuntu image ships wget and nothing purged it.
+run BASTION_EGRESS=closed STUB_TOOLS=wget
+[ "$RC" != 0 ] && grep -q 'FAIL.*tools still installed: wget' <<<"$OUT" && ok "closed: wget still installed FAILS" || bad "closed with wget passed: rc=$RC"
 run BASTION_EGRESS=closed STUB_TIMER=enabled
 [ "$RC" != 0 ] && grep -q 'FAIL.*apt-daily-upgrade.timer is still enabled' <<<"$OUT" && ok "closed: an enabled update timer FAILS" || bad "closed with the timer on passed: rc=$RC"
 run BASTION_EGRESS=wide
@@ -134,6 +145,15 @@ mutant "passwordless sudo"         SUDON yes "passwordless sudo"
 mutant "no adm group"              GROUPS "bastion bastion-admins" "adm or systemd-journal"
 mutant "the sudo group"            GROUPS "bastion bastion-admins sudo adm systemd-journal" "in the sudo group"
 mutant "no fingerprint line"       FP 0 "SHA256"
+# BASTION_AUDIT=0 is a bastion with audit_logging=false (closed egress forces it): no auditd, but the template still sets the
+# persistent journal and the journal groups, so those stay asserted (lab 11 found them asserted-or-skipped inconsistently).
+facts_with AUDITD inactive; run BASTION_BASELINE=1 BASTION_AUDIT=0
+[ "$RC" = 0 ] && grep -q 'auditd not asserted' <<<"$OUT" && ! grep -q 'auditd is active' <<<"$OUT" && grep -q 'the journal is persistent' <<<"$OUT" && grep -q 'adm, systemd-journal' <<<"$OUT" \
+  && ok "BASTION_AUDIT=0: auditd is not asserted, the journal, groups and login line are, and the run passes" || bad "BASTION_AUDIT=0 good facts: rc=$RC $OUT"
+facts_with JOURNAL volatile; run BASTION_BASELINE=1 BASTION_AUDIT=0
+[ "$RC" != 0 ] && grep -q 'FAIL.*journal' <<<"$OUT" && ok "BASTION_AUDIT=0 still FAILS a volatile journal (bastion-logs-pull.sh needs it)" || bad "BASTION_AUDIT=0 volatile journal passed: rc=$RC"
+facts_with GROUPS "bastion bastion-admins"; run BASTION_BASELINE=1 BASTION_AUDIT=0
+[ "$RC" != 0 ] && grep -q 'adm or systemd-journal' <<<"$OUT" && ok "BASTION_AUDIT=0 still FAILS an account outside adm / systemd-journal" || bad "BASTION_AUDIT=0 without groups passed: rc=$RC"
 printf '%s\n' "$GOOD_FACTS" | sed 's/AllowStreamLocalForwarding no;//' >"$FACTS"; run BASTION_BASELINE=1
 [ "$RC" != 0 ] && grep -q "FAIL.*AllowStreamLocalForwarding no" <<<"$OUT" && ok "a missing sshd directive FAILS, named" || bad "missing directive: rc=$RC $(grep FAIL <<<"$OUT" | head -2)"
 : >"$FACTS"; run BASTION_BASELINE=1
@@ -143,6 +163,23 @@ printf '%s\n' "$GOOD_FACTS" >"$FACTS"; run BASTION_BASELINE=1 STUB_NOSSHD=1
 grep -q "not readable without root" <<<"$OUT" && grep -q "password authentication is not offered" <<<"$OUT" && ! sed -n "/=== 3/,/=== 4/p" <<<"$OUT" | grep -q "FAIL" && ok "an unreadable sshd configuration is judged from outside, and the run goes on" || bad "unreadable sshd config: rc=$RC $(sed -n "/=== 3/,/=== 4/p" <<<"$OUT" | head -8)"
 run BASTION_BASELINE=1 STUB_NOSSHD=1 STUB_PWMETHODS=publickey,password
 [ "$RC" != 0 ] && grep -q "FAIL.*password authentication may be offered" <<<"$OUT" && ok "...and a server that offers a password is a FAIL" || bad "password offered passed: rc=$RC"
+
+echo "=== the control plane address: 4th argument, OA_CP_IP, or the tofu output ==="
+printf '%s\n' "$GOOD_FACTS" >"$FACTS"
+run0() { OUT="$(env PATH="$TMP/bin:$PATH" "$@" bash "$SUT" 192.0.2.10 bastion /dev/null 2>&1)"; RC=$?; }
+run0 STUB_TOFU='["10.0.0.7","10.0.0.8"]'
+grep -q 'Egress to 10.0.0.7:6443 allowed' <<<"$OUT" && ok "no 4th argument: the first control_plane_private_ips entry is probed" || bad "tofu derivation: $(sed -n '/=== 5/,/=== 6/p' <<<"$OUT")"
+run0 OA_CP_IP=10.0.0.9 STUB_TOFU='["10.0.0.7"]'
+grep -q 'Egress to 10.0.0.9:6443 allowed' <<<"$OUT" && ok "OA_CP_IP wins over the tofu output" || bad "OA_CP_IP: $(sed -n '/=== 5/,/=== 6/p' <<<"$OUT")"
+run0
+grep -q 'Skipping cluster egress test: no control plane address' <<<"$OUT" && ok "nothing to derive: check 5 is skipped, and says what to give" || bad "skip message: $(sed -n '/=== 5/,/=== 6/p' <<<"$OUT")"
+grep -q 'SKIPPED: 5 (egress ALLOW' <<<"$OUT" && ok "the summary names the skipped check" || bad "summary skipped line: $(sed -n '/SUMMARY/,$p' <<<"$OUT")"
+[ "$RC" = 0 ] && ok "a skipped check alone is still a pass by default" || bad "skip default rc=$RC"
+run0 BASTION_REQUIRE_ALL=1
+[ "$RC" != 0 ] && grep -q 'BASTION_REQUIRE_ALL=1' <<<"$OUT" && ok "BASTION_REQUIRE_ALL=1 turns the skipped check into a FAIL" || bad "REQUIRE_ALL: rc=$RC"
+run0 STUB_TOFU='["10.0.0.7"]'
+grep -q 'SKIPPED: none' <<<"$OUT" && ok "nothing skipped: the summary says none" || bad "none line"
+grep -q 'control_plane_private_ip\]' "$SUT" && grep -q 'CONTROL PLANE address' "$SUT" && ok "the usage names a CONTROL PLANE address" || bad "usage line"
 
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$PASS" -gt 0 ] && [ "$FAIL" -eq 0 ]

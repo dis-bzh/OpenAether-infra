@@ -118,8 +118,9 @@ Each block is the output of `scripts/dev/gen-flow-matrix.sh <provider>`: edit th
 | `talos_api` | tcp | 50000 | bastion SG | always |
 | `http` | tcp | `var.app_lb_node_ports.http` | `10.0.0.0/24` | `deploy_app_lb` |
 | `https` | tcp | `var.app_lb_node_ports.https` | `10.0.0.0/24` | `deploy_app_lb` |
-| `wireguard` | udp | 51820 | cluster SG members | always |
-| `inter_node` | all | all | cluster SG members | always |
+| `wireguard` | udp | 51820 | cluster SG members | not `restrict_inter_node` |
+| `inter_node` | all | all | cluster SG members | not `restrict_inter_node` |
+| `inter_node_ports` | each of the list | the shared list (`_shared/node-ports`) | cluster SG members | `restrict_inter_node` |
 <!-- flow-matrix:ovh:end -->
 
 **Outscale**
@@ -134,8 +135,9 @@ Each block is the output of `scripts/dev/gen-flow-matrix.sh <provider>`: edit th
 | `https` | tcp | `var.app_lb_node_ports.https` | public subnet (LB) | `deploy_app_lb` |
 | `app_lb_http` | tcp | 80 | `app_lb_allowed_cidrs`, cluster egress | `deploy_app_lb` and `app_lb_allowed_cidrs` |
 | `app_lb_https` | tcp | 443 | `app_lb_allowed_cidrs`, cluster egress | `deploy_app_lb` and `app_lb_allowed_cidrs` |
-| `wireguard` | udp | 51820 | cluster SG members | always |
-| `inter_node` | all | all | cluster SG members | always |
+| `wireguard` | udp | 51820 | cluster SG members | not `restrict_inter_node` |
+| `inter_node` | all | all | cluster SG members | not `restrict_inter_node` |
+| `inter_node_ports` | each of the list | the shared list (`_shared/node-ports`) | cluster SG members | `restrict_inter_node` |
 <!-- flow-matrix:outscale:end -->
 
 Proxmox has no security group; its ports are the same services, filtered by whatever the operator runs on the host or bridge.
@@ -157,7 +159,8 @@ The test requires every rule name above to have a row here, in both languages.
 | `gateway-<name>`, `http`, `https` | the application load balancer's backends on the Gateway's fixed NodePorts | only exists with `deploy_app_lb`; the Gateway's own routes authenticate (`OpenAether-apps/docs/public-exposure.md`) |
 | `app_lb_http`, `app_lb_https` | Outscale only: the load balancer's group is the cluster group, so the allowed public clients of 80/443 are rules in it | only with `app_lb_allowed_cidrs`; not run on a cloud, whether the group filters the load balancer at all is the first lab check |
 | `carrier-<name>` | load-balancer backend traffic that arrives from the carrier range; the origin is unconfirmed | kept until a real deploy shows it unused |
-| `inter_node` | all traffic between nodes (etcd, kubelet, Cilium) | **any port and any protocol between members**: broader than the matrix needs; narrowing it is planned work, not done |
+| `inter_node` | all traffic between nodes (etcd, kubelet, Cilium) | **any port and any protocol between members**: broader than the matrix needs. Default; `restrict_inter_node = true` replaces it (and `wireguard`) by `inter_node_ports` |
+| `inter_node_ports` | the same flows as the Scaleway list (without DHCP), one rule each, members only; WireGuard on 51871 | only with `restrict_inter_node`; the list is one file (`modules/providers/_shared/node-ports`) shared with Scaleway and the Talos rules; plan-checked, not run on a cloud (LAB-CHECKLIST B24) |
 
 ### 5.4 Bastion
 
@@ -169,9 +172,25 @@ only TCP 6443 and 50000 to the cluster subnet, ICMP in the subnet, the metadata 
 Listed so that a reader does not take the matrix for more than it is. None is changed by this page.
 
 1. **Scaleway's group does not filter the private network.** The rules are exact so that a host firewall can enforce them later.
-2. **No host firewall.** Nodes admit 50000, 50001, 2379-2381 and 10250 from the whole subnet (Scaleway) or the group (OVH, Outscale), including from a compromised node or a hostNetwork pod. Each service's own mTLS or authentication is the only barrier.
-   A staged plan exists in the audit (explicit port lists replacing `inter_node`, then an opt-in Talos or Cilium host firewall in audit mode, then enforcement); stage 0 is this page.
-3. **OVH and Outscale `inter_node` admits every protocol and port between members.**
+2. **No host firewall by default.** Nodes admit 50000, 50001, 2379-2381 and 10250 from the whole subnet (Scaleway) or the group (OVH, Outscale), including from a compromised node or a hostNetwork pod. Each service's own mTLS or authentication is the only barrier.
+   Staged plan: stage 0 is this page; stage 1 is `restrict_inter_node` (below); stage 2 is `node_firewall_mode = "port_allowlist"`, which writes one Talos `NetworkRuleConfig` per TCP/UDP flow of the shared list (none for ICMP: Talos refuses a rule without ports, and its own firewall already allows ICMP, rate limited, once the default action blocks; found on a real node, lab 11) beside a default ingress action of `accept`.
+   **It is not inert.** A `NetworkRuleConfig` is an allow-list for its port even when the default action is `accept`: the node's `ingress` chain (`talosctl -n <node> get nftableschain ingress -o yaml`) holds one `drop` per rule for every source outside the listed subnets (measured on live Outscale nodes, lab 11: a pod address was dropped on apid while the listed pod range reached the kubelet). So each listed port accepts only the listed sources, **ports that are not listed stay open**, and **a source missing from a list is cut off: the cluster breaks**. The value was first named `rules_only`; it never shipped. There is no mode with a blocking default action. Both switches are off by default; the allow-list ran on one Outscale and one Scaleway lab cluster only (nothing was missing there; LAB-CHECKLIST B24).
+   The sources of each rule (`node_firewall`: `node_cidrs` = the node subnet, `bastion_cidrs`, `pod_cidrs` default `10.244.0.0/16`, `lb_cidrs` default `100.64.0.0/10`):
+
+   | Rule | Port | Sources | Why / evidence |
+   |---|---|---|---|
+   | `kube-apiserver` | TCP 6443 | nodes, bastion, pods, lb | kubelets and controllers (nodes), `kubectl` and `talos-tunnels` (bastion), in-cluster clients and vmagent (pods), the API load balancer and its health checks (lb range, or the subnet the balancer sits in). Lab 11: bastion and nodes open |
+   | `talos-apid` | TCP 50000 | nodes, bastion | `talosctl` and the Talos provider through the bastion; apid between nodes. A pod is refused by design (lab 11) |
+   | `talos-trustd` | TCP 50001 | nodes | workers fetch certificates from control planes. The bastion is refused (lab 11) |
+   | `etcd` | TCP 2379-2380 | nodes | client and peer; control planes only in fact, the list is the node subnet |
+   | `etcd-metrics` | TCP 2381 | nodes, pods | vmagent scrapes it from a pod; a pod on a control-plane node arrives with its pod address. Added for this reason (the Talos rules split etcd; the security groups keep 2379-2381) |
+   | `kubelet` | TCP 10250 | nodes, pods | apiserver to kubelet; vmagent scrapes kubelet and cAdvisor from a pod |
+   | `cilium-vxlan`, `cilium-wireguard`, `cilium-health` | UDP 8472, UDP 51871, TCP 4240 | nodes | agent to agent (hostNetwork: the node address) |
+   | `cilium-metrics` | TCP 9962-9964 | nodes, pods | vmagent scrape |
+   | `node-exporter` | TCP 9100 | nodes, pods | vmagent scrape (hostNetwork exporter) |
+
+   What is **not verified** per provider: where the load balancer's health checks come from. Scaleway: the balancer reaches the nodes from its private-network address, which is inside `node_cidrs`; `lb_cidrs` covers the carrier range (origin unconfirmed). OVH: the Octavia amphora sits in the node network, so the node subnet; unconfirmed. Outscale: the load balancer lives in the public subnet, which is also the bastion subnet in the example, so 6443 from the balancer is covered only if `bastion_cidrs` holds that public subnet (unconfirmed); set it to the public subnet, not only to the bastion's address. Whether a client of a public API load balancer keeps its own address at the node (the Outscale group lists `admin_ip` on 6443) is not known: if it does, `admin_ip` must be added to the 6443 sources, which no variable does today. Proxmox: node and bastion subnets are yours to supply.
+3. **OVH and Outscale `inter_node` admits every protocol and port between members** unless `restrict_inter_node = true` (default false: nothing changes until it is set). Replacing the rules is not atomic: a few seconds may lack the new ones while the old are gone.
 4. **Node egress is open** (Scaleway `outbound_default_policy = accept`, OVH explicit all-egress rules, Outscale declares none). A compromised node can reach anything; an egress allowlist risks image pulls, S3 backups and first boot and needs a design.
 5. **The application load balancer has no source filter by default** when `deploy_app_lb` is true: every route on the Gateway answers anyone who sets its Host header, and a route's own login is its only protection
    (`OpenAether-apps/docs/public-exposure.md`, which lists the routes and how each authenticates). `admin_ip` guards the Kubernetes API frontend and the bastion only. `admin-access.md` said the gateway was "nothing public": corrected.
