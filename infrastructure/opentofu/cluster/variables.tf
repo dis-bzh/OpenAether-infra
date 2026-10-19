@@ -686,7 +686,7 @@ variable "git_repo_url" {
 }
 
 # The default and the examples pin the OpenAether-apps tag this release was cut with
-# (refs/tags/0.3.0 for infra 0.2.1), which exists before the infra tag that points at
+# (refs/tags/0.3.0 for infra 0.3.0), which exists before the infra tag that points at
 # it: a commit on a branch would otherwise reach a running cluster within the
 # reconcile interval. Moving the default is part of cutting a release, never of a
 # change in between. Set refs/heads/<branch> to develop against apps; a branch also
