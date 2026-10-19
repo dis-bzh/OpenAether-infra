@@ -12,6 +12,29 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ---
 
+## [0.3.2] — unreleased
+
+0.3.2 is a **patch release** of 0.3.1: no new scope, only bug fixes, documentation corrections and safety nets, worked offline. It pairs with OpenAether-apps 0.3.2 (which holds the
+Longhorn and Zitadel fixes of the same series); the `git_ref` default and the twelve `envs/*.tfvars.example` will pin OpenAether-apps `refs/tags/0.3.2` in the last commit of the release,
+so apps 0.3.2 must be tagged first (they still pin `refs/tags/0.3.1` now). Rung reached: **mocked** (self-tests and doc checks); nothing here was observed on a cloud. It does not fix the
+two infra issues the series set out to look at: #42 (the API unreachable for seconds during a control-plane roll) and #375 (the OVH hard-reboot window) stay open for 0.4.0, see below.
+Not a compliance claim.
+
+### Fixed
+
+- **The repository settings check no longer goes red on a cancelled, unexpanded matrix run** (#293): `check-required-checks.sh` skips a check run whose name still contains a literal
+  `${{` AND whose conclusion is `cancelled` (what editing a PR body while CI runs leaves behind). A successful run of that name and a cancelled plain unrequired one still fail. Three
+  self-test cases, the first red without the change. Rung: mocked.
+- **Documentation: finish every bastion replacement with a plan that says `No changes`** (#360), EN and FR: on Outscale the public IP link did not always come back in the same run (lab 11). The
+  OVH and Scaleway equivalents are written as unchecked. No script changed.
+
+### Not fixed, on purpose
+
+- **#42 (API unreachable during a control-plane roll)** and **#375 (hard-reboot window behind the OVH load balancer)**: nothing safe is verifiable offline. The roll already hands etcd leadership over
+  and gates on etcd 3/3; the remaining candidates (HTTPS health checks on `/readyz`, `--shutdown-delay-duration`, `externalTrafficPolicy: Local`) need a cluster and, for the first, the owner's decision on
+  anonymous health endpoints. Both stay open, labelled for 0.4.0.
+- **#286** looks fixed already on `main` (the harness unsets `VERSION` and has a case with a hostile `VERSION`): it is for closing after a Cléa run shows a verdict that comes from the dependency.
+
 ## [0.3.1] — 2026-10-19
 
 0.3.1 is a **patch release** of 0.3.0: no new scope, the hotfix for the problems that block the goals of 0.4.0 (resilience and monitoring). It pairs with
