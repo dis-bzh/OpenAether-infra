@@ -331,6 +331,23 @@ variable "node_dns_boot_timeout" {
   }
 }
 
+variable "talos_api_access_namespaces" {
+  description = <<-EOT
+    Kubernetes namespaces whose pods may be granted the Talos role `os:etcd:backup` through a talos.dev ServiceAccount object
+    (machine.features.kubernetesTalosAPIAccess, control planes only). The role takes an etcd snapshot and nothing else; the
+    apps repository's etcd-snapshot CronJob (foundation-databases) is its only user. Empty (module default) renders nothing and
+    leaves every config byte-identical; the cluster variable etcd_snapshot_api_access sets it. One apply re-applies the
+    control planes' machine configuration.
+  EOT
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for n in var.talos_api_access_namespaces : can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", n))])
+    error_message = "talos_api_access_namespaces must be Kubernetes namespace names."
+  }
+}
+
 variable "node_log_forwarding" {
   description = <<-EOT
     Ships the nodes' Talos service logs (machine.logging, json_lines) and, unless

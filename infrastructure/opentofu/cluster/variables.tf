@@ -397,6 +397,20 @@ variable "node_time_servers" {
   default     = []
 }
 
+variable "etcd_snapshot_api_access" {
+  description = <<-EOT
+    Lets the apps repository's scheduled etcd snapshot (CronJob etcd-snapshot, foundation-databases) reach the Talos API of the
+    control planes with ONE role, os:etcd:backup (take a snapshot, nothing else): machine.features.kubernetesTalosAPIAccess,
+    allowed for the namespace foundation-databases only. This is what removes "nothing runs the snapshot for you" without putting
+    the state passphrase, the S3 keys and a Talos admin credential on the bastion. true (default) on a new cluster; on an existing
+    one the next apply re-applies the control planes' machine configuration (one at a time; a reboot is not expected, but try it on
+    a throwaway cluster first). false keeps the configs as they were, and the operator's `task etcd-snapshot` is then the only
+    snapshot. Details: docs/backup-policy.md.
+  EOT
+  type        = bool
+  default     = true
+}
+
 variable "node_baseline" {
   description = <<-EOT
     Opt-in kernel/kubelet baseline of the nodes (ANSSI BP-028 R9/R12/R13). Null (default) changes nothing.

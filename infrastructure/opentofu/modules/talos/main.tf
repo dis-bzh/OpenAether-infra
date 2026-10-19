@@ -197,6 +197,24 @@ locals {
 }
 
 # ==============================================================================
+# Talos API access from Kubernetes, for the scheduled etcd snapshot. A pod in an allowed namespace that owns a talos.dev
+# ServiceAccount object gets a Secret holding a talosconfig limited to the roles it asked for; only `os:etcd:backup` is allowed
+# here (the snapshot, nothing else), only on the control planes (the controller runs there), only for the listed namespaces.
+# ==============================================================================
+
+locals {
+  talos_api_access_features = length(var.talos_api_access_namespaces) == 0 ? {} : {
+    kubernetesTalosAPIAccess = {
+      enabled                     = true
+      allowedRoles                = ["os:etcd:backup"]
+      allowedKubernetesNamespaces = sort(var.talos_api_access_namespaces)
+    }
+  }
+  # Folded into machine_config_version so an existing cluster actually gets a change.
+  talos_api_access_signature = length(var.talos_api_access_namespaces) == 0 ? "" : sha256(jsonencode(local.talos_api_access_features))
+}
+
+# ==============================================================================
 # node_log_forwarding: Talos service logs (machine.logging, json_lines) and, unless
 # kernel = false, the kernel log (KmsgLogConfig) pushed over plain TCP to a receiver
 # the HOST can reach (ANSSI PA-012 R9, batch B22). Unset (default) renders neither,
@@ -409,7 +427,7 @@ data "talos_machine_configuration" "control_plane" {
               enabled = true
               port    = 7445
             }
-          }, local.container_features)
+          }, local.container_features, local.talos_api_access_features)
           # Disk encryption at rest (LUKS2). Safe in container mode — Talos ignores
           # it when no block device is present.
           systemDiskEncryption = {
@@ -668,7 +686,7 @@ resource "terraform_data" "talos_port_ready_worker" {
 # by the two `replace_triggered_by` below. See the comment on them.
 resource "terraform_data" "machine_config_version" {
   count = local.do_apply ? 1 : 0
-  input = "${var.talos_version}/${var.kubernetes_version}${local.resolver_tail == "" ? "" : "/${sha256(local.resolver_tail)}"}${local.node_log_signature == "" ? "" : "/${local.node_log_signature}"}${local.node_baseline_signature == "" ? "" : "/${local.node_baseline_signature}"}"
+  input = "${var.talos_version}/${var.kubernetes_version}${local.resolver_tail == "" ? "" : "/${sha256(local.resolver_tail)}"}${local.node_log_signature == "" ? "" : "/${local.node_log_signature}"}${local.node_baseline_signature == "" ? "" : "/${local.node_baseline_signature}"}${local.talos_api_access_signature == "" ? "" : "/${local.talos_api_access_signature}"}"
 }
 
 resource "talos_machine_configuration_apply" "control_plane" {
