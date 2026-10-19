@@ -383,7 +383,7 @@ check needs the tunnels you just closed and fails after its 15 minutes, seen on 
 `…bastion` instance resource of the provider module (`module.scw[0].scaleway_instance_server.bastion`,
 `module.ovh[0].openstack_compute_instance_v2.bastion`, `module.outscale[0].outscale_vm.bastion`,
 `module.proxmox[0].proxmox_virtual_environment_vm.bastion[0]`), never during a bootstrap or upgrade (the tunnels die with it). The
-public IP is its own resource and survives; the host key does not (see above). A bake-and-replace image pipeline or an ephemeral jump
+public IP is its own resource and survives; the host key does not (see above). On Outscale the `outscale_public_ip_link` does not always come back in the same run (seen in lab 11, infra #360: the new bastion was unreachable until a second apply), so finish every `-replace` of the bastion with a plain `tofu plan`: it must say `No changes`, and if it shows the link to create, `tofu apply` once more before `tunnels-up`. The OVH floating-IP association and the Scaleway equivalent have not been checked for the same gap. A bake-and-replace image pipeline or an ephemeral jump
 host is not built. To open the egress again for a window, set the mode back to `legacy` and replace the bastion. `BASTION_EGRESS=closed
 scripts/ops/bastion-harden-check.sh …` asserts the result (80, 443, another public address and 8200 refused, tools absent, update timers
 off); without it the check expects the legacy state, where 80/443 are open by design (it used to expect port 80 blocked, which the
