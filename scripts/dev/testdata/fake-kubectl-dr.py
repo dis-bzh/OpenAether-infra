@@ -87,6 +87,10 @@ if a[:3] == ["-n", "foundation-vault", "delete"] and "pod" in a:
     sys.exit(0)
 if a[:2] == ["get", "externalsecret"]:
     out("ns es True\n" * 3)
+if "get ds cilium" in A:
+    out("daemonset.apps/cilium\n")
+if "rollout" in A:
+    sys.exit(0)
 if "get cluster " in A + " ":  # the bare name is the CAPI Cluster on a management cluster (lab 20): nothing is there
     sys.stderr.write('Error from server (NotFound): clusters.cluster.x-k8s.io not found\n')
     sys.exit(1)

@@ -199,6 +199,7 @@ new; FAKE_ETCD_SIZE=8224 FAKE_TALOS_ENDPOINT=127.0.0.1:52000 run "${ALL[@]}" --s
 chk "a tunnel endpoint is refused as the node: the address of the control plane is asked for" "[ $RC = 1 ] && ! calls | grep -q 'talosctl.*bootstrap' && grep -q -- '--control-plane-ip' '$TMP/stdout' '$TMP/stderr'"
 new; FAKE_ETCD_SIZE=8224 FAKE_TALOS_ENDPOINT=127.0.0.1:52000 run "${ALL[@]}" --scenario etcd --execute --confirm oa-test --control-plane-ip 172.16.0.3
 chk "behind a tunnel the node is the given address and the endpoint stays the tunnel" "[ $RC = 0 ] && calls | grep -q 'talosctl.* -n 172.16.0.3 -e 127.0.0.1:52000 bootstrap --recover-from='"
+chk "after the etcd restore the Cilium agents and operator are restarted (their watches predate the restored revision)" "calls | grep -q 'rollout restart ds/cilium deploy/cilium-operator'"
 new; FAKE_ETCD_SIZE=1000 run "${ALL[@]}" --scenario etcd --execute --confirm oa-test
 chk "a file that is not a bolt database stops the chain before talosctl is called" "[ $RC = 1 ] && ! calls | grep -q 'talosctl.*bootstrap'"
 

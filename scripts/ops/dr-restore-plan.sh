@@ -519,7 +519,15 @@ check_etcd-recover() { :; }
 run_etcd-check() { :; }
 check_etcd-check() {
   for _ in $(seq 1 "${OA_DR_WAIT_TRIES:-90}"); do
-    K get --raw=/readyz >/dev/null 2>&1 && [ "$(K get nodes --no-headers 2>/dev/null | awk '$2 !~ /^Ready/' | wc -l)" -eq 0 ] && return 0
+    if K get --raw=/readyz >/dev/null 2>&1 && [ "$(K get nodes --no-headers 2>/dev/null | awk '$2 !~ /^Ready/' | wc -l)" -eq 0 ]; then
+      # After an etcd restore the older revision makes every informer stale: in lab 20 the Cilium agents kept no backend for the API Service
+      # and about twenty controllers (Flux, CNPG, cert-manager) crash-looped until the agents were restarted.
+      if K -n kube-system get ds cilium >/dev/null 2>&1; then
+        say "  (restarting the Cilium agents and operator: their watches predate the restored revision)"
+        K -n kube-system rollout restart ds/cilium deploy/cilium-operator >/dev/null && K -n kube-system rollout status ds/cilium --timeout=300s >/dev/null || { echo "the Cilium agents did not come back"; return 1; }
+      fi
+      return 0
+    fi
     sleep "${OA_DR_POLL:-10}"
   done
   echo "the API or the nodes did not come back"; return 1
