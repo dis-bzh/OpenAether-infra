@@ -129,6 +129,10 @@ if "delete job" in A or "delete clusters.postgresql.cnpg.io" in A:
     sys.exit(0)
 if "create job --from=cronjob/cnpg-recovery-restore-test" in A:
     sys.exit(0)
+if "logs job/dr-check" in A:
+    if os.environ.get("FAKE_VERIFY_SKIP"):
+        out("SKIP zitadel-db/primary/latest: the live database has no canary row yet (writer not run)\n")
+    out("PASS zitadel-db/primary/latest: canary identical to the live chain\n")
 if "get job dr-check" in A:
     key = "failed" if "failed" in A else "succeeded"
     out("1" if (key == "failed") == bool(os.environ.get("FAKE_VERIFY_FAIL")) else "")

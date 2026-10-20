@@ -167,6 +167,8 @@ new; FAKE_PG_RESTORE=real run "${ALL[@]}" --execute --confirm oa-test --only dbs
 chk "any other pg_restore error fails the step even next to the tolerated one" "[ $RC = 1 ]"
 new; FAKE_NODES=2 run "${ALL[@]}" --execute --confirm oa-test --only cluster
 chk "fewer nodes than the tfvars ask for fail the cluster check" "[ $RC = 1 ] && grep -q '2 nodes, 6 expected' '$TMP/stdout'"
+new; FAKE_VERIFY_SKIP=1 run "${ALL[@]}" --execute --confirm oa-test --only verify
+chk "a restore test that only skipped does not pass the verify step" "[ $RC = 1 ] && grep -q 'without proving anything' '$TMP/stderr' '$TMP/stdout'"
 new; FAKE_VERIFY_FAIL=1 run "${ALL[@]}" --execute --confirm oa-test --only verify
 chk "a failing restore test on the rebuilt cluster fails the last step" "[ $RC = 1 ] && grep -q 'restore test of the rebuilt cluster failed' '$TMP/stdout'"
 

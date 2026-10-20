@@ -478,7 +478,12 @@ run_verify() {
 }
 check_verify() {
   for _ in $(seq 1 "${OA_DR_WAIT_TRIES:-90}"); do
-    [ "$(K -n foundation-databases get job dr-check -o jsonpath='{.status.succeeded}' 2>/dev/null)" = 1 ] && return 0
+    if [ "$(K -n foundation-databases get job dr-check -o jsonpath='{.status.succeeded}' 2>/dev/null)" = 1 ]; then
+      # A Job that skipped every combination also "succeeds" (lab 20: the application role could not read the canary, four SKIPs, exit 0).
+      local out; out="$(K -n foundation-databases logs job/dr-check --all-containers 2>/dev/null || true)"
+      grep -q '^PASS ' <<<"$out" && ! grep -q '^SKIP ' <<<"$out" && return 0
+      echo "the restore test of the rebuilt cluster succeeded without proving anything (SKIP or no PASS line): $(grep -E '^(SKIP|FAIL)' <<<"$out" | head -n 2 | tr '\n' ' ')"; return 1
+    fi
     [ "$(K -n foundation-databases get job dr-check -o jsonpath='{.status.failed}' 2>/dev/null)" = 1 ] && { echo "the restore test of the rebuilt cluster failed (job dr-check)"; return 1; }
     sleep "${OA_DR_POLL:-10}"
   done
