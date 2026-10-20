@@ -45,7 +45,8 @@ echo "task $*" >>"$FAKE_DR/calls.log"
 case "$1" in
   restore-artifacts)
     for a in "$@"; do case "$a" in OUT=*) o="${a#OUT=}"; mkdir -p "$o"; echo "apiVersion: v1" >"$o/kubeconfig"; echo "context: x" >"$o/talosconfig" ;; esac; done ;;
-  cluster-up) [ -z "${FAKE_FAIL_CLUSTER:-}" ] || exit 7 ;;
+  cluster-up) [ -z "${FAKE_FAIL_CLUSTER:-}" ] || exit 7
+    [ -z "${FAKE_NEW_IDENTITY:-}" ] || { echo "apiVersion: v1 # NEW-PKI" >infrastructure/opentofu/cluster/kubeconfig; echo "context: new # NEW-PKI" >infrastructure/opentofu/cluster/talosconfig; } ;;
 esac
 exit 0
 STUB
@@ -158,6 +159,8 @@ new; FAKE_FAIL_SECRET=1 run "${ALL[@]}" --execute --confirm oa-test
 chk "a command that fails inside a step fails the step (errexit in the step's own shell): seedkey failed, nothing after it ran" "[ $RC = 1 ] && grep -q '✗ seedkey FAILED' '$TMP/stdout' && ! calls | grep -q 'restic -r'"
 new; FAKE_FAIL_CLUSTER=1 run "${ALL[@]}" --execute --confirm oa-test
 chk "a failing cluster-up stops before the seal key" "[ $RC = 1 ] && ! calls | grep -q 'openbao-seal-key'"
+new; FAKE_NEW_IDENTITY=1 run "${ALL[@]}" --execute --confirm oa-test --only artifacts,cluster
+chk "a new cluster's kubeconfig and talosconfig replace the restored ones (the PKI is new), the old ones stay as .old" "grep -q NEW-PKI '$OUTD/kubeconfig' && grep -q NEW-PKI '$OUTD/talosconfig' && [ -s '$OUTD/kubeconfig.old' ] && ! grep -q NEW-PKI '$OUTD/kubeconfig.old'"
 new; FAKE_NODES=2 run "${ALL[@]}" --execute --confirm oa-test --only cluster
 chk "fewer nodes than the tfvars ask for fail the cluster check" "[ $RC = 1 ] && grep -q '2 nodes, 6 expected' '$TMP/stdout'"
 new; FAKE_VERIFY_FAIL=1 run "${ALL[@]}" --execute --confirm oa-test --only verify

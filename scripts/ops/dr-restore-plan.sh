@@ -228,7 +228,20 @@ HELD="$WORK/held.txt"
 run_artifacts() { mkdir -p "$OUT"; ( cd "$ROOT" && $TASK restore-artifacts PROVIDER="$PROVIDER" ROLE="$ROLE" FROM="$FROM" OUT="$OUT" FORCE=1 ); }
 check_artifacts() { [ -s "$KCFG" ] && [ -s "$TCFG" ] || { echo "kubeconfig or talosconfig missing in $OUT"; return 1; }; }
 
-run_cluster() { ( cd "$ROOT" && $TASK cluster-up PROVIDER="$PROVIDER" ROLE="$ROLE" ); }
+# A cluster brought up AFTER its state was destroyed has a new PKI: the kubeconfig and talosconfig restored from the old cluster's artifacts
+# (step artifacts) no longer open it (lab 20: "the API does not answer" on a healthy cluster). After each cluster-up the chain takes the
+# identity OpenTofu has just written; the old files stay as *.old.
+refresh_identity() {
+  local f
+  for f in kubeconfig talosconfig; do
+    [ -s "$CLUSTER_DIR/$f" ] || continue
+    cmp -s "$CLUSTER_DIR/$f" "$OUT/$f" 2>/dev/null && continue
+    [ -s "$OUT/$f" ] && cp -p "$OUT/$f" "$OUT/$f.old"
+    cp -p "$CLUSTER_DIR/$f" "$OUT/$f"; chmod 600 "$OUT/$f"
+    say "  ($f of the new cluster taken from ${CLUSTER_DIR##*/infrastructure/}; the restored one is $f.old)"
+  done
+}
+run_cluster() { ( cd "$ROOT" && $TASK cluster-up PROVIDER="$PROVIDER" ROLE="$ROLE" ) && refresh_identity; }
 check_cluster() {
   K get --raw=/readyz >/dev/null 2>&1 || { echo "the API does not answer"; return 1; }
   local total notready
@@ -254,7 +267,8 @@ run_flux() {
   TFBAK="${TFVARS}.dr-bak"; cp -p "$TFVARS" "$TFBAK"
   if grep -qE '^[[:space:]]*deploy_flux[[:space:]]*=' "$TFVARS"; then sed -i -E 's/^([[:space:]]*deploy_flux[[:space:]]*=[[:space:]]*)false/\1true/' "$TFVARS"
   else printf '\ndeploy_flux = true\n' >>"$TFVARS"; fi
-  ( cd "$ROOT" && $TASK cluster-up PROVIDER="$PROVIDER" ROLE="$ROLE" )
+  ( cd "$ROOT" && $TASK cluster-up PROVIDER="$PROVIDER" ROLE="$ROLE" ) || return 1
+  refresh_identity
   # run_flux is the only step that edits the operator's file; the copy is the way back, kept next to it
   echo "  (${TFVARS##*/} now says deploy_flux = true; the previous file is ${TFBAK##*/})"
 }

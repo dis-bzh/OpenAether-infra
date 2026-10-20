@@ -43,6 +43,7 @@ Not a compliance claim. The apps-side results (#134 partial, #143, #144) are in 
 ### Fixed (found by lab 20, 2026-10-20)
 
 - `dr-restore-plan` looked for the restic repositories under the bare `cluster_name` of the tfvars; they live under `CLUSTER_NAME` of the cluster-identity ConfigMap, which is `<cluster_name>-<environment>-<provider>`. Found by the dry run on a lab cluster; the test now expects the full name.
+- `dr-restore-plan` kept the old cluster's kubeconfig and talosconfig after rebuilding: a cluster brought up after its state was destroyed has a new PKI, so the step `cluster` ended "the API does not answer" on a healthy, verified cluster. After each `cluster-up` the chain takes the identity OpenTofu has just written (the restored files stay as `*.old`). It also puts the recovery shares into `openbao-recovery-dev` when the fresh OpenBao is a development one.
 
 ### Fixed
 
