@@ -66,7 +66,7 @@ cat >"$TMP/bin/talosctl" <<'STUB'
 #!/usr/bin/env bash
 echo "talosctl $*" >>"$FAKE_DR/calls.log"
 [ "$1 $2" = "--talosconfig x" ] && true
-case "$*" in *"config info"*) echo '{"endpoints":["203.0.113.10"]}' ;; esac
+case "$*" in *"config info"*) echo "{\"endpoints\":[\"${FAKE_TALOS_ENDPOINT:-203.0.113.10}\"]}" ;; esac
 exit 0
 STUB
 chmod +x "$TMP/bin/task" "$TMP/bin/restic" "$TMP/bin/talosctl"
@@ -195,6 +195,10 @@ new; FAKE_ETCD_SIZE=8192 run "${ALL[@]}" --scenario etcd --execute --confirm oa-
 chk "a snapshot of 4096n bytes (no trailer) is recovered with --recover-skip-hash-check" "[ $RC = 0 ] && calls | grep -q 'bootstrap --recover-from=.*--recover-skip-hash-check'"
 new; FAKE_ETCD_SIZE=8224 run "${ALL[@]}" --scenario etcd --execute --confirm oa-test
 chk "a snapshot of 4096n + 32 bytes (sha256 trailer) is recovered WITHOUT skipping the hash check" "[ $RC = 0 ] && calls | grep -q 'bootstrap --recover-from=' && ! calls | grep -q 'skip-hash-check'"
+new; FAKE_ETCD_SIZE=8224 FAKE_TALOS_ENDPOINT=127.0.0.1:52000 run "${ALL[@]}" --scenario etcd --execute --confirm oa-test
+chk "a tunnel endpoint is refused as the node: the address of the control plane is asked for" "[ $RC = 1 ] && ! calls | grep -q 'talosctl.*bootstrap' && grep -q -- '--control-plane-ip' '$TMP/stdout' '$TMP/stderr'"
+new; FAKE_ETCD_SIZE=8224 FAKE_TALOS_ENDPOINT=127.0.0.1:52000 run "${ALL[@]}" --scenario etcd --execute --confirm oa-test --control-plane-ip 172.16.0.3
+chk "behind a tunnel the node is the given address and the endpoint stays the tunnel" "[ $RC = 0 ] && calls | grep -q 'talosctl.* -n 172.16.0.3 -e 127.0.0.1:52000 bootstrap --recover-from='"
 new; FAKE_ETCD_SIZE=1000 run "${ALL[@]}" --scenario etcd --execute --confirm oa-test
 chk "a file that is not a bolt database stops the chain before talosctl is called" "[ $RC = 1 ] && ! calls | grep -q 'talosctl.*bootstrap'"
 

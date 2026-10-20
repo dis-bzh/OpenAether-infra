@@ -48,6 +48,7 @@ Not a compliance claim. The apps-side results (#134 partial, #143, #144) are in 
 - `dr-restore-plan` failed the step `dbs` on `pg_restore --clean` exiting 1 for six "cannot drop inherited constraint" errors on Zitadel's partitioned cache tables, although the data had been loaded (151 tables, the canary chain intact). That one error is tolerated, any other still fails the step; the canary check follows.
 - `dr-restore-plan` restored the databases with `pg_restore --no-owner` as postgres, so every table of the rebuilt Zitadel belonged to postgres and Zitadel logged "permission denied for schema queue" (145 tables of one owner, caught on a real rebuild). The restore runs `--role=<owner of the database>`; the double refuses a restore without it.
 - The step `verify` of `dr-restore-plan` passed when the restore test Job only skipped (four SKIPs, exit 0). It needs a PASS line and no SKIP.
+- `dr-restore-plan --scenario etcd` gave `talosctl` the talosconfig endpoint as the node: behind a bastion that is a tunnel (`127.0.0.1:52000`) and the call ended "invalid target". The node is `--control-plane-ip` (or the talosconfig's first node); the chain refuses a tunnel as the node.
 
 ### Fixed
 

@@ -17,6 +17,7 @@
 # Usage:
 #   dr-restore-plan.sh <provider> [--role management] [--from primary|replica] [--scenario rebuild|etcd]
 #                      [--db-source pitr|dump] [--pitr-time 'YYYY-MM-DD HH:MM:SS+00']
+#                      [--control-plane-ip IP]  (etcd scenario: the NODE address when the talosconfig endpoints are tunnels)
 #                      [--seal-key-file F] [--restic-password-file F] [--bao-token-file F] [--recovery-shares-dir D]
 #                      [--out DIR] [--work DIR] [--report FILE] [--only a,b] [--from-step a] [--strict]
 #                      [--execute --confirm <cluster_name>]
@@ -32,7 +33,7 @@ PROVIDER="${1:-}"
 case "$PROVIDER" in "" | -h | --help) usage >&2; exit 2 ;; esac
 shift
 ROLE=management; FROM=primary; SCENARIO=rebuild; DBSRC=pitr; PITR=""
-SEALKEY=""; RPW=""; BAOTOK=""; SHARES=""; OUT=""; WORK=""; REPORT=""; ONLY=""; FROMSTEP=""; STRICT=0; EXECUTE=0; CONFIRM=""
+CPIP=""; SEALKEY=""; RPW=""; BAOTOK=""; SHARES=""; OUT=""; WORK=""; REPORT=""; ONLY=""; FROMSTEP=""; STRICT=0; EXECUTE=0; CONFIRM=""
 need_arg() { [ $# -ge 2 ] || { echo "✗ $1 needs a value" >&2; exit 2; }; }
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -41,6 +42,7 @@ while [ $# -gt 0 ]; do
     --scenario) need_arg "$@"; SCENARIO="$2"; shift 2 ;;
     --db-source) need_arg "$@"; DBSRC="$2"; shift 2 ;;
     --pitr-time) need_arg "$@"; PITR="$2"; shift 2 ;;
+    --control-plane-ip) need_arg "$@"; CPIP="$2"; shift 2 ;;
     --seal-key-file) need_arg "$@"; SEALKEY="$2"; shift 2 ;;
     --restic-password-file) need_arg "$@"; RPW="$2"; shift 2 ;;
     --bao-token-file) need_arg "$@"; BAOTOK="$2"; shift 2 ;;
@@ -218,7 +220,7 @@ show_verify() {
 }
 show_etcd-fetch() { say "  \$ restic -r $(repo etcd) restore latest --host etcd --target $WORK/etcd"; say "  check: a file of the snapshot exists, a bolt database (size is a multiple of 4096, or 4096n + 32 with a sha256 trailer)"; }
 show_etcd-recover() {
-  say "  \$ talosctl --talosconfig $TCFG -n <control-plane IP> -e <control-plane IP> bootstrap --recover-from=<snapshot> [--recover-skip-hash-check]"
+  say "  \$ talosctl --talosconfig $TCFG -n <control-plane IP, --control-plane-ip> -e <talosconfig endpoint> bootstrap --recover-from=<snapshot> [--recover-skip-hash-check]"
   say "  note: the node must have no etcd data (wiped or new); this REPLACES the etcd of the cluster and drops everything written since the snapshot"
 }
 show_etcd-check() { say "  \$ talosctl etcd members ; kubectl get nodes ; kubectl -n flux-system get kustomization"; say "  check: 3 members (or the control plane count), nodes Ready"; }
@@ -500,13 +502,18 @@ check_etcd-fetch() {
   say "  ($f, $sz bytes$([ $((sz % 4096)) -eq 32 ] && echo ', with sha256 trailer' || echo ', no trailer: --recover-skip-hash-check is needed'))"
 }
 run_etcd-recover() {
-  local f sz skip="" cp
+  local f sz skip="" ep node
   f="$(etcd_file)"; sz="$(stat -c %s "$f")"
   [ $((sz % 4096)) -eq 32 ] || skip="--recover-skip-hash-check"
-  cp="$(TALOSCONFIG="$TCFG" talosctl config info -o json 2>/dev/null | python3 -c 'import json,sys; print((json.load(sys.stdin).get("endpoints") or [""])[0])' 2>/dev/null || true)"
-  [ -n "$cp" ] || { echo "no control-plane endpoint in $TCFG"; return 1; }
+  ep="$(TALOSCONFIG="$TCFG" talosctl config info -o json 2>/dev/null | python3 -c 'import json,sys; print((json.load(sys.stdin).get("endpoints") or [""])[0])' 2>/dev/null || true)"
+  [ -n "$ep" ] || { echo "no control-plane endpoint in $TCFG"; return 1; }
+  # The ENDPOINT is where talosctl connects (a tunnel such as 127.0.0.1:52000 on a cluster behind a bastion); the NODE is the machine
+  # that receives the command and must be its own address (lab 20: "invalid target 127.0.0.1:52000" when the endpoint was used for both).
+  node="${CPIP:-$(TALOSCONFIG="$TCFG" talosctl config info -o json 2>/dev/null | python3 -c 'import json,sys; print((json.load(sys.stdin).get("nodes") or [""])[0])' 2>/dev/null || true)}"
+  [ -n "$node" ] || node="$ep"
+  case "$node" in 127.* | localhost*) echo "the node is the tunnel $node: pass --control-plane-ip <the control plane's own address>"; return 1 ;; esac
   # shellcheck disable=SC2086
-  talosctl --talosconfig "$TCFG" -n "$cp" -e "$cp" bootstrap --recover-from="$f" $skip
+  talosctl --talosconfig "$TCFG" -n "$node" -e "$ep" bootstrap --recover-from="$f" $skip
 }
 check_etcd-recover() { :; }
 run_etcd-check() { :; }
