@@ -383,7 +383,7 @@ CANARY_SQL="SELECT counter, to_char(written_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T
 DBS=("zitadel-db:zitadel" "grafana-db:grafana")
 db_healthy() { # cluster
   for _ in $(seq 1 "${OA_DR_WAIT_TRIES:-90}"); do
-    [ "$(K -n foundation-databases get cluster "$1" -o jsonpath='{.status.phase}' 2>/dev/null)" = "Cluster in healthy state" ] && return 0
+    [ "$(K -n foundation-databases get clusters.postgresql.cnpg.io "$1" -o jsonpath='{.status.phase}' 2>/dev/null)" = "Cluster in healthy state" ] && return 0
     sleep "${OA_DR_POLL:-10}"
   done
   return 1
@@ -412,10 +412,10 @@ run_dbs() {
   for pair in "${DBS[@]}"; do
     c="${pair%%:*}"; db="${pair##*:}"
     db_healthy "$c" || { echo "$c is not healthy (the live Cluster must exist and be empty before the load)"; return 1; }
-    live="$(K -n foundation-databases get cluster "$c" -o jsonpath='{.status.currentPrimary}')"
+    live="$(K -n foundation-databases get clusters.postgresql.cnpg.io "$c" -o jsonpath='{.status.currentPrimary}')"
     if [ "$DBSRC" = pitr ]; then
-      img="$(K -n foundation-databases get cluster "$c" -o jsonpath='{.spec.imageName}')"
-      size="$(K -n foundation-databases get cluster "$c" -o jsonpath='{.spec.storage.size}')"
+      img="$(K -n foundation-databases get clusters.postgresql.cnpg.io "$c" -o jsonpath='{.spec.imageName}')"
+      size="$(K -n foundation-databases get clusters.postgresql.cnpg.io "$c" -o jsonpath='{.spec.storage.size}')"
       dr_manifest "$c" "$img" "$size" | K apply -f - >/dev/null
       db_healthy "$c-dr" || { echo "$c-dr (recovery from ${STORE}) did not become healthy"; return 1; }
       K -n foundation-databases exec "$c-dr-1" -c postgres -- pg_dump -U postgres -Fc "$db" \
@@ -432,13 +432,13 @@ check_dbs() {
   local pair c db live out rc=0
   for pair in "${DBS[@]}"; do
     c="${pair%%:*}"; db="${pair##*:}"
-    live="$(K -n foundation-databases get cluster "$c" -o jsonpath='{.status.currentPrimary}')"
+    live="$(K -n foundation-databases get clusters.postgresql.cnpg.io "$c" -o jsonpath='{.status.currentPrimary}')"
     if out="$(K -n foundation-databases exec "$live" -c postgres -- psql -U postgres -d "$db" -X -At -F "$(printf '\t')" -c "$CANARY_SQL" | python3 -c "$CANARY_PY" 2>&1)"; then
       say "  ✓ $c: $out"
     else
       echo "$c: $out"; rc=1
     fi
-    K -n foundation-databases delete cluster "$c-dr" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+    K -n foundation-databases delete clusters.postgresql.cnpg.io "$c-dr" --ignore-not-found --wait=false >/dev/null 2>&1 || true
   done
   return "$rc"
 }

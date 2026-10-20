@@ -140,7 +140,7 @@ for x in c:
     assert x['spec']['externalClusters'][0]['plugin']['parameters']['barmanObjectName'].endswith('-primary')
 PY"
 chk "the dump of each scratch Cluster was loaded into the live primary" "[ \"\$(grep -c 'bytes=1005' '$FAKE_DR/state/pg_restore.log')\" = 2 ] && grep -q '^zitadel-db-1 ' '$FAKE_DR/state/pg_restore.log'"
-chk "the scratch Clusters are deleted" "calls | grep -q 'delete cluster zitadel-db-dr' && calls | grep -q 'delete cluster grafana-db-dr'"
+chk "the scratch Clusters are deleted" "calls | grep -q 'delete clusters.postgresql.cnpg.io zitadel-db-dr' && calls | grep -q 'delete clusters.postgresql.cnpg.io grafana-db-dr'"
 chk "the report is written with every step ok and a target" "[ \"\$(grep -c -P '\tok\t' '$OUTD/dr-report-'*.tsv)\" = 11 ] && head -1 '$OUTD/dr-report-'*.tsv | grep -q target_seconds"
 chk "the report states the wall clock against the RTO" "grep -qE 'chain: [0-9]+s wall clock.*RTO target 28800s — within' '$TMP/stdout'"
 

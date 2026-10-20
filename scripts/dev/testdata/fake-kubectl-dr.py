@@ -87,8 +87,11 @@ if a[:3] == ["-n", "foundation-vault", "delete"] and "pod" in a:
     sys.exit(0)
 if a[:2] == ["get", "externalsecret"]:
     out("ns es True\n" * 3)
-if "get cluster" in A:
-    name = a[a.index("cluster") + 1]
+if "get cluster " in A + " ":  # the bare name is the CAPI Cluster on a management cluster (lab 20): nothing is there
+    sys.stderr.write('Error from server (NotFound): clusters.cluster.x-k8s.io not found\n')
+    sys.exit(1)
+if "get clusters.postgresql.cnpg.io" in A:
+    name = a[a.index("clusters.postgresql.cnpg.io") + 1]
     jp = opt("-o") or ""
     for key, val in (("status.phase", "Cluster in healthy state"), ("currentPrimary", name + "-1"), ("imageName", "ghcr.io/cloudnative-pg/postgresql:18.6"),
                      ("storage.size", "5Gi")):
@@ -111,7 +114,7 @@ if "exec" in a and "psql" in a:
         rows.append((i, ts, "f" * 64 if (os.environ.get("FAKE_BROKEN_CHAIN") and i == 20) else sha))
         prev = sha
     out("".join(f"{i}\t{t}\t{s}\n" for i, t, s in rows))
-if "delete job" in A or "delete cluster" in A:
+if "delete job" in A or "delete clusters.postgresql.cnpg.io" in A:
     sys.exit(0)
 if "create job --from=cronjob/cnpg-recovery-restore-test" in A:
     sys.exit(0)
