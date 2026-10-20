@@ -105,6 +105,12 @@ if "exec" in a and "pg_restore" in a:
     i = a.index("exec") + 1
     pod = a[i + 1] if a[i] == "-i" else a[i]
     open(f("pg_restore.log"), "a").write(f"{pod} bytes={len(data)}\n")
+    if os.environ.get("FAKE_PG_RESTORE") == "inherited":
+        sys.stderr.write('pg_restore: error: could not execute query: ERROR:  cannot drop inherited constraint "x_pkey" of relation "x"\npg_restore: warning: errors ignored on restore: 1\n')
+        sys.exit(1)
+    if os.environ.get("FAKE_PG_RESTORE") == "real":
+        sys.stderr.write('pg_restore: error: could not execute query: ERROR:  role "zitadel" does not exist\npg_restore: error: could not execute query: ERROR:  cannot drop inherited constraint "x_pkey" of relation "x"\n')
+        sys.exit(1)
     sys.exit(0)
 if "exec" in a and "psql" in a:
     rows, prev = [], ""

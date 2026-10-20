@@ -403,6 +403,19 @@ print(json.dumps({"apiVersion": "postgresql.cnpg.io/v1", "kind": "Cluster",
                                                  "parameters": {"barmanObjectName": f"{c}-{store}", "serverName": c}}}]}}))
 PY
 }
+# pg_restore --clean on Zitadel's partitioned cache tables cannot drop the partitions' inherited constraints and exits 1 although the
+# data is loaded (lab 20: 6 such errors, then the canary chain intact). That one error is harmless; any other is a failure.
+load_dump() { # live-pod database; the dump (custom format) on stdin
+  local err="$WORK/pg_restore-$2.err" rc=0
+  K -n foundation-databases exec -i "$1" -c postgres -- pg_restore -U postgres -d "$2" --clean --if-exists --no-owner 2>"$err" || rc=$?
+  cat "$err" >&2
+  [ "$rc" -eq 0 ] && return 0
+  if grep -q '^pg_restore: error:' "$err" && ! grep '^pg_restore: error:' "$err" | grep -vq 'cannot drop inherited constraint'; then
+    say "  (pg_restore exited $rc on $(grep -c '^pg_restore: error:' "$err") inherited-constraint error(s) of --clean on partitioned tables: tolerated, the data is checked below)"
+    return 0
+  fi
+  return "$rc"
+}
 run_dbs() {
   mkdir -p "$WORK"
   local pair c db live img size
@@ -419,12 +432,12 @@ run_dbs() {
       dr_manifest "$c" "$img" "$size" | K apply -f - >/dev/null
       db_healthy "$c-dr" || { echo "$c-dr (recovery from ${STORE}) did not become healthy"; return 1; }
       K -n foundation-databases exec "$c-dr-1" -c postgres -- pg_dump -U postgres -Fc "$db" \
-        | K -n foundation-databases exec -i "$live" -c postgres -- pg_restore -U postgres -d "$db" --clean --if-exists --no-owner
+        | load_dump "$live" "$db"
     else
       local f
       f="$(find "$WORK/cnpg" -type f -name "$c.dump" | head -n 1)"
       [ -n "$f" ] || { echo "$c.dump is not in the restored snapshot"; return 1; }
-      K -n foundation-databases exec -i "$live" -c postgres -- pg_restore -U postgres -d "$db" --clean --if-exists --no-owner <"$f"
+      load_dump "$live" "$db" <"$f"
     fi
   done
 }
