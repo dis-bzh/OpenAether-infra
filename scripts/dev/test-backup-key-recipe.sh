@@ -32,6 +32,13 @@ for b in blocks:
     if own:
         assert {"s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"} <= acts
 PY
+# the replica pair lives on the REPLICA store: an OVH replica gets the OVH note and no bucket policy, whatever the cluster's cloud (lab 19)
+sed -E 's#^s3_replica_endpoint[[:space:]]*=.*#s3_replica_endpoint = "https://s3.gra.io.cloud.ovh.net"#' "$SB/t.tfvars" >"$SB/o.tfvars"
+out_o="$($R "$SB/o.tfvars" replica 2>&1)"
+{ grep -q "replica pair for ovh" <<<"$out_o" && grep -q "OVH: no bucket policy" <<<"$out_o" && ! grep -q '"Version"' <<<"$out_o" && grep -q "bucket $P-backups-dev-backup" <<<"$out_o"; } \
+  && ok "an OVH replica store: OVH note, no bucket policy, bucket named after the cluster" || bad "OVH replica: $out_o"
+out_p="$($R "$SB/o.tfvars" primary 2>&1)"
+grep -q "primary pair for scaleway" <<<"$out_p" && grep -q '"Version"' <<<"$out_p" && ok "the primary pair keeps the cluster's cloud" || bad "primary changed"
 grep -qE 'SCW[0-9A-Z]{16}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}' <<<"$out" && bad "an identifier appears" || ok "no identifier of any account in the output"
 out="$(PAIR_PRINCIPAL=11111111-example OPERATOR_PRINCIPAL=22222222-example $R "$SB/t.tfvars" primary 2>&1)"
 python3 -I - "$out" <<'PY' && ok "primary: the principals given are used, SCW-style on Scaleway" || bad "principal not used"

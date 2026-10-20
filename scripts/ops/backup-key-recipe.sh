@@ -22,6 +22,8 @@ command -v jq >/dev/null 2>&1 || { echo "✗ jq required" >&2; exit 2; }
 
 CLUSTER="$(tfv "$TFVARS" cluster_name)"; ROLE="$(tfv "$TFVARS" cluster_role)"; ENVN="$(tfv "$TFVARS" environment)"
 PROVIDER="$(tfv_provider "$TFVARS")"
+STORE_PROVIDER="$PROVIDER"   # who HOLDS the bucket: the replica pair lives on the replica store, which may be another cloud (lab 19: OVH)
+if [ "$KIND" = replica ]; then rp="$(provider_of_endpoint "$(tfv "$TFVARS" s3_replica_endpoint)")"; [ -z "$rp" ] || STORE_PROVIDER="$rp"; fi
 PROJECT="$(oa_project "$CLUSTER" "$(tfv "$TFVARS" bucket_suffix)")"
 STATE="$(oa_state_bucket "$PROJECT" "$PROVIDER" "$ENVN")"; ARTIFACT="$(oa_artifact_bucket "$PROJECT" "$PROVIDER" "$ROLE" "$ENVN")"
 BACKUPS="$(oa_backup_bucket "$PROJECT" "$PROVIDER" "$ENVN")"; LOGS="$(oa_logs_bucket "$PROJECT" "$PROVIDER" "$ENVN")"
@@ -29,21 +31,21 @@ case "$KIND" in primary) OWN="$BACKUPS"; OTHERS=("$STATE" "$ARTIFACT" "$LOGS") ;
                 replica) OWN="$BACKUPS-backup"; OTHERS=("$STATE-backup" "$ARTIFACT-backup") ;;
                 loki)    OWN="$LOGS"; OTHERS=("$STATE" "$ARTIFACT" "$BACKUPS") ;; esac
 PAIR="${PAIR_PRINCIPAL:-<principal of the pair>}"; OPER="${OPERATOR_PRINCIPAL:-<principal of the operator>}"
-case "$PROVIDER" in
+case "$STORE_PROVIDER" in
   scaleway) principal() { jq -cn --arg p "$1" '{SCW: ("application_id:" + $p)}'; }; opprincipal() { jq -cn --arg p "$1" '{SCW: ("user_id:" + $p)}'; } ;;
   *)        principal() { jq -cn --arg p "$1" '{AWS: $p}'; }; opprincipal() { principal "$1"; } ;;
 esac
 
-echo "# ${KIND} pair for ${PROVIDER} (bucket ${OWN})"
+echo "# ${KIND} pair for ${STORE_PROVIDER} (bucket ${OWN})"
 echo
 echo "## Rights the pair must hold on ${OWN} (nothing else; apps/base/backup/README.md, 'S3 rights of a dedicated key pair')"
 echo "  bucket:  s3:ListBucket (it is also HeadBucket), s3:GetBucketLocation, s3:ListBucketMultipartUploads"
 echo "  objects: s3:GetObject, s3:PutObject (with the AES256 server-side-encryption request), s3:DeleteObject,"
 echo "           s3:AbortMultipartUpload, s3:ListMultipartUploadParts"
 echo "  withheld: s3:DeleteObjectVersion, versioning, lifecycle, object-lock and retention changes, bucket deletion, every other bucket"
-[ "$PROVIDER" != scaleway ] || echo "  Scaleway IAM (project-wide sets): ObjectStorageBucketsRead + ObjectStorageObjectsRead/Write/Delete on the application; the bucket policies isolate"
-[ "$PROVIDER" != ovh ] || echo "  OVH: no bucket policy through the S3 API; give the S3 user the same rights through the OVH API (not verified)"
-if [ "$PROVIDER" != ovh ]; then
+[ "$STORE_PROVIDER" != scaleway ] || echo "  Scaleway IAM (project-wide sets): ObjectStorageBucketsRead + ObjectStorageObjectsRead/Write/Delete on the application; the bucket policies isolate"
+[ "$STORE_PROVIDER" != ovh ] || echo "  OVH: no bucket policy through the S3 API; give the S3 user the same rights through the OVH API (not verified)"
+if [ "$STORE_PROVIDER" != ovh ]; then
   echo
   echo "## Bucket policy of ${OWN} (apply with the operator's keys: aws s3api put-bucket-policy --bucket ${OWN} --policy file://policy.json)"
   jq -n --arg b "$OWN" --argjson pp "$(principal "$PAIR")" --argjson op "$(opprincipal "$OPER")" '{
