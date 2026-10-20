@@ -20,6 +20,16 @@ infra 7e367d9 / apps 75e464f, on branches) ran a nominal `cluster-up` in 9 min 0
 infra issues the series set out to look at: #42 (the API unreachable for seconds during a control-plane roll) and #375 (the OVH hard-reboot window) stay open for 0.4.0, see below.
 Not a compliance claim. The apps-side results (#134 partial, #143, #144) are in the OpenAether-apps CHANGELOG.
 
+### Added (0.4.0, milestone M3: restore tests and disaster recovery)
+
+- **`task dr-restore-plan`** (`scripts/ops/dr-restore-plan.sh`): the chain of `docs/disaster-recovery.md` as one command. Dry-run by default (prints the ordered steps with this cluster's commands, the inputs each step needs and which are missing; `--strict` makes
+  a missing input an error, for a readiness check before the day). `--execute --confirm <cluster_name>` runs it: restore the artifacts, `cluster-up` with Flux held, the OpenBao seal key Secret, Flux on, hold the Kustomizations outside OpenBao's closure, restore the raft snapshot
+  from the chosen store, put the recovery shares back, resume, restore the databases (a scratch Cluster recovered from the ObjectStore, optionally at a point in time, then `pg_dump | pg_restore` into the empty live Cluster, or the restic dump), resume identity, verify with a restore test on the rebuilt
+  cluster. A check after each step stops the chain at the first failure and names the step to resume from; a TSV report gives seconds and target per step against the 8 h RTO. `--scenario etcd` restores the newest etcd snapshot with `talosctl bootstrap --recover-from`. Secrets travel on stdin or as
+  files, never in argv. Offline test `scripts/dev/test-dr-restore-plan.sh` (stateful kubectl double, stub task, restic and talosctl): dry-run runs nothing, `--execute` needs the cluster name, the order, a failing step stops the chain, no secret in argv or output.
+  Rung: **mocked**. The chain has not been run on a cluster; `docs/disaster-recovery.md` (EN and FR) now states the RPO of each dataset, the RTO target, the measured pieces (lab 15A, 15c, 19) and what is not proven.
+- The application restore tests (daily CNPG recovery from both stores with a canary compare, weekly point in time, the dumps loaded daily, an opt-in Longhorn canary) are in the OpenAether-apps CHANGELOG; `docs/backup-policy.md` rows follow them.
+
 ### Added (0.4.0, milestone M2: backups complete, replicated, verified)
 
 - **Talos API access for the scheduled etcd snapshot** (`etcd_snapshot_api_access`, default true): the control planes enable `machine.features.kubernetesTalosAPIAccess` with the single role `os:etcd:backup` for the namespace `foundation-databases`,

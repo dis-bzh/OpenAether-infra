@@ -3,7 +3,7 @@
 🇫🇷 [Version française](disaster-recovery.fr.md)
 
 > Written to answer ANSSI rules on a documented recovery plan, time targets and a recovery test (audit id F-BKP-16). It links the
-> existing pieces in the order that works; **it adds no mechanism, and the chain as a whole has never been run**: the pieces were
+> existing pieces in the order that works, and since 0.4.0 `task dr-restore-plan` runs them in that order; **the chain as a whole has never been run on a cluster**: the pieces were
 > each exercised (the rung is said for each step), the joins between them were not. The time targets are proposals, not
 > measurements. It claims no compliance with any ANSSI document.
 
@@ -48,14 +48,61 @@ Do the steps in this order. A step that fails stops the chain: do not skip ahead
 | 5 | **OpenBao snapshot restore** | On the operator machine: `restic restore latest` of the repository `<bucket>/<CLUSTER_NAME>/openbao` (the CronJob's value; the example in the apps README omits `<CLUSTER_NAME>`) with the restic password from escrow and the surviving store's keys (**not** from OpenBao: they live in the thing being restored); then with a break-glass root token of the fresh cluster (a quorum of share holders), `bao operator raft snapshot restore -force <file>` (apps `backup/README.md` and `vault/README.md`) | The Zitadel masterkey, the database passwords, the restic and Longhorn passphrases and the PKI intermediate all come back from here. Nothing else can start correctly before | The restore command was run on a real OpenBao; the whole step is **not drilled with standbys** (apps README). 1 h |
 | 6 | Recovery shares back | Replace the fresh `openbao-recovery-shares` with the source's saved copy (apps README, DR step 4) | The restored data is under the source cluster's recovery keys | As step 5. 15 min |
 | 7 | External Secrets and the rest resume | Resume the suspended Kustomizations; `kubectl get externalsecret -A` all Ready; the restic and `zitadel-masterkey` Secrets exist | The cluster's own Secrets are rebuilt from OpenBao, which is why step 5 precedes the next | Observed at install. 15 min |
-| 8 | **Databases (CNPG)** | **Before Zitadel serves**, hold the `identity` Kustomization (or scale Zitadel to 0). Restore from the restic dump (`pg_restore … --clean --if-exists`) or by point in time into a new Cluster (apps `backup/README.md`) | The masterkey in OpenBao (step 5) must already be in place: a database restored under a different masterkey is unusable | The dump path is written; `pg_restore --list` tested monthly; **the PITR and the dump restore into a live database have not been run**. 1 h |
+| 8 | **Databases (CNPG)** | **Before Zitadel serves**, hold the `identity` Kustomization (or scale Zitadel to 0). Restore from the restic dump (`pg_restore … --clean --if-exists`) or by point in time into a new Cluster (apps `backup/README.md`) | The masterkey in OpenBao (step 5) must already be in place: a database restored under a different masterkey is unusable | `dr-restore-plan` step `dbs` (PITR through a scratch Cluster, or the dump); the recovery itself ran by hand and is now tested daily; **the load into a live Cluster has not been run on a cluster**. 1 h |
 | 9 | Zitadel and the rest of the DAG | Resume `identity`; wait for the DAG (the number of Kustomizations moves with the bricks picked) | Identity needs its database and masterkey | Convergence measured at install (35 Kustomizations about 2 minutes after the seed, Scaleway). 30 min |
 | 10 | What lives only in etcd | Only if needed: the etcd snapshot (`talosctl bootstrap --recover-from`; the scheduled one is the restic repository `<bucket>/<CLUSTER_NAME>/etcd`, `restic restore latest` with the escrowed restic password, and the file is passed with `--recover-skip-hash-check` only if it has no sha256 trailer; the operator's gpg ones are `backups/etcd/`), which **replaces** the current etcd and everything written since | A last resort: Flux rebuilds the cluster's content | Run on OVH in the upgrade drill (`upgrade.md`). Not part of the normal chain |
 | 11 | Verify | `task cluster-verify`, `task cluster-security`, `task rbac-review`, a login to each UI, a backup run, then re-seed what is outside OpenBao (`seed-openbao.sh`) if the snapshot predates it | Declare done on evidence | Targets of the commands, not of the chain. 30 min |
 | 12 | After an attack only | Rotate (`incident-response.md`, section 7), then erase the old cluster's state generations | A restore returns the old secrets | n/a |
 
-**Proposed time target for the whole chain: 8 hours of work, one working day (RTO), data as of the last good backup (RPO 24 h).** The sum of the
+**Proposed time target for the whole chain: 8 hours of work, one working day (RTO), data as of the last good backup (RPO below).** The sum of the
 step targets above is about 6.5 hours. No drill has timed it.
+
+### One command
+
+`task dr-restore-plan` is the table above as a command (`scripts/ops/dr-restore-plan.sh`; it adds no mechanism, every step calls a command that exists). It is a **dry-run by default**: it prints each step with the commands for THIS
+cluster (its buckets, repositories and store), the inputs each step still needs and which are missing, and runs nothing. Run it, with `--strict`, before the day you need it. `--execute --confirm <cluster_name>` runs the
+chain, a check after each step, and stops at the first failure with the step to resume from; it writes a timing report (a TSV, seconds and target per step, the wall clock against the 8 h) to fill the table of section 5.
+
+```bash
+task dr-restore-plan PROVIDER=scaleway -- --from replica                         # dry-run: ordered steps, this cluster's commands, missing inputs
+task dr-restore-plan PROVIDER=scaleway -- --from replica --strict --seal-key-file F --restic-password-file F \
+  --bao-token-file F --recovery-shares-dir D                                     # readiness: exits 1 if an input is missing
+task dr-restore-plan PROVIDER=scaleway -- --from replica --seal-key-file F --restic-password-file F --bao-token-file F \
+  --recovery-shares-dir D --execute --confirm <cluster_name>                     # the chain; --from-step <id> resumes, --only <id,id> runs a subset
+```
+
+Steps (rebuild scenario): `artifacts` (1), `cluster` (2, with `deploy_flux = false`), `seedkey` (3), `flux` (4: `deploy_flux = true`, a second `task cluster-up`; the previous tfvars is kept as `.dr-bak`), `hold` (the Kustomizations outside OpenBao's dependency
+closure are suspended), `openbao` (5), `shares` (6), `resume` (7: everything held except identity), `dbs` (8), `identity` (9), `verify` (11, which ends with a restore test run on the rebuilt cluster). `--db-source pitr` (default) recovers each
+CNPG database from the ObjectStore of the chosen store (optionally `--pitr-time`) into a scratch Cluster `<name>-dr`, then streams `pg_dump | pg_restore --clean` into the empty live Cluster and checks the canary chain; `--db-source dump` restores the
+restic dump instead (RPO 24 h, no archive needed: the path when the other provider's archive is gone). `--scenario etcd` is step 10 alone: restic restore of the newest etcd snapshot, `talosctl bootstrap --recover-from` (with `--recover-skip-hash-check` when the
+file has no sha256 trailer), and a check that the API and the nodes are back. Secrets are read from files and travel on stdin or as file arguments, never in argv or in the output.
+
+### RPO, RTO, what was measured and what was not
+
+| Data | RPO (worst case) | Where it comes from |
+|---|---|---|
+| OpenBao | 24 h | daily snapshot 02:17 UTC, restic on both stores |
+| CNPG databases through the archive | minutes on the primary store; up to **15 min plus the copy** on the replica store (46 s for 22 objects, lab 19) | WAL archive and the 15-minute `cnpg-store-replicate` |
+| CNPG databases through the dump | 24 h | daily dump 02:47 UTC, restic on both stores |
+| etcd | 24 h | snapshot 04:10 UTC, restic on both stores |
+| Longhorn volumes | per recurring job (daily 03:37 UTC when on) | one store only |
+| tfstate, artifacts | since the last apply or change | both stores |
+
+RTO target: **8 h** for the whole chain (0.4.0 decision; tighten after the first timed run). What was measured, piece by piece, with the shape of the lab: `cluster-up` 8 min 53 s (Scaleway, 3 + 3 POP2-4C-16G, lab 19) and 545 s to 1661 s on
+the three clouds (`status.md`); the whole DAG Ready 23.5 min (Scaleway) and 29 min (OVH) after the start (0.3.0 final validation); CNPG recovery into a new Cluster 40 s (lab 15A), 54 s (15c), 72 s with a point in time from the primary store and 66 s from the
+**replica store alone** with the primary emptied (lab 19, 150 tables = origin); Longhorn RWO, LUKS2 and RWX restored into new volumes, 82 s, sha256 identical (15c); an etcd snapshot of 97.7 MB restored from the replica store with the escrowed password
+and opened in a local etcd (lab 19). All of these are nominal and separate. **Not measured: the chain, nominal or with an incident.**
+
+**Not proven yet** (each is a pass criterion of the next lab): the chain as a whole; the join in step 3 (`hold` suspends the Kustomizations before foundation-vault is Ready; the race is unmeasured); the OpenBao raft restore with standbys, and the form the script uses (token and snapshot
+on the standard input of `kubectl exec`, `/tmp` writable in the pod); `talosctl bootstrap --recover-from` on a throwaway Talos cluster; the load of a recovered database into the live Cluster (owner and role handling); a new cluster name (the restic prefix is the
+old name, so the script, which reads the name from the tfvars, expects the same name); the scheduled restore tests below have run only offline.
+
+### The scheduled restore tests (0.4.0)
+
+Since 0.4.0 the platform restores its own backups without a person (apps `backup/databases`, `cnpg` and the opt-in `storage-restore-test`): daily `cnpg-recovery-restore-test` recovers zitadel-db and grafana-db from the primary AND the replica store into a scratch Cluster in
+`backup-restore-test` and compares a canary table (a counter and a hash chain written every 5 minutes) with the live database; weekly `cnpg-pitr-restore-test` recovers to the time of one canary row and must end exactly there; daily `cnpg-dump-load-restore-test` loads the restic dumps of
+both repositories into a private PostgreSQL; the opt-in `longhorn-restore-test` restores a canary volume weekly. Results are `oa_restore_test_*` metrics with `RestoreTestFailed`, `RestoreTestNoRecentPass` and the other alerts of `vmrule-restore-test.yaml`. A scratch object is always removed, even
+on failure, and a restore test can never touch a live object (namespace, names, RBAC and a Kyverno policy). The OpenBao raft snapshot is checked daily as far as its sums; it is restored into an OpenBao only by this chain.
 
 **Points where the chain has an unsettled join**: (a) how step 3 is won against Flux on a cluster brought up with Flux on (suspend `flux-system`
 right after the API answers, or build with `deploy_flux = false` and enable it after the Secret exists): not tried, it is a lab step; (b) whether the surviving replica holds the
@@ -82,7 +129,7 @@ timer started at the decision and every step noted as run, skipped or failed.
 |---|---|---|---|---|---|---|
 | _none yet_ | | | | | | |
 
-The first drill is the dry run of this chain (`LAB-CHECKLIST.md`, B13 and B17): it settles the three joins above and replaces the proposed targets with numbers.
+The first drill is `task dr-restore-plan ... --execute` on a throwaway cluster (`LAB-CHECKLIST.md`, B13 and B17): it settles the three joins above and replaces the proposed targets with numbers; its report TSV is the source of the row.
 Whoever runs it writes the row, corrects this page, and states in the CHANGELOG the rung reached.
 
 ## 6. Review

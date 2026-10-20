@@ -491,6 +491,8 @@ tasks:
       # The failover seeds a cluster from the OTHER provider's replica; what it untracks is the
       # difference between a PKI carried over and a destroy plan against a cloud that is gone.
       - ./scripts/dev/test-restore-state.sh
+      # The recovery chain as a command: dry-run runs nothing, --execute needs the name, a failing check stops it.
+      - ./scripts/dev/test-dr-restore-plan.sh
       # `nc -z` calls a dead ssh -L tunnel healthy. Two local listeners measure
       # the difference the whole tunnel guard rests on.
       - ./scripts/dev/test-endpoint-probe.sh
@@ -1915,6 +1917,22 @@ tasks:
       - ../../../scripts/internal/ensure-buckets.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars --preflight
       - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
       - '{{.GEN_ENV}}../../../scripts/ops/restore-state.sh envs/{{.FROM}}.tfvars envs/{{.ROLE}}-{{.PROVIDER}}.tfvars'
+
+  dr-restore-plan:
+    desc: >-
+      The disaster-recovery chain of docs/disaster-recovery.md as one command, a check after each step, a timing
+      report. DRY-RUN by default: prints the ordered steps with this cluster's commands and the inputs each one still
+      needs (run it BEFORE the day). Usage: task dr-restore-plan PROVIDER=scaleway [ROLE=management] --
+      [--from primary|replica]
+      [--scenario rebuild|etcd] [--seal-key-file F --restic-password-file F --bao-token-file F --recovery-shares-dir D]
+      [--db-source pitr|dump] [--strict]. Execute: -- --execute --confirm <cluster_name> (the script has the rest)
+    requires:
+      vars: [PROVIDER]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+    cmds:
+      - ./scripts/ops/dr-restore-plan.sh {{.PROVIDER}} --role {{.ROLE}} {{.CLI_ARGS}}
 
   cluster-upgrade:
     aliases: [upgrade]
