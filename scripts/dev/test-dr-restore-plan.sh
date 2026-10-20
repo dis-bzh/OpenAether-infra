@@ -99,13 +99,13 @@ OA_ENVS_DIR="$TMP/none" bash "$DR" scaleway >/dev/null 2>"$TMP/stderr"; chk "no 
 echo "=== dry-run (the default) ==="
 new; run "${ALL[@]}"
 chk "exit 0 and every step of the chain is printed" "[ $RC = 0 ] && for s in artifacts cluster seedkey flux hold openbao shares resume dbs identity verify; do grep -q \"── step \$s:\" '$TMP/stdout' || exit 1; done"
-chk "the commands name THIS cluster's store and repositories" "grep -q 's3:https://s3.fr-par.scw.cloud/s3-oa-zz-scaleway-backups-prod/oa-test/openbao' '$TMP/stdout' && grep -q 'FROM=primary' '$TMP/stdout'"
+chk "the commands name THIS cluster's store and repositories" "grep -q 's3:https://s3.fr-par.scw.cloud/s3-oa-zz-scaleway-backups-prod/oa-test-prod-scaleway/openbao' '$TMP/stdout' && grep -q 'FROM=primary' '$TMP/stdout'"
 chk "it says it is a dry-run and that nothing ran" "grep -q 'MODE: DRY-RUN' '$TMP/stdout'"
 chk "nothing was run: no stub was called, no directory created" "[ ! -s '$FAKE_DR/calls.log' ] && [ ! -e '$OUTD' ]"
 chk "the targets and the RTO are stated, with the RPO of each data set" "grep -q '480 min RTO' '$TMP/stdout' && grep -q 'RPO' '$TMP/stdout'"
 chk "the report table has every step as dry-run" "[ \"\$(grep -c ' dry-run ' '$TMP/stdout')\" = 11 ]"
 run "${ALL[@]}" --from replica
-chk "--from replica reads the -backup bucket on the replica endpoint with the replica store's keys" "grep -q 's3:https://s3.gra.io.cloud.ovh.net/s3-oa-zz-scaleway-backups-prod-backup/oa-test/openbao' '$TMP/stdout'"
+chk "--from replica reads the -backup bucket on the replica endpoint with the replica store's keys" "grep -q 's3:https://s3.gra.io.cloud.ovh.net/s3-oa-zz-scaleway-backups-prod-backup/oa-test-prod-scaleway/openbao' '$TMP/stdout'"
 
 echo "=== missing inputs ==="
 new; run; chk "without inputs: exit 0 (a plan to read), the missing ones listed" "[ $RC = 0 ] && grep -q 'needs: --seal-key-file' '$TMP/stdout' && grep -q 'needs: --bao-token-file' '$TMP/stdout' && grep -q 'needs: --recovery-shares-dir' '$TMP/stdout'"
@@ -169,7 +169,7 @@ run "${ALL[@]}" --execute --confirm oa-test --from-step resume
 chk "--from-step resume runs resume and everything after it, nothing before" "[ $RC = 0 ] && ! calls | grep -q 'task restore-artifacts' && calls | grep -q 'task cluster-verify' && grep -q '^cnpg resume' '$FAKE_DR/state/patches.log'"
 new; mkdir -p "$OUTD/work"; printf 'cnpg\nidentity\n' >"$OUTD/work/held.txt"
 run "${ALL[@]}" --execute --confirm oa-test --only dbs --db-source dump --from replica
-chk "--db-source dump restores the cnpg dumps from the replica repository and loads them (no scratch Cluster)" "[ $RC = 0 ] && calls | grep -q 'restic -r s3:https://s3.gra.io.cloud.ovh.net/.*-backup/oa-test/cnpg' && [ ! -e '$FAKE_DR/state/applied.jsonl' ] && [ \"\$(grep -c 'bytes=500' '$FAKE_DR/state/pg_restore.log')\" = 2 ]"
+chk "--db-source dump restores the cnpg dumps from the replica repository and loads them (no scratch Cluster)" "[ $RC = 0 ] && calls | grep -q 'restic -r s3:https://s3.gra.io.cloud.ovh.net/.*-backup/oa-test-prod-scaleway/cnpg' && [ ! -e '$FAKE_DR/state/applied.jsonl' ] && [ \"\$(grep -c 'bytes=500' '$FAKE_DR/state/pg_restore.log')\" = 2 ]"
 new; run "${ALL[@]}" --execute --confirm oa-test --only dbs --from replica --pitr-time '2026-10-20 09:00:00+00'
 chk "--pitr-time is the recovery target of the scratch Cluster, from the replica ObjectStore" "python3 - '$FAKE_DR/state/applied.jsonl' <<'PY'
 import json, sys

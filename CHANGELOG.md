@@ -40,6 +40,10 @@ Not a compliance claim. The apps-side results (#134 partial, #143, #144) are in 
   section 4 says how to use it (Scaleway measured, OVH and Outscale expectations, Outscale a source only while #377 stands).
 - Documentation (EN and FR): the etcd snapshot and CNPG archive rows of the backup policy (the CNPG archive has no client-side encryption, stated), a deviation row in the key management page, the etcd restore from the restic repository.
 
+### Fixed (found by lab 20, 2026-10-20)
+
+- `dr-restore-plan` looked for the restic repositories under the bare `cluster_name` of the tfvars; they live under `CLUSTER_NAME` of the cluster-identity ConfigMap, which is `<cluster_name>-<environment>-<provider>`. Found by the dry run on a lab cluster; the test now expects the full name.
+
 ### Fixed
 
 - **Documentation (EN and FR, second pass on lab 19):** `docs/backup-policy` says exactly what is not client-side encrypted: the CNPG WAL and base backups, and their copy on the replica store (same bytes, SSE-S3 requested; header read back on OVH objects in lab 19); the restic datasets are. The scheduled etcd snapshot now finds the control planes itself through the Kubernetes API (apps #150, OpenAether-apps CHANGELOG); the Talos API access feature of this repository is unchanged, and its endpoint `talos.default` is not relied on. Not proven on a cluster yet. Open: apps #149.

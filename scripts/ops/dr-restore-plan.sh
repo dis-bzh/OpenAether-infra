@@ -74,6 +74,9 @@ REPL_EP="$(tfv "$TFVARS" s3_replica_endpoint)"; REPL_REGION="$(tfv "$TFVARS" s3_
 DEPLOY_FLUX="$(tfv "$TFVARS" deploy_flux)"
 CPS="$(tfv "$TFVARS" control_planes)"; WKS="$(tfv "$TFVARS" workers)"
 NODES_EXPECTED=""; { [[ "$CPS" =~ ^[0-9]+$ ]] && [[ "$WKS" =~ ^[0-9]+$ ]]; } && NODES_EXPECTED=$((CPS + WKS))
+# The restic prefix is CLUSTER_NAME of the cluster-identity ConfigMap, which OpenTofu sets to "<cluster_name>-<environment>-<provider>"
+# (main.tf cluster_id), NOT the bare cluster_name of the tfvars (lab 20: the repositories were looked for under "openaether").
+CID="${CN}-${ENVN}-${PROVIDER}"
 PROJECT="$(oa_project "$CN" "$(tfv "$TFVARS" bucket_suffix)")"
 BKT="$(oa_backup_bucket "$PROJECT" "$PROVIDER" "$ENVN")"          # restic (OpenBao, CNPG dumps, etcd) and Longhorn
 if [ "$FROM" = replica ]; then
@@ -163,7 +166,7 @@ restic_env() { # runs "$@" with the surviving store's keys and the repository pa
   AWS_ACCESS_KEY_ID="$(s3_cred "$PROVIDER" "$KIND" ak "$EP")" AWS_SECRET_ACCESS_KEY="$(s3_cred "$PROVIDER" "$KIND" sk "$EP")" \
     AWS_DEFAULT_REGION="$REGION" RESTIC_PASSWORD_FILE="$RPW" "$@"
 }
-repo() { printf 's3:%s/%s/%s/%s' "$EP" "$BKT" "$CN" "$1"; }
+repo() { printf 's3:%s/%s/%s/%s' "$EP" "$BKT" "$CID" "$1"; }
 
 # ── show_<id>: the commands, as the operator would type them ────────────────────────────────────────────────────────────────
 show_artifacts() { say "  \$ $TASK restore-artifacts PROVIDER=$PROVIDER ROLE=$ROLE FROM=$FROM OUT=$OUT"; say "  check: kubeconfig and talosconfig exist in $OUT"; }
