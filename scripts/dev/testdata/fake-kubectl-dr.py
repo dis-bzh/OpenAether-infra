@@ -100,7 +100,12 @@ if "get clusters.postgresql.cnpg.io" in A:
 if "exec" in a and "pg_dump" in a:
     sys.stdout.buffer.write(b"PGDMP" + b"d" * 1000)
     sys.exit(0)
+if "exec" in a and "psql" in a and "pg_database" in A and "datdba" in A:
+    out("appowner\n")
 if "exec" in a and "pg_restore" in a:
+    if "--role=appowner" not in A:  # the restore must run as the owner of the database
+        sys.stderr.write("pg_restore without --role=<database owner>\n")
+        sys.exit(2)
     data = sys.stdin.buffer.read()
     i = a.index("exec") + 1
     pod = a[i + 1] if a[i] == "-i" else a[i]

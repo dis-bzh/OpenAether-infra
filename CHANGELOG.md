@@ -46,6 +46,7 @@ Not a compliance claim. The apps-side results (#134 partial, #143, #144) are in 
 - `dr-restore-plan` kept the old cluster's kubeconfig and talosconfig after rebuilding: a cluster brought up after its state was destroyed has a new PKI, so the step `cluster` ended "the API does not answer" on a healthy, verified cluster. After each `cluster-up` the chain takes the identity OpenTofu has just written (the restored files stay as `*.old`). It also puts the recovery shares into `openbao-recovery-dev` when the fresh OpenBao is a development one.
 - `dr-restore-plan` asked `kubectl get cluster`, which on a management cluster is the Cluster API `Cluster`: the step `dbs` waited 30 minutes for a database that was healthy. It names `clusters.postgresql.cnpg.io`, and the kubectl double refuses the bare name.
 - `dr-restore-plan` failed the step `dbs` on `pg_restore --clean` exiting 1 for six "cannot drop inherited constraint" errors on Zitadel's partitioned cache tables, although the data had been loaded (151 tables, the canary chain intact). That one error is tolerated, any other still fails the step; the canary check follows.
+- `dr-restore-plan` restored the databases with `pg_restore --no-owner` as postgres, so every table of the rebuilt Zitadel belonged to postgres and Zitadel logged "permission denied for schema queue" (145 tables of one owner, caught on a real rebuild). The restore runs `--role=<owner of the database>`; the double refuses a restore without it.
 
 ### Fixed
 

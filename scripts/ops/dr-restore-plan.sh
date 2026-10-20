@@ -406,8 +406,12 @@ PY
 # pg_restore --clean on Zitadel's partitioned cache tables cannot drop the partitions' inherited constraints and exits 1 although the
 # data is loaded (lab 20: 6 such errors, then the canary chain intact). That one error is harmless; any other is a failure.
 load_dump() { # live-pod database; the dump (custom format) on stdin
-  local err="$WORK/pg_restore-$2.err" rc=0
-  K -n foundation-databases exec -i "$1" -c postgres -- pg_restore -U postgres -d "$2" --clean --if-exists --no-owner 2>"$err" || rc=$?
+  local err="$WORK/pg_restore-$2.err" rc=0 own
+  # The objects must belong to the role that owns the database (the application's), not to postgres that runs pg_restore: with plain
+  # --no-owner every table was postgres's and Zitadel logged "permission denied for schema queue" on the rebuilt cluster (lab 20).
+  own="$(K -n foundation-databases exec "$1" -c postgres -- psql -U postgres -d postgres -X -At -c "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = '$2'" | head -n 1)"
+  [ -n "$own" ] || { echo "cannot read the owner of the database $2"; return 1; }
+  K -n foundation-databases exec -i "$1" -c postgres -- pg_restore -U postgres -d "$2" --clean --if-exists --no-owner --role="$own" 2>"$err" || rc=$?
   cat "$err" >&2
   [ "$rc" -eq 0 ] && return 0
   if grep -q '^pg_restore: error:' "$err" && ! grep '^pg_restore: error:' "$err" | grep -vq 'cannot drop inherited constraint'; then
