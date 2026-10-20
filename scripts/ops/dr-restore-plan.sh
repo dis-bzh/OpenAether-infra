@@ -322,17 +322,23 @@ check_openbao() {
   echo "bao status: not initialised and unsealed after the restore"; return 1
 }
 
+# A development OpenBao keeps its single share in openbao-recovery-dev (labelled), a production one in openbao-recovery-shares: put the
+# source's shares back where the FRESH cluster keeps its own (lab 20: the cluster was a development one and the chain wrote the other Secret).
+shares_secret() { if K -n foundation-vault get secret openbao-recovery-dev >/dev/null 2>&1; then echo openbao-recovery-dev; else echo openbao-recovery-shares; fi; }
 run_shares() {
-  K -n foundation-vault delete secret openbao-recovery-shares --ignore-not-found >/dev/null
+  local sec; sec="$(shares_secret)"
+  K -n foundation-vault delete secret "$sec" --ignore-not-found >/dev/null
   local args=() f n
   for f in "$SHARES"/openbao-share-*.b64; do n="${f##*openbao-share-}"; n="${n%.b64}"; args+=("--from-file=share-$n=$f"); done
-  K -n foundation-vault create secret generic openbao-recovery-shares "${args[@]}"
+  K -n foundation-vault create secret generic "$sec" "${args[@]}"
+  if [ "$sec" = openbao-recovery-dev ]; then K -n foundation-vault label secret openbao-recovery-dev openaether.io/dev-bootstrap=true --overwrite >/dev/null; fi
 }
 check_shares() {
-  local want have
+  local want have sec
+  sec="$(shares_secret)"
   want="$(find "$SHARES" -maxdepth 1 -name 'openbao-share-*.b64' | wc -l)"
-  have="$(K -n foundation-vault get secret openbao-recovery-shares -o json 2>/dev/null | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("data", {})))' 2>/dev/null || echo 0)"
-  [ "$want" -gt 0 ] && [ "$want" = "$have" ] || { echo "the Secret holds $have shares, the directory $want"; return 1; }
+  have="$(K -n foundation-vault get secret "$sec" -o json 2>/dev/null | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("data", {})))' 2>/dev/null || echo 0)"
+  [ "$want" -gt 0 ] && [ "$want" = "$have" ] || { echo "the Secret $sec holds $have shares, the directory $want"; return 1; }
 }
 
 resume_list() { # held names; $1 = only|except identity
