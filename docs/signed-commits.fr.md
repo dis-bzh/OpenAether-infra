@@ -3,7 +3,7 @@
 🇬🇧 [English version](signed-commits.md)
 
 L'accès en écriture à Git est la racine de confiance de la plateforme : Flux applique ce que contient la ref suivie, avec
-cluster-admin. Aucun commit de l'historique ne vérifie comme signé aujourd'hui. Cette page est le standard des
+cluster-admin. Aucun commit de l'historique antérieur à la politique de commits signés ci-dessous ne vérifie comme signé. Cette page est le standard des
 mainteneurs et l'interrupteur optionnel pour le dépôt d'infrastructure ; le dépôt apps a sa page jumelle
 (`docs/signed-commits.md` là-bas) et le composant correspondant. Elle traite ANSSI SSDLC-CICD-AIP-03 et
 SSDLC-CONT-REC06 ; ce n'est **pas** une déclaration de conformité. Niveau de preuve : simulé/statique (`tofu test`, test
@@ -28,11 +28,32 @@ de script avec clé jetable), jamais exécuté sur un cluster (checklist de labo
 - **CODEOWNERS** nomme `.github/` et les manifestes de bootstrap ; avec un seul propriétaire, cela n'impose rien tant
   qu'il n'y a pas de second relecteur.
 
-### Ensemble de signataires
+### Signataires et politique (décidé le 2026-10-21, issue #332)
 
-Tenir le tableau dans la page du dépôt apps (mêmes clés des deux côtés). Un squash ou un commit de merge fait dans
-l'interface web GitHub est signé par la clé `web-flow` de GitHub, un rebase non : connaître la stratégie autorisée avant
-l'étape 2.
+Tout commit de `main` est signé par une clé de ce tableau, ou par la clé `web-flow` de GitHub. Les merges sont des **squash merges faits dans
+l'interface web GitHub** (web-flow signe le commit de squash ; un rebase garde la signature de l'auteur, et son absence échoue) ; les PR Renovate
+sont squashées de la même façon. La vérification Flux tourne en **mode avertissement dès la 0.4.0** (voir plus bas) et **refuse** un commit non
+signé ou inconnu à partir de la 1.0.0.
+
+| Signataire | Empreinte | Fichier de clé publique | Rôle |
+|---|---|---|---|
+| Clé de release du VPS (Vincent Dislaire, ed25519, expire le 2028-10-17) | `1D5895FDC14F5BAD6D1B170B5CA26229559044A2` | `docs/signers/release-vps.asc` | tags de release et commits des branches de release |
+| GitHub `web-flow` (clé de signature des commits) | `968479A1AFF927E37D1A566BB5690EEEBB952194` | `docs/signers/web-flow.asc` | squash et merges web. Prise sur `https://github.com/web-flow.gpg` (qui liste aussi une ancienne clé, expirée le 2024-01-16, non gardée) |
+| Clé propre du mainteneur | **À REMPLIR : le propriétaire donne l'empreinte (l'ancienne clé a été supprimée)** | `docs/signers/maintainer.asc` une fois donnée | commits |
+
+`docs/signers/signers.txt` contient les empreintes sous forme lisible par machine (lu par `scripts/dev/check-release-tag.sh`) ; les fichiers `.asc`
+sont les clés publiques seules (`gpg --armor --export <empreinte>`), à passer à `flux_git_verify.public_keys` avec `file()`. Comparer une empreinte
+à ce tableau avant d'appliquer : tofu ne le fait pas. Ajouter un signataire est un commit relu qui change ensemble ce tableau, `signers.txt` et le fichier de clé.
+
+### Vérification Flux en mode avertissement
+
+Flux n'a **pas de mode avertissement** : avec `spec.verify`, un commit qui échoue la vérification rend le GitRepository NotReady et rien de neuf n'est
+appliqué (le dernier artefact sain reste) ; le source-controller vendu n'a pas de réglage « journaliser et appliquer quand même ». La période
+d'avertissement de la 0.4.0 se compose donc de ce que le dépôt a : le job CI `commits` signale les commits non signés ou mal signés
+(`check-commit-signatures.sh`, sans `--strict`), le ruleset de `main` exige les signatures une fois activé par le propriétaire (#333), et
+`flux_git_verify` reste `enabled = false` par défaut. Pour essayer la vérification elle-même avant la 1.0.0, l'activer sur un cluster de dev seulement,
+avec les trois clés, et lire `SourceVerified` ; une erreur coûte une source NotReady que la section « Bris de glace » défait. Le manque (pas de vrai mode
+avertissement dans Flux) est consigné sur #332 ; « refuser » est simplement `enabled = true` en production à la 1.0.0.
 
 ## Étape 2 - côté cluster (désactivé par défaut)
 
@@ -77,5 +98,5 @@ corriger l'ensemble de signataires, restaurer le bloc (réactiver le composant e
 
 ## Non fait ici
 
-Aucun changement de ruleset, aucune clé publiée, pas de vérification de tag, rien d'exécuté sur un cluster, et aucune
+Aucun changement de ruleset, aucune clé publiée, pas de vérification de tag par Flux (les tags de release sont vérifiés par `scripts/dev/check-release-tag.sh`, voir docs/release-checklist.md), rien d'exécuté sur un cluster, et aucune
 vérification que le source-controller vendu accepte le bloc.
