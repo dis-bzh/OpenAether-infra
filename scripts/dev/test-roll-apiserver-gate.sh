@@ -107,7 +107,7 @@ c="$(grep -n 'uncordon "\$node_name"' "$RR" | tail -1 | cut -d: -f1)"
 { [ -n "$a" ] && [ -n "$b" ] && [ -n "$c" ] && [ "$a" -lt "$b" ] && [ "$b" -lt "$c" ]; } \
   && ok_ "a control plane is checked for a serving apiserver after etcd is whole and before it returns to rotation" \
   || bad "wait_apiserver_ready is not between the etcd gate and the uncordon (etcd:$a api:$b uncordon:$c)"
-grep -q 'wait_apiservers_all_ready "${#CP_IPS\[@\]}"' "$RR" \
+grep -q 'wait_apiservers_all_ready "\$api_want"' "$RR" && grep -q 'api_want=\$(( \${#CP_IPS\[@\]} - DEAD ))' "$RR" \
   && ok_ "every apiserver must serve before the next control plane is taken down" \
   || bad "no all-apiservers gate before a control plane"
 d="$(grep -n 'wait_apiservers_all_ready' "$RR" | head -1 | cut -d: -f1)"
