@@ -43,7 +43,8 @@ TARGETS = {
                      "test-cnpg-gates-local", "ssh-ca-check", "bastion-baseline-check", "bastion-identity-check"), ("local-docker", "docker")),
     **dict.fromkeys(("infra-plan", "infra-apply", "infra-down-plan", "infra-down", "cluster-up",
                      "cluster-verify", "cluster-roll", "cluster-upgrade", "cluster-shrink",
-                     "cluster-shrink-plan", "cluster-idempotency", "cluster-down", "teardown-all"),
+                     "cluster-shrink-plan", "cluster-idempotency", "cluster-down", "teardown-all",
+                     "cluster-node-recover", "cluster-replace-node"),
                     ("real-cloud", "tofu")),
 }
 # A plan applies nothing: recorded, and a red one fails the check, but it cannot
@@ -54,6 +55,7 @@ PLANS = {"infra-plan", "infra-down-plan", "cluster-shrink-plan"}
 EXCLUDED = {
     "cluster-security": "reads whatever KUBECONFIG names, local or cloud: no rung to record",
     "cluster-exposure": "probes public addresses from wherever it runs: a check on a cluster, not a rung",
+    "cluster-node-state": "read-only: asks the provider and the cluster about one node, changes nothing and proves no change",
     "cluster-netcheck": "sends traffic that must be denied, on whatever KUBECONFIG names: a check, not a rung",
     "feint-test": "its feint-plan and feint-apply children record for it",
     "feint-up": "starts the emulator, proves nothing about a change",
