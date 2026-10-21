@@ -20,6 +20,17 @@ infra 7e367d9 / apps 75e464f, on branches) ran a nominal `cluster-up` in 9 min 0
 infra issues the series set out to look at: #42 (the API unreachable for seconds during a control-plane roll) and #375 (the OVH hard-reboot window) stay open for 0.4.0, see below.
 Not a compliance claim. The apps-side results (#134 partial, #143, #144) are in the OpenAether-apps CHANGELOG.
 
+### Added (0.4.0, owner decisions of 2026-10-21: signing, release tags, capacity)
+
+- **Signer table and signed-commit policy** (#332): `docs/signed-commits.md` (+ FR) lists the VPS release key and GitHub `web-flow` with their fingerprints and public keys under `docs/signers/`
+  (machine-readable: `docs/signers/signers.txt`). Policy: every commit on `main` is signed by a table key or `web-flow`, squash merges through the web interface, Renovate included. Flux has **no
+  warning mode** for `spec.verify`; the warning period is the CI signature report, and `enabled = true` (refuse) is for 1.0.0. **Open: the maintainer's own key fingerprint** (placeholder, not invented).
+  Rung: documentation, nothing run on a cluster.
+- **Release tags are annotated and signed** (#386): `scripts/dev/check-release-tag.sh` refuses a lightweight tag, an unsigned one, and one signed by a key outside the table; the release checklist and skill
+  push the signed tag first and use `gh release create --verify-tag`; `.github/workflows/release-tag.yml` repeats the check on a tag push. Rung: mocked (`test-check-release-tag.sh`, throwaway repository and keys).
+- **Capacity, said plainly** (#389): the 4-worker examples survive one worker and either single-worker zone, not the zone holding two (224% requested for 200% left). A documented "5 workers zone-HA" profile (2 + 2 + 1)
+  with a commented block in the Scaleway and OVH management examples; `test-failure-domain-check.sh` covers both shapes. Rung: arithmetic on stubs, no zone loss on five workers recorded.
+
 ### Added (0.4.0, milestone M4: loss of a node, a control plane or a zone, and its rebuild)
 
 Owner rule: the OpenTofu-built management cluster has NO node self-healing and NO node autoscaling (those stay optional modules for the Cluster API clusters); it survives a loss through
