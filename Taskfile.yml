@@ -458,6 +458,7 @@ tasks:
       - ./scripts/dev/test-node-provider.sh
       - ./scripts/dev/test-node-recovery.sh
       - ./scripts/dev/test-dead-node-roll.sh
+      - ./scripts/dev/test-failure-domain-check.sh
       - ./scripts/dev/test-egress-probe.sh
       - ./scripts/dev/test-tunnel-guard.sh
       # The one test that runs talos-tunnels.sh itself: every other harness stubs it (#65).
@@ -1412,6 +1413,23 @@ tasks:
         {{if eq .APPROVE "auto"}}--yes {{end}}{{.CLI_ARGS}}
       - task: _backup-state
         vars: {PROVIDER: "{{.PROVIDER}}"}
+
+  failure-domain-check:
+    desc: >-
+      READ-ONLY. For every failure domain (zone, AZ, subregion, host) that holds a node: would losing it stop etcd,
+      leave too few workers or too little CPU, break the OpenBao raft quorum, take a database or a Longhorn volume
+      with it, or remove the Gateway? Placement comes from the state (control_plane_zones, worker_zones), the rest
+      from the cluster. Exit 1 when some loss is not survivable. The cloud drill is in docs/resilience.md.
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+    env: *provider-env
+    cmds:
+      - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
+      - ../../../scripts/ops/failure-domain-check.sh {{.PROVIDER}} --role={{.ROLE}} {{.CLI_ARGS}}
 
   cluster-shrink-plan:
     desc: >-
