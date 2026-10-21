@@ -2,9 +2,9 @@
 
 # Perdre un nœud, un plan de contrôle ou une zone : ce qui survit, ce que vous lancez, comment c'est prouvé
 
-Version 0.4.0, jalon M4. Niveau de preuve de tout ce qui suit : **simulé/statique** (tests avec doublures, manifestes rendus, tests unitaires des règles d'alerte). Rien
-n'a encore été éprouvé sur un cloud : les exercices qui le prouveront sont à la fin, avec leurs critères de réussite, et la liste de ce qui n'est PAS VÉRIFIÉ suit le
-premier tableau. Pas une déclaration de conformité.
+Version 0.4.0, jalon M4. Niveau de preuve : **simulé/statique** (tests avec doublures, manifestes rendus, tests unitaires des règles d'alerte), puis **éprouvé une fois sur un vrai cloud** : le labo 21
+(Scaleway, 3 plans de contrôle et 4 workers sur trois zones, 2026-10-21) a joué les exercices de la fin de cette page. Ses chiffres, les critères tenus et ceux qui ne l'ont pas été sont dans le tableau
+« Mesuré au labo 21 » juste après les exercices ; ce qui reste PAS VÉRIFIÉ est la dernière section. Pas une déclaration de conformité.
 
 ## Ce que cela promet, et ce que cela ne promet pas
 
@@ -34,9 +34,9 @@ lieu de 5 minutes : `task cluster-replace-node` le fait.
 
 La perte d'un worker ou d'une zone demande de la marge : les requêtes CPU des workers doivent tenir sur les workers qui restent. Les exemples 3 x 4 vCPU
 passaient `cluster-roll` avec environ 0,8 vCPU de reste (`capacity.md`, dérivé du labo 16) ; le travail HA du M4 ajoute environ 345 m de requêtes CPU (dérivé des
-manifestes : admission Kyverno, opérateur CNPG, contrôleur et webhook ESO, metrics-server, la page de connexion Zitadel, le second Alertmanager), ce qui laisse environ 0,45 vCPU. Les exemples Scaleway et OVH livrent donc 4 workers de 4 vCPU (décision du propriétaire, 2026-10-21) : 7,85 vCPU demandés pour 12
-pour la perte d'un worker ; pour la perte de la zone qui porte deux des quatre workers, 8 vCPU restent pour 7,85 (`capacity.md`, dérivé, à mesurer par l'exercice de zone).
-La barrière de `task cluster-roll` le dit avant de toucher à quoi que ce soit ; `ClusterCannotLoseWorker` le dit pendant que le cluster tourne.
+manifestes : admission Kyverno, opérateur CNPG, contrôleur et webhook ESO, metrics-server, la page de connexion Zitadel, le second Alertmanager), ce qui laisse environ 0,45 vCPU. Mesurée au labo 21, la plateforme demande environ 9 vCPU (223-228 % d'un worker de 4 vCPU), pas les 7,85 dérivés : les exemples Scaleway et OVH livrent 4 workers de 4 vCPU (décision du
+propriétaire, 2026-10-21 ; 3 seraient refusés par la barrière), qui passent à 74-76 % de sa limite ; pour la perte de la zone qui porte deux des quatre workers, 200 % restent pour 224 %
+(`capacity.md` : des pods restent Pending jusqu'au retour de la zone ; 5 workers tiendraient sur le papier). La barrière de `task cluster-roll` le dit avant de toucher à quoi que ce soit ; `ClusterCannotLoseWorker` le dit pendant que le cluster tourne.
 
 ## Ce que vous lancez
 
@@ -84,7 +84,7 @@ plan enregistré et les mêmes barrières que `cluster-roll`, avec ces différen
 
 L'état est sauvegardé ensuite, comme le fait `cluster-roll`. Cela efface le disque système du nœud et les données local-path qu'il portait (membre raft OpenBao, une
 instance CNPG, un réplica de stockage VictoriaMetrics), que les pairs reconstruisent. Une instance CNPG dont le volume était sur le disque mort peut rester Pending :
-supprimez son pod et son PVC et laissez CNPG la cloner (PAS VÉRIFIÉ en exercice ; le script affiche l'indication).
+supprimez son pod et son PVC et laissez CNPG la cloner (vérifié au labo 21 : boucle de plantage sur le répertoire de données vide, clone en moins d'une minute ; seulement tant que le cluster a un primaire sain ailleurs ; le script affiche l'indication).
 
 Jamais : `tofu destroy` ou `tofu apply -replace` à la main sur plus d'un nœud ; supprimer l'objet Node d'un plan de contrôle avant que son membre etcd soit parti ;
 `task cluster-roll` pendant qu'un nœud est tombé (ses barrières refusent) ; supprimer le PVC d'un pod dont le nœud est seulement injoignable.
@@ -128,16 +128,44 @@ seconde par le répartiteur. Noter la plus longue série d'échecs consécutifs 
 | Remplacer un plan de contrôle mort | Idem sur un plan de contrôle | l'examen passe avec un quorum, le membre etcd retiré avant l'objet Node, etcd 3/3 et 3 apiservers, `/readyz` indisponible au plus 10 s au total |
 | Récupérer | `cluster-node-recover` sur un worker rendu muet avec `talosctl`, ou sur le prochain vrai #371 | un redémarrage forcé, Ready dans l'attente bornée ; tunnels fermés exprès, rien n'est redémarré |
 | Barrière de déploiement | `task cluster-roll … -- --cp-only` avec la sonde `/readyz` | le journal montre la barrière apiserver entre chaque redémarrage de plan de contrôle ; plus longue série d'échecs `/readyz` d'au plus 5 s (#42 mesurait 5 à 8 s avant) |
-| Alertes | pendant les exercices ci-dessus | chaque alerte s'est déclenchée dans sa fenêtre `for`, son texte nomme la commande, `alertmanager_cluster_members` valait 2 avant et 1 pendant la perte du nœud portant un Alertmanager |
+| Alertes | pendant les exercices ci-dessus | chaque alerte s'est déclenchée dans sa fenêtre `for`, son texte nomme la commande, `AlertmanagerClusterDegraded` se déclenche pendant la perte du nœud portant un Alertmanager (`alertmanager_cluster_members` NE baisse PAS : il est resté à 2 sur le survivant au labo 21) |
+
+## Mesuré au labo 21 (Scaleway, 3 plans de contrôle + 4 workers POP2-4C-16G, 2026-10-21, sondes à 1 Hz)
+
+Plus longue série d'échantillons consécutifs en échec, et total, par exercice. Cibles : à-coup HTTP d'au plus 5 s, trou d'écriture base d'au plus 30 s.
+
+| Exercice | HTTP (plus longue série / échecs) | `/readyz` en échec | Trou base | Verdict face aux critères |
+|---|---|---|---|---|
+| Worker éteint 5 min (3 fois, trois workers) | 1 s / 8-16 isolés | 0 | 0 s ; 287 s quand les deux réplicas coredns étaient sur le worker ; 328-333 s quand il portait le primaire | série <= 5 s tenue ; total <= 5 NON tenu (8-16) ; trou base NON tenu si le primaire ou le DNS est perdu ; réplicas au complet 113-122 s après le rallumage ; aucune différence de données |
+| Worker redémarré sans drain | 1 s / 8 | 0 | 59 s (primaire sur ce worker) | idem |
+| Plan de contrôle éteint 5 min / redémarré sans drain | 0 / 0 | 2 / 3 isolés | 46 s (un coredns dessus) / 0 | HTTP 0 et `/readyz` <= 10 s tenus ; trou base NON tenu quand le DNS perd la moitié de ses réplicas |
+| `cluster-roll -- --cp-only` (17 min 34 s) | 0 / 0 | 66 isolés, série max 1 s | 0 | barrière apiserver visible entre les trois plans de contrôle ; série `/readyz` max 1 s (tenu ; #42 mesurait 5-8 s) ; la sonde TCP de 75 s du répartiteur coûte encore environ 22 échecs isolés par plan de contrôle |
+| Zone éteinte 10 min, fr-par-3 | 1 s / 4 | 3 | 0 | tout tenu sauf `FailureDomainLost` à 3 min 11 s (`for: 1m` ; corrigé à 1 min 51 s) |
+| Zone éteinte 10 min, fr-par-1 (deux workers, un plan de contrôle, grafana-db entièrement dedans) | 3 s / 15 | 2 | 36 s | `FailureDomainLost` 2 min 2 s ; OpenBao 2 sur 3 puis 3 sur 3 ; trou base NON tenu (DNS) ; pods Pending (CPU de la zone à deux workers) |
+| Même zone après la répartition par zone des clusters CNPG et de l'opérateur | 2 s / 31 | 4 | 0 | tout tenu ; grafana-db a basculé en fr-par-2 |
+| Remplacer un worker mort (`cluster-replace-node`, 260 s) | 1 s / 12 | 0 | 328 s (primaire dessus) | objet Node supprimé avant l'apply, Ready en 4 min 20 s ; deux instances CNPG en boucle de plantage sur le disque vide jusqu'à la suppression de leur PVC et pod (documenté, désormais VÉRIFIÉ) ; réplicas au complet 665 s après la commande |
+| Remplacer un plan de contrôle mort (335 s) | 0 / 0 | 1 | 0 | état des lieux avec quorum, membre etcd retiré AVANT l'objet Node, etcd 3/3, 3 apiservers : tout tenu |
+| `cluster-node-recover` | 1 s / 2 | 0 | 0 | un seul redémarrage forcé, Ready après 104 s ; tunnels fermés exprès, rien n'est redémarré (silence du kubelet simulé : aucune API Talos ne l'arrête) |
+
+Ce que les exercices ont changé dans cette version : `NodeScrapeDown` et `FailureDomainLost` lisent la collecte du kubelet (kube-state-metrics est un seul pod : aveugle quand il était sur le nœud perdu, et la
+condition Ready arrive 80 s après la perte), `AlertmanagerClusterDegraded` compte les pods qui répondent, une préférence de zone sur les clusters CNPG et l'opérateur. Ce qu'ils n'ont pas changé : CoreDNS
+(fourni par Talos, les deux réplicas sur un worker après l'installation), l'attente de 5 minutes avant de basculer un primaire de base sur un nœud perdu, la capacité de la zone à deux workers (`capacity.md`).
+Chacun a un ticket.
 
 ## PAS VÉRIFIÉ
 
-- Deux réplicas de l'opérateur CNPG, du contrôleur ESO (option d'élection de leader) et de l'admission Kyverno sur un cluster ; `kube_node_role`, l'étiquette de zone de
-  `kube_node_labels` et `alertmanager_cluster_members` comme séries ; le bavardage (gossip) d'Alertmanager à travers la politique réseau.
-- Qu'un nœud Talos accepte `topology.kubernetes.io/zone` par `machine.nodeLabels`, et que le placement Outscale soit connu au plan.
-- Les appels Scaleway et Outscale de `node-provider.py` (écrits d'après la documentation des API ; OVH suit le script de purge existant).
-- Que les volumes local-path d'un nœud reconstruit se rattachent proprement (OpenBao) et ce dont une instance CNPG sur un disque perdu a besoin.
+Vérifié au labo 21 (Scaleway) : deux opérateurs CNPG dont un tient le bail, l'élection de leader du contrôleur ESO, deux contrôleurs d'admission Kyverno, `kube_node_role`, l'étiquette de zone de
+`kube_node_labels` et `alertmanager_cluster_members` comme séries, le gossip d'Alertmanager à travers la politique réseau (2 membres), `machine.nodeLabels` appliqué à un nœud en marche sans
+redémarrage (l'étiquette de zone est sur chaque nœud dès le premier démarrage), les appels Scaleway `state` et `hard-reboot` de `node-provider.py`, et ce dont une instance CNPG sur un disque
+remplacé a besoin (sa PVC et son pod supprimés, puis un clone en moins d'une minute).
+
+Reste PAS VÉRIFIÉ :
+
+- Les appels OVH et Outscale de `node-provider.py` (OVH suit le script de purge existant), et que le placement Outscale soit connu au plan.
+- Qu'un membre OpenBao dont le volume local-path était sur un disque remplacé rejoigne ses pairs raft (les exercices ont perdu des zones, qui rendent leurs disques).
+- Une vraie machine « qui tourne mais ne répond plus » (OVH #371) : simulée ici en forçant la condition Ready.
 - Le comportement de Longhorn avec l'attente de réplication par défaut (10 minutes) après une perte de nœud ; l'alerte « moins de deux réplicas sains » est
   `LonghornVolumeDegraded` (Longhorn n'exporte pas de nombre de réplicas).
-- Abaisser la tolérance de 5 minutes (kube-apiserver `--default-not-ready-toleration-seconds` et `--default-unreachable-toleration-seconds`) accélérerait la
-  replanification des pods à un seul réplica : non fait, car cela change l'éviction de tous les pods et n'a pas été mesuré.
+- Abaisser la tolérance de 5 minutes (kube-apiserver `--default-not-ready-toleration-seconds` et `--default-unreachable-toleration-seconds`) : non fait. Le labo 21 a mesuré ce que coûte de la garder :
+  un primaire de base sur un nœud perdu bascule après environ 5 minutes (trous d'écriture de 328 et 333 s), mais le changement touche l'éviction de tous les pods et n'a pas été mesuré.
+- Tout sur OVH et Outscale : rien de ceci n'y a tourné.

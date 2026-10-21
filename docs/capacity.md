@@ -95,21 +95,21 @@ Arithmetic (derived from those numbers, taking a worker's allocatable as about i
 total, on 3 vCPU the 239% is about 7.2 vCPU, so requests are roughly 6.3 vCPU of fixed deployments plus 0.3 vCPU of DaemonSets per
 worker (an estimate from two points, not a measurement of each). With n workers of 4 vCPU the gate needs 6.3 + 0.3n <= 4(n - 1):
 n = 3 gives 7.2 against 8 (about 90% of the limit, 180% against 200%); n = 4 gives 7.5 against 12. The examples for Scaleway and OVH
-therefore shipped 3 workers until 0.4.0 (they ship **4** now, see below). The margin at 3 is thin: a heavier app set can break it, and the gate says so before anything is touched.
+therefore shipped 3 workers until 0.4.0 (they ship **4** now, see below: the measured load of the full platform needs it). The margin at 3 is thin: a heavier app set can break it, and the gate says so before anything is touched.
 This is the CPU gate only: replicas with a required spread (three OpenBao pods, for instance) stay short while a worker is out, and
 the cluster-wide behaviour of losing a node under load belongs to 0.4.0 (resilience), not to this table.
 
-**0.4.0 (M4), derived, not measured.** The high-availability work adds about 345 m of CPU requests to the platform (a second Kyverno admission controller, CNPG operator, ESO controller
-and webhook, metrics-server and Zitadel login, and a second Alertmanager), so the estimate above becomes about 7.55 vCPU of 8 on 3 workers of 4 vCPU: about 0.45 vCPU of margin instead of
-0.8. The gate still passes on paper; the application repository bounds the requests it renders (`scripts/check-ha.py`) and the alert `ClusterCannotLoseWorker` watches the real figure. The
-owner decided (2026-10-21) that the Scaleway and OVH examples ship **4 workers of 4 vCPU**. The arithmetic, with the platform's fixed part of about
-6.3 + 0.345 = 6.65 vCPU and 0.3 vCPU of DaemonSets per worker: 3 workers need 7.55 against the 8 vCPU the gate leaves (94% of the limit, margin 0.45);
-4 workers need 7.85 against 12 (65% of the limit, margin 4.15, i.e. 196% requested against 300% allowed). Of that, the Deployments and
-StatefulSets that the application repository renders request 3005 m (`python3 scripts/check-ha.py`, budget 3300 m); the rest is DaemonSets,
-operators and the figure measured in lab 16, which no render can show. `task failure-domain-check` applies the same arithmetic to the loss of a
-whole zone, and there the 4th worker does not help the worst case: workers spread 2 + 1 + 1 over three zones, so losing the zone with two of them
-leaves two workers (8 vCPU) for 7.85 vCPU of requests, about 0.15 vCPU of margin (3 workers: 2 stay, 7.55, margin 0.45). Derived, not measured;
-lab 21 loses a zone for real.
+**0.4.0 (M4): derived first, then measured (lab 21).** The high-availability work adds about 345 m of CPU requests to the platform (a second Kyverno admission controller, CNPG
+operator, ESO controller and webhook, metrics-server and Zitadel login, and a second Alertmanager). The derivation (6.3 vCPU fixed + 0.345 + 0.3 per worker) gave 7.55 vCPU on 3 workers
+(margin 0.45 of 8) and 7.85 on 4. **Lab 21 measured** (Scaleway, 4 x `POP2-4C-16G`, the full platform and three small probes): 9095 m = 228% of one worker right after Flux converged,
+223-224% later (53/43/70/57% per worker), and `cluster-roll`'s own survey printed `223% requested, 300% available without one worker`. The derivation under-counted by about 1.2 vCPU.
+Consequences: on 3 workers the measured load (about 9 vCPU) is above the 8 vCPU the gate leaves, so **3 workers would be refused**; the owner's decision of 2026-10-21 to ship
+**4 workers of 4 vCPU** on Scaleway and OVH is the minimum for the full platform, not a margin. 4 workers pass at 74-76% of the gate's limit (about 2.9 vCPU to spare). The Deployments
+and StatefulSets that the application repository renders request 3005 m (`python3 scripts/check-ha.py`, budget 3300 m); the rest is DaemonSets, operators and Jobs, which no render shows.
+`task failure-domain-check` applies the same arithmetic to the loss of a whole zone, and there four workers do not help the worst case: they spread 2 + 1 + 1 over three zones, so
+losing the zone with two of them leaves two workers (200%) for 224% of requests, about 1 vCPU short; the check says so, and lab 21 lost that zone for 10 minutes (twice): nothing
+stopped, but pods stayed Pending until the zone returned. Five workers (2 + 2 + 1: losing two leaves 300%) or six would hold on the arithmetic (see the lab 21 results for what a fifth
+worker did), as would about 12% fewer requests. Which of these the examples should ship is an owner decision (infra issue filed).
 
 Outscale (the examples are unchanged and stay within the 20 vCPU quota): no shape fits the default 20 vCPU quota and passes the gate. 3 workers of 3 vCPU fail (above), and 4 workers of 3 vCPU need
 3 + 4 nodes x 3 + 2 (bastion) = 23 vCPU. The smallest passing shape on the arithmetic is 3+3 `tinav5.c4r8p2` (4 vCPU / 8 GB): 26 vCPU with

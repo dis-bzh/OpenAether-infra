@@ -211,8 +211,10 @@ case "$CMD" in
     if [[ -n "$notrunning" ]]; then
       warn "pods that are not Running yet (a local-path volume pinned to the old disk keeps its pod Pending until the data is rebuilt):"
       printf '%s\n' "$notrunning" | sed 's/^/    /' >&2
-      echo "  A CNPG instance that does not come back: kubectl cnpg status <cluster> -n <ns>; its PVC held the old disk's data, so the" >&2
-      echo "  operator-supported repair is to delete that instance's pod and PVC and let CNPG clone it (UNVERIFIED in a drill)." >&2
+      echo "  A CNPG instance that does not come back (CrashLoopBackOff on an empty data directory, seen in lab 21 after replacing a" >&2
+      echo "  worker): kubectl cnpg status <cluster> -n <ns>; its volume held the old disk's data, so delete that instance's PVC and pod:" >&2
+      echo "  kubectl -n <ns> delete pvc <instance> pod <instance> (only while the cluster has a healthy primary elsewhere); CNPG clones it" >&2
+      echo "  again, under a minute for the lab's databases." >&2
       echo "  An OpenBao member rejoins its raft peers on its own: bao operator raft list-peers." >&2
     else
       ok "every pod is Running or finished"

@@ -29,8 +29,8 @@ node_distribution = {
     # With the platform, NO profile that fits 20 vCPU can be rolled or lose a worker: lab 16 measured 239% of one worker's
     # CPU requested on 3 x tinav5.c3r6p2 (3 vCPU), above the 200% that `cluster-roll` allows for 3 workers, and 6 GB nodes fell
     # into an IO and memory cascade after one backup+restore and one drained reboot (#376). The smallest shape that passes
-    # the gate on the arithmetic is 3 + 3 of tinav5.c4r8p2 (4 vCPU / 8 GB): 26 vCPU with the bastion, thin (about 0.45 vCPU of
-    # margin with the 0.4.0 HA additions). The Scaleway and OVH examples ship 4 workers; here that is 3 + 4: 30 vCPU with the
+    # the gate on the arithmetic is 3 + 3 of tinav5.c4r8p2 (4 vCPU / 8 GB): 26 vCPU with the bastion, but the full platform
+    # measured about 9 vCPU on another cloud (lab 21), above the 8 vCPU 3 workers of 4 vCPU leave: 3 + 3 would be refused too. The Scaleway and OVH examples ship 4 workers; here that is 3 + 4: 30 vCPU with the
     # bastion. Ask for a quota of at least 30 vCPU / 64 GB first. This example stays within the account's 20-vCPU quota on
     # purpose, and neither shape has been run on Outscale.
     instance_type      = "tinav5.c2r4p1"

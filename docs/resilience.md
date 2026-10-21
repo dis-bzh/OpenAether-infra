@@ -2,9 +2,9 @@
 
 # Losing a node, a control plane or a zone: what survives, what you run, how it is proven
 
-Release 0.4.0, milestone M4. Rung of everything below: **mocked/static** (stub tests, rendered manifests, unit tests of alert rules). Nothing here has been
-drilled on a cloud yet: the drills that will prove it are at the end, with their pass criteria, and the list of what is UNVERIFIED comes right after the first
-table. Not a compliance claim.
+Release 0.4.0, milestone M4. Rung: **mocked/static** (stub tests, rendered manifests, unit tests of alert rules), then **drilled once on a real cloud**: lab 21 (Scaleway, 3 control
+planes and 4 workers over three zones, 2026-10-21) ran the drills at the end of this page. Its numbers, which pass criteria were met and which were not, are in the table "Measured in lab 21"
+right after the drills; what stays UNVERIFIED is the last section. Not a compliance claim.
 
 ## What this promises, and what it does not
 
@@ -33,9 +33,9 @@ the ones that stay single, with what their loss means. Deleting the Node object 
 
 Worker-loss and zone-loss behaviour needs room: the CPU requests of the workers must fit on the workers that stay. The 3 x 4 vCPU examples were
 roll-able with about 0.8 vCPU to spare (`capacity.md`, derived from lab 16); the HA work of M4 adds about 345 m of CPU requests (derived from the manifests:
-Kyverno admission, CNPG operator, ESO controller and webhook, metrics-server, the Zitadel login, the second Alertmanager), leaving about 0.45 vCPU. So the
-Scaleway and OVH examples ship 4 workers of 4 vCPU (owner decision 2026-10-21): 7.85 vCPU requested against 12 for the loss of one worker; for the loss of the
-zone that holds two of the four workers 8 vCPU stay for 7.85 (`capacity.md`, derived, to be measured by the zone drill). The gate of
+Kyverno admission, CNPG operator, ESO controller and webhook, metrics-server, the Zitadel login, the second Alertmanager), leaving about 0.45 vCPU. Measured in lab 21 the platform requests about 9 vCPU (223-228% of a 4 vCPU worker), not the derived 7.85: the Scaleway and OVH examples ship 4 workers of 4 vCPU (owner
+decision 2026-10-21; 3 would be refused by the gate), which pass at 74-76% of its limit; for the loss of the zone that holds two of the four workers 200% stay for 224%
+(`capacity.md`: pods stay Pending until the zone returns; 5 workers would hold on the arithmetic). The gate of
 `task cluster-roll` says so before it touches anything; `ClusterCannotLoseWorker` says so while the cluster runs.
 
 ## What you run
@@ -83,8 +83,8 @@ applies and gates as `cluster-roll`, with these differences, because the node ca
 3. then Ready, uncordon, etcd back to full membership and the kube-apiserver serving (control plane), and the Longhorn gate.
 
 The state is backed up afterwards, as `cluster-roll` does. Wipes the node's system disk and the local-path data on it (OpenBao raft member, a CNPG instance, a
-VictoriaMetrics storage replica), which the peers rebuild. A CNPG instance whose volume was on the dead disk may stay Pending: delete its pod and PVC and let
-CNPG clone it (UNVERIFIED in a drill; the script prints the hint).
+VictoriaMetrics storage replica), which the peers rebuild. A CNPG instance whose volume was on the dead disk crash-loops on the empty data directory (lab 21): delete its PVC and pod and let
+CNPG clone it (under a minute there; only while the cluster has a healthy primary elsewhere; the script prints the hint).
 
 Never: `tofu destroy` or `tofu apply -replace` by hand on more than one node; deleting a control plane's Node object before its etcd member is gone;
 `task cluster-roll` while a node is down (its gates refuse); deleting the PVC of a pod whose node is only unreachable.
@@ -129,16 +129,44 @@ own namespace. Cluster shape recorded with every timing.
 | Replace a dead control plane | The same on one control plane | the survey passes with a quorum, the etcd member removed before the Node object, etcd 3/3 and 3 apiservers, `/readyz` unavailable at most 10 s in total |
 | Recover | `cluster-node-recover` on a worker after `talosctl` made it silent, or on the next real #371 | one hard reboot, Ready within the bounded wait; with the tunnels closed on purpose, nothing is rebooted |
 | Roll gate | `task cluster-roll … -- --cp-only` with the `/readyz` probe | the log shows the apiserver gate between every control-plane reboot; longest `/readyz` failure run at most 5 s (#42 measured 5-8 s before) |
-| Alerts | during the drills above | each alert fired within its `for` window, its text names the command, `alertmanager_cluster_members` was 2 before and 1 during the loss of the node holding one Alertmanager |
+| Alerts | during the drills above | each alert fired within its `for` window, its text names the command, `AlertmanagerClusterDegraded` fires during the loss of the node holding one Alertmanager (`alertmanager_cluster_members` does NOT drop: it stayed at 2 on the survivor in lab 21) |
+
+## Measured in lab 21 (Scaleway, 3 control planes + 4 workers POP2-4C-16G, 2026-10-21, probes at 1 Hz)
+
+Longest run of consecutive failed samples, and the total, per drill. Targets: HTTP blip at most 5 s, database write gap at most 30 s, 99.9% (not computed over a lab of a few hours).
+
+| Drill | HTTP (longest run / failed) | `/readyz` failed | DB gap | Verdict against the pass criteria |
+|---|---|---|---|---|
+| Worker power-off 5 min (3 runs, three different workers) | 1 s / 8-16 isolated | 0 | 0 s, 287 s when both coredns replicas sat on the worker, 328-333 s when it held the database primary | run <= 5 s met; total <= 5 NOT met (8-16); DB gap NOT met when the primary or the DNS is lost; replicas full 113-122 s after power-on; no data difference |
+| Worker undrained reboot | 1 s / 8 | 0 | 59 s (primary on that worker) | as above |
+| Control-plane power-off 5 min / undrained reboot | 0 / 0 | 2 / 3 isolated | 46 s (a coredns replica on it) / 0 | HTTP 0 and `/readyz` <= 10 s met; DB gap NOT met when DNS lost half its replicas |
+| `cluster-roll -- --cp-only` (17 min 34 s) | 0 / 0 | 66 isolated, longest 1 s | 0 | apiserver gate in the log between the three control planes; longest `/readyz` run 1 s (met; #42 measured 5-8 s); the 75 s TCP health check of the load balancer still costs about 22 isolated failures per control plane |
+| Zone power-off 10 min, fr-par-3 | 1 s / 4 | 3 | 0 | all met except `FailureDomainLost` 3 min 11 s (`for: 1m`; fixed to 1 min 51 s) |
+| Zone power-off 10 min, fr-par-1 (two workers, a control plane, grafana-db entirely inside) | 3 s / 15 | 2 | 36 s | `FailureDomainLost` 2 min 2 s; OpenBao 2 of 3 then 3 of 3; DB gap NOT met (DNS); pods Pending (CPU of the two-worker zone) |
+| Same zone after the zone spread of the CNPG clusters and operator | 2 s / 31 | 4 | 0 | all met; grafana-db failed over to fr-par-2 |
+| Replace a dead worker (`cluster-replace-node`, 260 s) | 1 s / 12 | 0 | 328 s (primary on it) | Node object deleted before the apply, Ready in 4 min 20 s; two CNPG instances crash-looped on the empty disk until their PVC and pod were deleted (documented, now VERIFIED); replicas full 665 s after the command |
+| Replace a dead control plane (335 s) | 0 / 0 | 1 | 0 | survey with quorum, etcd member removed BEFORE the Node object, etcd 3/3, 3 apiservers: all met |
+| `cluster-node-recover` | 1 s / 2 | 0 | 0 | one hard reboot, Ready after 104 s; with the tunnels closed on purpose nothing is rebooted (kubelet silence simulated: no Talos API stops it) |
+
+What the drills changed in this release: `NodeScrapeDown` and `FailureDomainLost` read the kubelet scrape (kube-state-metrics is one pod: it was blind when it sat on the lost node, and
+the Ready condition arrives 80 s after the loss), `AlertmanagerClusterDegraded` counts answering pods, a preferred zone spread on the CNPG clusters and operator. What they did not change:
+CoreDNS (Talos-owned, both replicas on one worker after the install), the 5 minute wait before a database primary on a lost node is failed over, the capacity of the two-worker zone
+(`capacity.md`). Each has an issue.
 
 ## UNVERIFIED
 
-- Two replicas of the CNPG operator, the ESO controller (leader election flag) and Kyverno admission on a cluster; `kube_node_role`, the zone label of
-  `kube_node_labels` and `alertmanager_cluster_members` as series; the Alertmanager gossip through the network policy.
-- That a Talos node accepts `topology.kubernetes.io/zone` through `machine.nodeLabels`, and that the Outscale placement is known at plan time.
-- The Scaleway and Outscale calls of `node-provider.py` (written from the API documentation; OVH follows the existing purge script).
-- That a rebuilt node's local-path volumes rejoin cleanly (OpenBao) and what a CNPG instance on a lost disk needs.
+Verified in lab 21 (Scaleway): two CNPG operators with one holding the lease, the ESO controller leader election, two Kyverno admission controllers, `kube_node_role`, the zone label of
+`kube_node_labels` and `alertmanager_cluster_members` as series, the Alertmanager gossip through the network policy (2 members), `machine.nodeLabels` applied to a running node without a
+reboot (the zone label is on every node from the first boot), the Scaleway `state` and `hard-reboot` calls of `node-provider.py`, and what a CNPG instance on a replaced disk needs
+(its PVC and pod deleted, then a clone in under a minute).
+
+Still UNVERIFIED:
+
+- The OVH and Outscale calls of `node-provider.py` (OVH follows the existing purge script), and that the Outscale placement is known at plan time.
+- That an OpenBao member whose local-path volume was on a replaced disk rejoins its raft peers (the drills lost zones, which return their disks).
+- A real "running but silent" machine (OVH #371): simulated here by forcing the Ready condition.
 - The Longhorn behaviour with the default replica replenishment wait (10 minutes) after a node loss; the alert for "fewer than two healthy replicas" is
   `LonghornVolumeDegraded` (Longhorn exports no replica count).
-- Lowering the 5 minute toleration (kube-apiserver `--default-not-ready-toleration-seconds` and `--default-unreachable-toleration-seconds`) would speed up the
-  reschedule of single-replica pods: not done, because it changes eviction for every pod and has not been measured.
+- Lowering the 5 minute toleration (kube-apiserver `--default-not-ready-toleration-seconds` and `--default-unreachable-toleration-seconds`): not done. Lab 21 measured what it costs to keep it:
+  a database primary on a lost node is failed over after about 5 minutes (328 and 333 s write gaps), but the change affects eviction for every pod and has not been measured.
+- Everything on OVH and Outscale: nothing here ran there.

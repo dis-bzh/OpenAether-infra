@@ -96,20 +96,21 @@ Calcul (dérivé de ces chiffres, en prenant l'allouable d'un worker à peu prè
 6,9 vCPU au total ; sur 3 vCPU, 239 % font environ 7,2 vCPU. Les requêtes valent donc à peu près 6,3 vCPU de déploiements fixes plus 0,3 vCPU
 de DaemonSets par worker (estimation à partir de deux points, pas une mesure de chacun). Avec n workers de 4 vCPU, la porte exige
 6,3 + 0,3n <= 4(n - 1) : n = 3 donne 7,2 contre 8 (environ 90 % de la limite, 180 % contre 200 %) ; n = 4 donne 7,5 contre 12. Les exemples
-Scaleway et OVH livraient donc 3 workers jusqu'à la 0.4.0 (ils en livrent **4** maintenant, voir plus bas). La marge à 3 est mince : une pile plus lourde peut la rompre, et la porte le dit avant de toucher quoi que ce soit.
+Scaleway et OVH livraient donc 3 workers jusqu'à la 0.4.0 (ils en livrent **4** maintenant, voir plus bas : la charge mesurée de la plateforme complète l'exige). La marge à 3 est mince : une pile plus lourde peut la rompre, et la porte le dit avant de toucher quoi que ce soit.
 Ce n'est que la porte CPU : les réplicas à répartition obligatoire (les trois pods OpenBao, par exemple) restent incomplets pendant qu'un worker est
 absent, et le comportement de la perte d'un nœud sous charge relève de la 0.4.0 (résilience), pas de ce tableau.
 
-**0.4.0 (M4), dérivé, non mesuré.** Le travail de haute disponibilité ajoute environ 345 m de requêtes CPU à la plateforme (un second contrôleur d'admission Kyverno, l'opérateur CNPG, le
-contrôleur et le webhook ESO, metrics-server et la page de connexion Zitadel, et un second Alertmanager) : l'estimation ci-dessus devient environ 7,55 vCPU sur 8 pour 3 workers de 4 vCPU,
-soit environ 0,45 vCPU de marge au lieu de 0,8. La barrière passe encore sur le papier ; le dépôt applicatif borne les requêtes qu'il rend (`scripts/check-ha.py`) et l'alerte
-`ClusterCannotLoseWorker` surveille le chiffre réel. Le propriétaire a décidé (2026-10-21) que les exemples Scaleway et OVH livrent **4 workers de 4 vCPU**. Le calcul, avec la part fixe de la plateforme d'environ
-6,3 + 0,345 = 6,65 vCPU et 0,3 vCPU de DaemonSets par worker : 3 workers demandent 7,55 contre les 8 vCPU que la barrière laisse (94 % de la limite, marge 0,45) ;
-4 workers demandent 7,85 contre 12 (65 % de la limite, marge 4,15, soit 196 % demandés pour 300 % permis). Les Deployments et StatefulSets rendus par le dépôt
-applicatif en demandent 3005 m (`python3 scripts/check-ha.py`, budget 3300 m) ; le reste est les DaemonSets, les opérateurs et le chiffre mesuré au labo 16,
-qu'aucun rendu ne montre. `task failure-domain-check` applique la même arithmétique à la perte d'une zone entière, et là le 4e worker n'aide pas le pire cas :
-les workers se répartissent 2 + 1 + 1 sur trois zones, donc perdre la zone qui en porte deux laisse deux workers (8 vCPU) pour 7,85 vCPU de requêtes, soit environ
-0,15 vCPU de marge (3 workers : 2 restent, 7,55, marge 0,45). Dérivé, non mesuré ; le labo 21 perd une zone pour de vrai.
+**0.4.0 (M4) : dérivé d'abord, puis mesuré (labo 21).** Le travail de haute disponibilité ajoute environ 345 m de requêtes CPU à la plateforme (un second contrôleur d'admission Kyverno,
+l'opérateur CNPG, le contrôleur et le webhook ESO, metrics-server et la page de connexion Zitadel, et un second Alertmanager). La dérivation (6,3 vCPU fixes + 0,345 + 0,3 par worker) donnait
+7,55 vCPU sur 3 workers (marge 0,45 sur 8) et 7,85 sur 4. **Le labo 21 a mesuré** (Scaleway, 4 x `POP2-4C-16G`, la plateforme complète et trois petites sondes) : 9095 m = 228 % d'un worker juste
+après la convergence de Flux, 223-224 % ensuite (53/43/70/57 % par worker), et l'état des lieux de `cluster-roll` a affiché `223% requested, 300% available without one worker`. La dérivation
+sous-estimait d'environ 1,2 vCPU. Conséquences : sur 3 workers la charge mesurée (environ 9 vCPU) dépasse les 8 vCPU que la barrière laisse, donc **3 workers seraient refusés** ; la décision du
+propriétaire du 2026-10-21 de livrer **4 workers de 4 vCPU** sur Scaleway et OVH est le minimum pour la plateforme complète, pas une marge. 4 workers passent à 74-76 % de la limite de la barrière
+(environ 2,9 vCPU de reste). Les Deployments et StatefulSets que le dépôt applicatif rend demandent 3005 m (`python3 scripts/check-ha.py`, budget 3300 m) ; le reste est les DaemonSets, les
+opérateurs et les Jobs, qu'aucun rendu ne montre. `task failure-domain-check` applique la même arithmétique à la perte d'une zone entière, et là quatre workers n'aident pas le pire cas : ils se
+répartissent 2 + 1 + 1 sur trois zones, donc perdre la zone qui en porte deux laisse deux workers (200 %) pour 224 % de requêtes, environ 1 vCPU de moins ; le contrôle le dit, et le labo 21 a perdu
+cette zone 10 minutes (deux fois) : rien ne s'est arrêté, mais des pods sont restés Pending jusqu'au retour de la zone. Cinq workers (2 + 2 + 1 : en perdre deux laisse 300 %) ou six tiendraient sur
+le papier (voir les résultats du labo 21 pour ce que le cinquième a donné), comme environ 12 % de requêtes en moins. Ce que les exemples doivent livrer est une décision du propriétaire (ticket infra ouvert).
 
 Outscale (les exemples sont inchangés et restent dans le quota de 20 vCPU) : aucune forme ne tient dans le quota par défaut de 20 vCPU et passe la porte. 3 workers de 3 vCPU échouent (ci-dessus), et 4 workers de
 3 vCPU demandent 3 + 4 nœuds x 3 + 2 (bastion) = 23 vCPU. La plus petite forme qui passe sur le papier est 3+3 `tinav5.c4r8p2` (4 vCPU / 8 Go) : 26 vCPU
