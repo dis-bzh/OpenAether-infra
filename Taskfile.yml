@@ -1420,6 +1420,7 @@ tasks:
       leave too few workers or too little CPU, break the OpenBao raft quorum, take a database or a Longhorn volume
       with it, or remove the Gateway? Placement comes from the state (control_plane_zones, worker_zones), the rest
       from the cluster. Exit 1 when some loss is not survivable. The cloud drill is in docs/resilience.md.
+      Usage: task failure-domain-check PROVIDER=… [ROLE=management] [-- --strict]
     dir: infrastructure/opentofu/cluster
     requires:
       vars: [PROVIDER]

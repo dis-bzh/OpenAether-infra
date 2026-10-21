@@ -219,3 +219,11 @@ Relire cette page, régénérer les tableaux (`scripts/dev/gen-flow-matrix.sh`),
 - après tout incident qui a touché le réseau (`incident-response.fr.md`).
 
 La revue demande : chaque port ouvert de la matrice est-il encore utilisé ; une règle est-elle plus large que sa ligne ne le dit ; un provider a-t-il changé ce que son groupe applique ; une lacune de la section 6 est-elle fermée ou pire ?
+
+## 9. Les sondes des répartiteurs de charge de l'API, et le déploiement des plans de contrôle (#42)
+
+Les trois répartiteurs de l'API sondent TCP 6443 (Scaleway et OVH : 5 sondes x 15 s ; Outscale : 3 x 10 s) : un plan de contrôle dont le kube-apiserver n'est pas encore prêt reste en
+rotation jusqu'à 75 s. Le déploiement ne s'appuie plus sur le répartiteur : il attend que l'apiserver de chaque plan de contrôle redémarré serve (`resilience.fr.md`). Passer les sondes en HTTPS
+`/readyz` n'est **pas fait et demande une décision du propriétaire** : il faut que `/readyz` réponde sans identifiants (accès anonyme limité aux points de santé, non activé aujourd'hui, à
+vérifier d'abord sur un nœud Talos), et cela ne rapporte qu'avec `--shutdown-delay-duration` sur kube-apiserver. Les pools du répartiteur applicatif OVH ont bien une sonde TCP (#375, labo 17) ;
+elle n'a pas raccourci la fenêtre de redémarrage forcé (23 à 25 s avec, 12 à 23 s sans, n=2 chaque), qui suit l'arrêt du nœud lui-même.

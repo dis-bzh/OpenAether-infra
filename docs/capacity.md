@@ -99,6 +99,11 @@ therefore ship **3 workers**. The margin at 3 is thin: a heavier app set can bre
 This is the CPU gate only: replicas with a required spread (three OpenBao pods, for instance) stay short while a worker is out, and
 the cluster-wide behaviour of losing a node under load belongs to 0.4.0 (resilience), not to this table.
 
+**0.4.0 (M4), derived, not measured.** The high-availability work adds about 345 m of CPU requests to the platform (a second Kyverno admission controller, CNPG operator, ESO controller
+and webhook, metrics-server and Zitadel login, and a second Alertmanager), so the estimate above becomes about 7.55 vCPU of 8 on 3 workers of 4 vCPU: about 0.45 vCPU of margin instead of
+0.8. The gate still passes on paper; the application repository bounds the requests it renders (`scripts/check-ha.py`) and the alert `ClusterCannotLoseWorker` watches the real figure. A
+fourth worker is the cheap way to widen it. `task failure-domain-check` applies the same arithmetic to the loss of a whole zone.
+
 Outscale: no shape fits the default 20 vCPU quota and passes the gate. 3 workers of 3 vCPU fail (above), and 4 workers of 3 vCPU need
 3 + 4 nodes x 3 + 2 (bastion) = 23 vCPU. The smallest passing shape on the arithmetic is 3+3 `tinav5.c4r8p2` (4 vCPU / 8 GB): 26 vCPU with
 the bastion, so a quota raise comes first. It has not been run on Outscale. The 6 GB nodes of lab 16 also fell into an IO and memory

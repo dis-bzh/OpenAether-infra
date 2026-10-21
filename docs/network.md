@@ -218,3 +218,11 @@ Re-read this page, regenerate the tables (`scripts/dev/gen-flow-matrix.sh`), and
 - after every incident that touched the network (`incident-response.md`).
 
 The review asks: is every open port in the matrix still used; is any rule broader than its row says; did a provider change what its group enforces; is a gap of section 6 closed or worse?
+
+## 9. The API load balancers' health checks, and the control-plane roll (#42)
+
+The three API load balancers check TCP 6443 (Scaleway and OVH: 5 checks x 15 s; Outscale: 3 x 10 s), so a control plane whose kube-apiserver is not ready yet stays in
+rotation for up to 75 s. The roll no longer relies on the load balancer: it waits for each rebooted control plane's apiserver to serve (`resilience.md`). Changing the checks
+to HTTPS `/readyz` is **not done and needs an owner decision**: it needs `/readyz` to answer without credentials (anonymous access limited to the health endpoints, not enabled
+today, to verify on a Talos node first), and it only pays off together with `--shutdown-delay-duration` on kube-apiserver. The OVH application load balancer's pools do have a TCP
+monitor (#375, lab 17); it did not shorten the hard-reboot window (23-25 s with it, 12-23 s without, n=2 each), which follows the node's own shutdown.

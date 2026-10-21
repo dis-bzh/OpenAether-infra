@@ -20,6 +20,27 @@ infra 7e367d9 / apps 75e464f, on branches) ran a nominal `cluster-up` in 9 min 0
 infra issues the series set out to look at: #42 (the API unreachable for seconds during a control-plane roll) and #375 (the OVH hard-reboot window) stay open for 0.4.0, see below.
 Not a compliance claim. The apps-side results (#134 partial, #143, #144) are in the OpenAether-apps CHANGELOG.
 
+### Added (0.4.0, milestone M4: loss of a node, a control plane or a zone, and its rebuild)
+
+Owner rule: the OpenTofu-built management cluster has NO node self-healing and NO node autoscaling (those stay optional modules for the Cluster API clusters); it survives a loss through
+spreading, budgets and replicas (OpenAether-apps `scripts/check-ha.py`), says so loudly with alerts that name the command, and is rebuilt by an operator command. Rung: **mocked** (stub tests,
+fake provider API, mocked OpenTofu tests); **UNVERIFIED on a cluster**; the drills and pass criteria are in `docs/resilience.md` (EN, FR). Not a compliance claim.
+
+- **`task cluster-node-state`, `cluster-node-recover`, `cluster-replace-node`** (`scripts/ops/node-recovery.sh`, `node-provider.py`). `state` is read-only (provider state, kubelet, Talos port, `VERDICT=`);
+  `recover` hard-reboots a machine the provider says runs but is silent (OVH ACTIVE while dead, #49, #371), refuses when the tunnels rather than the node are down, bounded wait, destroys nothing;
+  `replace` runs `rolling-replace.sh --dead --node=…` (new flags `--node`, `--ip`, `--dead`): a survey of the survivors (one node down only; etcd quorum without it, else `dr-restore-plan`), cordon without
+  a drain, the etcd member removed BEFORE the Node object is deleted (its pods are freed at once instead of after the 5 minute toleration), the same saved-plan applies and gates as `cluster-roll`.
+  Tests: `test-node-recovery.sh` (fake repository, real listeners for the tunnels), `test-dead-node-roll.sh`, `test-node-provider.sh` (fake provider API for OVH, Scaleway, Outscale). Scaleway and
+  Outscale calls are written from the API documentation and UNVERIFIED against an account. A set -e trap in the `--node` lookup was found and fixed by the tests.
+- **Roll gate for the API blip of a control-plane roll (#42).** After a control plane reboots the roll waits for its kube-apiserver static pod to be Ready and `/readyz` to answer, three polls in a row,
+  and refuses to take a control plane down unless every apiserver serves (`wait_apiserver_ready`, `wait_apiservers_all_ready`; `test-roll-apiserver-gate.sh`, fails without the change). Whether this
+  removes the 5-8 s blip is a cloud measurement. NOT done, owner decision needed: HTTPS `/readyz` load-balancer checks (needs anonymous access to the health endpoints) and `--shutdown-delay-duration`; `docs/network.md` section 9.
+- **`task failure-domain-check`** (`scripts/ops/failure-domain-check.sh`, read-only): for each failure domain, would its loss stop etcd, leave too few workers or too little CPU, break the OpenBao quorum, take a
+  database or a Longhorn volume, or remove the Gateway. `worker_zones` joins `control_plane_zones` in the provider contract and the root outputs, and every node now carries the label
+  `topology.kubernetes.io/zone` (talos module `node_zones`, `machine.nodeLabels`, folded into the replace trigger; byte-identical when a provider reports nothing). Tests: `test-failure-domain-check.sh`,
+  `control-plane-zones.tftest.hcl` (workers), `node-zones.tftest.hcl`. That a Talos node accepts the label is UNVERIFIED.
+- **Docs**: new `docs/resilience.md` and `resilience.fr.md`; `upgrade.md` ("A node that is already dead"), `network.md` section 9, `capacity.md` (about 345 m of CPU requests added by the HA work, derived, about 0.45 vCPU of margin left on the shipped 3 x 4 vCPU example), EN and FR.
+
 ### Fixed (0.4.0, lab 20 finding, apps #153)
 
 - **A cluster rebuilt by `dr-restore-plan` no longer archives into the dead cluster's WAL path.** New step `generation` (after `hold`): it lists `cnpg/<cluster>/` in both stores, takes the highest archive generation plus one and writes the ConfigMap `cnpg-archive-generation` (flux-system: `CNPG_ARCHIVE_SUFFIX`, `CNPG_ARCHIVE_PREVIOUS_SUFFIX`) that

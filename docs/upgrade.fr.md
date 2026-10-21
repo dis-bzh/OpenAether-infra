@@ -405,6 +405,14 @@ pire, puisque tous les nœuds seraient détruits en même temps.
 [`tests/node-size-change.tftest.hcl`](../infrastructure/opentofu/cluster/tests/node-size-change.tftest.hcl)
 vérifie que le drapeau de Scaleway reste désactivé.
 
+## Un nœud déjà mort
+
+`task cluster-roll` exige que tous les nœuds soient Ready et vide chacun avant de le toucher ; un nœud mort ne peut ni l'un ni l'autre. Utilisez `task cluster-node-state PROVIDER=… NODE=…`
+(lecture seule, nomme la commande suivante), puis `task cluster-node-recover` quand le fournisseur dit que la machine tourne, ou `task cluster-replace-node` quand elle est arrêtée, en
+erreur ou disparue. La seconde fait le même remplacement que le déploiement pour ce seul nœud (`rolling-replace.sh --dead --node=…`), après un examen des survivants et
+avec le membre etcd retiré avant l'objet Node. Le déploiement attend aussi maintenant que le kube-apiserver de chaque plan de contrôle redémarré serve avant de continuer
+(#42). La procédure, les exercices et ce qui n'est PAS VÉRIFIÉ sont dans [`resilience.fr.md`](resilience.fr.md).
+
 ## Retirer des nœuds
 
 Baisser `control_planes` ou `workers` dans les tfvars faisait détruire à OpenTofu la machine d'indice le plus

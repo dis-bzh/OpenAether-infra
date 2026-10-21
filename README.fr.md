@@ -319,6 +319,7 @@ task security            # contrôles de durcissement
 | [docs/admin-access.fr.md](docs/admin-access.fr.md) | Parcours jour-1 de la plateforme applicative : escrow, PKI offline, accès UIs, tests navigateur. **Inutile pour un cluster d'infrastructure seule** |
 | [docs/capi-bootstrap.fr.md](docs/capi-bootstrap.fr.md) | Amorcer un management par CAPI et le rendre autogéré |
 | [docs/deployment-test-matrix.fr.md](docs/deployment-test-matrix.fr.md) | Ce qui est validé, où, et comment |
+| [docs/resilience.fr.md](docs/resilience.fr.md) | Perdre un nœud, un plan de contrôle ou une zone : ce qui survit, les commandes à lancer, les exercices et leurs critères de réussite |
 | [docs/capacity.fr.md](docs/capacity.fr.md) | Ce qu'un cluster consomme par provider, et le plancher de taille |
 | [docs/clea.fr.md](docs/clea.fr.md) | Ce que le rapport de dépendances épingle, et ce qu'un rapport vert peut affirmer |
 | [docs/emulated-cloud.fr.md](docs/emulated-cloud.fr.md) | Tester Scaleway/Outscale contre un émulateur local — et les limites de l'exercice |

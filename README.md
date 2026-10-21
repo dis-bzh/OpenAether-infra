@@ -312,6 +312,7 @@ task security            # hardening checks
 | [docs/admin-access.md](docs/admin-access.md) | Day-1 path for the application platform: escrow, offline PKI, UI access, browser tests. **Not needed for an infrastructure-only cluster** |
 | [docs/capi-bootstrap.md](docs/capi-bootstrap.md) | Bootstrap a management via CAPI and make it self-managed |
 | [docs/deployment-test-matrix.md](docs/deployment-test-matrix.md) | What is validated, where, and how |
+| [docs/resilience.md](docs/resilience.md) | Losing a node, a control plane or a zone: what survives, the commands to run, the drills and their pass criteria |
 | [docs/capacity.md](docs/capacity.md) | What a cluster consumes per provider, and the sizing floor |
 | [docs/clea.md](docs/clea.md) | What the dependency report pins, and what a green report may claim |
 | [docs/emulated-cloud.md](docs/emulated-cloud.md) | Testing Scaleway/Outscale against a local emulator — and the limits of that |

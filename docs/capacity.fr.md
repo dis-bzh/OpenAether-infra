@@ -100,6 +100,11 @@ Scaleway et OVH livrent donc **3 workers**. La marge à 3 est mince : une pile p
 Ce n'est que la porte CPU : les réplicas à répartition obligatoire (les trois pods OpenBao, par exemple) restent incomplets pendant qu'un worker est
 absent, et le comportement de la perte d'un nœud sous charge relève de la 0.4.0 (résilience), pas de ce tableau.
 
+**0.4.0 (M4), dérivé, non mesuré.** Le travail de haute disponibilité ajoute environ 345 m de requêtes CPU à la plateforme (un second contrôleur d'admission Kyverno, l'opérateur CNPG, le
+contrôleur et le webhook ESO, metrics-server et la page de connexion Zitadel, et un second Alertmanager) : l'estimation ci-dessus devient environ 7,55 vCPU sur 8 pour 3 workers de 4 vCPU,
+soit environ 0,45 vCPU de marge au lieu de 0,8. La barrière passe encore sur le papier ; le dépôt applicatif borne les requêtes qu'il rend (`scripts/check-ha.py`) et l'alerte
+`ClusterCannotLoseWorker` surveille le chiffre réel. Un quatrième worker est le moyen peu coûteux de l'élargir. `task failure-domain-check` applique la même arithmétique à la perte d'une zone entière.
+
 Outscale : aucune forme ne tient dans le quota par défaut de 20 vCPU et passe la porte. 3 workers de 3 vCPU échouent (ci-dessus), et 4 workers de
 3 vCPU demandent 3 + 4 nœuds x 3 + 2 (bastion) = 23 vCPU. La plus petite forme qui passe sur le papier est 3+3 `tinav5.c4r8p2` (4 vCPU / 8 Go) : 26 vCPU
 avec le bastion, donc une hausse de quota d'abord. Elle n'a pas été exécutée sur Outscale. Les nœuds de 6 Go du lab 16 sont aussi tombés dans une cascade
