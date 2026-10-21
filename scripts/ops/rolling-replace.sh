@@ -125,6 +125,8 @@ UPGRADE_CONFIRM_TIMEOUT="${UPGRADE_CONFIRM_TIMEOUT:-120}"
 STOP_REQUESTED=0
 trap 'STOP_REQUESTED=1; printf "\n⚠ stop requested — finishing the node in flight, then stopping.\n" >&2' INT TERM
 ETCD_TIMEOUT="${ETCD_TIMEOUT:-300}"               # seconds
+API_TIMEOUT="${API_TIMEOUT:-300}"                 # seconds, for the kube-apiserver of a control plane to serve (#42)
+API_STABLE_POLLS="${API_STABLE_POLLS:-3}"         # consecutive Ready polls: one lucky poll between two restarts is not serving
 LONGHORN_TIMEOUT="${LONGHORN_TIMEOUT:-600}"       # seconds
 POLL=10                                           # seconds between health polls
 
@@ -276,7 +278,7 @@ replace_node() { # <type: cp|worker> <index>
     if [[ $UPGRADE -eq 1 ]]; then
       echo "  would: talosctl upgrade -e ${ep} -n ${node_ip} --image ${TALOS_IMAGE} --wait"
       echo "         (Talos cordons and drains the node itself, and refuses a CP that would cost etcd its quorum)"
-      echo "  would: wait Talos health @ ${ep}, node Ready, $( [[ $t == cp ]] && echo 'etcd 3/3, ' )Longhorn healthy"
+      echo "  would: wait Talos health @ ${ep}, node Ready, $( [[ $t == cp ]] && echo 'etcd 3/3, kube-apiserver serving, ' )Longhorn healthy"
       return 0
     fi
     echo "  would: kubectl cordon ${node_name}"
@@ -288,7 +290,7 @@ replace_node() { # <type: cp|worker> <index>
     echo "  would: tofu plan -out=<config.tfplan> ${cfg_targets[*]} \\"
     echo "                    -var-file='${TFVARS}' -var talos_bootstrap=true"
     echo "         count its deletes from 'tofu show -json', then: tofu apply <config.tfplan>"
-    echo "  would: wait Talos health @ ${ep}, node Ready, $( [[ $t == cp ]] && echo 'etcd 3/3, ' )Longhorn healthy"
+    echo "  would: wait Talos health @ ${ep}, node Ready, $( [[ $t == cp ]] && echo 'etcd 3/3, kube-apiserver serving, ' )Longhorn healthy"
     echo "  would: kubectl uncordon ${node_name}"
     return 0
   fi
@@ -468,6 +470,9 @@ replace_node() { # <type: cp|worker> <index>
   # 6. for control planes: etcd must be back to full membership before the next CP
   if [[ "$t" == "cp" ]]; then
     wait_etcd_healthy "${#CP_IPS[@]}" || die "etcd did not return to ${#CP_IPS[@]}/${#CP_IPS[@]} healthy — STOP (do NOT replace another CP)"
+    # And its kube-apiserver must serve before the next control plane goes down (#42): etcd 3/3 and a Ready node do
+    # not say so, and the load balancer's TCP check keeps a not-ready apiserver in rotation for up to 75 s.
+    wait_apiserver_ready "$node_name" || die "kube-apiserver on ${node_name} does not serve after ${API_TIMEOUT}s — STOP (do NOT touch another control plane)"
   fi
 
   # 7. back into rotation, BEFORE the Longhorn gate: Longhorn does not schedule a
@@ -566,6 +571,10 @@ fi
 if [[ "$SCOPE" == "all" || "$SCOPE" == "cp" ]]; then
   for j in $(cp_roll_order); do
     stop_here cp && break
+    # Every apiserver serves BEFORE this control plane is touched: two out together is an API outage (#42).
+    if [[ $DRY_RUN -eq 0 ]]; then
+      wait_apiservers_all_ready "${#CP_IPS[@]}" || die "not every kube-apiserver serves after ${API_TIMEOUT}s — refusing to take a control plane down"
+    fi
     # Re-read each time: leadership can move for reasons that are not ours.
     if [[ $DRY_RUN -eq 0 && "$j" == "$(etcd_leader_index || true)" ]]; then
       forfeit_leadership "$j"

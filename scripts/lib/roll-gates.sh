@@ -998,6 +998,61 @@ wait_etcd_healthy() { # <expected_members>
   return 1
 }
 
+# The API blip of a control-plane roll (#42): etcd 3/3 and a Ready node do not say that THIS node's kube-apiserver
+# serves. The load balancer checks TCP 6443 only, so it sends requests to a control plane whose apiserver is not ready
+# for up to 75 s (5 checks x 15 s); the next control plane must not be taken down before the one just rebooted serves,
+# or two apiservers are out together. These gates ask the cluster, not the node: the kube-apiserver static pod's own
+# Ready condition (its readinessProbe is /readyz) and /readyz through the kubeconfig's endpoint, N polls in a row.
+apiserver_pod_state() { # <node_name> → ready | notready | absent | unknown
+  local r
+  if r="$("${KCTL[@]}" -n kube-system get pod "kube-apiserver-$1" \
+          -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>&1)"; then
+    [[ "$r" == True ]] && echo ready || echo notready
+    return 0
+  fi
+  case "$r" in
+    *NotFound* | *"not found"*) echo absent ;;
+    *) echo unknown ;;   # an unanswered question is not an absent pod
+  esac
+}
+
+wait_apiserver_ready() { # <node_name> — the apiserver of this control plane serves, API_STABLE_POLLS polls in a row
+  local node="$1" need="${API_STABLE_POLLS:-3}" got=0 deadline=$(( SECONDS + ${API_TIMEOUT:-300} )) st
+  info "Waiting for kube-apiserver on ${node} to serve (${need} Ready polls in a row)…"
+  while (( SECONDS < deadline )); do
+    st="$(apiserver_pod_state "$node")"
+    if [[ "$st" == ready ]] && "${KCTL[@]}" get --raw=/readyz >/dev/null 2>&1; then
+      got=$(( got + 1 ))
+      if (( got >= need )); then ok "kube-apiserver on ${node} serves"; return 0; fi
+    else
+      got=0
+    fi
+    sleep "$POLL"
+  done
+  return 1
+}
+
+wait_apiservers_all_ready() { # <expected_control_planes> — before a control plane is touched, every apiserver serves
+  local want="$1" need="${API_STABLE_POLLS:-3}" got=0 deadline=$(( SECONDS + ${API_TIMEOUT:-300} )) raw n
+  info "Waiting for ${want}/${want} kube-apiservers to serve…"
+  while (( SECONDS < deadline )); do
+    if raw="$("${KCTL[@]}" -n kube-system get pods -o json 2>/dev/null)"; then
+      n="$(jq -r '[.items[] | select(.metadata.name | startswith("kube-apiserver-"))
+                   | select(any(.status.conditions[]?; .type == "Ready" and .status == "True"))] | length' <<<"$raw" 2>/dev/null)" || n=0
+    else
+      n=0
+    fi
+    if [[ "${n:-0}" == "$want" ]]; then
+      got=$(( got + 1 ))
+      if (( got >= need )); then ok "${want}/${want} kube-apiservers serve"; return 0; fi
+    else
+      got=0
+    fi
+    sleep "$POLL"
+  done
+  return 1
+}
+
 # Is the upgrade CONFIRMED, or merely apparent?
 #
 # "The node reports the new version and is Ready" is not "Talos accepted the
