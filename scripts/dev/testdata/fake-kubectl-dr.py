@@ -3,7 +3,8 @@
 
 FAKE_DR    state directory (calls.log: one line of argv per call, no stdin; state/ holds what the chain created)
 FAKE_*     failure injections: FAKE_FAIL_SECRET=1 (the seal key Secret is refused), FAKE_BROKEN_CHAIN=1 (the restored canary chain is
-           broken), FAKE_VERIFY_FAIL=1 (the restore test of the rebuilt cluster fails), FAKE_NODES=n (nodes of the cluster)
+           broken), FAKE_APPLY_STALE=1 (Flux never gives the Clusters the new archive name), FAKE_BACKUP_FAIL=1 (the base backup of the new archive
+           fails), FAKE_NO_ARCHIVING=1 (ContinuousArchiving stays False), FAKE_VERIFY_FAIL=1 (the restore test of the rebuilt cluster fails), FAKE_NODES=n (nodes of the cluster)
 Secrets are never written to calls.log: stdin is summarised (a length), --from-file contents are not copied there.
 """
 import base64
@@ -45,7 +46,12 @@ if a[:1] == ["apply"]:
     body = sys.stdin.read()
     if body.strip().startswith("{"):
         d = json.loads(body)
-        open(f("applied.jsonl"), "a").write(json.dumps(d) + "\n")
+        if d.get("kind") == "ConfigMap":
+            json.dump(d, open(f("cm-generation.json"), "w"))
+        elif d.get("kind") == "Backup":
+            open(f("backups.jsonl"), "a").write(json.dumps(d) + "\n")
+        else:
+            open(f("applied.jsonl"), "a").write(json.dumps(d) + "\n")
     sys.exit(0)
 if "create secret generic openbao-seal-key" in A:
     if os.environ.get("FAKE_FAIL_SECRET"):
@@ -67,6 +73,19 @@ if "get pod openbao-0" in A:
     out("Running")
 if "get job openbao-init" in A:
     out("1")
+def gen_cm():
+    return json.load(open(f("cm-generation.json"))) if os.path.exists(f("cm-generation.json")) else None
+
+
+if a[:5] == ["-n", "flux-system", "get", "configmap", "cnpg-archive-generation"]:
+    cm = gen_cm()
+    if cm is None:
+        sys.stderr.write('Error from server (NotFound): configmaps "cnpg-archive-generation" not found\n')
+        sys.exit(1)
+    jp = opt("-o") or ""
+    if jp.startswith("jsonpath={.data."):
+        out(cm["data"].get(jp[len("jsonpath={.data."):-1], ""))
+    out("cnpg-archive-generation\n")
 if a[:3] == ["-n", "flux-system", "get"] and opt("-o") == "json":
     ks = {"foundation-vault": ["namespaces", "platform"], "namespaces": [], "platform": ["namespaces"], "external-secrets-stores": ["foundation-vault"],
           "cnpg": ["external-secrets-stores"], "backup-databases": ["cnpg"], "identity": ["cnpg"], "identity-gateway": ["identity"], "observability": []}
@@ -97,6 +116,11 @@ if "get cluster " in A + " ":  # the bare name is the CAPI Cluster on a manageme
 if "get clusters.postgresql.cnpg.io" in A:
     name = a[a.index("clusters.postgresql.cnpg.io") + 1]
     jp = opt("-o") or ""
+    if "isWALArchiver" in jp:  # the archive name the Cluster has been given by Flux
+        cm = gen_cm()
+        out(name + ("" if os.environ.get("FAKE_APPLY_STALE") or cm is None else cm["data"]["CNPG_ARCHIVE_SUFFIX"]))
+    if "ContinuousArchiving" in jp:
+        out("False" if os.environ.get("FAKE_NO_ARCHIVING") else "True")
     for key, val in (("status.phase", "Cluster in healthy state"), ("currentPrimary", name + "-1"), ("imageName", "ghcr.io/cloudnative-pg/postgresql:18.6"),
                      ("storage.size", "5Gi")):
         if key in jp:
@@ -129,7 +153,13 @@ if "exec" in a and "psql" in a:
         rows.append((i, ts, "f" * 64 if (os.environ.get("FAKE_BROKEN_CHAIN") and i == 20) else sha))
         prev = sha
     out("".join(f"{i}\t{t}\t{s}\n" for i, t, s in rows))
-if "delete job" in A or "delete clusters.postgresql.cnpg.io" in A:
+if "get backups.postgresql.cnpg.io" in A:
+    out("failed" if os.environ.get("FAKE_BACKUP_FAIL") else "completed")
+if "create job --from=cronjob/cnpg-store-replicate" in A:
+    sys.exit(0)
+if "get job dr-replicate" in A:
+    out("1")
+if "delete backups.postgresql.cnpg.io" in A or "delete job" in A or "delete clusters.postgresql.cnpg.io" in A:
     sys.exit(0)
 if "create job --from=cronjob/cnpg-recovery-restore-test" in A:
     sys.exit(0)

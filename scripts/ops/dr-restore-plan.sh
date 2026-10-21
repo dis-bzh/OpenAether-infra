@@ -17,6 +17,7 @@
 # Usage:
 #   dr-restore-plan.sh <provider> [--role management] [--from primary|replica] [--scenario rebuild|etcd]
 #                      [--db-source pitr|dump] [--pitr-time 'YYYY-MM-DD HH:MM:SS+00']
+#                      [--archive-generation N]  (default: one more than the highest CNPG archive generation the stores hold)
 #                      [--control-plane-ip IP]  (etcd scenario: the NODE address when the talosconfig endpoints are tunnels)
 #                      [--seal-key-file F] [--restic-password-file F] [--bao-token-file F] [--recovery-shares-dir D]
 #                      [--out DIR] [--work DIR] [--report FILE] [--only a,b] [--from-step a] [--strict]
@@ -33,7 +34,7 @@ PROVIDER="${1:-}"
 case "$PROVIDER" in "" | -h | --help) usage >&2; exit 2 ;; esac
 shift
 ROLE=management; FROM=primary; SCENARIO=rebuild; DBSRC=pitr; PITR=""
-CPIP=""; SEALKEY=""; RPW=""; BAOTOK=""; SHARES=""; OUT=""; WORK=""; REPORT=""; ONLY=""; FROMSTEP=""; STRICT=0; EXECUTE=0; CONFIRM=""
+CPIP=""; GEN=""; SEALKEY=""; RPW=""; BAOTOK=""; SHARES=""; OUT=""; WORK=""; REPORT=""; ONLY=""; FROMSTEP=""; STRICT=0; EXECUTE=0; CONFIRM=""
 need_arg() { [ $# -ge 2 ] || { echo "✗ $1 needs a value" >&2; exit 2; }; }
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -42,6 +43,7 @@ while [ $# -gt 0 ]; do
     --scenario) need_arg "$@"; SCENARIO="$2"; shift 2 ;;
     --db-source) need_arg "$@"; DBSRC="$2"; shift 2 ;;
     --pitr-time) need_arg "$@"; PITR="$2"; shift 2 ;;
+    --archive-generation) need_arg "$@"; GEN="$2"; shift 2 ;;
     --control-plane-ip) need_arg "$@"; CPIP="$2"; shift 2 ;;
     --seal-key-file) need_arg "$@"; SEALKEY="$2"; shift 2 ;;
     --restic-password-file) need_arg "$@"; RPW="$2"; shift 2 ;;
@@ -61,6 +63,7 @@ while [ $# -gt 0 ]; do
 done
 case "$FROM" in primary | replica) ;; *) echo "✗ --from must be primary or replica" >&2; exit 2 ;; esac
 case "$SCENARIO" in rebuild | etcd) ;; *) echo "✗ --scenario must be rebuild or etcd" >&2; exit 2 ;; esac
+case "$GEN" in "" | [1-9] | [1-9][0-9]) ;; *) echo "✗ --archive-generation must be a number from 1 to 99" >&2; exit 2 ;; esac
 case "$DBSRC" in pitr | dump) ;; *) echo "✗ --db-source must be pitr or dump" >&2; exit 2 ;; esac
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -81,6 +84,7 @@ NODES_EXPECTED=""; { [[ "$CPS" =~ ^[0-9]+$ ]] && [[ "$WKS" =~ ^[0-9]+$ ]]; } && 
 CID="${CN}-${ENVN}-${PROVIDER}"
 PROJECT="$(oa_project "$CN" "$(tfv "$TFVARS" bucket_suffix)")"
 BKT="$(oa_backup_bucket "$PROJECT" "$PROVIDER" "$ENVN")"          # restic (OpenBao, CNPG dumps, etcd) and Longhorn
+BKT_P="$BKT"; BKT_R="${BKT}-backup"; EP_P="$PRIM_EP"; REGION_P="$PRIM_REGION"; EP_R="${REPL_EP:-$PRIM_EP}"; REGION_R="${REPL_REGION:-$PRIM_REGION}"
 if [ "$FROM" = replica ]; then
   BKT="${BKT}-backup"; EP="${REPL_EP:-$PRIM_EP}"; REGION="${REPL_REGION:-$PRIM_REGION}"; KIND=backup; STORE=replica
 else
@@ -96,7 +100,7 @@ K() { kubectl --kubeconfig "$KCFG" "$@"; }
 
 # Targets, in minutes, from docs/disaster-recovery.md section 3 (proposed, not measured). Their sum is checked against RTO_MIN.
 RTO_MIN=480
-declare -A TARGET=([artifacts]=30 [cluster]=120 [seedkey]=15 [flux]=15 [hold]=5 [openbao]=60 [shares]=15 [resume]=15 [dbs]=60 [identity]=30 [verify]=30
+declare -A TARGET=([artifacts]=30 [cluster]=120 [seedkey]=15 [flux]=15 [hold]=5 [generation]=5 [openbao]=60 [shares]=15 [resume]=15 [dbs]=60 [identity]=30 [verify]=30
                    [etcd-fetch]=15 [etcd-recover]=30 [etcd-check]=15)
 declare -A TITLE=(
   [artifacts]="Access to the old cluster's identity (talosconfig, kubeconfig) from the ${STORE} store"
@@ -104,18 +108,19 @@ declare -A TITLE=(
   [seedkey]="OpenBao seal key Secret from the escrow, BEFORE any OpenBao pod exists"
   [flux]="Flux on (deploy_flux = true, task cluster-up again), OpenBao deployed and initialised empty"
   [hold]="Hold every Kustomization outside OpenBao's own dependency closure"
+  [generation]="New CNPG archive generation: the rebuilt clusters must not archive into the dead clusters' WAL path (ConfigMap cnpg-archive-generation)"
   [openbao]="OpenBao raft snapshot: restic restore from the ${STORE} store, then bao operator raft snapshot restore"
   [shares]="The source cluster's recovery shares back"
   [resume]="Resume the held Kustomizations except identity; External Secrets rebuilds every Secret from the restored OpenBao"
   [dbs]="Databases: restore into the empty Clusters (${DBSRC}${PITR:+ to $PITR})"
   [identity]="Resume identity and the rest; wait for the whole DAG"
-  [verify]="Verify: cluster-verify, a backup run, a restore test on the rebuilt cluster"
+  [verify]="Verify: cluster-verify, a base backup of the new archive and its copy to the replica store, a restore test on the rebuilt cluster"
   [etcd-fetch]="etcd snapshot: restic restore of the newest one from the ${STORE} store"
   [etcd-recover]="talosctl bootstrap --recover-from on the control plane that lost its etcd"
   [etcd-check]="etcd members healthy, Kubernetes API up, Flux reconciles"
 )
 declare -A DESTRUCTIVE=([openbao]=1 [shares]=1 [dbs]=1 [etcd-recover]=1)
-if [ "$SCENARIO" = rebuild ]; then STEPS=(artifacts cluster seedkey flux hold openbao shares resume dbs identity verify)
+if [ "$SCENARIO" = rebuild ]; then STEPS=(artifacts cluster seedkey flux hold generation openbao shares resume dbs identity verify)
 else STEPS=(artifacts etcd-fetch etcd-recover etcd-check); fi
 
 # ── the clock and the report ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -144,6 +149,11 @@ needs_cluster() {
 needs_seedkey() { missing_file --seal-key-file "$SEALKEY" "the escrowed OpenBao seal key, decrypted (gpg -d openbao-seal-key.gpg), outside any repository"; }
 needs_flux() { :; }
 needs_hold() { :; }
+needs_generation() {
+  [ -n "$GEN" ] && return 0
+  command -v aws >/dev/null 2>&1 || echo "aws on PATH (to list the archive generations in the stores), or --archive-generation N"
+  s3_creds_missing
+}
 needs_openbao() {
   missing_file --restic-password-file "$RPW" "the escrowed restic password"
   missing_file --bao-token-file "$BAOTOK" "a break-glass root token of the FRESH cluster (a quorum of share holders)"
@@ -188,6 +198,13 @@ show_flux() {
 show_hold() {
   say "  \$ kubectl -n flux-system patch kustomization <every one outside the dependency closure of foundation-vault> --type merge -p '{\"spec\":{\"suspend\":true}}'"
   say "  check: the held list is written to $WORK/held.txt; UNPROVEN join: the held ones must be suspended before foundation-vault is Ready"
+}
+show_generation() {
+  say "  \$ aws s3api list-objects-v2 --bucket <bucket> --prefix cnpg/<cluster>/ --delimiter /      # both stores, both clusters: the archive generations in use"
+  say "  \$ kubectl -n flux-system apply -f -      # ConfigMap cnpg-archive-generation: CNPG_ARCHIVE_SUFFIX=-g<N+1>, CNPG_ARCHIVE_PREVIOUS_SUFFIX=<the last one>"
+  say "  note: the rebuilt Clusters then archive under serverName <cluster>-g<N+1> (Flux substitutes it); the OLD path (cnpg/<cluster>/<cluster>[-g<N>]/)"
+  say "        is untouched and stays the recovery source of this chain (step dbs) and of any point in time before the rebuild; a re-run keeps the value"
+  say "  check: the ConfigMap exists and names a suffix; the Clusters take it when cnpg is resumed (step dbs waits for it)"
 }
 show_openbao() {
   say "  \$ restic -r $(repo openbao) restore latest --host openbao --target $WORK/openbao      # password from --restic-password-file"
@@ -314,6 +331,87 @@ check_hold() {
   say "  ($(wc -l <"$HELD") Kustomizations held: $HELD)"
 }
 
+# ── the CNPG archive generation (apps #153) ────────────────────────────────────────────────────────────────────────────────────
+# A rebuilt cluster that archives under the dead cluster's serverName meets a non-empty archive and barman refuses it ("Expected empty
+# archive", ContinuousArchiving False, lab 20): no WAL, no base backup, a verifier that keeps reading the stale path. The new Clusters
+# archive under <cluster>-g<N> instead; generation 1 is the bare cluster name (every install), so nothing moves until a rebuild. The
+# value lives in the ConfigMap cnpg-archive-generation (flux-system), which Flux substitutes into the Cluster, the verifier and the jobs.
+GENCM=cnpg-archive-generation
+gen_suffix() { [ "$1" -le 1 ] && printf '' || printf -- '-g%s' "$1"; }
+gen_of() { # <cluster> <server name> -> generation number, or nothing when the name is not one of ours
+  if [ "$2" = "$1" ]; then echo 1; elif [[ "$2" =~ ^${1}-g([0-9]+)$ ]]; then echo "${BASH_REMATCH[1]}"; fi
+}
+list_servers() { # <primary|replica> <cluster> -> the serverName directories of the archive in that store
+  local kind="$1" b ep rg
+  if [ "$kind" = primary ]; then b="$BKT_P"; ep="$EP_P"; rg="$REGION_P"; else b="$BKT_R"; ep="$EP_R"; rg="$REGION_R"; fi
+  local k=primary; [ "$kind" = replica ] && k=backup
+  local raw
+  raw="$(AWS_ACCESS_KEY_ID="$(s3_cred "$PROVIDER" "$k" ak "$ep")" AWS_SECRET_ACCESS_KEY="$(s3_cred "$PROVIDER" "$k" sk "$ep")" AWS_DEFAULT_REGION="$rg" \
+    aws s3api list-objects-v2 --bucket "$b" --prefix "cnpg/$2/" --delimiter / --endpoint-url "$ep" --query 'CommonPrefixes[].Prefix' --output text)" || return 1
+  printf '%s\n' "$raw" | tr '\t' '\n' | sed -e 's#/$##' -e 's#.*/##' | grep -vx 'None' || true
+}
+highest_generation() { # the highest generation in use in the stores; the surviving store must answer, the other is best effort
+  local kind c n srv g max=0
+  for kind in "$STORE" $([ "$STORE" = replica ] && echo primary || echo replica); do
+    for c in zitadel-db grafana-db; do
+      if ! n="$(list_servers "$kind" "$c" 2>/dev/null)"; then
+        [ "$kind" = "$STORE" ] && { echo "the $kind store cannot be listed (keys, endpoint): pass --archive-generation N" >&2; return 1; }
+        echo "  (the $kind store cannot be listed: its generations are not counted)" >&2; continue
+      fi
+      for srv in $n; do g="$(gen_of "$c" "$srv")"; [ -z "$g" ] || [ "$g" -le "$max" ] || max="$g"; done
+    done
+  done
+  echo "$max"
+}
+gen_manifest() { # suffix previous-suffix generation
+  python3 - "$GENCM" "$1" "$2" "$3" <<'PY'
+import json, sys, datetime
+name, suffix, prev, gen = sys.argv[1:5]
+print(json.dumps({"apiVersion": "v1", "kind": "ConfigMap",
+                  "metadata": {"name": name, "namespace": "flux-system",
+                               "labels": {"openaether.io/managed-by": "dr-restore-plan"},
+                               "annotations": {"openaether.io/archive-generation": gen,
+                                               "openaether.io/recorded-at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}},
+                  "data": {"CNPG_ARCHIVE_SUFFIX": suffix, "CNPG_ARCHIVE_PREVIOUS_SUFFIX": prev}}))
+PY
+}
+gen_get() { K -n flux-system get configmap "$GENCM" -o "jsonpath={.data.$1}" 2>/dev/null; }
+run_generation() {
+  mkdir -p "$WORK"
+  if [ -z "$GEN" ] && K -n flux-system get configmap "$GENCM" >/dev/null 2>&1; then
+    say "  (the ConfigMap $GENCM already exists, suffix '$(gen_get CNPG_ARCHIVE_SUFFIX)': kept, this is a re-run; --archive-generation N replaces it)"
+    return 0
+  fi
+  local found new prev
+  if [ -n "$GEN" ]; then new="$GEN"; found=$((GEN - 1)); say "  (generation $GEN from --archive-generation; the stores were not listed)"
+  else
+    found="$(highest_generation)" || return 1
+    new=$((found + 1)); [ "$found" -ge 1 ] || new=1
+    say "  (highest generation found in the stores: ${found}; the rebuilt Clusters archive as generation ${new})"
+  fi
+  prev=""; [ "$found" -ge 1 ] && prev="$(gen_suffix "$found")"
+  gen_manifest "$(gen_suffix "$new")" "$prev" "$new" | K apply -f - >/dev/null
+  printf '%s\t%s\t%s\n' "$new" "$(gen_suffix "$new")" "$prev" >"$WORK/archive-generation.tsv"
+}
+check_generation() {
+  local want have
+  have="$(gen_get CNPG_ARCHIVE_SUFFIX)" || { echo "the ConfigMap $GENCM is not in flux-system"; return 1; }
+  K -n flux-system get configmap "$GENCM" >/dev/null 2>&1 || { echo "the ConfigMap $GENCM is not in flux-system"; return 1; }
+  if [ -n "$GEN" ]; then want="$(gen_suffix "$GEN")"; [ "$have" = "$want" ] || { echo "the ConfigMap holds suffix '$have', --archive-generation $GEN wants '$want'"; return 1; }; fi
+  say "  (new archive: serverName <cluster>${have}; recovery source of this chain: <cluster>$(gen_get CNPG_ARCHIVE_PREVIOUS_SUFFIX), left untouched)"
+}
+# step dbs: Flux must have given the Clusters the new name BEFORE the data is loaded (the load is then archived from its first WAL).
+archive_applied() { # cluster
+  local want have
+  want="$1$(gen_get CNPG_ARCHIVE_SUFFIX)"
+  for _ in $(seq 1 "${OA_DR_WAIT_TRIES:-90}"); do
+    have="$(K -n foundation-databases get clusters.postgresql.cnpg.io "$1" -o 'jsonpath={.spec.plugins[?(@.isWALArchiver==true)].parameters.serverName}' 2>/dev/null || true)"
+    [ "$have" = "$want" ] && return 0
+    sleep "${OA_DR_POLL:-10}"
+  done
+  echo "$1 archives under '${have:-<cluster name>}', not '$want': Flux has not applied the new archive name (Kustomization cnpg resumed? ConfigMap read?)"; return 1
+}
+
 run_openbao() {
   mkdir -p "$WORK/openbao"
   restic_env restic -r "$(repo openbao)" restore latest --host openbao --target "$WORK/openbao"
@@ -390,10 +488,10 @@ db_healthy() { # cluster
   done
   return 1
 }
-dr_manifest() { # cluster image size: the scratch Cluster that recovers the archive; it never archives
-  python3 - "$1" "$2" "$3" "$STORE" "$PITR" <<'PY'
+dr_manifest() { # cluster image size: the scratch Cluster that recovers the PREVIOUS archive generation (the dead cluster's); it never archives
+  python3 - "$1" "$2" "$3" "$STORE" "$PITR" "$(gen_get CNPG_ARCHIVE_PREVIOUS_SUFFIX || true)" <<'PY'
 import json, sys
-c, img, size, store, pitr = sys.argv[1:6]
+c, img, size, store, pitr, prev = sys.argv[1:7]
 rec = {"source": "origin"}
 if pitr:
     rec["recoveryTarget"] = {"targetTime": pitr}
@@ -402,7 +500,7 @@ print(json.dumps({"apiVersion": "postgresql.cnpg.io/v1", "kind": "Cluster",
                   "spec": {"instances": 1, "imageName": img, "storage": {"size": size, "storageClass": "local-path"},
                            "bootstrap": {"recovery": rec},
                            "externalClusters": [{"name": "origin", "plugin": {"name": "barman-cloud.cloudnative-pg.io",
-                                                 "parameters": {"barmanObjectName": f"{c}-{store}", "serverName": c}}}]}}))
+                                                 "parameters": {"barmanObjectName": f"{c}-{store}", "serverName": c + prev}}}]}}))
 PY
 }
 # pg_restore --clean on Zitadel's partitioned cache tables cannot drop the partitions' inherited constraints and exits 1 although the
@@ -431,6 +529,7 @@ run_dbs() {
   for pair in "${DBS[@]}"; do
     c="${pair%%:*}"; db="${pair##*:}"
     db_healthy "$c" || { echo "$c is not healthy (the live Cluster must exist and be empty before the load)"; return 1; }
+    archive_applied "$c" || return 1
     live="$(K -n foundation-databases get clusters.postgresql.cnpg.io "$c" -o jsonpath='{.status.currentPrimary}')"
     if [ "$DBSRC" = pitr ]; then
       img="$(K -n foundation-databases get clusters.postgresql.cnpg.io "$c" -o jsonpath='{.spec.imageName}')"
@@ -473,8 +572,45 @@ check_identity() {
   echo "$bad Kustomizations are not Ready"; return 1
 }
 
+# The new archive generation starts empty: give it a base backup, force the segment that holds it into the archive (an idle database
+# does not switch, lab 20), prove ContinuousArchiving, then copy to the replica store so the restore test can read BOTH stores.
+wait_for() { # <tries> <command...>
+  local n="$1"; shift
+  for _ in $(seq 1 "$n"); do "$@" && return 0; sleep "${OA_DR_POLL:-10}"; done
+  return 1
+}
+backup_done() { [ "$(K -n foundation-databases get backups.postgresql.cnpg.io "dr-base-$1" -o jsonpath='{.status.phase}' 2>/dev/null)" = completed ]; }
+archiving_true() { [ "$(K -n foundation-databases get clusters.postgresql.cnpg.io "$1" -o 'jsonpath={.status.conditions[?(@.type=="ContinuousArchiving")].status}' 2>/dev/null)" = True ]; }
+replicate_done() { [ "$(K -n foundation-databases get job dr-replicate -o jsonpath='{.status.succeeded}' 2>/dev/null)" = 1 ]; }
+backup_manifest() {
+  python3 - "$1" <<'PY'
+import json, sys
+c = sys.argv[1]
+print(json.dumps({"apiVersion": "postgresql.cnpg.io/v1", "kind": "Backup", "metadata": {"name": "dr-base-" + c, "namespace": "foundation-databases"},
+                  "spec": {"cluster": {"name": c}, "method": "plugin", "pluginConfiguration": {"name": "barman-cloud.cloudnative-pg.io"}}}))
+PY
+}
+prove_new_archive() {
+  local pair c live
+  for pair in "${DBS[@]}"; do
+    c="${pair%%:*}"
+    K -n foundation-databases delete backups.postgresql.cnpg.io "dr-base-$c" --ignore-not-found >/dev/null
+    backup_manifest "$c" | K apply -f - >/dev/null
+  done
+  for pair in "${DBS[@]}"; do
+    c="${pair%%:*}"
+    wait_for "${OA_DR_WAIT_TRIES:-90}" backup_done "$c" || { echo "$c: the base backup of the new archive did not complete (ContinuousArchiving? barman 'Expected empty archive'?)"; return 1; }
+    live="$(K -n foundation-databases get clusters.postgresql.cnpg.io "$c" -o jsonpath='{.status.currentPrimary}')"
+    K -n foundation-databases exec "$live" -c postgres -- psql -U postgres -X -At -c 'SELECT pg_switch_wal()' >/dev/null
+    wait_for "${OA_DR_WAIT_TRIES:-90}" archiving_true "$c" || { echo "$c: ContinuousArchiving is not True"; return 1; }
+  done
+  K -n foundation-databases delete job dr-replicate --ignore-not-found >/dev/null
+  K -n foundation-databases create job --from=cronjob/cnpg-store-replicate dr-replicate >/dev/null
+  wait_for "${OA_DR_WAIT_TRIES:-90}" replicate_done || { echo "the copy of the new archive to the replica store (job dr-replicate) did not complete"; return 1; }
+}
 run_verify() {
   ( cd "$ROOT" && $TASK cluster-verify PROVIDER="$PROVIDER" ROLE="$ROLE" )
+  prove_new_archive || return 1
   K -n foundation-databases delete job dr-check --ignore-not-found >/dev/null
   K -n foundation-databases create job --from=cronjob/cnpg-recovery-restore-test dr-check >/dev/null
 }
@@ -553,7 +689,7 @@ for s in "${STEPS[@]}"; do total_target=$((total_target + TARGET[$s])); done
 
 say "OpenAether disaster recovery — scenario $SCENARIO — cluster $CN ($ENVN) on $PROVIDER — store $STORE ($EP)"
 say "$([ "$EXECUTE" = 1 ] && echo 'MODE: EXECUTE' || echo 'MODE: DRY-RUN (nothing is run or changed; --execute --confirm <cluster_name> runs the chain)')"
-say "Sum of the step targets: ${total_target} min of a ${RTO_MIN} min RTO. RPO: OpenBao and the dumps 24 h, CNPG (PITR) the age of the replica copy (up to 15 min + copy) or the primary's WAL; nothing else is restored."
+say "Sum of the step targets: ${total_target} min of a ${RTO_MIN} min RTO. RPO: OpenBao and the dumps 24 h, CNPG (PITR) the age of the replica copy (up to 15 min + copy) or the primary's WAL; nothing else is restored. The rebuilt clusters archive under a NEW serverName (<cluster>-g<N>): a point in time before the rebuild is recovered from the OLD path, one after it from the new."
 if [ "$EXECUTE" = 1 ]; then
   [ "$CONFIRM" = "$CN" ] || { echo "✗ --execute needs --confirm $CN (the cluster_name of ${TFVARS##*/}); got '${CONFIRM:-nothing}'" >&2; exit 2; }
   mkdir -p "$OUT" "$WORK"

@@ -20,6 +20,13 @@ infra 7e367d9 / apps 75e464f, on branches) ran a nominal `cluster-up` in 9 min 0
 infra issues the series set out to look at: #42 (the API unreachable for seconds during a control-plane roll) and #375 (the OVH hard-reboot window) stay open for 0.4.0, see below.
 Not a compliance claim. The apps-side results (#134 partial, #143, #144) are in the OpenAether-apps CHANGELOG.
 
+### Fixed (0.4.0, lab 20 finding, apps #153)
+
+- **A cluster rebuilt by `dr-restore-plan` no longer archives into the dead cluster's WAL path.** New step `generation` (after `hold`): it lists `cnpg/<cluster>/` in both stores, takes the highest archive generation plus one and writes the ConfigMap `cnpg-archive-generation` (flux-system: `CNPG_ARCHIVE_SUFFIX`, `CNPG_ARCHIVE_PREVIOUS_SUFFIX`) that
+  Flux substitutes into the Clusters' `serverName` (apps: `<cluster>-g2`…; no ConfigMap, no suffix, so installs and the lab 19/20 paths do not move). `--archive-generation N` forces it. Step `dbs` waits for Flux to apply the new name before the load and its PITR recovery reads the PREVIOUS path; step `verify` takes a base
+  backup of each new archive, forces `pg_switch_wal`, requires `ContinuousArchiving` True and runs `cnpg-store-replicate` once before the restore test. `docs/disaster-recovery.md` (EN, FR): the RPO and the paths after a rebuild, what is UNVERIFIED and the pass criteria of the next drill. Test: `test-dr-restore-plan.sh`
+  (generation from fake stores, previous path, order, failures, no aws call with `--archive-generation`). Rung: **mocked**; **UNVERIFIED on a cluster**. The apps side is in the OpenAether-apps CHANGELOG.
+
 ### Added (0.4.0, milestone M3: restore tests and disaster recovery)
 
 - **`task dr-restore-plan`** (`scripts/ops/dr-restore-plan.sh`): the chain of `docs/disaster-recovery.md` as one command. Dry-run by default (prints the ordered steps with this cluster's commands, the inputs each step needs and which are missing; `--strict` makes
