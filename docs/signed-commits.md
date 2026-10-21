@@ -36,7 +36,7 @@ from 1.0.0.
 |---|---|---|---|
 | VPS release key (Vincent Dislaire, ed25519, expires 2028-10-17) | `1D5895FDC14F5BAD6D1B170B5CA26229559044A2` | `docs/signers/release-vps.asc` | release tags and the commits of the release branches |
 | GitHub `web-flow` (commit signing key) | `968479A1AFF927E37D1A566BB5690EEEBB952194` | `docs/signers/web-flow.asc` | squash and web merges. Taken from `https://github.com/web-flow.gpg` (which also lists an older key, expired 2024-01-16, not kept) |
-| Maintainer's own key | **TO FILL: the owner gives the fingerprint (the previous key was deleted)** | `docs/signers/maintainer.asc` once given | commits |
+| Maintainer's own key | **TO FILL: the owner gives the fingerprint (the previous key was deleted)** | a file `maintainer.asc` in `docs/signers/` once given | commits |
 
 `docs/signers/signers.txt` holds the fingerprints in a machine-readable form (read by `scripts/dev/check-release-tag.sh`); the `.asc` files are the
 public keys only (`gpg --armor --export <fingerprint>`), the ones to pass to `flux_git_verify.public_keys` with `file()`. Check a fingerprint

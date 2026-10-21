@@ -39,7 +39,7 @@ signé ou inconnu à partir de la 1.0.0.
 |---|---|---|---|
 | Clé de release du VPS (Vincent Dislaire, ed25519, expire le 2028-10-17) | `1D5895FDC14F5BAD6D1B170B5CA26229559044A2` | `docs/signers/release-vps.asc` | tags de release et commits des branches de release |
 | GitHub `web-flow` (clé de signature des commits) | `968479A1AFF927E37D1A566BB5690EEEBB952194` | `docs/signers/web-flow.asc` | squash et merges web. Prise sur `https://github.com/web-flow.gpg` (qui liste aussi une ancienne clé, expirée le 2024-01-16, non gardée) |
-| Clé propre du mainteneur | **À REMPLIR : le propriétaire donne l'empreinte (l'ancienne clé a été supprimée)** | `docs/signers/maintainer.asc` une fois donnée | commits |
+| Clé propre du mainteneur | **À REMPLIR : le propriétaire donne l'empreinte (l'ancienne clé a été supprimée)** | le fichier `maintainer.asc` dans `docs/signers/` une fois donnée | commits |
 
 `docs/signers/signers.txt` contient les empreintes sous forme lisible par machine (lu par `scripts/dev/check-release-tag.sh`) ; les fichiers `.asc`
 sont les clés publiques seules (`gpg --armor --export <empreinte>`), à passer à `flux_git_verify.public_keys` avec `file()`. Comparer une empreinte
