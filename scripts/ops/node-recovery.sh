@@ -215,7 +215,10 @@ case "$CMD" in
       echo "  worker): kubectl cnpg status <cluster> -n <ns>; its volume held the old disk's data, so delete that instance's PVC and pod:" >&2
       echo "  kubectl -n <ns> delete pvc <instance> pod <instance> (only while the cluster has a healthy primary elsewhere); CNPG clones it" >&2
       echo "  again, under a minute for the lab's databases." >&2
-      echo "  An OpenBao member rejoins its raft peers on its own: bao operator raft list-peers." >&2
+      echo "  An OpenBao member does NOT come back on its own (lab 21: CrashLoopBackOff, 'open /bao/data/node-id: permission denied': the" >&2
+      echo "  retained volume's directory was re-created root-owned on the new disk). With the other two members unsealed, delete its pod," >&2
+      echo "  its PVC and the retained PV (class local-path-retain), let local-path provision a new volume: it rejoined and unsealed in about 2 min." >&2
+      echo "  Same for any pod on a local-path volume that crash-loops with 'permission denied' (lab 21: loki-0, vmselect): delete its pod and PVC." >&2
     else
       ok "every pod is Running or finished"
     fi

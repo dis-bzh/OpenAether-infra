@@ -83,7 +83,8 @@ applies and gates as `cluster-roll`, with these differences, because the node ca
 3. then Ready, uncordon, etcd back to full membership and the kube-apiserver serving (control plane), and the Longhorn gate.
 
 The state is backed up afterwards, as `cluster-roll` does. Wipes the node's system disk and the local-path data on it (OpenBao raft member, a CNPG instance, a
-VictoriaMetrics storage replica), which the peers rebuild. A CNPG instance whose volume was on the dead disk crash-loops on the empty data directory (lab 21): delete its PVC and pod and let
+VictoriaMetrics storage replica), which the peers rebuild. An OpenBao member on a replaced worker does NOT rejoin on its own (lab 21: `open /bao/data/node-id: permission denied`, the retained volume's directory is re-created root-owned on the new disk): with the
+other two members unsealed, delete its pod, its PVC and the retained PV, and local-path provisions a new volume; the member then rejoined and unsealed in about 2 minutes; `loki-0` and `vmselect` (class `local-path`) crash-looped the same way and came back after their pod and PVC were deleted (the script prints the hint). A CNPG instance whose volume was on the dead disk crash-loops on the empty data directory (lab 21): delete its PVC and pod and let
 CNPG clone it (under a minute there; only while the cluster has a healthy primary elsewhere; the script prints the hint).
 
 Never: `tofu destroy` or `tofu apply -replace` by hand on more than one node; deleting a control plane's Node object before its etcd member is gone;
@@ -144,7 +145,7 @@ Longest run of consecutive failed samples, and the total, per drill. Targets: HT
 | Zone power-off 10 min, fr-par-3 | 1 s / 4 | 3 | 0 | all met except `FailureDomainLost` 3 min 11 s (`for: 1m`; fixed to 1 min 51 s) |
 | Zone power-off 10 min, fr-par-1 (two workers, a control plane, grafana-db entirely inside) | 3 s / 15 | 2 | 36 s | `FailureDomainLost` 2 min 2 s; OpenBao 2 of 3 then 3 of 3; DB gap NOT met (DNS); pods Pending (CPU of the two-worker zone) |
 | Same zone after the zone spread of the CNPG clusters and operator | 2 s / 31 | 4 | 0 | all met; grafana-db failed over to fr-par-2 |
-| Replace a dead worker (`cluster-replace-node`, 260 s) | 1 s / 12 | 0 | 328 s (primary on it) | Node object deleted before the apply, Ready in 4 min 20 s; two CNPG instances crash-looped on the empty disk until their PVC and pod were deleted (documented, now VERIFIED); replicas full 665 s after the command |
+| Replace a dead worker (`cluster-replace-node`, 260-287 s, twice) | 1 s / 12 | 0 | 328 s (primary on it) | Node object deleted before the apply, Ready in 4 min 20 s; the pods whose local-path volume sat on the replaced disk crash-looped (two CNPG instances on an empty data directory, then on the second worker an OpenBao member, loki-0 and vmselect with `permission denied`) until their PVC (and the retained PV) was deleted by hand: NOT back to full by itself, about 2 minutes each once done |
 | Replace a dead control plane (335 s) | 0 / 0 | 1 | 0 | survey with quorum, etcd member removed BEFORE the Node object, etcd 3/3, 3 apiservers: all met |
 | `cluster-node-recover` | 1 s / 2 | 0 | 0 | one hard reboot, Ready after 104 s; with the tunnels closed on purpose nothing is rebooted (kubelet silence simulated: no Talos API stops it) |
 
@@ -157,13 +158,12 @@ CoreDNS (Talos-owned, both replicas on one worker after the install), the 5 minu
 
 Verified in lab 21 (Scaleway): two CNPG operators with one holding the lease, the ESO controller leader election, two Kyverno admission controllers, `kube_node_role`, the zone label of
 `kube_node_labels` and `alertmanager_cluster_members` as series, the Alertmanager gossip through the network policy (2 members), `machine.nodeLabels` applied to a running node without a
-reboot (the zone label is on every node from the first boot), the Scaleway `state` and `hard-reboot` calls of `node-provider.py`, and what a CNPG instance on a replaced disk needs
-(its PVC and pod deleted, then a clone in under a minute).
+reboot (the zone label is on every node from the first boot), the Scaleway `state` and `hard-reboot` calls of `node-provider.py`, and what a CNPG instance and an OpenBao member on a replaced disk need
+(a CNPG instance: its PVC and pod deleted, then a clone in under a minute; an OpenBao member: its pod, PVC and retained PV deleted, back in about 2 minutes).
 
 Still UNVERIFIED:
 
 - The OVH and Outscale calls of `node-provider.py` (OVH follows the existing purge script), and that the Outscale placement is known at plan time.
-- That an OpenBao member whose local-path volume was on a replaced disk rejoins its raft peers (the drills lost zones, which return their disks).
 - A real "running but silent" machine (OVH #371): simulated here by forcing the Ready condition.
 - The Longhorn behaviour with the default replica replenishment wait (10 minutes) after a node loss; the alert for "fewer than two healthy replicas" is
   `LonghornVolumeDegraded` (Longhorn exports no replica count).

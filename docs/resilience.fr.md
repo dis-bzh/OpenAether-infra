@@ -83,7 +83,8 @@ plan enregistré et les mêmes barrières que `cluster-roll`, avec ces différen
 3. puis Ready, uncordon, etcd revenu à tous ses membres et kube-apiserver en service (plan de contrôle), et la barrière Longhorn.
 
 L'état est sauvegardé ensuite, comme le fait `cluster-roll`. Cela efface le disque système du nœud et les données local-path qu'il portait (membre raft OpenBao, une
-instance CNPG, un réplica de stockage VictoriaMetrics), que les pairs reconstruisent. Une instance CNPG dont le volume était sur le disque mort peut rester Pending :
+instance CNPG, un réplica de stockage VictoriaMetrics), que les pairs reconstruisent. Un membre OpenBao sur un worker remplacé NE se rattache PAS tout seul (labo 21 : `open /bao/data/node-id: permission denied`, le répertoire du volume conservé est recréé en root sur le nouveau disque) :
+les deux autres membres descellés, supprimez son pod, sa PVC et le PV conservé, local-path provisionne un nouveau volume ; le membre s'est rattaché et descellé en environ 2 minutes ; `loki-0` et `vmselect` (classe `local-path`) ont planté de la même façon et sont revenus après suppression de leur pod et PVC (le script affiche l'indication). Une instance CNPG dont le volume était sur le disque mort peut rester Pending :
 supprimez son pod et son PVC et laissez CNPG la cloner (vérifié au labo 21 : boucle de plantage sur le répertoire de données vide, clone en moins d'une minute ; seulement tant que le cluster a un primaire sain ailleurs ; le script affiche l'indication).
 
 Jamais : `tofu destroy` ou `tofu apply -replace` à la main sur plus d'un nœud ; supprimer l'objet Node d'un plan de contrôle avant que son membre etcd soit parti ;
