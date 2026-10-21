@@ -82,8 +82,8 @@ applies and gates as `cluster-roll`, with these differences, because the node ca
    pods now; the instance and then its Talos configuration are applied;
 3. then Ready, uncordon, etcd back to full membership and the kube-apiserver serving (control plane), and the Longhorn gate.
 
-The state is backed up afterwards, as `cluster-roll` does. Wipes the node's system disk and the local-path data on it (OpenBao raft member, a CNPG instance, a
-VictoriaMetrics storage replica), which the peers rebuild. An OpenBao member on a replaced worker does NOT rejoin on its own (lab 21: `open /bao/data/node-id: permission denied`, the retained volume's directory is re-created root-owned on the new disk): with the
+The state is backed up afterwards, as `cluster-roll` does. It then lists the volumes the old disk left behind and prints the commands that drop them (`-- --clean` runs them, for the known safe cases: section "DNS and the eviction delay after lab 21"). Wipes the node's system disk and the local-path data on it (OpenBao raft member, a CNPG instance, a
+VictoriaMetrics storage replica), which the peers rebuild. What follows is what the cleanup does for you; by hand: an OpenBao member on a replaced worker does NOT rejoin on its own (lab 21: `open /bao/data/node-id: permission denied`, the retained volume's directory is re-created root-owned on the new disk): with the
 other two members unsealed, delete its pod, its PVC and the retained PV, and local-path provisions a new volume; the member then rejoined and unsealed in about 2 minutes; `loki-0` and `vmselect` (class `local-path`) crash-looped the same way and came back after their pod and PVC were deleted (the script prints the hint). A CNPG instance whose volume was on the dead disk crash-loops on the empty data directory (lab 21): delete its PVC and pod and let
 CNPG clone it (under a minute there; only while the cluster has a healthy primary elsewhere; the script prints the hint).
 
@@ -113,6 +113,47 @@ OpenBao members, an instance of each database and a replica of each volume.
 `task failure-domain-check PROVIDER=…` computes that for every domain from the state and the cluster and exits 1 when some loss would stop something. A single
 Gateway pod, a database whose instances share a domain, workers whose requests do not fit on the ones that stay, are named. It is also the first thing to run
 when `FailureDomainLost` fires.
+
+## DNS and the eviction delay after lab 21 (infra #388, apps #154)
+
+Rung: **mocked/static** (`tofu test`, the rendered manifest, a fake `kubectl`). Nothing below has been drilled. Not a compliance claim.
+
+**CoreDNS (#388).** Lab 21: both Talos replicas sat on one worker, so its loss was 4 min 46 s without DNS; with the replicas on two control planes one lost control plane still cost
+a 46 s write gap. The lever: Talos' `cluster.coreDNS` has two keys, `disabled` and `image`, no replicas, no scheduling, no budget, and a patch from outside (Flux, Kyverno, a
+post-renderer) on an object Talos also applies would fight Talos's own sync (which side wins is UNVERIFIED). Chosen, `coredns_ha` (default true, module `talos`):
+`cluster.coreDNS.disabled = true` plus an inline manifest `coredns` (`modules/talos/coredns.yaml.tftpl`) with the same names, labels and ClusterIP (`10.96.0.10`, the default service range
+`10.96.0.0/12`), `min(3, nodes)` replicas, a **hard hostname spread with `minDomains` = replicas** (a replica created before the other nodes registered waits for a different node
+instead of sharing one, which is what happened), a zone preference, a budget allowing one disruption, 30 s not-ready/unreachable tolerations, requests 50m/70Mi (three replicas 150 m, was 2 x 100 m).
+It is an inline manifest and not a Flux object because Flux itself needs DNS to fetch anything. You now own the image: `coredns_image_tag`, tracked by Renovate.
+Not chosen: a Flux or Kyverno patch of the Talos object (above); NodeLocal DNS cache (a DaemonSet per node, about 0.1 vCPU each against a margin of 0.15 vCPU in the two-worker zone, and it
+answers stale only for names already asked: it hides an outage, it does not remove one); changing the apiserver default tolerations (every pod). Still true afterwards: until the Service stops
+using the replica of a lost node (about 40 s after the node turns NotReady, 80 s seen in lab 21) one lookup in three goes to it; resolvers retry after 5 s, a 1 Hz writer with a short connect
+timeout can still fail for that time.
+
+**Talos upgrades.** With `coreDNS.disabled` Talos neither creates nor upgrades `kube-system/coredns`: Talos and Kubernetes upgrades leave it alone, a CoreDNS version change is a
+`coredns_image_tag` change and a `tofu apply` (the config is re-sent to the control planes, which re-apply their inline manifests; no reboot). Turning it on for a running cluster replaces the
+Talos-created Deployment at the next apply; turning it off again leaves OpenAether's in place until Talos re-applies its own, so delete `kube-system/coredns` first. UNVERIFIED: that the
+inline-manifest sync updates a Deployment in place when only the tag changes, what `talosctl upgrade-k8s` says about CoreDNS when it is disabled, and the seconds of DNS during the switch.
+
+**Database failover (#154, OpenAether-apps `docs/resilience.md`).** The CNPG primary of a lost node is failed over when its pod is evicted; the Clusters now tolerate `unreachable` and `not-ready`
+for 30 s instead of 300 s. Expected write gap of a node power loss: about 60 s (two measurements of 328 and 333 s minus the 300 s), not 30 s: detection and promotion alone are 28-33 s. A
+primary kill (24 s) and a switchover (12-14 s) meet 30 s. The owner decides whether 30 s applies to a power loss.
+
+**After a replacement (#4 of the lab 21 follow-up).** `cluster-replace-node` now ends with `scripts/ops/replaced-node-cleanup.py`: it takes the PVs pinned to the replaced node by hostname and
+created BEFORE its new Node object (the data lived on the old disk), finds the pods stuck on them, and prints the exact `kubectl` commands. Default: nothing is deleted. `-- --clean` runs them,
+only for: a CNPG replica whose Cluster has a Ready primary elsewhere (never the primary of record), an OpenBao member while a raft majority of the others is Ready (Ready means unsealed), Loki,
+vmstorage and vmselect while another replica is Ready; the retained PV is deleted with the claim. One member per workload per run, a Ready pod is left alone, anything else is refused and
+the command exits 1. Longhorn replicas are reported (a faulted volume is named), never deleted: Longhorn rebuilds them. `task cluster-replaced-node-cleanup NODE=<node> [-- --clean]` runs it alone
+(for a deferred member, or later). UNVERIFIED: the matching of a PV to the new Node by creation time on a live cluster, and CNPG re-cloning in every case the script lets through.
+
+**Lab pass criteria for these changes.**
+
+| Drill | Pass |
+|---|---|
+| Fresh install, `coredns_ha` on | three `k8s-app=kube-dns` pods on three different nodes (`-o wide`), none Pending for good; `kubectl get pdb -n kube-system coredns` allows 1; `cluster-verify` green |
+| Worker (or control plane) holding a CoreDNS replica powered off 5 min, 1 Hz lookup of a Service name from a pod on a third node plus the database writer | no lookup fails for good, and the longest database write gap that is not a failover is at most 30 s (was 287 s / 46 s); replicas back to three within 15 minutes of the power-on |
+| Worker holding the zitadel-db primary powered off and left off | the longest write gap is at most 75 s (expected about 60 s), a replica is promoted within 45 s of the node turning Unknown, data identical; 30 s is not claimed |
+| `cluster-replace-node` of a dead worker holding a CNPG instance, an OpenBao member, loki and vmselect | the cleanup lists exactly the volumes of that node created before the new one; without `--clean` nothing is deleted; with `--clean` every replica is full within 15 minutes of the command with no manual `kubectl`; the primary of record and every other node's volume are untouched (`kubectl get pv` before and after) |
 
 ## The drills that prove it (cloud, 1 Hz probes)
 
@@ -149,10 +190,10 @@ Longest run of consecutive failed samples, and the total, per drill. Targets: HT
 | Replace a dead control plane (335 s) | 0 / 0 | 1 | 0 | survey with quorum, etcd member removed BEFORE the Node object, etcd 3/3, 3 apiservers: all met |
 | `cluster-node-recover` | 1 s / 2 | 0 | 0 | one hard reboot, Ready after 104 s; with the tunnels closed on purpose nothing is rebooted (kubelet silence simulated: no Talos API stops it) |
 
-What the drills changed in this release: `NodeScrapeDown` and `FailureDomainLost` read the kubelet scrape (kube-state-metrics is one pod: it was blind when it sat on the lost node, and
-the Ready condition arrives 80 s after the loss), `AlertmanagerClusterDegraded` counts answering pods, a preferred zone spread on the CNPG clusters and operator. What they did not change:
+What the drills changed in this release: `NodeScrapeDown` and `FailureDomainLost` read the kubelet scrape (kube-state-metrics was one pod then and was blind when it sat on the lost node, and
+the Ready condition arrives 80 s after the loss; it has two replicas now, OpenAether-apps #156), `AlertmanagerClusterDegraded` counts answering pods, a preferred zone spread on the CNPG clusters and operator. What they did not change:
 CoreDNS (Talos-owned, both replicas on one worker after the install), the 5 minute wait before a database primary on a lost node is failed over, the capacity of the two-worker zone
-(`capacity.md`). Each has an issue.
+(`capacity.md`). Each has an issue; the first two have offline changes, see the section "DNS and the eviction delay after lab 21" (not drilled).
 
 ## UNVERIFIED
 
@@ -167,6 +208,7 @@ Still UNVERIFIED:
 - A real "running but silent" machine (OVH #371): simulated here by forcing the Ready condition.
 - The Longhorn behaviour with the default replica replenishment wait (10 minutes) after a node loss; the alert for "fewer than two healthy replicas" is
   `LonghornVolumeDegraded` (Longhorn exports no replica count).
-- Lowering the 5 minute toleration (kube-apiserver `--default-not-ready-toleration-seconds` and `--default-unreachable-toleration-seconds`): not done. Lab 21 measured what it costs to keep it:
-  a database primary on a lost node is failed over after about 5 minutes (328 and 333 s write gaps), but the change affects eviction for every pod and has not been measured.
+- Lowering the 5 minute toleration for every pod (kube-apiserver `--default-not-ready-toleration-seconds` and `--default-unreachable-toleration-seconds`): not done, it affects eviction for every pod.
+  Only the two CNPG Clusters and CoreDNS carry a 30 s toleration (see the section on DNS above); `kube-controller-manager`'s `node-monitor-grace-period` is untouched.
+- The offline changes after lab 21 (CoreDNS inline manifest, the 30 s CNPG toleration, the replaced-node cleanup, kube-state-metrics at two replicas, the zone preference): nothing ran on a cluster.
 - Everything on OVH and Outscale: nothing here ran there.

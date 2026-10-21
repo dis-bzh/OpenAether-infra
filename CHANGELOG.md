@@ -43,6 +43,18 @@ fake provider API, mocked OpenTofu tests); **UNVERIFIED on a cluster**; the dril
   `control-plane-zones.tftest.hcl` (workers), `node-zones.tftest.hcl`. That a Talos node accepts the label is UNVERIFIED.
 - **Docs**: new `docs/resilience.md` and `resilience.fr.md`; `upgrade.md` ("A node that is already dead"), `network.md` section 9, `capacity.md` (about 345 m of CPU requests added by the HA work, derived, about 0.45 vCPU of margin left on the shipped 3 x 4 vCPU example), EN and FR.
 
+### Fixed (lab 21 follow-up, offline: infra #388, apps #154; to be proven by the next lab)
+
+Rung: **mocked/static** (`tofu test`, a rendered-manifest test, a fake `kubectl`). Not a compliance claim; the lab pass criteria are in `docs/resilience.md`.
+
+- **CoreDNS** (#388): `coredns_ha` (default on) disables the Talos-owned Deployment (`cluster.coreDNS.disabled`) and injects an inline `coredns` manifest with the same names, labels and ClusterIP:
+  `min(3, nodes)` replicas on different nodes (hard hostname spread with `minDomains`, so a replica created before the other nodes exist waits instead of sharing one), a zone preference, a budget
+  allowing one disruption, 30 s tolerations, requests 150 m in all (was 200 m). `coredns_image_tag` is Renovate-tracked. `tests/coredns.tftest.hcl` and `test-coredns-manifest.sh`. What a Talos upgrade does is
+  written down, with what is UNVERIFIED. A NodeLocal DNS cache was evaluated and not shipped.
+- **After `cluster-replace-node`**: `scripts/ops/replaced-node-cleanup.py` lists the volumes the old disk left behind (PVs pinned to the node and older than its new Node object) and the pods stuck on them,
+  and prints the `kubectl` commands; `-- --clean` runs them for a CNPG replica with a healthy primary elsewhere, an OpenBao member with a raft majority left, Loki, vmstorage and vmselect with another Ready
+  replica, and refuses the rest (the primary of record, an unknown workload, a lost majority). `task cluster-replaced-node-cleanup`; `test-replaced-node-cleanup.sh` (fake `kubectl`, 21 cases).
+
 ### Fixed (0.4.0, lab 20 finding, apps #153)
 
 - **A cluster rebuilt by `dr-restore-plan` no longer archives into the dead cluster's WAL path.** New step `generation` (after `hold`): it lists `cnpg/<cluster>/` in both stores, takes the highest archive generation plus one and writes the ConfigMap `cnpg-archive-generation` (flux-system: `CNPG_ARCHIVE_SUFFIX`, `CNPG_ARCHIVE_PREVIOUS_SUFFIX`) that
