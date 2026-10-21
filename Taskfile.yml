@@ -455,6 +455,7 @@ tasks:
       - ./scripts/dev/test-shrink-nodes.sh
       - ./scripts/dev/test-rwx-drain-gate.sh
       - ./scripts/dev/test-roll-apiserver-gate.sh
+      - ./scripts/dev/test-node-provider.sh
       - ./scripts/dev/test-egress-probe.sh
       - ./scripts/dev/test-tunnel-guard.sh
       # The one test that runs talos-tunnels.sh itself: every other harness stubs it (#65).
