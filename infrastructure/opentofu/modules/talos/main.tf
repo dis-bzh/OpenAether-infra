@@ -126,7 +126,25 @@ locals {
     },
   ] : []
 
-  inline_manifests = concat(local.base_manifests, local.flux_manifests)
+  # OpenAether's CoreDNS replaces the Talos-owned one (infra #388), so DNS survives the loss of a node. Replicas
+  # = min(3, nodes): a one-node lab has one, a 3 + 4 cluster has three. minDomains equals it, so a replica created
+  # before the other nodes registered waits for a different node instead of sharing one.
+  coredns_replicas = min(3, var.control_plane_count + var.worker_count)
+  coredns_manifests = var.coredns_ha ? [{
+    name = "coredns"
+    contents = templatefile("${path.module}/coredns.yaml.tftpl", {
+      replicas    = local.coredns_replicas
+      min_domains = local.coredns_replicas
+      image_tag   = var.coredns_image_tag
+    })
+  }] : []
+  # Talos then neither creates nor upgrades kube-system/coredns: the inline manifest does (infra #388). Off renders
+  # nothing, so the generated configs stay byte-identical.
+  coredns_cluster_patch = var.coredns_ha ? { coreDNS = { disabled = true } } : {}
+  # Folded into machine_config_version so an existing cluster actually gets a change.
+  coredns_signature = var.coredns_ha ? sha256(local.coredns_manifests[0].contents) : ""
+
+  inline_manifests = concat(local.base_manifests, local.coredns_manifests, local.flux_manifests)
 }
 
 # ==============================================================================
@@ -503,6 +521,7 @@ data "talos_machine_configuration" "control_plane" {
             }
           }
         },
+        local.coredns_cluster_patch,
         local.apiserver_vip_certsans
       )
     }),
@@ -698,7 +717,7 @@ resource "terraform_data" "talos_port_ready_worker" {
 # by the two `replace_triggered_by` below. See the comment on them.
 resource "terraform_data" "machine_config_version" {
   count = local.do_apply ? 1 : 0
-  input = "${var.talos_version}/${var.kubernetes_version}${local.resolver_tail == "" ? "" : "/${sha256(local.resolver_tail)}"}${local.node_log_signature == "" ? "" : "/${local.node_log_signature}"}${local.node_baseline_signature == "" ? "" : "/${local.node_baseline_signature}"}${local.talos_api_access_signature == "" ? "" : "/${local.talos_api_access_signature}"}${local.node_zones_signature == "" ? "" : "/${local.node_zones_signature}"}"
+  input = "${var.talos_version}/${var.kubernetes_version}${local.resolver_tail == "" ? "" : "/${sha256(local.resolver_tail)}"}${local.node_log_signature == "" ? "" : "/${local.node_log_signature}"}${local.node_baseline_signature == "" ? "" : "/${local.node_baseline_signature}"}${local.talos_api_access_signature == "" ? "" : "/${local.talos_api_access_signature}"}${local.node_zones_signature == "" ? "" : "/${local.node_zones_signature}"}${local.coredns_signature == "" ? "" : "/${local.coredns_signature}"}"
 }
 
 resource "talos_machine_configuration_apply" "control_plane" {

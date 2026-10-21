@@ -190,6 +190,25 @@ variable "cilium_manifest" {
   type        = string
 }
 
+variable "coredns_ha" {
+  description = <<-EOT
+    Ship OpenAether's own CoreDNS (min(3, number of nodes) replicas on different nodes, a PodDisruptionBudget, a 30 s
+    not-ready/unreachable toleration) as an inline manifest and set cluster.coreDNS.disabled = true, instead of the
+    2-replica Deployment that Talos owns (infra #388: lab 21 had 4 min 46 s without DNS when both replicas shared a
+    worker). False keeps the Talos one. The ClusterIP is 10.96.0.10 (Talos's default service range 10.96.0.0/12).
+    Enabling it on a running cluster replaces the Deployment in place at the next apply (docs/resilience.md, Talos upgrades).
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "coredns_image_tag" {
+  description = "CoreDNS image tag of the shipped manifest (registry.k8s.io/coredns/coredns). Talos no longer upgrades it when coredns_ha is on: bump it here."
+  type        = string
+  # renovate: datasource=docker depName=registry.k8s.io/coredns/coredns
+  default = "v1.12.4"
+}
+
 variable "flux_manifest" {
   description = "Flux install manifest YAML content (from bootstrap-manifests/flux-install.yaml)"
   type        = string

@@ -677,6 +677,7 @@ module "talos" {
   node_log_forwarding   = var.node_log_forwarding
   node_time_servers     = var.node_time_servers
   node_baseline         = var.node_baseline
+  coredns_ha            = var.coredns_ha
 
   talos_api_access_namespaces = var.etcd_snapshot_api_access ? ["foundation-databases"] : []
 

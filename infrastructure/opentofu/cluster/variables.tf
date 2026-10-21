@@ -411,6 +411,12 @@ variable "etcd_snapshot_api_access" {
   default     = true
 }
 
+variable "coredns_ha" {
+  description = "Run OpenAether's own CoreDNS (min(3, nodes) replicas on different nodes, a budget, a 30 s toleration) instead of the 2-replica Talos one (infra #388, modules/talos). False keeps the Talos Deployment; docs/resilience.md says what each does on a Talos upgrade."
+  type        = bool
+  default     = true
+}
+
 variable "node_baseline" {
   description = <<-EOT
     Opt-in kernel/kubelet baseline of the nodes (ANSSI BP-028 R9/R12/R13). Null (default) changes nothing.

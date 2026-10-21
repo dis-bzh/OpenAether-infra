@@ -6,6 +6,7 @@ mock_provider "talos" {}
 mock_provider "random" {}
 
 variables {
+  coredns_ha              = false
   cluster_name            = "t"
   cluster_endpoint        = "https://10.0.0.10:6443"
   talos_version           = "v1.14.2"
