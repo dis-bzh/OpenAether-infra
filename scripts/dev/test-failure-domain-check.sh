@@ -77,6 +77,27 @@ healthy; echo "{\"items\":[$(vpod w0)]}" >"$W/gw.json"; run
 { [ "$RC" = 1 ] && grep -q 'gateway: every pod is in a' <<<"$OUT"; } && ok_ "a single Gateway pod is a zone SPOF" || bad "gateway not caught: $OUT"
 
 echo
+echo "=== the shipped 4 workers and the 5-worker zone-HA profile (docs/capacity.md, infra #389) ==="
+# n workers placed round-robin over the zones a, b, c (what the cloud modules do with a three-zone list), with the measured
+# load: 4 workers carry about 225% of a worker's CPU (lab 21: 223-228%), a fifth adds a DaemonSet's worth (about 230%).
+workers() { # <count> <zones json> <percent each>
+  local i ips="" nodes="$(node cp0 10.0.0.10),$(node cp1 10.0.0.11),$(node cp2 10.0.0.12)" d=""
+  for ((i = 0; i < $1; i++)); do
+    ips="$ips${ips:+,}\"10.0.0.$((20 + i))\""; nodes="$nodes,$(node "w$i" "10.0.0.$((20 + i))")"; d="${d}Name:  w$i\n  cpu  1000m ($3%%)\n"
+  done
+  printf '{"control_plane_private_ips":{"value":["10.0.0.10","10.0.0.11","10.0.0.12"]},"worker_private_ips":{"value":[%s]},"control_plane_zones":{"value":["a","b","c"]},"worker_zones":{"value":%s}}' "$ips" "$2" >"$W/outputs.json"
+  echo "{\"items\":[$nodes]}" >"$W/nodes.json"; printf "$d" >"$W/describe.txt"
+}
+healthy; workers 4 '["a","b","c","a"]' 56; run   # 4 x 56% = 224%
+{ [ "$RC" = 1 ] && grep -q 'If a is lost' <<<"$OUT" && grep -q 'workers: 2 stay, but the workers request 224% of a node and 2 hold 200%' <<<"$OUT"; } \
+  && ok_ "4 workers (2+1+1): the zone with two cannot be lost, 224% against 200%" || bad "4 workers not refused as written (rc=$RC): $OUT"
+{ grep -q 'workers: 3 of 4 stay, requests 224% fit in 300%' <<<"$OUT"; } \
+  && ok_ "... while each single-worker zone can" || bad "single-worker zone loss not shown ok: $OUT"
+healthy; workers 5 '["a","b","c","a","b"]' 46; run   # 5 x 46% = 230%
+{ [ "$RC" = 0 ] && grep -q 'workers: 3 of 5 stay, requests 230% fit in 300%' <<<"$OUT" && grep -q 'survivable' <<<"$OUT"; } \
+  && ok_ "5 workers (2+2+1): every one of the three zones is survivable, 230% in 300%" || bad "5-worker zone-HA profile refused (rc=$RC): $OUT"
+
+echo
 echo "=== what cannot be read ==="
 healthy; echo '{"control_plane_private_ips":{"value":["10.0.0.10","10.0.0.11","10.0.0.12"]},"worker_private_ips":{"value":["10.0.0.20"]}}' >"$W/outputs.json"; run
 { [ "$RC" = 0 ] && grep -q 'UNCHECKED' <<<"$OUT"; } && ok_ "a state without the zone outputs is UNCHECKED, not green" || bad "missing zones: rc=$RC $OUT"

@@ -109,7 +109,37 @@ and StatefulSets that the application repository renders request 3005 m (`python
 `task failure-domain-check` applies the same arithmetic to the loss of a whole zone, and there four workers do not help the worst case: they spread 2 + 1 + 1 over three zones, so
 losing the zone with two of them leaves two workers (200%) for 224% of requests, about 1 vCPU short; the check says so, and lab 21 lost that zone for 10 minutes (twice): nothing
 stopped, but pods stayed Pending until the zone returned. Five workers (2 + 2 + 1: losing two leaves 300%) or six would hold on the arithmetic (see the lab 21 results for what a fifth
-worker did), as would about 12% fewer requests. Which of these the examples should ship is an owner decision (infra issue filed).
+worker did), as would about 12% fewer requests. Which of these the examples should ship was decided on 2026-10-21 (below).
+
+### What the shipped 4 workers survive, and what they do not (decision of 2026-10-21, infra #389)
+
+The Scaleway and OVH examples ship **4 workers**, placed round-robin over three zones, so 2 + 1 + 1. Said plainly:
+
+| Loss | Survives? | Why (measured load: 223-228% of a worker, about 9 vCPU, lab 21) |
+|---|---|---|
+| One worker (a drain, a reboot, a crash) | **Yes** | 3 workers = 300% for 224% requested; `cluster-roll` passes at 74-76% of its limit |
+| A zone holding one worker (either of the two) | **Yes** | 3 workers stay, 300% for 224% |
+| **The zone holding two workers** | **No** | 2 workers stay = 200% for 224%: about 1 vCPU of requests cannot be placed and pods stay Pending until the zone returns (lab 21 lost that zone for 10 minutes, twice: nothing stopped, pods stayed Pending until the zone returned). `task failure-domain-check` reports it as a refused loss |
+
+Control planes are not affected: three of them in three zones keep an etcd quorum through any one zone.
+
+### Profile "5 workers zone-HA" (2 + 2 + 1)
+
+Set `workers = 5` in the management example of Scaleway or OVH (a commented block in each `envs/management-*.tfvars.example` says so); nothing else changes.
+The modules place workers round-robin over the zone list (`element(zones, index)`), so five land 2 + 2 + 1 and **any one zone** can be lost: the least
+favourable loss removes two workers and leaves three (300%). The load grows by about one DaemonSet's worth per added worker (about 0.3 vCPU), so
+five workers request about 230% of a worker (derived: 224% plus one DaemonSet's share; no zone loss on five workers is recorded in this repository), well inside 300%.
+
+`task failure-domain-check PROVIDER=<scaleway|ovh>` (read-only, needs the deployed state) is the expected verdict:
+
+| Workers | Zones | `If <zone> is lost` | Verdict |
+|---|---|---|---|
+| 4 (shipped) | 2 + 1 + 1 | the zone with two: `workers: 2 stay, but the workers request 224% of a node and 2 hold 200%` | exit 1 for that zone; the other two zones pass |
+| 5 | 2 + 2 + 1 | `workers: 3 of 5 stay, requests 230% fit in 300%` for the two-worker zones; 4 of 5 for the other | exit 0, every loss survivable |
+
+The script test `scripts/dev/test-failure-domain-check.sh` runs both shapes against stub `tofu` and `kubectl`. That proves the arithmetic of the check, not a
+cluster: no zone loss on the 5-worker shape is recorded here. Cost: one more instance and 4 vCPU (and the matching quota) per cloud. Outscale is
+not covered (its examples are below the floor, see above).
 
 Outscale (the examples are unchanged and stay within the 20 vCPU quota): no shape fits the default 20 vCPU quota and passes the gate. 3 workers of 3 vCPU fail (above), and 4 workers of 3 vCPU need
 3 + 4 nodes x 3 + 2 (bastion) = 23 vCPU. The smallest passing shape on the arithmetic is 3+3 `tinav5.c4r8p2` (4 vCPU / 8 GB): 26 vCPU with

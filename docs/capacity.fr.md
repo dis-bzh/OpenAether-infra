@@ -110,7 +110,37 @@ propriétaire du 2026-10-21 de livrer **4 workers de 4 vCPU** sur Scaleway et OV
 opérateurs et les Jobs, qu'aucun rendu ne montre. `task failure-domain-check` applique la même arithmétique à la perte d'une zone entière, et là quatre workers n'aident pas le pire cas : ils se
 répartissent 2 + 1 + 1 sur trois zones, donc perdre la zone qui en porte deux laisse deux workers (200 %) pour 224 % de requêtes, environ 1 vCPU de moins ; le contrôle le dit, et le labo 21 a perdu
 cette zone 10 minutes (deux fois) : rien ne s'est arrêté, mais des pods sont restés Pending jusqu'au retour de la zone. Cinq workers (2 + 2 + 1 : en perdre deux laisse 300 %) ou six tiendraient sur
-le papier (voir les résultats du labo 21 pour ce que le cinquième a donné), comme environ 12 % de requêtes en moins. Ce que les exemples doivent livrer est une décision du propriétaire (ticket infra ouvert).
+le papier (voir les résultats du labo 21 pour ce que le cinquième a donné), comme environ 12 % de requêtes en moins. Ce que les exemples livrent a été décidé le 2026-10-21 (ci-dessous).
+
+### Ce que les 4 workers livrés supportent, et ce qu'ils ne supportent pas (décision du 2026-10-21, infra #389)
+
+Les exemples Scaleway et OVH livrent **4 workers**, placés en tourniquet sur trois zones, donc 2 + 1 + 1. Dit sans détour :
+
+| Perte | Supportée ? | Pourquoi (charge mesurée : 223-228 % d'un worker, environ 9 vCPU, labo 21) |
+|---|---|---|
+| Un worker (drain, redémarrage, panne) | **Oui** | 3 workers = 300 % pour 224 % demandés ; `cluster-roll` passe à 74-76 % de sa limite |
+| Une zone qui porte un seul worker (l'une ou l'autre) | **Oui** | 3 workers restent, 300 % pour 224 % |
+| **La zone qui porte deux workers** | **Non** | 2 workers restent = 200 % pour 224 % : environ 1 vCPU de requêtes ne peut pas être placé et des pods restent Pending jusqu'au retour de la zone (le labo 21 a perdu cette zone 10 minutes, deux fois : rien ne s'est arrêté, des pods sont restés Pending). `task failure-domain-check` la signale comme une perte refusée |
+
+Les control planes ne sont pas concernés : trois dans trois zones gardent un quorum etcd à la perte de n'importe quelle zone.
+
+### Profil « 5 workers zone-HA » (2 + 2 + 1)
+
+Mettre `workers = 5` dans l'exemple management de Scaleway ou d'OVH (un bloc commenté de chaque `envs/management-*.tfvars.example` le dit) ; rien d'autre ne change.
+Les modules placent les workers en tourniquet sur la liste de zones (`element(zones, index)`) : cinq tombent en 2 + 2 + 1 et **n'importe quelle zone** peut être
+perdue : la perte la plus défavorable retire deux workers et en laisse trois (300 %). La charge croît d'environ un DaemonSet par worker ajouté (environ 0,3 vCPU) : cinq
+workers demandent environ 230 % d'un worker (dérivé : 224 % plus la part d'un DaemonSet ; aucune perte de zone à cinq workers n'est consignée dans ce dépôt), largement sous 300 %.
+
+`task failure-domain-check PROVIDER=<scaleway|ovh>` (lecture seule, demande l'état déployé) donne le verdict attendu :
+
+| Workers | Zones | `If <zone> is lost` | Verdict |
+|---|---|---|---|
+| 4 (livré) | 2 + 1 + 1 | la zone à deux : `workers: 2 stay, but the workers request 224% of a node and 2 hold 200%` | sortie 1 pour cette zone ; les deux autres passent |
+| 5 | 2 + 2 + 1 | `workers: 3 of 5 stay, requests 230% fit in 300%` pour les zones à deux workers ; 4 sur 5 pour l'autre | sortie 0, toute perte est supportable |
+
+Le test `scripts/dev/test-failure-domain-check.sh` exécute les deux formes contre des `tofu` et `kubectl` factices. Il prouve l'arithmétique du contrôle, pas un
+cluster : aucune perte de zone sur la forme à 5 workers n'est consignée ici. Coût : une instance de plus et 4 vCPU (et le quota correspondant) par cloud. Outscale n'est
+pas couvert (ses exemples sont sous le plancher, voir plus haut).
 
 Outscale (les exemples sont inchangés et restent dans le quota de 20 vCPU) : aucune forme ne tient dans le quota par défaut de 20 vCPU et passe la porte. 3 workers de 3 vCPU échouent (ci-dessus), et 4 workers de
 3 vCPU demandent 3 + 4 nœuds x 3 + 2 (bastion) = 23 vCPU. La plus petite forme qui passe sur le papier est 3+3 `tinav5.c4r8p2` (4 vCPU / 8 Go) : 26 vCPU
