@@ -305,8 +305,8 @@ SUT="$STUB_DIR/roll-all.sh"
 cat "${RR_FILES[@]}" >"$SUT"
 lineno() { grep -n "$1" "$SUT" | head -1 | cut -d: -f1; }
 # Last match: the first is the per-node re-assert in cordon_drain, not the main block.
-L_MAINT="$(grep -n '^  cnpg_maintenance true$' "$SUT" | tail -1 | cut -d: -f1)"
-L_PRE="$(lineno '^  preflight_roll$')"
+L_MAINT="$(grep -n '^ *cnpg_maintenance true$' "$SUT" | tail -1 | cut -d: -f1)"
+L_PRE="$(lineno '^ *preflight_roll$')"
 L_ROLL="$(lineno 'replace_node worker')"
 [ "$(grep -c '^  *preflight_roll$' "$SUT")" = 1 ] \
   && ok "the survey is called exactly once" || bad "expected one call site"

@@ -456,6 +456,8 @@ tasks:
       - ./scripts/dev/test-rwx-drain-gate.sh
       - ./scripts/dev/test-roll-apiserver-gate.sh
       - ./scripts/dev/test-node-provider.sh
+      - ./scripts/dev/test-node-recovery.sh
+      - ./scripts/dev/test-dead-node-roll.sh
       - ./scripts/dev/test-egress-probe.sh
       - ./scripts/dev/test-tunnel-guard.sh
       # The one test that runs talos-tunnels.sh itself: every other harness stubs it (#65).
@@ -1333,6 +1335,80 @@ tasks:
       # which is the ordering every other flag here already has.
       - >-
         ../../../scripts/ops/rolling-replace.sh {{.PROVIDER}} --role={{.ROLE}}
+        {{if eq .APPROVE "auto"}}--yes {{end}}{{.CLI_ARGS}}
+      - task: _backup-state
+        vars: {PROVIDER: "{{.PROVIDER}}"}
+
+  cluster-node-state:
+    desc: >-
+      READ-ONLY. What the provider says about one node's machine, whether its kubelet and Talos port answer, and
+      the ONE next command (VERDICT=healthy|recover|replace|wait|unknown). The first step of every NodeUnreachable
+      / NodeNotReady alert.
+      Usage: task cluster-node-state PROVIDER=… NODE=<kubernetes node name> [ROLE=management] [KEY=~/.ssh/key] [--
+      --ip=<private address, when the Node object is gone>]
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER, NODE]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+      KEY: '{{.KEY | default "~/.ssh/id_ed25519"}}'
+    env: *provider-env
+    cmds:
+      - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
+      - SSH_KEY="{{.KEY}}" ../../../scripts/bootstrap/talos-tunnels.sh open .
+      - ../../../scripts/ops/node-recovery.sh state {{.PROVIDER}} --node={{.NODE}} --role={{.ROLE}} {{.CLI_ARGS}}
+
+  cluster-node-recover:
+    desc: >-
+      The machine runs at the provider but the node is silent (OVH ACTIVE while dead, infra #371): a provider HARD
+      reboot and a bounded wait. Refuses when the provider says the machine is not running, and when no other node
+      answers through the tunnels (then the tunnels are the fault). Destroys nothing; the serial console trace is
+      lost, read it first.
+      Usage: task cluster-node-recover PROVIDER=… NODE=<node> [ROLE=management] [KEY=~/.ssh/key] [APPROVE=auto]
+      [-- --ip=ADDR]
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER, NODE]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+      KEY: '{{.KEY | default "~/.ssh/id_ed25519"}}'
+      APPROVE: '{{.APPROVE | default "ask"}}'
+    env: *provider-env
+    cmds:
+      - defer: *receipt
+      - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
+      - SSH_KEY="{{.KEY}}" ../../../scripts/bootstrap/talos-tunnels.sh open .
+      - >-
+        ../../../scripts/ops/node-recovery.sh recover {{.PROVIDER}} --node={{.NODE}} --role={{.ROLE}}
+        {{if eq .APPROVE "auto"}}--yes {{end}}{{.CLI_ARGS}}
+
+  cluster-replace-node:
+    desc: >-
+      Replace ONE dead node through the same OpenTofu path as cluster-roll, without a drain: a survey of the
+      survivors (every other node Ready; for a control plane, an etcd quorum without it), the etcd member removed,
+      the Node object deleted, the two applies, then Ready, uncordon, the Longhorn and apiserver gates. Wipes the
+      node's system disk and its local-path data. Refuses a Ready node (use cluster-roll) and a machine the
+      provider calls running (use cluster-node-recover first). An operator command: the management cluster has no
+      automatic node replacement.
+      Usage: task cluster-replace-node PROVIDER=… NODE=<node> [ROLE=management] [KEY=~/.ssh/key] [APPROVE=auto]
+      [-- --dry-run|--even-if-running|--ip=ADDR]
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER, NODE]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+      KEY: '{{.KEY | default "~/.ssh/id_ed25519"}}'
+      APPROVE: '{{.APPROVE | default "ask"}}'
+    env: *provider-env
+    cmds:
+      - defer: *receipt
+      - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
+      - SSH_KEY="{{.KEY}}" ../../../scripts/bootstrap/talos-tunnels.sh open .
+      - >-
+        ../../../scripts/ops/node-recovery.sh replace {{.PROVIDER}} --node={{.NODE}} --role={{.ROLE}}
         {{if eq .APPROVE "auto"}}--yes {{end}}{{.CLI_ARGS}}
       - task: _backup-state
         vars: {PROVIDER: "{{.PROVIDER}}"}

@@ -816,6 +816,72 @@ wait_rwx_clear() { # <node_name>
   done
 }
 
+# --- A node that is already dead (task cluster-replace-node) ------------------------------------------------------
+# A drain cannot move pods off a machine that does not answer, and the roll's pre-flight demands every node Ready. For a
+# dead node the questions are different: can the SURVIVORS carry on while it is rebuilt, and is exactly one node down?
+# Fatal: another node NotReady, or (control plane) fewer healthy etcd members than a quorum without this one. Not fatal,
+# only printed: the CPU requests, because the pods of the dead node are already Pending somewhere or nowhere, and the
+# replacement is what gives them room back.
+dead_node_survey() { # <cp|worker> <index> <node_name>
+  local t="$1" idx="$2" node="$3" fatal=0 raw others k ep ip healthy=0 need cap name pct total=0 nodes=0
+  hr
+  info "Survey before replacing the dead node ${node}: the survivors, once."
+  if ! raw="$("${KCTL[@]}" get nodes --no-headers 2>/dev/null)" || [[ -z "$raw" ]]; then
+    die "the Kubernetes API did not answer - refusing to replace a node blind."
+  fi
+  others="$(awk -v n="$node" '$1 != n && $2 !~ /^Ready/ {printf "%s ", $1}' <<<"$raw")"
+  if [[ -n "$others" ]]; then
+    warn "another node is not Ready: ${others}- one node at a time; fix or replace that one first, or this is a zone loss (task failure-domain-check)."
+    fatal=1
+  else
+    ok "every other node is Ready"
+  fi
+  if [[ "$t" == cp ]]; then
+    for k in "${!CP_IPS[@]}"; do
+      [[ "$k" == "$idx" ]] && continue
+      ep="$(talos_ep cp "$k")"; ip="${CP_IPS[$k]}"
+      talosctl -e "$ep" -n "$ip" service etcd 2>/dev/null | grep -qE 'HEALTH[[:space:]]+OK' && healthy=$((healthy + 1))
+    done
+    need=$(( ${#CP_IPS[@]} / 2 + 1 ))
+    if (( healthy >= need )); then
+      ok "etcd: ${healthy} healthy member(s) besides ${node}, quorum is ${need}"
+    else
+      warn "etcd: only ${healthy} healthy member(s) besides ${node}, quorum is ${need}. Replacing a member without a quorum cannot work: this is the etcd disaster-recovery case (task dr-restore-plan), not a replacement."
+      fatal=1
+    fi
+  fi
+  if cap="$(worker_cpu_requests)" && [[ -n "$cap" ]]; then
+    while read -r name pct; do
+      [[ "$pct" =~ ^[0-9]+$ ]] || continue
+      info "  ${name}: ${pct}% of CPU requested"
+      nodes=$((nodes + 1)); total=$((total + pct))
+    done <<<"$cap"
+    if (( nodes > 1 && total > (nodes - 1) * 100 )); then
+      warn "capacity: the ${nodes} workers request ${total}% and ${nodes} minus one hold $(( (nodes - 1) * 100 ))%: pods of the dead node stay Pending until its replacement is Ready (docs/capacity.md)."
+    fi
+  fi
+  (( fatal == 0 )) || die "the survey found blocking conditions, listed above. Nothing was changed."
+  ok "Survey clean - ${node} is the only node down"
+}
+
+# Cordon what cannot be drained; the Node object is deleted separately (delete_dead_node_object), AFTER the etcd member of a
+# control plane is gone.
+cordon_dead() { # <node_name>
+  "${KCTL[@]}" cordon "$1" >/dev/null 2>&1 || warn "could not cordon ${1} (it may already be gone) - continuing"
+}
+
+# Deleting the Node object of a machine that is gone frees its pods at once (the pod garbage collector removes pods bound to
+# a node that no longer exists) instead of after the 5 minute toleration. The new machine registers under the same name.
+# A pod on a local-path volume stays Pending until then: its data was on the dead disk.
+delete_dead_node_object() { # <node_name>
+  if "${KCTL[@]}" get node "$1" >/dev/null 2>&1; then
+    "${KCTL[@]}" delete node "$1" --wait=false >/dev/null \
+      && ok "Node object ${1} deleted - its pods are freed" || warn "could not delete the Node object ${1}"
+  else
+    ok "Node object ${1} already gone"
+  fi
+}
+
 cordon_drain() { # <node_name>
   local node="$1"
   # RE-ASSERT, once per node. cnpg_maintenance ran once for the whole roll, and a
