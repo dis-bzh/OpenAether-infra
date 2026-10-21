@@ -29,10 +29,10 @@ signer l'intermédiaire de la PKI) : [`admin-access.fr.md`](admin-access.fr.md).
 
 ## Avant de commencer
 
-- Un compte Scaleway, et le quota pour **6 instances** du type indiqué dans ton
+- Un compte Scaleway, et le quota pour **7 instances** du type indiqué dans ton
   tfvars. Un compte neuf peut être plafonné à 1 — Console → Quotas. Il n'existe
   pas de script de préflight pour Scaleway (`preflight-quotas.py` ne couvre
-  qu'OVH et Outscale) : cette vérification est à ta charge. Le bastion ajoute
+  qu'OVH et Outscale) : cette vérification est à ta charge. Les exemples livrés ont 3 control planes et 4 workers ; le bastion ajoute
   un `DEV1-S` ; ce que consomme chaque provider, et si son exemple atteint le
   plancher de dimensionnement : [`capacity.fr.md`](capacity.fr.md).
 - Une paire de clés SSH que tu possèdes déjà, ou `ssh-keygen -t ed25519`.

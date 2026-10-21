@@ -173,6 +173,10 @@ NO_CRD='get crd clusters.postgresql.cnpg.io\t1\tError from server (NotFound)\n'
 
 CAP_OK='describe nodes\t0\tName: w1%%  cpu 1440m (72%)  2 (100%)%%Name: w2%%  cpu 940m (47%)  2 (100%)%%Name: w3%%  cpu 540m (27%)  2 (100%)\n'
 CAP_FULL='describe nodes\t0\tName: w1%%  cpu 1560m (78%)  2 (100%)%%Name: w2%%  cpu 1980m (99%)  2 (100%)%%Name: w3%%  cpu 2000m (100%)  2 (100%)\n'
+# The shipped 4 x 4 vCPU shape with the full platform and the 0.4.0 HA additions (docs/capacity.md): 7.85 vCPU requested = 196% of one
+# worker spread over four, against the 300% that three workers can take. The 3-worker shape it replaces sat at 189% of 200%.
+CAP_4W='describe nodes\t0\tName: w1%%  cpu 1960m (49%)  4 (100%)%%Name: w2%%  cpu 1960m (49%)  4 (100%)%%Name: w3%%  cpu 1960m (49%)  4 (100%)%%Name: w4%%  cpu 1960m (49%)  4 (100%)\n'
+CAP_3W_THIN='describe nodes\t0\tName: w1%%  cpu 2520m (63%)  4 (100%)%%Name: w2%%  cpu 2520m (63%)  4 (100%)%%Name: w3%%  cpu 2520m (63%)  4 (100%)\n'
 CAP_ONE='describe nodes\t0\tName: w1%%  cpu 900m (45%)  2 (100%)\n'
 CAP_FAIL='describe nodes\t1\tThe connection to the server was refused\n'
 
@@ -234,6 +238,16 @@ survey "$HEALTHY"
 [ "$RC" = 0 ] && saw "146% requested, 200% available" \
   && ok "a cluster that can lose a worker passes, and says by how much" \
   || bad "healthy cluster refused (rc ${RC}): ${OUT}"
+
+survey "${CRD}${CAP_4W}${PDB_BYDESIGN}${DB_WHOLE}"
+[ "$RC" = 0 ] && saw "196% requested, 300% available" \
+  && ok "4 workers of 4 vCPU with the full platform pass the capacity gate with 104 points to spare" \
+  || bad "the shipped 4-worker shape was refused (rc ${RC}): ${OUT}"
+
+survey "${CRD}${CAP_3W_THIN}${PDB_BYDESIGN}${DB_WHOLE}"
+[ "$RC" = 0 ] && saw "189% requested, 200% available" \
+  && ok "3 workers at 189% still pass, with 11 points to spare: the margin the 4th worker widens" \
+  || bad "the thin 3-worker shape was refused (rc ${RC}): ${OUT}"
 
 survey "${CRD}${CAP_FULL}${PDB_BYDESIGN}${DB_WHOLE}"
 [ "$RC" = 1 ] && saw "3 workers request 277%" \

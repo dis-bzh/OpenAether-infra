@@ -32,9 +32,10 @@ PodDisruptionBudget qui autorise exactement une perturbation, rien qui puisse bl
 (`scripts/ha-allowlist.yaml`) de ceux qui restent seuls, avec ce que leur perte signifie. Supprimer l'objet Node d'une machine disparue libère ses pods immédiatement au
 lieu de 5 minutes : `task cluster-replace-node` le fait.
 
-La perte d'un worker ou d'une zone demande de la marge : les requêtes CPU des workers doivent tenir sur les workers qui restent. Les exemples livrés 3 x 4 vCPU
+La perte d'un worker ou d'une zone demande de la marge : les requêtes CPU des workers doivent tenir sur les workers qui restent. Les exemples 3 x 4 vCPU
 passaient `cluster-roll` avec environ 0,8 vCPU de reste (`capacity.md`, dérivé du labo 16) ; le travail HA du M4 ajoute environ 345 m de requêtes CPU (dérivé des
-manifestes : admission Kyverno, opérateur CNPG, contrôleur et webhook ESO, metrics-server, la page de connexion Zitadel, le second Alertmanager), ce qui laisse environ 0,45 vCPU.
+manifestes : admission Kyverno, opérateur CNPG, contrôleur et webhook ESO, metrics-server, la page de connexion Zitadel, le second Alertmanager), ce qui laisse environ 0,45 vCPU. Les exemples Scaleway et OVH livrent donc 4 workers de 4 vCPU (décision du propriétaire, 2026-10-21) : 7,85 vCPU demandés pour 12
+pour la perte d'un worker ; pour la perte de la zone qui porte deux des quatre workers, 8 vCPU restent pour 7,85 (`capacity.md`, dérivé, à mesurer par l'exercice de zone).
 La barrière de `task cluster-roll` le dit avant de toucher à quoi que ce soit ; `ClusterCannotLoseWorker` le dit pendant que le cluster tourne.
 
 ## Ce que vous lancez
@@ -96,17 +97,17 @@ d'arrêter un plan de contrôle si tous les apiservers ne servent pas. etcd 3/3 
 apiserver non prêt en rotation jusqu'à 75 s (5 sondes x 15 s). La barrière est prouvée hors ligne avec un kubectl factice ; savoir si elle supprime le battement de 5 à 8 s demande le
 déploiement réel ci-dessous.
 
-**Décision du propriétaire nécessaire, non prise ici** (elle change ce qui est exposé) : faire sonder `/readyz` en HTTPS par les répartiteurs au lieu de TCP 6443, et donner à
+**Décision du propriétaire prise le 2026-10-21 : aucune des deux n'est activée** (elle changerait ce qui est exposé) ; la barrière du roll de l'apiserver est ce qui existe. Les options, pour mémoire : faire sonder `/readyz` en HTTPS par les répartiteurs au lieu de TCP 6443, et donner à
 kube-apiserver `--shutdown-delay-duration` pour qu'il devienne non prêt avant de s'arrêter. La première exige que `/readyz` réponde sans identifiants, donc un accès anonyme aux
 points de santé (`anonymous-auth` ou une configuration d'authentification structurée limitée à `/livez`, `/readyz`, `/healthz`), que les clusters n'activent pas aujourd'hui et qu'il faut
 d'abord vérifier sur un nœud Talos (#42 le dit aussi). La seconde est un changement de configuration machine Talos sur chaque plan de contrôle. Aucune n'est utile sans l'autre.
-Tant que ce n'est pas décidé, les sondes TCP et la barrière sont ce qui existe.
+Les sondes TCP et la barrière sont ce qui existe.
 
 ## Perte de zone
 
 Hypothèses de placement : les plans de contrôle sont répartis sur trois domaines de défaillance (vérifié par `cluster-verify`, #38) et les workers aussi (`worker_zones`, nouveau : où le
 fournisseur a placé chaque worker). Chaque nœud porte désormais l'étiquette `topology.kubernetes.io/zone` posée depuis ce placement (Talos `machine.nodeLabels`, appliquée au prochain
-`infra-apply` sans redémarrage). Avec 3 plans de contrôle et 3 workers sur 3 domaines, perdre un domaine laisse 2 plans de contrôle (quorum etcd), 2 workers, 2 membres OpenBao sur 3, une
+`infra-apply` sans redémarrage). Avec 3 plans de contrôle et 3 ou 4 workers sur 3 domaines, perdre un domaine laisse 2 plans de contrôle (quorum etcd), 2 ou 3 workers, 2 membres OpenBao sur 3, une
 instance de chaque base et un réplica de chaque volume.
 
 `task failure-domain-check PROVIDER=…` calcule cela pour chaque domaine à partir de l'état et du cluster et sort en code 1 quand une perte arrêterait quelque chose. Un pod Gateway unique, une base

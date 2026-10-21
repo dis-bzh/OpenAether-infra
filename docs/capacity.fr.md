@@ -52,10 +52,10 @@ script ne vérifie IP, LB ni security groups.
 
 | Exemple | Nœuds × type (vCPU / RAM) | Inst. | vCPU | RAM | Au plancher ? | `task preflight-quotas PROVIDER=… --` |
 |---|---|---|---|---|---|---|
-| `management-`, `failover-scaleway` | 3+3 × `POP2-4C-16G` (4 / 16 Go) | 7 | 26 | 98 Go | Oui ; déroulable, voir le calcul plus bas | pas de backend Scaleway |
-| `workload-scaleway` | 3+3 × `POP2-4C-16G` | 7 | 26 | 98 Go | Oui | pas de backend Scaleway |
-| `management-`, `failover-ovh` | 3+3 × `c3-8` (4 / 8 Go) | 7 | 26 | 56 Go | Oui ; déroulable, voir le calcul plus bas | `--add-vms 7 --add-cores 26 --add-ram-gb 56` |
-| `workload-ovh` | 3+3 × `c3-8` | 7 | 26 | 56 Go | Oui | `--add-vms 7 --add-cores 26 --add-ram-gb 56` |
+| `management-`, `failover-scaleway` | 3+4 × `POP2-4C-16G` (4 / 16 Go) | 8 | 30 | 114 Go | Oui ; déroulable, voir le calcul plus bas | pas de backend Scaleway |
+| `workload-scaleway` | 3+4 × `POP2-4C-16G` | 8 | 30 | 114 Go | Oui | pas de backend Scaleway |
+| `management-`, `failover-ovh` | 3+4 × `c3-8` (4 / 8 Go) | 8 | 30 | 64 Go | Oui ; déroulable, voir le calcul plus bas | `--add-vms 8 --add-cores 30 --add-ram-gb 64` |
+| `workload-ovh` | 3+4 × `c3-8` | 8 | 30 | 64 Go | Oui | `--add-vms 8 --add-cores 30 --add-ram-gb 64` |
 | `management-`, `failover-outscale` | 3+2 × `tinav5.c2r4p1` (2 / 4 Go) | 6 | 12 | 22 Go | **Non, volontairement** — voir plus bas | `--add-vms 6 --add-cores 12 --add-ram-gb 22` |
 | `workload-outscale` | 3+3 × `tinav5.c2r4p1` | 7 | 14 | 26 Go | **Non, volontairement** | `--add-vms 7 --add-cores 14 --add-ram-gb 26` |
 | `*-proxmox` | 1+1 × 4 vCPU / 8 Gio, disque 20 Gio | 2 | 8 | 16 Gio | Type oui ; un seul worker ne se draine pas sans coupure | capacité de l'hôte, pas un quota |
@@ -96,18 +96,24 @@ Calcul (dérivé de ces chiffres, en prenant l'allouable d'un worker à peu prè
 6,9 vCPU au total ; sur 3 vCPU, 239 % font environ 7,2 vCPU. Les requêtes valent donc à peu près 6,3 vCPU de déploiements fixes plus 0,3 vCPU
 de DaemonSets par worker (estimation à partir de deux points, pas une mesure de chacun). Avec n workers de 4 vCPU, la porte exige
 6,3 + 0,3n <= 4(n - 1) : n = 3 donne 7,2 contre 8 (environ 90 % de la limite, 180 % contre 200 %) ; n = 4 donne 7,5 contre 12. Les exemples
-Scaleway et OVH livrent donc **3 workers**. La marge à 3 est mince : une pile plus lourde peut la rompre, et la porte le dit avant de toucher quoi que ce soit.
+Scaleway et OVH livraient donc 3 workers jusqu'à la 0.4.0 (ils en livrent **4** maintenant, voir plus bas). La marge à 3 est mince : une pile plus lourde peut la rompre, et la porte le dit avant de toucher quoi que ce soit.
 Ce n'est que la porte CPU : les réplicas à répartition obligatoire (les trois pods OpenBao, par exemple) restent incomplets pendant qu'un worker est
 absent, et le comportement de la perte d'un nœud sous charge relève de la 0.4.0 (résilience), pas de ce tableau.
 
 **0.4.0 (M4), dérivé, non mesuré.** Le travail de haute disponibilité ajoute environ 345 m de requêtes CPU à la plateforme (un second contrôleur d'admission Kyverno, l'opérateur CNPG, le
 contrôleur et le webhook ESO, metrics-server et la page de connexion Zitadel, et un second Alertmanager) : l'estimation ci-dessus devient environ 7,55 vCPU sur 8 pour 3 workers de 4 vCPU,
 soit environ 0,45 vCPU de marge au lieu de 0,8. La barrière passe encore sur le papier ; le dépôt applicatif borne les requêtes qu'il rend (`scripts/check-ha.py`) et l'alerte
-`ClusterCannotLoseWorker` surveille le chiffre réel. Un quatrième worker est le moyen peu coûteux de l'élargir. `task failure-domain-check` applique la même arithmétique à la perte d'une zone entière.
+`ClusterCannotLoseWorker` surveille le chiffre réel. Le propriétaire a décidé (2026-10-21) que les exemples Scaleway et OVH livrent **4 workers de 4 vCPU**. Le calcul, avec la part fixe de la plateforme d'environ
+6,3 + 0,345 = 6,65 vCPU et 0,3 vCPU de DaemonSets par worker : 3 workers demandent 7,55 contre les 8 vCPU que la barrière laisse (94 % de la limite, marge 0,45) ;
+4 workers demandent 7,85 contre 12 (65 % de la limite, marge 4,15, soit 196 % demandés pour 300 % permis). Les Deployments et StatefulSets rendus par le dépôt
+applicatif en demandent 3005 m (`python3 scripts/check-ha.py`, budget 3300 m) ; le reste est les DaemonSets, les opérateurs et le chiffre mesuré au labo 16,
+qu'aucun rendu ne montre. `task failure-domain-check` applique la même arithmétique à la perte d'une zone entière, et là le 4e worker n'aide pas le pire cas :
+les workers se répartissent 2 + 1 + 1 sur trois zones, donc perdre la zone qui en porte deux laisse deux workers (8 vCPU) pour 7,85 vCPU de requêtes, soit environ
+0,15 vCPU de marge (3 workers : 2 restent, 7,55, marge 0,45). Dérivé, non mesuré ; le labo 21 perd une zone pour de vrai.
 
-Outscale : aucune forme ne tient dans le quota par défaut de 20 vCPU et passe la porte. 3 workers de 3 vCPU échouent (ci-dessus), et 4 workers de
+Outscale (les exemples sont inchangés et restent dans le quota de 20 vCPU) : aucune forme ne tient dans le quota par défaut de 20 vCPU et passe la porte. 3 workers de 3 vCPU échouent (ci-dessus), et 4 workers de
 3 vCPU demandent 3 + 4 nœuds x 3 + 2 (bastion) = 23 vCPU. La plus petite forme qui passe sur le papier est 3+3 `tinav5.c4r8p2` (4 vCPU / 8 Go) : 26 vCPU
-avec le bastion, donc une hausse de quota d'abord. Elle n'a pas été exécutée sur Outscale. Les nœuds de 6 Go du lab 16 sont aussi tombés dans une cascade
+avec le bastion (mince, voir le paragraphe 0.4.0 ci-dessus), et la forme 3 + 4 des autres clouds fait 30 vCPU, donc une hausse de quota d'abord. Aucune n'a été exécutée sur Outscale. Les nœuds de 6 Go du lab 16 sont aussi tombés dans une cascade
 d'E/S et de mémoire après une sauvegarde-restauration et un redémarrage drainé (#376) ; le volume racine est gp2 (type non configurable ici), et un passage
 manuel en `io1 3000` ne l'a pas arrêtée. L'exemple fixe maintenant `outscale_root_volume_size_gb = 50` au lieu de le laisser en commentaire.
 

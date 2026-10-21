@@ -224,6 +224,6 @@ La revue demande : chaque port ouvert de la matrice est-il encore utilisé ; une
 
 Les trois répartiteurs de l'API sondent TCP 6443 (Scaleway et OVH : 5 sondes x 15 s ; Outscale : 3 x 10 s) : un plan de contrôle dont le kube-apiserver n'est pas encore prêt reste en
 rotation jusqu'à 75 s. Le déploiement ne s'appuie plus sur le répartiteur : il attend que l'apiserver de chaque plan de contrôle redémarré serve (`resilience.fr.md`). Passer les sondes en HTTPS
-`/readyz` n'est **pas fait et demande une décision du propriétaire** : il faut que `/readyz` réponde sans identifiants (accès anonyme limité aux points de santé, non activé aujourd'hui, à
+`/readyz` n'est **pas fait, par décision du propriétaire (2026-10-21)** ; les raisons restent : : il faut que `/readyz` réponde sans identifiants (accès anonyme limité aux points de santé, non activé aujourd'hui, à
 vérifier d'abord sur un nœud Talos), et cela ne rapporte qu'avec `--shutdown-delay-duration` sur kube-apiserver. Les pools du répartiteur applicatif OVH ont bien une sonde TCP (#375, labo 17) ;
 elle n'a pas raccourci la fenêtre de redémarrage forcé (23 à 25 s avec, 12 à 23 s sans, n=2 chaque), qui suit l'arrêt du nœud lui-même.

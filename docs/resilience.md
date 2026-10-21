@@ -31,9 +31,11 @@ PodDisruptionBudget that allows exactly one disruption, nothing that can strand 
 the ones that stay single, with what their loss means. Deleting the Node object of a machine that is gone frees its pods immediately instead of after 5 minutes:
 `task cluster-replace-node` does that.
 
-Worker-loss and zone-loss behaviour needs room: the CPU requests of the workers must fit on the workers that stay. The shipped 3 x 4 vCPU examples were
+Worker-loss and zone-loss behaviour needs room: the CPU requests of the workers must fit on the workers that stay. The 3 x 4 vCPU examples were
 roll-able with about 0.8 vCPU to spare (`capacity.md`, derived from lab 16); the HA work of M4 adds about 345 m of CPU requests (derived from the manifests:
-Kyverno admission, CNPG operator, ESO controller and webhook, metrics-server, the Zitadel login, the second Alertmanager), leaving about 0.45 vCPU. The gate of
+Kyverno admission, CNPG operator, ESO controller and webhook, metrics-server, the Zitadel login, the second Alertmanager), leaving about 0.45 vCPU. So the
+Scaleway and OVH examples ship 4 workers of 4 vCPU (owner decision 2026-10-21): 7.85 vCPU requested against 12 for the loss of one worker; for the loss of the
+zone that holds two of the four workers 8 vCPU stay for 7.85 (`capacity.md`, derived, to be measured by the zone drill). The gate of
 `task cluster-roll` says so before it touches anything; `ClusterCannotLoseWorker` says so while the cluster runs.
 
 ## What you run
@@ -94,17 +96,17 @@ its kube-apiserver static pod to be Ready and for `/readyz` to answer, three pol
 down unless every apiserver serves. etcd 3/3 and a Ready node did not say that, and the load balancer's TCP check keeps a not-ready apiserver in rotation for up
 to 75 s (5 checks x 15 s). The gate is proven offline with a stub kubectl; whether it removes the 5-8 s blip needs the real-cloud roll below.
 
-**Owner decision needed, not taken here** (it changes what is exposed): making the load balancers check `/readyz` over HTTPS instead of TCP 6443, and giving
+**Owner decision taken 2026-10-21: neither is enabled** (it would change what is exposed); the apiserver roll gate is what there is. The options, for the record: making the load balancers check `/readyz` over HTTPS instead of TCP 6443, and giving
 kube-apiserver `--shutdown-delay-duration` so that it goes not-ready before it stops. The first requires `/readyz` to answer without credentials, that is
 anonymous access to the health endpoints (`anonymous-auth` or a structured authentication configuration limited to `/livez`, `/readyz`, `/healthz`), which the
 clusters do not enable today and which has to be verified on a Talos node first (#42 says so too). The second is a Talos machine-config change on every control plane.
-Neither is useful without the other. Until decided, the TCP checks and the gate are what there is.
+Neither is useful without the other. The TCP checks and the gate are what there is.
 
 ## Zone loss
 
 Spread assumptions: the control planes are spread over three failure domains (checked by `cluster-verify`, #38) and the workers too (`worker_zones`, new: where the
 provider placed each worker). Every node now carries the label `topology.kubernetes.io/zone` set from that placement (Talos `machine.nodeLabels`, applied at the next
-`infra-apply` without a reboot). With 3 control planes and 3 workers over 3 domains, losing one domain leaves 2 control planes (etcd quorum), 2 workers, 2 of 3
+`infra-apply` without a reboot). With 3 control planes and 3 or 4 workers over 3 domains, losing one domain leaves 2 control planes (etcd quorum), 2 or 3 workers, 2 of 3
 OpenBao members, an instance of each database and a replica of each volume.
 
 `task failure-domain-check PROVIDER=…` computes that for every domain from the state and the cluster and exits 1 when some loss would stop something. A single

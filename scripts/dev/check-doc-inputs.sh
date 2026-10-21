@@ -104,13 +104,13 @@ if [ "${STRICT_EXAMPLES:-1}" = "1" ]; then
   done
 
   # infra #378: cluster-roll refuses above (workers - 1) x 100% of CPU requested; lab 16 measured 172% on 2 x 4 vCPU workers with the
-  # platform, so a 4 vCPU example needs 3 workers. Outscale cannot (20 vCPU quota) and says so in its comment instead, and sets the
+  # platform, so a 4 vCPU example needs 3 workers, and 4 since the 0.4.0 HA additions (owner decision 2026-10-21: ~0.45 vCPU of margin on 3). Outscale cannot (20 vCPU quota) and says so in its comment instead, and sets the
   # root volume (#376) because the platform does not fit the OMI's own size.
   echo
-  echo "=== the Scaleway and OVH examples can be rolled (3 workers), the Outscale ones set the root size ==="
+  echo "=== the Scaleway and OVH examples can be rolled (4 workers), the Outscale ones set the root size ==="
   for ex in "$ENVS"/{management,failover,workload}-{scaleway,ovh}.tfvars.example; do
     w="$(grep -E '^[[:space:]]*workers[[:space:]]*=' "$ex" | head -1 | sed -E 's/^[^=]*=[[:space:]]*([0-9]+).*/\1/')"
-    if [ "${w:-0}" -ge 3 ]; then ok "$(basename "$ex") — $w workers"; else bad "$(basename "$ex") — ${w:-no} workers: cluster-roll refuses 2 (#378)"; fi
+    if [ "${w:-0}" -ge 4 ]; then ok "$(basename "$ex") — $w workers"; else bad "$(basename "$ex") — ${w:-no} workers: the full platform leaves ~0.45 vCPU on 3, ship 4 (#378, docs/capacity.md)"; fi
   done
   for ex in "$ENVS"/{management,failover,workload}-outscale.tfvars.example; do
     if grep -qE '^outscale_root_volume_size_gb[[:space:]]*=' "$ex"; then ok "$(basename "$ex") — sets outscale_root_volume_size_gb"; else bad "$(basename "$ex") — outscale_root_volume_size_gb is commented out (#376)"; fi

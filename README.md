@@ -236,7 +236,7 @@ ours, and its `apps/clusters` is not yours.
 
 ```bash
 # Quotas: OVH and Outscale only — the script does not cover Scaleway.
-# On Scaleway, check the console: 3 control planes + 3 workers needs 6 instances
+# On Scaleway, check the console: 3 control planes + 4 workers needs 7 instances
 # of the type in your tfvars, and a new account may be capped at 1.
 task preflight-quotas PROVIDER=ovh
 
