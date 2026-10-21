@@ -457,8 +457,12 @@ tasks:
       - ./scripts/dev/test-roll-apiserver-gate.sh
       - ./scripts/dev/test-node-provider.sh
       - ./scripts/dev/test-node-recovery.sh
+      # The volumes a replaced disk leaves behind: which are dropped, which are refused, against a fake kubectl.
+      - ./scripts/dev/test-replaced-node-cleanup.sh
       - ./scripts/dev/test-dead-node-roll.sh
       - ./scripts/dev/test-failure-domain-check.sh
+      # The CoreDNS manifest modules/talos injects (infra #388): selectors, host spread, tolerations, budget.
+      - ./scripts/dev/test-coredns-manifest.sh
       - ./scripts/dev/test-egress-probe.sh
       - ./scripts/dev/test-tunnel-guard.sh
       # The one test that runs talos-tunnels.sh itself: every other harness stubs it (#65).
@@ -1394,7 +1398,10 @@ tasks:
       provider calls running (use cluster-node-recover first). An operator command: the management cluster has no
       automatic node replacement.
       Usage: task cluster-replace-node PROVIDER=… NODE=<node> [ROLE=management] [KEY=~/.ssh/key] [APPROVE=auto]
-      [-- --dry-run|--even-if-running|--ip=ADDR]
+      [-- --dry-run|--even-if-running|--ip=ADDR|--clean]
+      Afterwards it lists the pods whose local-path volume stayed on the old disk (CNPG instances, an OpenBao
+      member, loki, vmselect: they do not start by themselves) and PRINTS the commands that drop them; --clean
+      runs them, for the safe cases only (task cluster-replaced-node-cleanup does the same on its own).
     dir: infrastructure/opentofu/cluster
     requires:
       vars: [PROVIDER, NODE]
@@ -1413,6 +1420,24 @@ tasks:
         {{if eq .APPROVE "auto"}}--yes {{end}}{{.CLI_ARGS}}
       - task: _backup-state
         vars: {PROVIDER: "{{.PROVIDER}}"}
+
+  cluster-replaced-node-cleanup:
+    desc: >-
+      After task cluster-replace-node: list the volumes the old disk of NODE left behind (local-path volumes
+      created before the replacement Node) and the pods stuck on them, and PRINT the exact kubectl commands.
+      With --clean it runs them for the known safe cases only (a CNPG replica with a healthy primary elsewhere,
+      an OpenBao member while a raft majority is Ready, Loki/vmstorage/vmselect with another Ready replica) and
+      refuses the rest; one member per workload per run.
+      Usage: task cluster-replaced-node-cleanup NODE=<node> [-- --clean]
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [NODE]
+    preconditions: *refuse-local
+    cmds:
+      - defer: *receipt
+      - >-
+        KUBECTL="kubectl --kubeconfig ./kubeconfig --request-timeout=30s"
+        python3 ../../../scripts/ops/replaced-node-cleanup.py --node {{.NODE}} {{.CLI_ARGS}}
 
   failure-domain-check:
     desc: >-

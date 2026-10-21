@@ -15,7 +15,12 @@
 #
 # Flags: --role=management|workload (default management), --ip=ADDR (private address, when the Node object is gone),
 #        --yes (no prompt), --dry-run (replace: print the plan of the roll and stop), --even-if-running (replace a
-#        machine the provider calls running: only after `recover` failed).
+#        machine the provider calls running: only after `recover` failed), --clean (replace: after the checks, drop the
+#        volumes the old disk left behind, see below).
+# After a replacement the pods whose local-path volume was pinned to the old disk (CNPG instances, an OpenBao member, loki-0,
+# vmselect-0, vmstorage: lab 21) do not start by themselves. replace then runs scripts/ops/replaced-node-cleanup.py: it lists them
+# and PRINTS the exact kubectl commands; with --clean it runs them, for the known safe cases only (a healthy primary or a raft
+# majority or another Ready replica must remain) and refuses the rest.
 # Needs the same as cluster-roll: tofu init done, the provider credentials, open Talos tunnels, ./talosconfig, ./kubeconfig,
 # run from infrastructure/opentofu/cluster. NODE_PROVIDER_CMD overrides node-provider.py (the tests).
 #
@@ -24,11 +29,11 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/../lib/common.sh"
 
-usage() { echo "usage: $0 <state|recover|replace> <ovh|scaleway|outscale|proxmox> --node=NAME [--ip=ADDR] [--role=R] [--yes] [--dry-run] [--even-if-running]" >&2; exit 2; }
+usage() { echo "usage: $0 <state|recover|replace> <ovh|scaleway|outscale|proxmox> --node=NAME [--ip=ADDR] [--role=R] [--yes] [--dry-run] [--even-if-running] [--clean]" >&2; exit 2; }
 [[ $# -ge 2 ]] || usage
 CMD="$1"; PROVIDER="$2"; shift 2
 case "$CMD" in state | recover | replace) ;; *) usage ;; esac
-NODE=""; ONLY_IP=""; ROLE="management"; ASSUME_YES=0; DRY_RUN=0; EVEN_RUNNING=0
+NODE=""; ONLY_IP=""; ROLE="management"; ASSUME_YES=0; DRY_RUN=0; EVEN_RUNNING=0; CLEAN=0
 for arg in "$@"; do
   case "$arg" in
     --node=*) NODE="${arg#--node=}" ;;
@@ -37,6 +42,7 @@ for arg in "$@"; do
     --yes | -y) ASSUME_YES=1 ;;
     --dry-run) DRY_RUN=1 ;;
     --even-if-running) EVEN_RUNNING=1 ;;
+    --clean) CLEAN=1 ;;
     *) echo "✗ unknown flag: $arg" >&2; usage ;;
   esac
 done
@@ -53,6 +59,7 @@ export TALOSCONFIG="${TALOSCONFIG:-./talosconfig}"
 KUBECONFIG_FILE="${KUBECONFIG:-./kubeconfig}"
 KCTL=(kubectl --kubeconfig "$KUBECONFIG_FILE" --request-timeout=20s)
 NODE_PROVIDER_CMD="${NODE_PROVIDER_CMD:-python3 $HERE/node-provider.py}"
+CLEANUP_CMD="${CLEANUP_CMD:-python3 $HERE/replaced-node-cleanup.py}"
 RECOVER_TIMEOUT="${RECOVER_TIMEOUT:-600}"
 POLL="${POLL:-10}"
 for bin in tofu jq talosctl kubectl; do command -v "$bin" >/dev/null 2>&1 || die "$bin is required"; done
@@ -211,17 +218,17 @@ case "$CMD" in
     if [[ -n "$notrunning" ]]; then
       warn "pods that are not Running yet (a local-path volume pinned to the old disk keeps its pod Pending until the data is rebuilt):"
       printf '%s\n' "$notrunning" | sed 's/^/    /' >&2
-      echo "  A CNPG instance that does not come back (CrashLoopBackOff on an empty data directory, seen in lab 21 after replacing a" >&2
-      echo "  worker): kubectl cnpg status <cluster> -n <ns>; its volume held the old disk's data, so delete that instance's PVC and pod:" >&2
-      echo "  kubectl -n <ns> delete pvc <instance> pod <instance> (only while the cluster has a healthy primary elsewhere); CNPG clones it" >&2
-      echo "  again, under a minute for the lab's databases." >&2
-      echo "  An OpenBao member does NOT come back on its own (lab 21: CrashLoopBackOff, 'open /bao/data/node-id: permission denied': the" >&2
-      echo "  retained volume's directory was re-created root-owned on the new disk). With the other two members unsealed, delete its pod," >&2
-      echo "  its PVC and the retained PV (class local-path-retain), let local-path provision a new volume: it rejoined and unsealed in about 2 min." >&2
-      echo "  Same for any pod on a local-path volume that crash-loops with 'permission denied' (lab 21: loki-0, vmselect): delete its pod and PVC." >&2
+      echo "  The volumes the old disk left behind are listed below (a CNPG instance, an OpenBao member, loki-0, vmselect-0 do not start" >&2
+      echo "  by themselves on an empty directory: lab 21)." >&2
     else
       ok "every pod is Running or finished"
     fi
+    # The pods above wait for a volume of the old disk: list them, print the commands, run them only with --clean.
+    clean_flag=(); [[ $CLEAN -eq 0 ]] || clean_flag=(--clean)
+    cleanup_rc=0
+    KUBECTL="kubectl --kubeconfig $KUBECONFIG_FILE --request-timeout=30s" $CLEANUP_CMD --node "$NAME_FOR_K8S" "${clean_flag[@]}" || cleanup_rc=$?
+    if [[ $cleanup_rc -ne 0 ]]; then warn "volumes of the old disk remain that were not cleaned (see above): look at them before anything else."; fail=1; fi
+    [[ $CLEAN -eq 1 ]] || echo "  To drop the safe ones: task cluster-replace-node ${TASKARGS} -- --clean   (it refuses a primary of record and any workload that would be left without a healthy replica)"
     (( fail == 0 )) || exit 1
     ok "Replacement of ${NAME_FOR_K8S} done. Verify: task cluster-verify PROVIDER=${PROVIDER}${ROLE_ARG}" ;;
 esac

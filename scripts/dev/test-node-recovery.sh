@@ -65,6 +65,13 @@ echo "roll $*" >>"$CALLS"; [ -f "$ST/roll.fails" ] && exit 1
 [ -f "$ST/roll.heals" ] && echo True >"$ST/ready.$(cat "$ST/target")"
 exit 0
 STUB
+cat >"$W/bin/cleanup" <<'STUB'
+#!/usr/bin/env bash
+echo "cleanup $* kubectl=${KUBECTL:-}" >>"$CALLS"
+echo "STALE=0 CLEAN=0 REFUSED=0 DEFERRED=0"
+[ -f "$ST/cleanup.fails" ] && exit 1
+exit 0
+STUB
 chmod +x "$W"/bin/* "$W/scripts/ops/rolling-replace.sh"
 
 export TALOS_TUNNEL_OFFSET=10200
@@ -82,11 +89,11 @@ PY
 LISTEN_PID=$!
 sleep 0.5
 
-export NODE_PROVIDER_CMD="$W/bin/node-provider"
+export NODE_PROVIDER_CMD="$W/bin/node-provider" CLEANUP_CMD="$W/bin/cleanup"
 export PATH="$W/bin:$PATH" RECOVER_TIMEOUT=3 POLL=1
 reset() {
   : >"$CALLS"
-  rm -f "${ST:?}"/ready.* "${ST:?}"/silent "${ST:?}"/pstate "${ST:?}"/reboot.* "${ST:?}"/roll.* "${ST:?}"/pods.txt "${ST:?}"/target
+  rm -f "${ST:?}"/ready.* "${ST:?}"/silent "${ST:?}"/pstate "${ST:?}"/reboot.* "${ST:?}"/roll.* "${ST:?}"/cleanup.* "${ST:?}"/pods.txt "${ST:?}"/target
   echo running >"$ST/pstate"
 }
 nr() { (cd "$C" && bash ${NRX:-} "$W/scripts/ops/node-recovery.sh" "$@" 2>&1); }
@@ -184,6 +191,25 @@ nr replace ovh --node=oa-lab-worker-0 --dry-run >/dev/null; rc=$?
 reset; echo oa-lab-worker-0 >"$ST/target"; echo False >"$ST/ready.oa-lab-worker-0"; echo stopped >"$ST/pstate"; : >"$ST/roll.fails"
 nr replace ovh --node=oa-lab-worker-0 --yes >/dev/null; rc=$?
 [ "$rc" -ne 0 ] && ok_ "a roll that fails fails the command" || bad "a failed roll passed"
+
+# the volumes the old disk left behind (lab 21): listed and printed by default, dropped only with --clean
+reset; echo oa-lab-worker-0 >"$ST/target"; echo False >"$ST/ready.oa-lab-worker-0"; echo stopped >"$ST/pstate"; : >"$ST/roll.heals"
+OUT="$(nr replace ovh --node=oa-lab-worker-0 --yes)"; rc=$?
+{ [ "$rc" -eq 0 ] && grep -q '^cleanup --node oa-lab-worker-0 kubectl=kubectl --kubeconfig' "$CALLS" && ! grep -q '^cleanup .*--clean' "$CALLS" \
+  && grep -q -- '-- --clean' <<<"$OUT"; } \
+  && ok_ "after the checks the cleanup runs in PRINT mode (no --clean), and the output says how to run it" || bad "default cleanup (rc=$rc): $(grep '^cleanup' "$CALLS") / $OUT"
+
+reset; echo oa-lab-worker-0 >"$ST/target"; echo False >"$ST/ready.oa-lab-worker-0"; echo stopped >"$ST/pstate"; : >"$ST/roll.heals"
+nr replace ovh --node=oa-lab-worker-0 --yes --clean >/dev/null; rc=$?
+{ [ "$rc" -eq 0 ] && grep -q '^cleanup --node oa-lab-worker-0 --clean' "$CALLS"; } && ok_ "--clean reaches the cleanup" || bad "--clean not passed (rc=$rc): $(grep '^cleanup' "$CALLS")"
+
+reset; echo oa-lab-worker-0 >"$ST/target"; echo False >"$ST/ready.oa-lab-worker-0"; echo stopped >"$ST/pstate"; : >"$ST/roll.heals"; : >"$ST/cleanup.fails"
+nr replace ovh --node=oa-lab-worker-0 --yes --clean >/dev/null; rc=$?
+[ "$rc" -ne 0 ] && ok_ "a cleanup that refuses something fails the command: the replacement is not finished" || bad "cleanup failure passed"
+
+reset; echo oa-lab-worker-0 >"$ST/target"; echo False >"$ST/ready.oa-lab-worker-0"; echo stopped >"$ST/pstate"
+nr replace ovh --node=oa-lab-worker-0 --dry-run --clean >/dev/null
+! grep -q '^cleanup' "$CALLS" && ok_ "--dry-run never runs the cleanup, even with --clean" || bad "cleanup ran on a dry run"
 
 echo
 echo "$PASS passed, $FAIL failed"
