@@ -1,0 +1,32 @@
+name: Release tag
+
+# A pushed tag must be annotated and signed by a key of the signer table (docs/signed-commits.md, infra #386).
+# Read-only; it is the alarm, the check is run by hand BEFORE the push (docs/release-checklist.md section 8).
+on:
+  push:
+    tags: ["[0-9]*"]
+
+permissions:
+  contents: read
+
+jobs:
+  tag-signature:
+    name: Release tag signature
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      # checkout fetches the tag as a lightweight ref when it is shallow: fetch the tag object itself.
+      - name: Fetch the tag object
+        env:
+          TAG: ${{ github.ref_name }}
+        run: git fetch --depth=1 origin "+refs/tags/${TAG}:refs/tags/${TAG}"
+
+      - name: Annotated, signed by the signer table
+        env:
+          TAG: ${{ github.ref_name }}
+        run: ./scripts/dev/check-release-tag.sh "$TAG"

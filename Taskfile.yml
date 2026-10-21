@@ -605,6 +605,8 @@ tasks:
       - ./scripts/dev/test-commit-authors.sh
       # Unsigned or badly signed commits are reported (a warning until every maintainer signs): docs/signed-commits.md.
       - ./scripts/dev/test-check-commit-signatures.sh
+      # A release tag is annotated and signed by a key of the signer table (infra #386): release-checklist.md section 8.
+      - ./scripts/dev/test-check-release-tag.sh
       # feint.sh checked `running` once, immediately after `feint start`
       # returned, with no retry — raced on a GitHub-hosted runner and failed
       # CI once with no code change (#169). A stub feint puts the startup
