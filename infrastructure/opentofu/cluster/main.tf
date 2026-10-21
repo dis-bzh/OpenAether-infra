@@ -484,6 +484,12 @@ locals {
     coalesce(one(module.outscale[*].control_plane_zones), []),
     coalesce(one(module.proxmox[*].control_plane_zones), []),
   )
+  worker_zones = concat(
+    coalesce(one(module.scw[*].worker_zones), []),
+    coalesce(one(module.ovh[*].worker_zones), []),
+    coalesce(one(module.outscale[*].worker_zones), []),
+    coalesce(one(module.proxmox[*].worker_zones), []),
+  )
 
   worker_ips = coalesce(
     length(coalesce(one(module.scw[*].worker_private_ips), [])) > 0 ? module.scw[0].worker_private_ips : null,
@@ -608,8 +614,10 @@ module "node_ports" {
 module "talos" {
   source = "../modules/talos"
 
-  cluster_name       = "${var.cluster_name}-${var.environment}"
-  cluster_endpoint   = "https://${local.k8s_lb_ip}:6443"
+  cluster_name     = "${var.cluster_name}-${var.environment}"
+  cluster_endpoint = "https://${local.k8s_lb_ip}:6443"
+  # Where the provider placed each node: the zone label the zone-loss alert and failure-domain-check read (0.4.0 M4).
+  node_zones         = { control_plane = local.control_plane_zones, worker = local.worker_zones }
   kubernetes_version = var.kubernetes_version
   talos_version      = var.talos_version
   # Container mode has no installer and no extensions; everywhere else the

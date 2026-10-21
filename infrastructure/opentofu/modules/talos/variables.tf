@@ -411,6 +411,20 @@ variable "node_time_servers" {
   }
 }
 
+variable "node_zones" {
+  description = <<-EOT
+    Failure domain of each node, as the provider placed it (the root passes control_plane_zones and worker_zones). When
+    set, every node carries the label topology.kubernetes.io/zone (machine.nodeLabels), which the zone-loss alert, the
+    kube-state-metrics allowlist and `task failure-domain-check` read. Null, or an entry that is empty, labels nothing.
+    The lists are in the order of control_plane_ips and worker_ips.
+  EOT
+  type = object({
+    control_plane = optional(list(string), [])
+    worker        = optional(list(string), [])
+  })
+  default = null
+}
+
 variable "node_baseline" {
   description = <<-EOT
     Opt-in kernel and kubelet baseline of the Talos nodes (ANSSI BP-028 R9/R12/R13, batch B23). Null

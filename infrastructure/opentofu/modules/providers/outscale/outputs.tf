@@ -18,6 +18,11 @@ output "control_plane_zones" {
   value       = outscale_vm.control_plane[*].placement_subregion_name
 }
 
+output "worker_zones" {
+  description = "Subregion of each worker VM, in worker_private_ips order"
+  value       = outscale_vm.worker[*].placement_subregion_name
+}
+
 # Load Balancer DNS names (Outscale LBs expose a DNS name, not a raw IP)
 output "k8s_lb_ip" {
   description = "DNS name of the Kubernetes API LB (6443)"

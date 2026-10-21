@@ -70,6 +70,11 @@ output "control_plane_zones" {
   value       = local.control_plane_zones
 }
 
+output "worker_zones" {
+  description = "Failure domain of each worker, in worker_private_ips order, as placed and not measured (read by failure-domain-check.sh)"
+  value       = local.worker_zones
+}
+
 output "worker_private_ips" {
   description = "Private IPs of worker nodes"
   value       = local.worker_ips
