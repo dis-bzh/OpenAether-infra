@@ -6,7 +6,7 @@
 #   1. LOCK        the bucket's versioning, lock mode and default retention, read back from the store, equal the tfvars.
 #   2. SEQUENCE    for every node and every UTC day in the window: the snapshots are ranges `oa-pos=<inode>:<from>:<to>[:eof]` of the apiserver's
 #                  files. Per inode they must start at 0 and chain with no hole (`from` <= what is covered so far; a repeat is counted, not
-#                  a failure), nothing may follow an `eof`, and a new inode must follow a closed one. An `oa-gap` snapshot is a LOSS the shipper
+#                  a failure), nothing may follow an `eof`, and a new inode must follow a closed one (an inode number reused by a later file, a chunk at 0 after an eof, is a new file). An `oa-gap` snapshot is a LOSS the shipper
 #                  recorded (the apiserver deleted a file before it was shipped).
 #   3. READABLE    the newest chunks (--sample, default 3) are decrypted with the password and every line must be a JSON audit Event.
 #
@@ -116,6 +116,9 @@ for node in $NODES; do
       chunks++
       if (ino != last && last != "" && !closed[last]) printf "UNCLOSED inode %s was followed by inode %s without eof\n", last, ino
       last = ino
+      # An inode number is reused once its file has been deleted (the apiserver keeps 10 rotated files): a chunk that starts at 0 after
+      # an eof is a NEW file that got the number, not a continuation (lab 23: 10 false defects on a 5 hour window).
+      if (closed[ino] && from == 0 && to > from) { delete closed[ino]; delete cov[ino] }
       if (closed[ino] && !(from == to)) { printf "AFTEREOF inode %s: chunk %s-%s after its eof\n", ino, from, to; next }
       if (!(ino in cov)) { cov[ino] = from; if (from > 0) printf "MIDFILE inode %s first seen at offset %s (earlier than the window, or a loss)\n", ino, from }
       if (from > cov[ino]) { printf "GAP inode %s: bytes %d-%d are missing (next chunk starts at %d)\n", ino, cov[ino], from, from; gaps++ }

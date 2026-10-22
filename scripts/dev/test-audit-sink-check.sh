@@ -77,6 +77,17 @@ OUT="$(check)"; RC=$?
 is "a new inode after a file that never got its eof: exit 1" 1 "$RC"
 grep -q "without eof" <<<"$OUT" && ok "named" || bad "$OUT"
 
+reset
+chunk cp-1 "$TODAY" 101 0 300 eof; chunk cp-1 "$TODAY" 202 0 100 eof; chunk cp-1 "$TODAY" 101 0 250; chunk cp-1 "$TODAY" 101 250 400
+OUT="$(check)"; RC=$?
+is "an inode number reused by a later file (a chunk at 0 after an eof) is a new file: exit 0" 0 "$RC"
+grep -q "no gap in the sequence" <<<"$OUT" && ok "and the sequence is called unbroken" || bad "$OUT"
+reset
+chunk cp-1 "$TODAY" 101 0 300 eof; chunk cp-1 "$TODAY" 202 0 100 eof; chunk cp-1 "$TODAY" 101 0 250; chunk cp-1 "$TODAY" 101 400 500
+OUT="$(check)"; RC=$?
+is "a hole inside the reused inode is still a gap: exit 1" 1 "$RC"
+grep -q "bytes 250-400 are missing" <<<"$OUT" && ok "named" || bad "$OUT"
+
 echo "--- a marker (from = to, a word) is not an audit event and is not sampled ---"
 reset
 chunk cp-1 "$TODAY" 101 0 300; chunk cp-1 "$TODAY" 101 300 300 eof word; chunk cp-1 "$TODAY" 202 0 50
