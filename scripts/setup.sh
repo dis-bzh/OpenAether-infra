@@ -49,7 +49,7 @@ HELM_VERSION="4.3.0"
 # renovate: datasource=github-releases depName=kubernetes/kubernetes extractVersion=^v(?<version>.*)$
 KUBECTL_VERSION="1.37.1"
 # renovate: datasource=github-tags depName=aws/aws-cli
-AWSCLI_VERSION="2.37.11"
+AWSCLI_VERSION="2.38.1"
 # renovate: datasource=pypi depName=checkov
 CHECKOV_VERSION="3.3.29"
 # renovate: datasource=pypi depName=yamllint
