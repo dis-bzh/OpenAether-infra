@@ -101,7 +101,7 @@ def plan(node, nodes, pvs, pvcs, pods, clusters, stss, longhorn):
                 it.update(kind="running", verdict="info", why="Ready on a re-created empty volume: nothing to do")
                 items.append(it)
                 continue
-            drop = [["-n", ns, "delete", "pod", name, "pvc", claim, "--wait=false"]] + ([["delete", "pv", pvn]] if retain else [])
+            drop = [["-n", ns, "delete", "pod/" + name, "pvc/" + claim, "--wait=false"]] + ([["delete", "pv", pvn]] if retain else [])
             labels = pod["metadata"].get("labels", {})
             cl = labels.get("cnpg.io/cluster")
             sts = owner_sts(pod)

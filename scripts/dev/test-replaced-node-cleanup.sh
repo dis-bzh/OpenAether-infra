@@ -109,33 +109,35 @@ mk base; run --node worker-3
 has "STALE=2 CLEAN=2 REFUSED=0 DEFERRED=0" && ok_ "only the 2 volumes of the replaced node created before it are stale (another node's and a fresh one are not)" || bad "stale count: $(tail -1 "$W/out.txt")"
 
 mk base; run --node worker-3 --clean
-{ [ "$(rc)" = 0 ] && called "-n foundation-databases delete pod grafana-db-1 pvc grafana-db-1" && called "delete pv pv-g1" && called "delete pod zitadel-db-2 pvc zitadel-db-2" && called "delete pv pv-z2"; } && ok_ "--clean drops the 2 CNPG replicas (pod, claim, retained volume)" || bad "--clean CNPG ($(rc)): $(cat "$CALLS")"
+{ [ "$(rc)" = 0 ] && called "-n foundation-databases delete pod/grafana-db-1 pvc/grafana-db-1" && called "delete pv pv-g1" && called "delete pod/zitadel-db-2 pvc/zitadel-db-2" && called "delete pv pv-z2"; } && ok_ "--clean drops the 2 CNPG replicas (pod, claim, retained volume)" || bad "--clean CNPG ($(rc)): $(cat "$CALLS")"
+# regression (lab 22): `kubectl delete pod NAME pvc CLAIM` treats `pvc` and CLAIM as pod names; the resources must be typed (pod/NAME pvc/CLAIM)
+! grep -E " delete .* (pvc|pv) [a-z0-9]" "$CALLS" | grep -v "delete pv " | grep -q . && ok_ "no untyped pvc argument in any delete command" || bad "an untyped pvc argument: $(grep -E ' delete .* pvc ' "$CALLS" | head -2)"
 { ! called "pv-other" && ! called "pv-fresh" && ! called "fresh-0" && ! called "zitadel-db-1" && ! called "grafana-db-2"; } && ok_ "--clean touches nothing of another node, a newer volume, or a healthy instance" || bad "--clean touched too much: $(cat "$CALLS")"
 
 mk primary-on-old-disk; run --node worker-3 --clean
-{ [ "$(rc)" = 1 ] && has "primary of record" && ! called "delete pod grafana-db-1"; } && ok_ "the primary of record is refused (rc 1), nothing deleted for it" || bad "primary refusal ($(rc))"
-called "delete pod zitadel-db-2" && ok_ "the other cluster's safe replica is still cleaned" || bad "other cluster not cleaned"
+{ [ "$(rc)" = 1 ] && has "primary of record" && ! called "delete pod/grafana-db-1"; } && ok_ "the primary of record is refused (rc 1), nothing deleted for it" || bad "primary refusal ($(rc))"
+called "delete pod/zitadel-db-2" && ok_ "the other cluster's safe replica is still cleaned" || bad "other cluster not cleaned"
 
 mk primary-not-ready; run --node worker-3 --clean
-{ [ "$(rc)" = 1 ] && has "without a healthy" && ! called "delete pod grafana-db-1"; } && ok_ "a replica is kept while its primary is not Ready" || bad "primary-not-ready ($(rc))"
+{ [ "$(rc)" = 1 ] && has "without a healthy" && ! called "delete pod/grafana-db-1"; } && ok_ "a replica is kept while its primary is not Ready" || bad "primary-not-ready ($(rc))"
 
 mk two-in-one-cluster; run --node worker-3 --clean
-{ called "delete pod zitadel-db-2" && ! called "delete pod zitadel-db-3" && has "DEFERRED=1" && [ "$(rc)" = 1 ]; } && ok_ "two instances of one cluster: one per run, the other deferred" || bad "defer ($(rc)): $(cat "$CALLS")"
+{ called "delete pod/zitadel-db-2" && ! called "delete pod/zitadel-db-3" && has "DEFERRED=1" && [ "$(rc)" = 1 ]; } && ok_ "two instances of one cluster: one per run, the other deferred" || bad "defer ($(rc)): $(cat "$CALLS")"
 
 mk ready-pod; run --node worker-3 --clean
-{ ! called "delete pod grafana-db-1" && has "nothing to do"; } && ok_ "a Ready pod on a re-created volume is left alone" || bad "ready pod touched"
+{ ! called "delete pod/grafana-db-1" && has "nothing to do"; } && ok_ "a Ready pod on a re-created volume is left alone" || bad "ready pod touched"
 
 mk openbao-ok; run --node worker-3 --clean
-{ called "-n foundation-vault delete pod openbao-1 pvc data-openbao-1" && called "delete pv pv-bao"; } && ok_ "OpenBao: 2 of 3 Ready (a raft majority) -> the member, its claim and the retained volume are dropped" || bad "openbao-ok ($(rc)): $(cat "$CALLS")"
+{ called "-n foundation-vault delete pod/openbao-1 pvc/data-openbao-1" && called "delete pv pv-bao"; } && ok_ "OpenBao: 2 of 3 Ready (a raft majority) -> the member, its claim and the retained volume are dropped" || bad "openbao-ok ($(rc)): $(cat "$CALLS")"
 mk openbao-lost-majority; run --node worker-3 --clean
-{ ! called "delete pod openbao-1" && has "only 1 other Ready"; } && ok_ "OpenBao: 1 other Ready of 3 is no majority -> refused" || bad "openbao-lost-majority"
+{ ! called "delete pod/openbao-1" && has "only 1 other Ready"; } && ok_ "OpenBao: 1 other Ready of 3 is no majority -> refused" || bad "openbao-lost-majority"
 
 mk loki-ok; run --node worker-3 --clean
-{ called "-n services-observability delete pod loki-0 pvc data-loki-0" && ! called "delete pv pv-x"; } && ok_ "Loki with another Ready replica: pod and claim dropped, no retained volume to delete (class local-path)" || bad "loki-ok: $(cat "$CALLS")"
+{ called "-n services-observability delete pod/loki-0 pvc/data-loki-0" && ! called "delete pv pv-x"; } && ok_ "Loki with another Ready replica: pod and claim dropped, no retained volume to delete (class local-path)" || bad "loki-ok: $(cat "$CALLS")"
 mk loki-alone; run --node worker-3 --clean
-{ ! called "delete pod loki-0" && has "REFUSED=1"; } && ok_ "Loki with no other Ready replica is refused" || bad "loki-alone"
+{ ! called "delete pod/loki-0" && has "REFUSED=1"; } && ok_ "Loki with no other Ready replica is refused" || bad "loki-alone"
 mk vmselect-ok; run --node worker-3 --clean
-called "delete pod vmselect-victoria-metrics-0" && ok_ "vmselect with another Ready replica is dropped" || bad "vmselect-ok"
+called "delete pod/vmselect-victoria-metrics-0" && ok_ "vmselect with another Ready replica is dropped" || bad "vmselect-ok"
 
 mk unknown; run --node worker-3 --clean
 { ! called "app-0" && has "not a known safe case" && [ "$(rc)" = 1 ]; } && ok_ "an unknown workload is listed and refused" || bad "unknown"
