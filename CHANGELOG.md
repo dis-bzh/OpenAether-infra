@@ -14,8 +14,13 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ## [Unreleased]
 
-Bug fixes, documentation corrections and safety nets after 0.3.1, for the next release (a 0.3.2 patch was prepared and abandoned: there is no 0.3.2 tag, and `git_ref` still pins
-OpenAether-apps `refs/tags/0.3.1`). No new scope. Rung reached by the lines below: **mocked** (self-tests and doc checks); the infra items were not observed on a cloud. Lab 18 (Scaleway,
+## [0.3.2] — 2026-10-22
+
+0.3.2 is a **security patch** of 0.3.1. It pairs with OpenAether-apps 0.3.2, which carries the actual change (Zitadel v4.19.5 against three HIGH account-takeover advisories, a generated login session
+cookie secret, wait4x 3.7.2, dated VEX waivers and an issue when the image scan fails: see its CHANGELOG). On this side the release only moves the pin: the `git_ref` default and the twelve
+`envs/*.tfvars.example` now point at OpenAether-apps `refs/tags/0.3.2` (they pointed at `refs/tags/0.3.1`), so apps 0.3.2 must be tagged first, and the tftest assertion on the rendered GitRepository
+follows. Nothing in the infrastructure is patched for these advisories; the infra image scan was green. The fixes below were merged on main after 0.3.1 and ship in this release. Bug fixes, documentation
+corrections and safety nets, no new scope. Rung reached by the lines below: **mocked** (self-tests and doc checks); the infra items were not observed on a cloud. Lab 18 (Scaleway,
 infra 7e367d9 / apps 75e464f, on branches) ran a nominal `cluster-up` in 9 min 07 s with `cluster-verify` at 15 passed, 0 failed; it did not exercise #293 or #360. It does not fix the two
 infra issues the series set out to look at: #42 (the API unreachable for seconds during a control-plane roll) and #375 (the OVH hard-reboot window) stay open for 0.4.0, see below.
 Not a compliance claim. The apps-side results (#134 partial, #143, #144) are in the OpenAether-apps CHANGELOG.
