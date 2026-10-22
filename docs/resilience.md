@@ -23,7 +23,7 @@ stays Cluster API's (optional modules for the child clusters), what OpenTofu man
 | Database acknowledged commits lost | **zero** | owner rule, 2026-10-22: synchronous quorum replication (`dataDurability: required`) on both databases; criteria in OpenAether-apps `docs/resilience.md`, "Zero-loss proof"; NOT run on a cluster yet |
 | Availability | 99.9 % | same |
 
-The write gap is **bounded, not zero**: PostgreSQL has one writer, so writes stop while a replica is promoted (a client that retries masks it, OpenAether-apps `docs/database-failover-clients.md`). What is zero is the loss of acknowledged commits. A true 0 s write path needs a distributed database and is not planned. Writes **block** (nothing is lost) when no replica is available: the alert `CnpgSyncReplicaMissing` says so.
+The write gap is **bounded, not zero**: PostgreSQL has one writer, so writes stop while a replica is promoted (a client that retries masks it, the OpenAether-apps guide "Surviving a database failover from your own application"). What is zero is the loss of acknowledged commits. A true 0 s write path needs a distributed database and is not planned. Writes **block** (nothing is lost) when no replica is available: the alert `CnpgSyncReplicaMissing` says so.
 
 ## Why a pod on a dead node is not rescheduled at once
 

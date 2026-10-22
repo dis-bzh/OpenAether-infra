@@ -24,7 +24,7 @@ API gère reste à Cluster API (modules optionnels pour les clusters enfants), c
 | Commits acquittés perdus en base | **zéro** | règle du propriétaire, 2026-10-22 : réplication synchrone par quorum (`dataDurability: required`) sur les deux bases ; critères dans OpenAether-apps `docs/resilience.md`, « Zero-loss proof » ; PAS encore exécuté sur un cluster |
 | Disponibilité | 99,9 % | idem |
 
-L'interruption d'écriture est **bornée, pas nulle** : PostgreSQL n'a qu'un écrivain, les écritures s'arrêtent le temps de promouvoir un réplica (un client qui réessaie la masque, OpenAether-apps `docs/database-failover-clients.md`). Ce qui est nul, c'est la perte de commits acquittés. Un chemin d'écriture réellement à 0 s demande une base distribuée et n'est pas prévu. Les écritures **se bloquent** (rien n'est perdu) quand aucun réplica n'est disponible : l'alerte `CnpgSyncReplicaMissing` le dit.
+L'interruption d'écriture est **bornée, pas nulle** : PostgreSQL n'a qu'un écrivain, les écritures s'arrêtent le temps de promouvoir un réplica (un client qui réessaie la masque, le guide OpenAether-apps « Surviving a database failover from your own application »). Ce qui est nul, c'est la perte de commits acquittés. Un chemin d'écriture réellement à 0 s demande une base distribuée et n'est pas prévu. Les écritures **se bloquent** (rien n'est perdu) quand aucun réplica n'est disponible : l'alerte `CnpgSyncReplicaMissing` le dit.
 
 ## Pourquoi un pod d'un nœud mort n'est pas replanifié tout de suite
 
