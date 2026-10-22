@@ -77,7 +77,7 @@ empreintes ne sont **pas** vérifiées par tofu : comparer chaque clé au tablea
 3. Surveiller `kubectl -n flux-system get gitrepository openaether -o yaml` (condition `SourceVerified`). Un commit refusé
    met l'objet NotReady et Flux garde le dernier artefact valide. L'alerte est côté apps (`FluxObjectNotReady`, 20 minutes).
 4. Changer `public_keys` sur un cluster en marche change le manifeste de bootstrap : savoir si Talos réapplique un
-   manifeste inline lors d'un apply de config est une question de labo ; le Secret peut aussi être mis à jour avec
+   manifeste inline lors d'un apply de config est une question de labo (le labo 22 a vu, pour le Deployment CoreDNS, Talos mettre à jour son manifeste et lancer son contrôleur mais laisser l'objet existant inchangé : ne pas y compter, mettre à jour le Secret avec `kubectl apply` ; non essayé sur un objet Flux) ; le Secret peut aussi être mis à jour avec
    `kubectl apply`.
 
 Déployer sur un cluster dev pendant plusieurs cycles de release avant la production.

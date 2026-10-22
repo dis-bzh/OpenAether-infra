@@ -74,7 +74,8 @@ and a duplicate. Fingerprints are **not** checked by tofu: compare each key to t
    makes the object NotReady and Flux keeps the last good artifact. Alerting on that is the apps side
    (`FluxObjectNotReady`, 20 minutes).
 4. Changing `public_keys` on a running cluster changes the bootstrap manifest: whether Talos re-applies an inline
-   manifest on a config apply is a lab question; the Secret can also be updated with `kubectl apply`.
+   manifest on a config apply is a lab question (lab 22 saw, for the CoreDNS Deployment, Talos update its manifest and run its controller
+   but leave the existing object unchanged: do not count on it, update the Secret with `kubectl apply`; not tried on a Flux object).
 
 Roll out on a dev cluster for several release cycles before production.
 
