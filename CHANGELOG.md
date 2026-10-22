@@ -20,6 +20,11 @@ infra 7e367d9 / apps 75e464f, on branches) ran a nominal `cluster-up` in 9 min 0
 infra issues the series set out to look at: #42 (the API unreachable for seconds during a control-plane roll) and #375 (the OVH hard-reboot window) stay open for 0.4.0, see below.
 Not a compliance claim. The apps-side results (#134 partial, #143, #144) are in the OpenAether-apps CHANGELOG.
 
+### Added (0.4.0, owner rule of 2026-10-22: no acknowledged data loss)
+
+- **Databases replicate synchronously** (OpenAether-apps: `zitadel-db` and `grafana-db`, quorum, `dataDurability: required`, failover quorum; `grafana-db` at 3 instances). The write gap stays bounded, not zero (one writer; clients mask it by retrying); what is zero is the loss of acknowledged commits. Writes block, losing nothing, when no replica streams (alert `CnpgSyncReplicaMissing`). `docs/resilience.md` (+ FR): target row and the lab pass criteria of the zero-loss proof (NOT run on a cluster).
+- **Capacity, honestly**: the third `grafana-db` instance adds about 100 m of CPU requests (derived +2.5 points of a worker: 4 workers about 226-231% against 300%, still passing; the two-worker zone still short, by about 1.1-1.2 vCPU instead of 1.0). `docs/capacity.md` (+ FR) say so; `check-doc-inputs.sh` fails if a capacity page stops accounting for it and no longer quotes a stale "0.45 vCPU of margin" in its 4-worker message.
+
 ### Added (0.4.0, owner decisions of 2026-10-21: signing, release tags, capacity)
 
 - **Signer table and signed-commit policy** (#332): `docs/signed-commits.md` (+ FR) lists the VPS release key and GitHub `web-flow` with their fingerprints and public keys under `docs/signers/`

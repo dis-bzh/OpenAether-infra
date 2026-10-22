@@ -110,7 +110,12 @@ if [ "${STRICT_EXAMPLES:-1}" = "1" ]; then
   echo "=== the Scaleway and OVH examples can be rolled (4 workers), the Outscale ones set the root size ==="
   for ex in "$ENVS"/{management,failover,workload}-{scaleway,ovh}.tfvars.example; do
     w="$(grep -E '^[[:space:]]*workers[[:space:]]*=' "$ex" | head -1 | sed -E 's/^[^=]*=[[:space:]]*([0-9]+).*/\1/')"
-    if [ "${w:-0}" -ge 4 ]; then ok "$(basename "$ex") — $w workers"; else bad "$(basename "$ex") — ${w:-no} workers: the full platform leaves ~0.45 vCPU on 3, ship 4 (#378, docs/capacity.md)"; fi
+    if [ "${w:-0}" -ge 4 ]; then ok "$(basename "$ex") — $w workers"; else bad "$(basename "$ex") — ${w:-no} workers: the full platform measured ~9 vCPU of requests (lab 21), more than 3 workers leave the gate; ship 4 (#378, docs/capacity.md)"; fi
+  done
+  # 0.4.0 owner rule 2026-10-22: the third grafana-db instance (synchronous replication) adds ~100 m of CPU requests to that arithmetic;
+  # the capacity pages must say so, in both languages, instead of keeping the figures from before it.
+  for cap in "$ROOT/docs/capacity.md" "$ROOT/docs/capacity.fr.md"; do
+    if grep -q 'grafana-db' "$cap" && grep -q '100 m' "$cap"; then ok "$(basename "$cap") — counts the third grafana-db instance (+100 m of CPU requests)"; else bad "$(basename "$cap") — does not account for the third grafana-db instance (+100 m): the 4-worker arithmetic is stale"; fi
   done
   for ex in "$ENVS"/{management,failover,workload}-outscale.tfvars.example; do
     if grep -qE '^outscale_root_volume_size_gb[[:space:]]*=' "$ex"; then ok "$(basename "$ex") — sets outscale_root_volume_size_gb"; else bad "$(basename "$ex") — outscale_root_volume_size_gb is commented out (#376)"; fi

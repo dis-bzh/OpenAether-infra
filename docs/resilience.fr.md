@@ -21,7 +21,10 @@ API gère reste à Cluster API (modules optionnels pour les clusters enfants), c
 |---|---|---|
 | Battement HTTP côté client | au plus 5 s d'affilée | décision du propriétaire, 2026-10-19 |
 | Interruption d'écriture en base | au plus 30 s | idem ; mesuré 24 s (primaire tué), 12 s (bascule) au labo 15c |
+| Commits acquittés perdus en base | **zéro** | règle du propriétaire, 2026-10-22 : réplication synchrone par quorum (`dataDurability: required`) sur les deux bases ; critères dans OpenAether-apps `docs/resilience.md`, « Zero-loss proof » ; PAS encore exécuté sur un cluster |
 | Disponibilité | 99,9 % | idem |
+
+L'interruption d'écriture est **bornée, pas nulle** : PostgreSQL n'a qu'un écrivain, les écritures s'arrêtent le temps de promouvoir un réplica (un client qui réessaie la masque, OpenAether-apps `docs/database-failover-clients.md`). Ce qui est nul, c'est la perte de commits acquittés. Un chemin d'écriture réellement à 0 s demande une base distribuée et n'est pas prévu. Les écritures **se bloquent** (rien n'est perdu) quand aucun réplica n'est disponible : l'alerte `CnpgSyncReplicaMissing` le dit.
 
 ## Pourquoi un pod d'un nœud mort n'est pas replanifié tout de suite
 
@@ -154,6 +157,7 @@ lance seule (pour un membre différé, ou plus tard). PAS VÉRIFIÉ : l'associat
 | Installation neuve, `coredns_ha` actif | trois pods `k8s-app=kube-dns` sur trois nœuds différents (`-o wide`), aucun Pending durable ; `kubectl get pdb -n kube-system coredns` admet 1 ; `cluster-verify` vert |
 | Worker (ou plan de contrôle) portant un réplica CoreDNS éteint 5 min, résolution à 1 Hz d'un nom de Service depuis un pod d'un troisième nœud plus l'écrivain de base | aucune résolution n'échoue pour de bon, et le plus long trou d'écriture qui n'est pas une bascule est d'au plus 30 s (287 s / 46 s avant) ; trois réplicas de retour dans les 15 minutes suivant le rallumage |
 | Worker portant le primaire zitadel-db éteint et laissé éteint | le plus long trou d'écriture est d'au plus 75 s (environ 60 s attendu), un réplica promu dans les 45 s après le passage du nœud en Unknown, données identiques ; 30 s n'est pas revendiqué |
+| Écrivain « zéro perte » (OpenAether-apps `docs/resilience.md`, « Zero-loss proof ») : 100 commits par seconde, une connexion neuve chacun, journal côté client des identifiants acquittés ; pod primaire tué, son worker éteint, son worker redémarré de force (`talosctl reboot --mode force`), sa zone éteinte ; puis une fois avec la réplication synchrone suspendue en témoin | après chaque passe avec réplication synchrone, **zéro identifiant acquitté absent** des lignes survivantes ; le trou d'écriture est relevé ; le témoin montre ce que la réplication asynchrone perd (ou qu'elle n'a pas reproduit de perte) |
 | `cluster-replace-node` d'un worker mort portant une instance CNPG, un membre OpenBao, loki et vmselect | le nettoyage liste exactement les volumes de ce nœud créés avant le nouveau ; sans `--clean` rien n'est supprimé ; avec `--clean` chaque réplica est complet dans les 15 minutes suivant la commande sans `kubectl` manuel ; le primaire d'enregistrement et les volumes de tout autre nœud sont intacts (`kubectl get pv` avant et après) |
 
 ## Les exercices qui le prouvent (cloud, sondes à 1 Hz)

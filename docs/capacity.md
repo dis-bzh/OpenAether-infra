@@ -111,6 +111,10 @@ losing the zone with two of them leaves two workers (200%) for 224% of requests,
 stopped, but pods stayed Pending until the zone returned. Five workers (2 + 2 + 1: losing two leaves 300%) or six would hold on the arithmetic (see the lab 21 results for what a fifth
 worker did), as would about 12% fewer requests. Which of these the examples should ship was decided on 2026-10-21 (below).
 
+**0.4.0 (owner rule of 2026-10-22, no acknowledged commit lost): one more database instance.** Both CNPG databases now replicate synchronously (OpenAether-apps `docs/resilience.md`, "Data classes"), and `grafana-db` goes from 2 to 3 instances so that losing one replica does not block writes.
+The added pod requests 100 m of CPU (50 m instance + 50 m Barman Cloud sidecar), 384 Mi of memory and 5 Gi of `local-path` storage. The application repository's audit (`python3 scripts/check-ha.py`) did not count CNPG pods before (they are not Deployments): it now prints them, 600 m for six instances (500 m before), next to the unchanged 3015 m of Deployments and StatefulSets.
+Derived from lab 21's measurement (9095 m = 228% of a worker, so a worker is about 3990 m): +100 m is about +2.5 points, so the 4-worker examples request about 226-231% (lab 21/22: 224-228%) against 300%, **75-77% of the gate's limit, still passing** (was 74-76%); the 5-worker profile about 246-250% of 400%. The budget of the application audit does not move (3300 m for Deployments and StatefulSets), the CNPG pods get their own (600 m). The two-worker zone is **not** helped: 200% against about 228-231% leaves about 1.1-1.2 vCPU of requests unplaceable (was about 1.0), same verdict as below. 3 workers stay refused. Nothing here was measured after the change; the next lab reads the real figure with `cluster-roll`'s survey.
+
 ### What the shipped 4 workers survive, and what they do not (decision of 2026-10-21, infra #389)
 
 The Scaleway and OVH examples ship **4 workers**, placed round-robin over three zones, so 2 + 1 + 1. Said plainly:

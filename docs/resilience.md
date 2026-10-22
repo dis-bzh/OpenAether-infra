@@ -20,7 +20,10 @@ stays Cluster API's (optional modules for the child clusters), what OpenTofu man
 |---|---|---|
 | Customer HTTP blip | at most 5 s in a row | owner decision, 2026-10-19 |
 | Database write gap | at most 30 s | same; measured 24 s (primary killed), 12 s (switchover) in lab 15c |
+| Database acknowledged commits lost | **zero** | owner rule, 2026-10-22: synchronous quorum replication (`dataDurability: required`) on both databases; criteria in OpenAether-apps `docs/resilience.md`, "Zero-loss proof"; NOT run on a cluster yet |
 | Availability | 99.9 % | same |
+
+The write gap is **bounded, not zero**: PostgreSQL has one writer, so writes stop while a replica is promoted (a client that retries masks it, OpenAether-apps `docs/database-failover-clients.md`). What is zero is the loss of acknowledged commits. A true 0 s write path needs a distributed database and is not planned. Writes **block** (nothing is lost) when no replica is available: the alert `CnpgSyncReplicaMissing` says so.
 
 ## Why a pod on a dead node is not rescheduled at once
 
@@ -153,6 +156,7 @@ the command exits 1. Longhorn replicas are reported (a faulted volume is named),
 | Fresh install, `coredns_ha` on | three `k8s-app=kube-dns` pods on three different nodes (`-o wide`), none Pending for good; `kubectl get pdb -n kube-system coredns` allows 1; `cluster-verify` green |
 | Worker (or control plane) holding a CoreDNS replica powered off 5 min, 1 Hz lookup of a Service name from a pod on a third node plus the database writer | no lookup fails for good, and the longest database write gap that is not a failover is at most 30 s (was 287 s / 46 s); replicas back to three within 15 minutes of the power-on |
 | Worker holding the zitadel-db primary powered off and left off | the longest write gap is at most 75 s (expected about 60 s), a replica is promoted within 45 s of the node turning Unknown, data identical; 30 s is not claimed |
+| Zero-loss writer (OpenAether-apps `docs/resilience.md`, "Zero-loss proof"): 100 commits per second, fresh connection each, client-side log of acknowledged ids; primary pod killed, its worker powered off, its worker force-rebooted (`talosctl reboot --mode force`), its zone powered off; then once with synchronous replication suspended as a control | after each run with synchronous replication, **zero acknowledged ids missing** from the surviving rows; the write gap is recorded; the control shows what asynchronous replication loses (or that it did not reproduce a loss) |
 | `cluster-replace-node` of a dead worker holding a CNPG instance, an OpenBao member, loki and vmselect | the cleanup lists exactly the volumes of that node created before the new one; without `--clean` nothing is deleted; with `--clean` every replica is full within 15 minutes of the command with no manual `kubectl`; the primary of record and every other node's volume are untouched (`kubectl get pv` before and after) |
 
 ## The drills that prove it (cloud, 1 Hz probes)
