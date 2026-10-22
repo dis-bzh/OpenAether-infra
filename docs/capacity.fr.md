@@ -142,6 +142,8 @@ workers demandent 243 à 247 % d'un worker (mesuré au labo 22 avec toute la pla
 | 4 (livré) | 2 + 1 + 1 | la zone à deux : `workers: 2 stay, but the workers request 224% of a node and 2 hold 200%` | sortie 1 pour cette zone ; les deux autres passent |
 | 5 | 2 + 2 + 1 | `workers: 3 of 5 stay, requests 246% fit in 300%` pour les zones à deux workers ; 4 sur 5 pour l'autre | sortie 0, toute perte est supportable |
 
+Labo 23 (grafana-db à 3 instances, le puits d'audit et les récepteurs sur la même forme à 5 workers) : `requests 249% fit in 300%` pour les zones à deux workers (labo 22 : 246 %) ; avec les trois profils de base de données du labo ajoutés (un `ha`, un `standard` et un `light` : 1,1 + 0,6 + 0,1 vCPU de requêtes) **294 %**, encore sous la barre. Le contrôle nomme aussi une base client qui perdrait ses données : il a signalé le profil `light` à une seule instance pour la perte de sa zone.
+
 Le test `scripts/dev/test-failure-domain-check.sh` exécute les deux formes contre des `tofu` et `kubectl` factices. Il prouve l'arithmétique du contrôle ; la forme elle-même a été éprouvée au labo 22 (Scaleway) : chacune des deux zones à deux workers a été éteinte
 10 minutes avec son plan de contrôle, aucun pod n'est resté en attente faute de CPU (les pods en attente étaient les DaemonSets des nœuds perdus et ceux ayant un volume local sur place),
 HTTP et `/readyz` ont tenu ; un primaire de base de données dans la zone perdue coûte environ 2 minutes d'écriture (`resilience.fr.md`). Coût : une instance de plus et 4 vCPU (et le quota correspondant) par cloud. Outscale n'est

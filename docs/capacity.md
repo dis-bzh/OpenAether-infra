@@ -141,6 +141,8 @@ five workers request 243-247% of a worker (measured in lab 22 with the full plat
 | 4 (shipped) | 2 + 1 + 1 | the zone with two: `workers: 2 stay, but the workers request 224% of a node and 2 hold 200%` | exit 1 for that zone; the other two zones pass |
 | 5 | 2 + 2 + 1 | `workers: 3 of 5 stay, requests 246% fit in 300%` for the two-worker zones; 4 of 5 for the other | exit 0, every loss survivable |
 
+Lab 23 (grafana-db at 3 instances, the audit sink and the receivers on the same 5-worker shape): `requests 249% fit in 300%` for the two-worker zones (lab 22: 246%); with the three database profiles of the lab added (an `ha`, a `standard` and a `light`: 1.1 + 0.6 + 0.1 vCPU of requests) **294%**, still under the gate. The check also names a customer database that would lose its data: it flagged the single-instance `light` profile for the loss of its zone.
+
 The script test `scripts/dev/test-failure-domain-check.sh` runs both shapes against stub `tofu` and `kubectl`. That proves the arithmetic of the check; the shape itself was drilled in lab 22 (Scaleway): each of the two zones holding two workers was powered off
 for 10 minutes with the control plane in it, no pod stayed Pending for lack of CPU (the Pending ones were DaemonSets of the lost nodes and pods with a local volume there),
 HTTP and `/readyz` held; a database primary inside the lost zone costs about 2 minutes of writes (`resilience.md`). Cost: one more instance and 4 vCPU (and the matching quota) per cloud. Outscale is

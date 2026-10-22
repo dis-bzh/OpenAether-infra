@@ -220,6 +220,23 @@ Defects found and fixed on the branch: `scripts/ops/replaced-node-cleanup.py` pr
 
 CoreDNS and Talos (observed): a changed `coredns_image_tag` is sent to the nodes by `tofu apply` (8 nodes, no reboot, the probes saw nothing) but the running Deployment is **not** updated by it (6 minutes after: still the old tag). `talosctl upgrade-k8s --dry-run` with `coreDNS.disabled = true` lists Service, PDB, ConfigMap and RBAC `unchanged` and the Deployment `configured` with a one-line diff (the image): the new tag is rolled out by the next `upgrade-k8s`, which neither recreates a Talos CoreDNS nor ignores ours. By hand before that: `kubectl -n kube-system set image deployment/coredns coredns=registry.k8s.io/coredns/coredns:<tag>`. `tofu plan` after all drills: no changes.
 
+## Measured in lab 23 (Scaleway, 3 control planes + 5 workers POP2-4C-16G, 2026-10-22): synchronous replication, zero-loss proof
+
+Heads: infra 100c862 plus the fixes of the lab, apps 11c1096 plus its fixes. Rung: **observed on a cluster**, Scaleway (cluster) and OVH (replica store and audit sink, buckets only). Not a compliance claim. The full table and the method are in OpenAether-apps `docs/resilience.md` ("Zero-loss proof").
+
+| Fault (two writers on `zitadel-db` and an `ha` profile Cluster, plus one through the pooler; ids acknowledged after the COMMIT) | acknowledged ids missing | longest write gap |
+|---|---|---|
+| force delete of both primary pods | **0** of 9519 / 7679 / 7624 | 32-36 s |
+| provider power-off of the primaries' worker, 300 s | **0** of 19048 / 15936 / 16482 | 40-60 s |
+| `talosctl reboot --mode force` of that worker | **0** of 13724 / 10912 / 10851 | 61-63 s |
+| power-off of the zone holding both primaries, 300 s (twice) | **0** (19698 / 15087 / 9825, then 21773 / 15262 / 15388) | 112-120 s then 50-80 s direct; **314.5 s once through the PgBouncer pooler** |
+| both replicas down 122 s, 330 s, 480 s | **0** | writers blocked for the whole outage (no acknowledgement); `CnpgSyncReplicaMissing` firing at +274 s of 480 s |
+| a primary and one replica lost together, 300 s | **0** of 18675 / 14126 / 14600 | no promotion (FailoverQuorum): 353-375 s, until the nodes returned |
+
+Control, asynchronous replication: 0 missing after a pod kill (also under a 32-client pgbench) and after a forced reboot; **817 of 15916 and 1409 of 16432 acknowledged ids LOST** when both replicas were down and the primary's node was then powered off, which is the double fault the synchronous setting blocks. Synchronous replication cost about 25% of the write throughput and 2.2 ms per commit across zones (OpenAether-apps `docs/database-profiles.md`).
+
+What it means for this repository: the 75 s node-loss bar was met (40-63 s), the zone-loss bar of 30 s was not (50-120 s, infra #390 stays), and a zone power-off with the pooler path once took 314.5 s (not explained, filed). The sink (infra #318) results of the same lab are in `docs/audit-sink.md`, section 10.
+
 ## UNVERIFIED
 
 Verified in lab 21 (Scaleway): two CNPG operators with one holding the lease, the ESO controller leader election, two Kyverno admission controllers, `kube_node_role`, the zone label of

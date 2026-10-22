@@ -220,6 +220,23 @@ Défauts trouvés et corrigés sur la branche : `scripts/ops/replaced-node-clean
 
 CoreDNS et Talos (observé) : un `coredns_image_tag` modifié est envoyé aux nœuds par `tofu apply` (8 nœuds, sans redémarrage, les sondes n'ont rien vu) mais le Deployment en cours **n'est pas** mis à jour par cela (6 minutes après : toujours l'ancien tag). `talosctl upgrade-k8s --dry-run` avec `coreDNS.disabled = true` liste Service, PDB, ConfigMap et RBAC `unchanged` et le Deployment `configured` avec un diff d'une ligne (l'image) : le nouveau tag est déployé par le prochain `upgrade-k8s`, qui ne recrée pas un CoreDNS de Talos et n'ignore pas le nôtre. À la main avant cela : `kubectl -n kube-system set image deployment/coredns coredns=registry.k8s.io/coredns/coredns:<tag>`. `tofu plan` après tous les exercices : aucun changement.
 
+## Mesuré au labo 23 (Scaleway, 3 plans de contrôle + 5 workers POP2-4C-16G, 2026-10-22) : réplication synchrone, preuve de zéro perte
+
+Têtes : infra 100c862 plus les correctifs du labo, apps 11c1096 plus les siens. Échelon : **observé sur un cluster**, Scaleway (cluster) et OVH (magasin de réplique et puits d'audit, seaux uniquement). Pas une revendication de conformité. Le tableau complet et la méthode sont dans OpenAether-apps `docs/resilience.md` (« Zero-loss proof »).
+
+| Panne (deux écrivains sur `zitadel-db` et un Cluster du profil `ha`, plus un par le pooler ; identifiants acquittés après le COMMIT) | identifiants acquittés manquants | plus long trou d'écriture |
+|---|---|---|
+| suppression forcée des deux pods primaires | **0** sur 9519 / 7679 / 7624 | 32-36 s |
+| extinction fournisseur du worker des primaires, 300 s | **0** sur 19048 / 15936 / 16482 | 40-60 s |
+| `talosctl reboot --mode force` de ce worker | **0** sur 13724 / 10912 / 10851 | 61-63 s |
+| extinction de la zone qui porte les deux primaires, 300 s (deux fois) | **0** (19698 / 15087 / 9825, puis 21773 / 15262 / 15388) | 112-120 s puis 50-80 s en direct ; **314,5 s une fois par le pooler PgBouncer** |
+| les deux réplicas arrêtés 122 s, 330 s, 480 s | **0** | écrivains bloqués pendant toute la panne (aucun acquittement) ; `CnpgSyncReplicaMissing` en alerte à +274 s sur 480 s |
+| un primaire et un réplica perdus ensemble, 300 s | **0** sur 18675 / 14126 / 14600 | pas de promotion (FailoverQuorum) : 353-375 s, jusqu'au retour des nœuds |
+
+Témoin, réplication asynchrone : 0 manquant après une mort de pod (même sous un pgbench à 32 clients) et après un redémarrage forcé ; **817 sur 15916 et 1409 sur 16432 identifiants acquittés PERDUS** quand les deux réplicas étaient arrêtés puis que le nœud du primaire a été éteint, c'est la double panne que le réglage synchrone bloque. La réplication synchrone a coûté environ 25 % du débit d'écriture et 2,2 ms par validation entre zones (OpenAether-apps `docs/database-profiles.md`).
+
+Ce que cela veut dire pour ce dépôt : la barre de 75 s pour une perte de nœud est tenue (40-63 s), celle de 30 s pour une perte de zone ne l'est pas (50-120 s, infra #390 reste), et une extinction de zone avec le chemin par le pooler a pris une fois 314,5 s (non expliqué, signalé). Les résultats du puits (infra #318) du même labo sont dans `docs/audit-sink.fr.md`, section 10.
+
 ## PAS VÉRIFIÉ
 
 Vérifié au labo 21 (Scaleway) : deux opérateurs CNPG dont un tient le bail, l'élection de leader du contrôleur ESO, deux contrôleurs d'admission Kyverno, `kube_node_role`, l'étiquette de zone de

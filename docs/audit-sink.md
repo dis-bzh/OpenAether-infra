@@ -2,8 +2,9 @@
 
 🇫🇷 [Version française](audit-sink.fr.md)
 
-> Design for infra #318. **Status: designed and tested offline (mocked/static). No cloud, no cluster, no provider has run it.**
-> The lab pass criteria are in section 9. It claims no compliance with any ANSSI document.
+> Design for infra #318. **Status: designed, tested offline, and run once on a real cluster (lab 23: a Scaleway cluster of 3 control planes and
+> 5 workers, the sink on OVH, GOVERNANCE lock): the results, including what failed, are in section 10.** Only that pairing, one day of one
+> lab, one lock mode. The lab pass criteria are in section 9. It claims no compliance with any ANSSI document.
 
 ## 1. Why, and the class of the data
 
@@ -91,7 +92,11 @@ audit-sink-check (Deployment) lists the prefix every 5 minutes --> oa_audit_sink
   dedicated pair the seed falls back to the operator's keys and says so loudly.
 - **OVH has no bucket policy through its S3 API**: the key pair of an OVH user cannot be limited to one bucket, so on an OVH sink
   the "dedicated" pair still reaches the other buckets of that OVH project. Isolate it by giving the sink its own OVH project/user,
-  and read the rights in the OVH API (not verified). The recipe prints this.
+  and read the rights in the OVH API (not verified). The recipe prints this. **Measured in lab 23 (OVH, a second EC2 credential of the
+  same user as the sink pair): it lists and reads every bucket of the project, `delete-object` without a version id is ACCEPTED (it writes a
+  delete marker: the version stays, the repository looks emptied to a reader that does not list versions) and `put-object-lock-configuration`
+  is ACCEPTED (the bucket's default retention was changed by the pair).** What it cannot do: delete or shorten a locked version, or change
+  the versioning of a locked bucket (the store refuses).
 
 ## 5. Failure behaviour
 
@@ -100,7 +105,7 @@ audit-sink-check (Deployment) lists the prefix every 5 minutes --> oa_audit_sink
 - **Sink unreachable.** The shipper retries on each interval, keeps nothing extra on disk (its restic cache is an `emptyDir` capped at
   256 MiB), and keeps reading from the offset it has acknowledged. **The buffer is the apiserver's own rotated files on the node**,
   bounded by the apiserver's rotation settings, not by us. While the sink is down the lag grows.
-- **Alerts** (apps `vmrule-audit-sink.yaml`): `AuditSinkDown` (the check cannot list the sink for 10 minutes), `AuditSinkStale`
+- **Alerts** (apps `vmrule-audit-sink.yaml`): `AuditSinkDown` (the check, which lists every 5 minutes, failed twice in a row: 10-12 minutes after the cut; it was 10 minutes of failures and fired after 16 min 41 s in lab 23), `AuditSinkStale`
   (a node's newest object is older than 20 minutes), `AuditSinkShipperUnavailable` (a control plane has no running shipper),
   `AuditSinkCheckAbsent`. A cluster whose control planes are all down cannot alert: only the heartbeat covers that.
 - **Nothing lost after recovery** holds as long as the outage is shorter than the rotation window of the apiserver file. After a
@@ -155,3 +160,27 @@ reads back the lock mode and the retention. Run it at least weekly, and after an
 7. **Rotation window**: read the apiserver's audit flags on a Talos control plane and record the maximum outage the node can absorb.
 8. **Network**: a connection from the shipper to any other host than the sink is dropped; the policy denies a different bucket host.
 9. **Both**: with `both`, stop one sink only: its alert fires, the other keeps receiving.
+
+## 10. Measured in lab 23 (Scaleway cluster, OVH sink, 2026-10-22)
+
+One cluster, one day, `other_provider`, GOVERNANCE 1 day, a dedicated OVH credential for the pair, the repository password escrowed with
+two throwaway OpenPGP keys and read back from the escrow (not from OpenBao).
+
+| criterion | result | numbers |
+|---|---|---|
+| 1 delivery within 10 minutes | pass | component applied 11:50, first snapshot 11:51:57, `oa_audit_sink_ok` 1 and age under 600 s on the 3 nodes at 11:57 |
+| 2 no gap over a window of at least 2 hours, across a rotation and a restart | pass | `audit-sink-check.sh --days 1` over 2 h 29 min: 5040 chunks, no gap, 0 missing range; 7 rotations of the 100 MB file, 3 shipper restarts, a 40 minute sink outage, node and zone losses in the window |
+| 3 lock read back | pass | versioning enabled, GOVERNANCE, 1 day, as the tfvars |
+| 4 rights of the sink pair | partial | upload works; delete of a version refused (by the lock); `put-bucket-versioning` refused (by the lock, not by the pair); plain delete and lock configuration ACCEPTED on OVH (section 4) |
+| 5 decrypt with the escrowed password alone | pass | the three newest chunks of each node restored, every line a JSON audit event |
+| 6 outage drill, 40 minutes | partial | `kubectl` answered in 0.17-0.33 s throughout; shipper work dir 19-32 MB of 384 Mi; `AuditSinkStale` firing 22 min after the cut (limit 25); `AuditSinkDown` firing after **16 min 41 s: not within 15** (check interval 5 + `for` 10 + evaluation): the rule is now `for: 5m`; the backlog (about 190 MB per node, two rotations) was shipped in 4-8 minutes and the script reports no gap |
+| 7 rotation window | recorded | `--audit-log-maxsize=100 --audit-log-maxbackup=10 --audit-log-maxage=30` (Talos): a rotation every 20-33 minutes on a busy lab (3-5 MB/min), so a node absorbs about 1 GB, 3.5 to 5 hours at that rate, before the oldest file is deleted unshipped |
+| 8 network | pass | from the shipper, another provider's S3 host, an unrelated host and the sink's redirect target all time out |
+| 9 both | not observed | |
+
+**Defect found by the lab, fixed in OpenAether-apps:** the shipper chased the growing audit file (each put takes a moment, the file has
+grown by then), so its 300 s cycle never ended: a snapshot every one to two seconds (about 1000 per node in 45 minutes), and its liveness
+probe (no completed cycle in 45 minutes) killed it. A cycle now ships what the file held when it began.
+
+Not proven: `same_provider_other_region` and `both`; COMPLIANCE on the sink; a sink on Outscale; the apiserver rotation window on an idle
+cluster; node and flow logs (section 8).

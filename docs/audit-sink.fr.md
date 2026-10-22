@@ -2,8 +2,10 @@
 
 🇬🇧 [English version](audit-sink.md)
 
-> Conception pour infra #318. **Statut : conçu et testé hors ligne (mocked/static). Aucun cloud, aucun cluster, aucun fournisseur ne l'a exécuté.**
-> Les critères de réussite du laboratoire sont à la section 9. Aucune conformité à un document de l'ANSSI n'est revendiquée.
+> Conception pour infra #318. **Statut : conçu, testé hors ligne, et exécuté une fois sur un vrai cluster (laboratoire 23 : cluster Scaleway de 3 plans de
+> contrôle et 5 workers, puits chez OVH, verrou GOVERNANCE) : les résultats, y compris ce qui a échoué, sont à la section 10.** Ce seul couple, une
+> journée d'un laboratoire, un seul mode de verrou. Les critères de réussite du laboratoire sont à la section 9. Aucune conformité à un document de
+> l'ANSSI n'est revendiquée.
 
 ## 1. Pourquoi, et la classe des données
 
@@ -102,7 +104,7 @@ audit-sink-check (Deployment) liste le préfixe toutes les 5 minutes --> oa_audi
 - **Puits injoignable.** L'expéditeur réessaie à chaque intervalle, ne garde rien de plus sur disque (son cache restic est un `emptyDir`
   plafonné à 256 MiB) et continue de lire depuis le décalage acquitté. **Le tampon, ce sont les fichiers tournés de l'apiserver sur le
   nœud**, bornés par sa rotation, pas par nous. Tant que le puits est en panne, le retard croît.
-- **Alertes** (apps `vmrule-audit-sink.yaml`) : `AuditSinkDown` (la vérification ne peut pas lister le puits pendant 10 minutes),
+- **Alertes** (apps `vmrule-audit-sink.yaml`) : `AuditSinkDown` (la vérification, qui liste toutes les 5 minutes, échoue deux fois de suite : 10 à 12 minutes après la coupure ; c'étaient 10 minutes d'échecs et elle a sonné au bout de 16 min 41 s au laboratoire 23),
   `AuditSinkStale` (l'objet le plus récent d'un nœud a plus de 20 minutes), `AuditSinkShipperUnavailable` (un control plane n'a pas
   d'expéditeur actif), `AuditSinkCheckAbsent`. Un cluster dont tous les control planes sont à l'arrêt ne peut pas alerter : seul le
   heartbeat le couvre.
@@ -162,3 +164,32 @@ analyse un échantillon, et relit le mode de verrou et la rétention. À lancer 
 7. **Fenêtre de rotation** : lire les options d'audit de l'apiserver sur un control plane Talos et noter la panne maximale que le nœud absorbe.
 8. **Réseau** : une connexion de l'expéditeur vers tout autre hôte que le puits est refusée ; la politique refuse un autre hôte de bucket.
 9. **Both** : avec `both`, arrêter un seul puits : son alerte sonne, l'autre continue de recevoir.
+
+## 10. Mesuré au laboratoire 23 (cluster Scaleway, puits OVH, 2026-10-22)
+
+Un cluster, une journée, `other_provider`, GOVERNANCE 1 jour, un identifiant OVH dédié pour la paire, le mot de passe du dépôt mis en séquestre
+avec deux clés OpenPGP jetables et relu depuis le séquestre (pas depuis OpenBao).
+
+| critère | résultat | chiffres |
+|---|---|---|
+| 1 livraison en moins de 10 minutes | réussi | composant appliqué à 11:50, premier instantané à 11:51:57, `oa_audit_sink_ok` à 1 et âge sous 600 s sur les 3 nœuds à 11:57 |
+| 2 aucun trou sur une fenêtre d'au moins 2 heures, à travers une rotation et un redémarrage | réussi | `audit-sink-check.sh --days 1` sur 2 h 29 : 5040 morceaux, aucun trou, 0 plage manquante ; 7 rotations du fichier de 100 Mo, 3 redémarrages de l'expéditeur, une panne du puits de 40 minutes, des pertes de nœuds et de zone dans la fenêtre |
+| 3 verrou relu | réussi | versionnement activé, GOVERNANCE, 1 jour, comme le tfvars |
+| 4 droits de la paire du puits | partiel | le dépôt marche ; la suppression d'une version est refusée (par le verrou) ; `put-bucket-versioning` refusé (par le verrou, pas par la paire) ; la suppression simple et la configuration du verrou sont ACCEPTÉES chez OVH (section 4) |
+| 5 déchiffrement avec le seul mot de passe séquestré | réussi | les trois derniers morceaux de chaque nœud restaurés, chaque ligne est un évènement d'audit JSON |
+| 6 exercice de panne, 40 minutes | partiel | `kubectl` a répondu en 0,17-0,33 s tout du long ; répertoire de travail de l'expéditeur 19-32 Mo sur 384 Mi ; `AuditSinkStale` en alerte 22 min après la coupure (limite 25) ; `AuditSinkDown` en alerte après **16 min 41 s : pas dans les 15** (intervalle de vérification 5 + `for` 10 + évaluation) : la règle est maintenant `for: 5m` ; le retard (environ 190 Mo par nœud, deux rotations) a été expédié en 4 à 8 minutes et le script ne signale aucun trou |
+| 7 fenêtre de rotation | relevé | `--audit-log-maxsize=100 --audit-log-maxbackup=10 --audit-log-maxage=30` (Talos) : une rotation toutes les 20 à 33 minutes sur un laboratoire chargé (3 à 5 Mo/min), donc un nœud absorbe environ 1 Go, de 3,5 à 5 heures à ce rythme, avant que le plus ancien fichier soit supprimé sans avoir été expédié |
+| 8 réseau | réussi | depuis l'expéditeur, l'hôte S3 d'un autre fournisseur, un hôte quelconque et la cible de redirection du puits expirent tous |
+| 9 les deux | non observé | |
+
+**Défaut trouvé par le laboratoire, corrigé dans OpenAether-apps :** l'expéditeur poursuivait le fichier d'audit qui grandit (chaque dépôt prend un
+instant, le fichier a grandi entre-temps), si bien que son cycle de 300 s ne finissait jamais : un instantané toutes les une à deux secondes
+(environ 1000 par nœud en 45 minutes), et sa sonde de vivacité (aucun cycle terminé en 45 minutes) le tuait. Un cycle expédie maintenant ce que le
+fichier contenait à son début.
+
+**Limite mesurée chez OVH (section 4) :** la paire « dédiée » liste et lit tous les seaux du projet, sa suppression simple écrit un marqueur de
+suppression (la version reste) et elle peut modifier la rétention par défaut du seau. Elle ne peut ni supprimer ou raccourcir une version verrouillée,
+ni changer le versionnement d'un seau verrouillé.
+
+Non prouvé : `same_provider_other_region` et `both` ; COMPLIANCE sur le puits ; un puits chez Outscale ; la fenêtre de rotation d'un cluster au repos ;
+les journaux des nœuds et de flux (section 8).
