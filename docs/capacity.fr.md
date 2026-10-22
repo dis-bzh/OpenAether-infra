@@ -128,18 +128,19 @@ Les control planes ne sont pas concernés : trois dans trois zones gardent un qu
 
 Mettre `workers = 5` dans l'exemple management de Scaleway ou d'OVH (un bloc commenté de chaque `envs/management-*.tfvars.example` le dit) ; rien d'autre ne change.
 Les modules placent les workers en tourniquet sur la liste de zones (`element(zones, index)`) : cinq tombent en 2 + 2 + 1 et **n'importe quelle zone** peut être
-perdue : la perte la plus défavorable retire deux workers et en laisse trois (300 %). La charge croît d'environ un DaemonSet par worker ajouté (environ 0,3 vCPU) : cinq
-workers demandent environ 230 % d'un worker (dérivé : 224 % plus la part d'un DaemonSet ; aucune perte de zone à cinq workers n'est consignée dans ce dépôt), largement sous 300 %.
+perdue : la perte la plus défavorable retire deux workers et en laisse trois (300 %). La charge croît d'environ 0,7 vCPU par worker ajouté (DaemonSets ; le labo 21 avait dérivé 0,3) : cinq
+workers demandent 243 à 247 % d'un worker (mesuré au labo 22 avec toute la plateforme et les sondes du labo ; quatre workers : 224-228 %), largement sous 300 %.
 
 `task failure-domain-check PROVIDER=<scaleway|ovh>` (lecture seule, demande l'état déployé) donne le verdict attendu :
 
 | Workers | Zones | `If <zone> is lost` | Verdict |
 |---|---|---|---|
 | 4 (livré) | 2 + 1 + 1 | la zone à deux : `workers: 2 stay, but the workers request 224% of a node and 2 hold 200%` | sortie 1 pour cette zone ; les deux autres passent |
-| 5 | 2 + 2 + 1 | `workers: 3 of 5 stay, requests 230% fit in 300%` pour les zones à deux workers ; 4 sur 5 pour l'autre | sortie 0, toute perte est supportable |
+| 5 | 2 + 2 + 1 | `workers: 3 of 5 stay, requests 246% fit in 300%` pour les zones à deux workers ; 4 sur 5 pour l'autre | sortie 0, toute perte est supportable |
 
-Le test `scripts/dev/test-failure-domain-check.sh` exécute les deux formes contre des `tofu` et `kubectl` factices. Il prouve l'arithmétique du contrôle, pas un
-cluster : aucune perte de zone sur la forme à 5 workers n'est consignée ici. Coût : une instance de plus et 4 vCPU (et le quota correspondant) par cloud. Outscale n'est
+Le test `scripts/dev/test-failure-domain-check.sh` exécute les deux formes contre des `tofu` et `kubectl` factices. Il prouve l'arithmétique du contrôle ; la forme elle-même a été éprouvée au labo 22 (Scaleway) : chacune des deux zones à deux workers a été éteinte
+10 minutes avec son plan de contrôle, aucun pod n'est resté en attente faute de CPU (les pods en attente étaient les DaemonSets des nœuds perdus et ceux ayant un volume local sur place),
+HTTP et `/readyz` ont tenu ; un primaire de base de données dans la zone perdue coûte environ 2 minutes d'écriture (`resilience.fr.md`). Coût : une instance de plus et 4 vCPU (et le quota correspondant) par cloud. Outscale n'est
 pas couvert (ses exemples sont sous le plancher, voir plus haut).
 
 Outscale (les exemples sont inchangés et restent dans le quota de 20 vCPU) : aucune forme ne tient dans le quota par défaut de 20 vCPU et passe la porte. 3 workers de 3 vCPU échouent (ci-dessus), et 4 workers de

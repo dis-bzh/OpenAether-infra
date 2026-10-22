@@ -62,6 +62,12 @@ et **non vérifié chez aucun provider** (support et coût diffèrent ; la liste
   l'appel est refusé, signalé, et le bucket n'est ni supprimé ni remplacé (en créer un nouveau, ou se contenter de `versioned` ; changer `bucket_suffix` les renomme tous).
 - **Règle pour la rétention.** Loki supprime ses chunks à 365 jours (apps) et une suppression sous versionnement laisse un marqueur et une version pendant `backup_retention_days` de plus ; le prune restic fait de même pour les
   dépôts. Le stockage grossit d'environ le renouvellement de ce nombre de jours. Un journal ou une sauvegarde supprimés restent donc physiquement présents pendant la rétention : ça ne convient pas à une donnée qui doit disparaître sur-le-champ.
+- **`compliance` essayé sur les trois stores (labo 22, 2026-10-21, un bucket jetable chacun, un objet, rétention 1 jour, rien de réel dedans).** Scaleway, OVH et Outscale acceptent tous un bucket créé avec le verrouillage d'objet et
+  `COMPLIANCE:1` comme rétention par défaut (relue par `oa_protection_state`), marquent l'objet `COMPLIANCE` jusqu'à 24 h après l'écriture, et répondent `AccessDenied` à : la suppression de cette version, le raccourcissement de sa rétention, et le passage de son mode à GOVERNANCE
+  (Scaleway : « Access Denied because object protected by object lock. » ; OVH : « Access Denied. » ; Outscale : « Access Denied »). Outscale refuse aussi `PutBucketVersioning` sur un tel bucket
+  (`InvalidBucketState`, la configuration de verrouillage est présente) : le bucket est déjà versionné, et le script ne parle plus d'échec. Non essayé, volontairement : tout contournement. Pas encore prouvé : la
+  suppression de la version et du bucket une fois la rétention écoulée (les buckets d'essai sont purgés à la main après les 24 h, hors de la destruction du labo). `s3-isolation-check.sh` n'a pas été lancé dessus : il lui faut les noms de buckets du cluster et
+  des paires de clés dédiées (sortie 2 sinon).
 - **Une restauration depuis les versions n'est pas répétée.** Après un prune malveillant, le dépôt se récupère en restaurant les versions précédentes de ses objets, ce qui n'est pas une restauration restic et n'a pas été exécuté.
 
 - **Expiration** : les générations et snapshots sont élagués par les scripts. Après un **changement de clé**, supprimer soi-même les anciens objets

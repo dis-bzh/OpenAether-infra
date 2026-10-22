@@ -62,6 +62,12 @@ and **not verified on any provider** (support and cost differ; the lab checklist
   reported, and the bucket is neither deleted nor replaced (create a new one, or accept `versioned`; changing `bucket_suffix` renames all of them).
 - **Rule of thumb for the retention.** Loki deletes its chunks at 365 days (apps) and a delete under versioning leaves a marker and a version for `backup_retention_days` more; restic prune does the same for the
   repositories. Storage grows by about the churn of that many days. A deleted log or backup therefore stays physically present for the retention: not a fit for data that must be gone at once.
+- **`compliance` tried on the three stores (lab 22, 2026-10-21, one throwaway bucket each, one object, retention 1 day, nothing real in them).** Scaleway, OVH and Outscale all accept a bucket created with object lock and
+  `COMPLIANCE:1` as the default retention (read back by `oa_protection_state`), stamp the object with `COMPLIANCE` until 24 h after the write, and answer `AccessDenied` to: deleting that version, shortening its retention, and changing its mode
+  to GOVERNANCE (Scaleway: "Access Denied because object protected by object lock."; OVH: "Access Denied."; Outscale: "Access Denied"). Outscale also refuses `PutBucketVersioning` on such a bucket
+  (`InvalidBucketState`, the lock configuration is present): the bucket is already versioned, and the script no longer calls that a failure. Not tried, on purpose: any bypass. Not yet proven: the
+  deletion of the version and the bucket once the retention has ended (the trial buckets are purged by hand after the 24 h, outside the lab teardown). `s3-isolation-check.sh` was not run against them: it needs the cluster's bucket names and
+  dedicated key pairs (exit 2 without).
 - **A restore from versions is not rehearsed.** After a malicious prune the repository is recovered by restoring the previous versions of its objects, which is not the same as a restic restore and has not been run.
 
 - **Expiry**: generations and snapshots are pruned by the scripts. After a **key change**, delete the old objects yourself

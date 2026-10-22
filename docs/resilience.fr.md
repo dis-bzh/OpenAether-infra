@@ -195,6 +195,27 @@ condition Ready arrive 80 s après la perte ; il a deux réplicas maintenant, Op
 (fourni par Talos, les deux réplicas sur un worker après l'installation), l'attente de 5 minutes avant de basculer un primaire de base sur un nœud perdu, la capacité de la zone à deux workers (`capacity.md`).
 Chacun a un ticket ; les deux premiers ont des changements hors ligne, voir la section « DNS et délai d'éviction après le labo 21 » (non éprouvés).
 
+## Mesuré au labo 22 (Scaleway, 3 plans de contrôle + 5 workers POP2-4C-16G, zones 2 + 2 + 1, 2026-10-22, sondes à 1 Hz)
+
+Têtes : infra 4e84806 plus les correctifs ci-dessous, apps 71f2496 plus les siens. Échelon : **observé sur un cluster**, Scaleway seulement. Pas une déclaration de conformité.
+
+| Exercice | Résultat | Contre le critère |
+|---|---|---|
+| Installation neuve, 5 workers | `cluster-verify` 15/15, Flux Ready, CoreDNS 3 pods sur 3 nœuds avec un budget de 1, kube-state-metrics 2 pods, `count(kube_node_info)` = 8, label de zone sur tous les nœuds ; `failure-domain-check` sortie 0 : `3 of 5 stay, requests 246% fit in 300%` (fr-par-1, fr-par-2), `4 of 5 stay, 246% in 400%` (fr-par-3) | tenu |
+| Worker portant le primaire zitadel-db éteint 5 min (deux fois) | trou d'écriture 43,6 s (switchover, 41 s après l'appel) et 64 s (failover, `Failing over` 35 s après le passage NotReady) ; promotion 34 s et 15 s AVANT le passage Unknown (le kubelet publie NotReady à +1 s : l'extinction par le fournisseur est un arrêt propre de l'OS) ; données identiques | tenu (<= 75 s, attendu environ 60 s) |
+| Idem, redémarrage non drainé | trou 57 s, HTTP 8 échecs isolés de 1 s (total au-dessus de 5, comme aux labos 15c / 21) | trou tenu, total HTTP NON tenu |
+| Worker portant un réplica CoreDNS éteint 5 min, primaire ailleurs | plus long trou d'écriture 6 s (était 287 s) ; résolution à 1 Hz depuis un troisième nœud : 4 échecs, au plus 6 s ; un réplica de remplacement Ready 36 s après l'appel, trois réplicas tout du long | tenu |
+| Pod kube-state-metrics tué, puis éteinte du worker portant l'autre | `NodeUnreachable` part (+300 s) ; `NodeScrapeDown` +240 s ; `NodeNotReady` (`for: 5m`) seulement pending, le nœud était revenu | tenu |
+| Zone à deux workers (fr-par-1 puis fr-par-2) éteinte 10 min | aucun pod en attente faute de CPU (0 événement `Insufficient` ; les pods en attente étaient les DaemonSets des nœuds perdus et ceux dont le volume local-path s'y trouve) ; HTTP au plus 2 s / 1 s, `/readyz` 1-2 s, OpenBao 2 sur 3 puis 3 sur 3, données identiques, tous les réplicas pleins 177 s après le rallumage ; trou d'écriture BD **11 s quand le primaire était hors de la zone, 122 s quand il y était** | HTTP, `/readyz`, OpenBao, CPU tenus ; trou BD de 30 s NON tenu avec le primaire dans la zone |
+| Remplacement d'un worker mort portant un réplica CNPG, OpenBao, loki et vmselect | `cluster-replace-node` 460 s ; la liste nomme exactement les quatre volumes de l'ancien disque, ne supprime rien sans `--clean` ; **`--clean` ne faisait rien au premier essai (défaut, corrigé ci-dessous)** ; avec le correctif tous les réplicas pleins 61 s après la commande, seuls les quatre volumes ont changé | tenu après correctif |
+| Latences des alertes après l'extinction (grain d'évaluation 1 min) | `FailureDomainLost` 64 s, `NodeScrapeDown` 244 s, `ControlPlaneMemberMissing` 244 s, `NodeUnreachable` 304 s, `NodeNotReady` / `EtcdMemberDown` 364 s | |
+
+Pourquoi la perte de zone avec le primaire dedans prend 122 s : le leader du kube-controller-manager était sur le plan de contrôle perdu. Le nouveau leader a démarré ses contrôleurs de cycle de vie des nœuds et d'éviction 37 s après la perte (bail de 15 s), la tolérance de 30 s a couru ensuite, CNPG a basculé à +89 s et promu à +120 s. Avec le leader vivant, la même éviction venait à +30 s. Leviers (non appliqués, une issue les porte) : des délais `leader-elect-*` plus courts pour le controller manager via Talos (risque : bascules de leader sous latence de l'API), ou rien et une limite annoncée d'environ 2 minutes pour un primaire de base de données dans une zone perdue.
+
+Défauts trouvés et corrigés sur la branche : `scripts/ops/replaced-node-cleanup.py` affichait et lançait `kubectl delete pod NOM pvc CLAIM` (trois noms de pod : rien supprimé ; corrigé en `pod/NOM pvc/CLAIM`) et `kubectl delete pv` restait bloqué sur un volume encore lié (maintenant `--wait=false`) ; `oa_protect_bucket` déclarait « NOT fully protected » un bucket Outscale entièrement verrouillé parce que le fournisseur refuse de réactiver le versioning sur un bucket créé avec le verrouillage d'objet.
+
+CoreDNS et Talos (observé) : un `coredns_image_tag` modifié est envoyé aux nœuds par `tofu apply` (8 nœuds, sans redémarrage, les sondes n'ont rien vu) mais le Deployment en cours **n'est pas** mis à jour par cela (6 minutes après : toujours l'ancien tag). `talosctl upgrade-k8s --dry-run` avec `coreDNS.disabled = true` liste Service, PDB, ConfigMap et RBAC `unchanged` et le Deployment `configured` avec un diff d'une ligne (l'image) : le nouveau tag est déployé par le prochain `upgrade-k8s`, qui ne recrée pas un CoreDNS de Talos et n'ignore pas le nôtre. À la main avant cela : `kubectl -n kube-system set image deployment/coredns coredns=registry.k8s.io/coredns/coredns:<tag>`. `tofu plan` après tous les exercices : aucun changement.
+
 ## PAS VÉRIFIÉ
 
 Vérifié au labo 21 (Scaleway) : deux opérateurs CNPG dont un tient le bail, l'élection de leader du contrôleur ESO, deux contrôleurs d'admission Kyverno, `kube_node_role`, l'étiquette de zone de

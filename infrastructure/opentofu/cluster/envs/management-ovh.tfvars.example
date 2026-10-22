@@ -57,7 +57,7 @@ node_distribution = {
     # refuses above (workers - 1) x 100%. The full platform measured about 9 vCPU (223-228% of a worker) on Scaleway in lab 21,
     # above the 8 vCPU that 3 workers of 4 vCPU leave; with 4 it is about 75% of that limit (docs/capacity.md).
     # "5 workers zone-HA" profile (infra #389): set `workers = 5` and nothing else. Workers go round-robin over `availability_zones`, so 5 land
-    # 2 + 2 + 1 on eu-west-par-a/b/c and the loss of ANY ONE zone leaves 3 workers (300%) for about 230% requested. With 4 (this example)
+    # 2 + 2 + 1 on eu-west-par-a/b/c and the loss of ANY ONE zone leaves 3 workers (300%) for about 245% requested (measured on Scaleway, lab 22). With 4 (this example)
     # the zone holding two workers cannot be lost: 2 stay (200%) for 224%. `task failure-domain-check PROVIDER=ovh` says which
     # (script test: scripts/dev/test-failure-domain-check.sh). Costs one more instance; check your quota first (docs/capacity.md).
     region             = "EU-WEST-PAR"

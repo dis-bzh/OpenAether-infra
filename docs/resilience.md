@@ -195,6 +195,27 @@ the Ready condition arrives 80 s after the loss; it has two replicas now, OpenAe
 CoreDNS (Talos-owned, both replicas on one worker after the install), the 5 minute wait before a database primary on a lost node is failed over, the capacity of the two-worker zone
 (`capacity.md`). Each has an issue; the first two have offline changes, see the section "DNS and the eviction delay after lab 21" (not drilled).
 
+## Measured in lab 22 (Scaleway, 3 control planes + 5 workers POP2-4C-16G, zones 2 + 2 + 1, 2026-10-22, probes at 1 Hz)
+
+Heads: infra 4e84806 plus the fixes listed below, apps 71f2496 plus its fixes. Rung: **observed on a cluster**, Scaleway only. Not a compliance claim.
+
+| Drill | Result | Against the pass criterion |
+|---|---|---|
+| Fresh install, 5 workers | `cluster-verify` 15/15, Flux Ready, CoreDNS 3 pods on 3 nodes with a budget of 1, kube-state-metrics 2 pods, `count(kube_node_info)` = 8, zone label on all nodes; `failure-domain-check` exit 0: `3 of 5 stay, requests 246% fit in 300%` (fr-par-1, fr-par-2), `4 of 5 stay, 246% in 400%` (fr-par-3) | met |
+| Worker holding the zitadel-db primary powered off 5 min (twice) | write gap 43.6 s (switchover, 41 s after the call) and 64 s (failover, `Failing over` 35 s after the node turned NotReady); promotion 34 s and 15 s BEFORE the node turned Unknown (the kubelet posts NotReady at +1 s: the provider power-off is a clean OS shutdown); data identical | met (<= 75 s, expected about 60 s) |
+| Same, undrained reboot | gap 57 s, HTTP 8 failed samples in isolated 1 s runs (total above 5, as in lab 15c / 21) | gap met, HTTP total NOT met |
+| Worker holding a CoreDNS replica powered off 5 min, DB primary elsewhere | longest write gap 6 s (was 287 s); 1 Hz lookup from a third node: 4 failed samples, longest 6 s; a replacement replica Ready 36 s after the call, three replicas throughout | met |
+| kube-state-metrics pod killed, then the worker with the other one powered off | `NodeUnreachable` fires (+300 s); `NodeScrapeDown` +240 s; `NodeNotReady` (`for: 5m`) only pending, the node was back | met |
+| Zone with two workers (fr-par-1, then fr-par-2) powered off 10 min | no pod pending for lack of CPU (0 `Insufficient` events; the pending pods were DaemonSet pods of the lost nodes and pods whose local-path volume lives there); HTTP longest 2 s / 1 s, `/readyz` 1-2 s, OpenBao 2 of 3 then 3 of 3, data identical, every replica full 177 s after the power-on; DB write gap **11 s when the primary was outside the zone, 122 s when it was inside** | HTTP, `/readyz`, OpenBao, CPU met; DB gap 30 s NOT met with the primary inside the zone |
+| Replace a dead worker holding a CNPG replica, OpenBao, loki and vmselect | `cluster-replace-node` 460 s; the listing named exactly the four volumes of the old disk, deleted nothing without `--clean`; **`--clean` did nothing on its first run (defect, fixed below)**; with the fix every replica full 61 s after the command, only the four volumes changed | met after the fix |
+| Alert latencies after the power-off (1 min evaluation grain) | `FailureDomainLost` 64 s, `NodeScrapeDown` 244 s, `ControlPlaneMemberMissing` 244 s, `NodeUnreachable` 304 s, `NodeNotReady` / `EtcdMemberDown` 364 s | |
+
+Why the zone loss with the primary inside takes 122 s: the kube-controller-manager leader sat on the lost control plane. The new leader started its node lifecycle and taint-eviction controllers 37 s after the loss (lease 15 s), the 30 s toleration ran after that, CNPG failed over at +89 s and promoted at +120 s. With the leader alive the same eviction came at +30 s. Levers (not applied, an issue holds them): shorter `leader-elect-*` timings of the controller manager through Talos (risk: leader flapping under API latency), or nothing and a stated limit of about 2 minutes for a database primary in a lost zone.
+
+Defects found and fixed on the branch: `scripts/ops/replaced-node-cleanup.py` printed and ran `kubectl delete pod NAME pvc CLAIM` (three pod names: nothing deleted; fixed to `pod/NAME pvc/CLAIM`) and `kubectl delete pv` blocked on a still-bound volume (now `--wait=false`); `oa_protect_bucket` reported a fully locked Outscale bucket as "NOT fully protected" because the provider refuses to re-enable versioning on a bucket created with object lock.
+
+CoreDNS and Talos (observed): a changed `coredns_image_tag` is sent to the nodes by `tofu apply` (8 nodes, no reboot, the probes saw nothing) but the running Deployment is **not** updated by it (6 minutes after: still the old tag). `talosctl upgrade-k8s --dry-run` with `coreDNS.disabled = true` lists Service, PDB, ConfigMap and RBAC `unchanged` and the Deployment `configured` with a one-line diff (the image): the new tag is rolled out by the next `upgrade-k8s`, which neither recreates a Talos CoreDNS nor ignores ours. By hand before that: `kubectl -n kube-system set image deployment/coredns coredns=registry.k8s.io/coredns/coredns:<tag>`. `tofu plan` after all drills: no changes.
+
 ## UNVERIFIED
 
 Verified in lab 21 (Scaleway): two CNPG operators with one holding the lease, the ESO controller leader election, two Kyverno admission controllers, `kube_node_role`, the zone label of
@@ -210,5 +231,5 @@ Still UNVERIFIED:
   `LonghornVolumeDegraded` (Longhorn exports no replica count).
 - Lowering the 5 minute toleration for every pod (kube-apiserver `--default-not-ready-toleration-seconds` and `--default-unreachable-toleration-seconds`): not done, it affects eviction for every pod.
   Only the two CNPG Clusters and CoreDNS carry a 30 s toleration (see the section on DNS above); `kube-controller-manager`'s `node-monitor-grace-period` is untouched.
-- The offline changes after lab 21 (CoreDNS inline manifest, the 30 s CNPG toleration, the replaced-node cleanup, kube-state-metrics at two replicas, the zone preference): nothing ran on a cluster.
+- The offline changes after lab 21 ran on a cluster in lab 22 (section above), except: a crash with no NotReady signal from the kubelet (both provider actions shut the OS down cleanly, so the Unknown-driven path, about +76 s plus 30 s, was not observed); the database gap of a zone loss with the primary inside (122 s, above the 30 s target); OVH and Outscale.
 - Everything on OVH and Outscale: nothing here ran there.

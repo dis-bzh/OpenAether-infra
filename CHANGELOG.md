@@ -54,6 +54,13 @@ fake provider API, mocked OpenTofu tests); **UNVERIFIED on a cluster**; the dril
   `control-plane-zones.tftest.hcl` (workers), `node-zones.tftest.hcl`. That a Talos node accepts the label is UNVERIFIED.
 - **Docs**: new `docs/resilience.md` and `resilience.fr.md`; `upgrade.md` ("A node that is already dead"), `network.md` section 9, `capacity.md` (about 345 m of CPU requests added by the HA work, derived, about 0.45 vCPU of margin left on the shipped 3 x 4 vCPU example), EN and FR.
 
+### Observed and fixed (lab 22, Scaleway, 3 control planes + 5 workers, rung: observed on a cluster)
+
+- The offline changes of the lab 21 follow-up below ran on a cluster: CoreDNS on three nodes (write gap 6 s when a replica's worker is lost, was 287 s), the 30 s toleration (database write gap 44-64 s for a primary on a powered-off worker), kube-state-metrics at two replicas (`NodeUnreachable` fires with one pod killed and the other lost), the 5-worker zone-HA profile (`failure-domain-check` green at 246%; each two-worker zone powered off 10 minutes, nothing Pending for lack of CPU), the replaced-node cleanup. Numbers and what stays open (a database primary inside a lost zone: 122 s) in `docs/resilience.md`, "Measured in lab 22".
+- **`replaced-node-cleanup.py --clean` deleted nothing**: it ran `kubectl delete pod NAME pvc CLAIM` (three pod names) and then blocked on `kubectl delete pv`. Now `pod/NAME pvc/CLAIM` and `--wait=false`; the offline test pinned the broken string with a fake kubectl and now fails on any untyped `pvc` argument. Observed: every replica full 61 s after the command.
+- `oa_protect_bucket` no longer reports a fully locked bucket as "NOT fully protected" when the store refuses to re-enable versioning on a bucket created with object lock (Outscale: `InvalidBucketState`), as long as the read-back confirms versioning. COMPLIANCE object lock itself was tried on a throwaway bucket per provider (see `docs/backup-policy.md`).
+- Capacity numbers of the 5-worker profile measured (243-247%, not the derived 230%), `docs/capacity.md` EN and FR; example comments say 245%.
+
 ### Fixed (lab 21 follow-up, offline: infra #388, apps #154; to be proven by the next lab)
 
 Rung: **mocked/static** (`tofu test`, a rendered-manifest test, a fake `kubectl`). Not a compliance claim; the lab pass criteria are in `docs/resilience.md`.

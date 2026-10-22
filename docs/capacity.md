@@ -127,18 +127,19 @@ Control planes are not affected: three of them in three zones keep an etcd quoru
 
 Set `workers = 5` in the management example of Scaleway or OVH (a commented block in each `envs/management-*.tfvars.example` says so); nothing else changes.
 The modules place workers round-robin over the zone list (`element(zones, index)`), so five land 2 + 2 + 1 and **any one zone** can be lost: the least
-favourable loss removes two workers and leaves three (300%). The load grows by about one DaemonSet's worth per added worker (about 0.3 vCPU), so
-five workers request about 230% of a worker (derived: 224% plus one DaemonSet's share; no zone loss on five workers is recorded in this repository), well inside 300%.
+favourable loss removes two workers and leaves three (300%). The load grows by about 0.7 vCPU per added worker (DaemonSets; lab 21 had derived 0.3), so
+five workers request 243-247% of a worker (measured in lab 22 with the full platform and the lab's probes; four workers: 224-228%), well inside 300%.
 
 `task failure-domain-check PROVIDER=<scaleway|ovh>` (read-only, needs the deployed state) is the expected verdict:
 
 | Workers | Zones | `If <zone> is lost` | Verdict |
 |---|---|---|---|
 | 4 (shipped) | 2 + 1 + 1 | the zone with two: `workers: 2 stay, but the workers request 224% of a node and 2 hold 200%` | exit 1 for that zone; the other two zones pass |
-| 5 | 2 + 2 + 1 | `workers: 3 of 5 stay, requests 230% fit in 300%` for the two-worker zones; 4 of 5 for the other | exit 0, every loss survivable |
+| 5 | 2 + 2 + 1 | `workers: 3 of 5 stay, requests 246% fit in 300%` for the two-worker zones; 4 of 5 for the other | exit 0, every loss survivable |
 
-The script test `scripts/dev/test-failure-domain-check.sh` runs both shapes against stub `tofu` and `kubectl`. That proves the arithmetic of the check, not a
-cluster: no zone loss on the 5-worker shape is recorded here. Cost: one more instance and 4 vCPU (and the matching quota) per cloud. Outscale is
+The script test `scripts/dev/test-failure-domain-check.sh` runs both shapes against stub `tofu` and `kubectl`. That proves the arithmetic of the check; the shape itself was drilled in lab 22 (Scaleway): each of the two zones holding two workers was powered off
+for 10 minutes with the control plane in it, no pod stayed Pending for lack of CPU (the Pending ones were DaemonSets of the lost nodes and pods with a local volume there),
+HTTP and `/readyz` held; a database primary inside the lost zone costs about 2 minutes of writes (`resilience.md`). Cost: one more instance and 4 vCPU (and the matching quota) per cloud. Outscale is
 not covered (its examples are below the floor, see above).
 
 Outscale (the examples are unchanged and stay within the 20 vCPU quota): no shape fits the default 20 vCPU quota and passes the gate. 3 workers of 3 vCPU fail (above), and 4 workers of 3 vCPU need
