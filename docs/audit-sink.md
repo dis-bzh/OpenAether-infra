@@ -96,7 +96,7 @@ audit-sink-check (Deployment) lists the prefix every 5 minutes --> oa_audit_sink
   same user as the sink pair): it lists and reads every bucket of the project, `delete-object` without a version id is ACCEPTED (it writes a
   delete marker: the version stays, the repository looks emptied to a reader that does not list versions) and `put-object-lock-configuration`
   is ACCEPTED (the bucket's default retention was changed by the pair).** What it cannot do: delete or shorten a locked version, or change
-  the versioning of a locked bucket (the store refuses).
+  the versioning of a locked bucket (the store refuses). Filed as infra #393.
 
 ## 5. Failure behaviour
 

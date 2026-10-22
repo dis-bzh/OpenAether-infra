@@ -235,7 +235,7 @@ Têtes : infra 100c862 plus les correctifs du labo, apps 11c1096 plus les siens.
 
 Témoin, réplication asynchrone : 0 manquant après une mort de pod (même sous un pgbench à 32 clients) et après un redémarrage forcé ; **817 sur 15916 et 1409 sur 16432 identifiants acquittés PERDUS** quand les deux réplicas étaient arrêtés puis que le nœud du primaire a été éteint, c'est la double panne que le réglage synchrone bloque. La réplication synchrone a coûté environ 25 % du débit d'écriture et 2,2 ms par validation entre zones (OpenAether-apps `docs/database-profiles.md`).
 
-Ce que cela veut dire pour ce dépôt : la barre de 75 s pour une perte de nœud est tenue (40-63 s), celle de 30 s pour une perte de zone ne l'est pas (50-120 s, infra #390 reste), et une extinction de zone avec le chemin par le pooler a pris une fois 314,5 s (non expliqué, signalé). Les résultats du puits (infra #318) du même labo sont dans `docs/audit-sink.fr.md`, section 10.
+Ce que cela veut dire pour ce dépôt : la barre de 75 s pour une perte de nœud est tenue (40-63 s), celle de 30 s pour une perte de zone ne l'est pas (50-120 s, infra #390 reste), et une extinction de zone avec le chemin par le pooler a pris une fois 314,5 s (non expliqué : OpenAether-apps #158). Les résultats du puits (infra #318) du même labo sont dans `docs/audit-sink.fr.md`, section 10.
 
 ## PAS VÉRIFIÉ
 

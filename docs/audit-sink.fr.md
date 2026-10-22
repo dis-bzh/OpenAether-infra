@@ -187,7 +187,7 @@ instant, le fichier a grandi entre-temps), si bien que son cycle de 300 s ne fin
 (environ 1000 par nœud en 45 minutes), et sa sonde de vivacité (aucun cycle terminé en 45 minutes) le tuait. Un cycle expédie maintenant ce que le
 fichier contenait à son début.
 
-**Limite mesurée chez OVH (section 4) :** la paire « dédiée » liste et lit tous les seaux du projet, sa suppression simple écrit un marqueur de
+**Limite mesurée chez OVH (section 4, infra #393) :** la paire « dédiée » liste et lit tous les seaux du projet, sa suppression simple écrit un marqueur de
 suppression (la version reste) et elle peut modifier la rétention par défaut du seau. Elle ne peut ni supprimer ou raccourcir une version verrouillée,
 ni changer le versionnement d'un seau verrouillé.
 

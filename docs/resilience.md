@@ -235,7 +235,7 @@ Heads: infra 100c862 plus the fixes of the lab, apps 11c1096 plus its fixes. Run
 
 Control, asynchronous replication: 0 missing after a pod kill (also under a 32-client pgbench) and after a forced reboot; **817 of 15916 and 1409 of 16432 acknowledged ids LOST** when both replicas were down and the primary's node was then powered off, which is the double fault the synchronous setting blocks. Synchronous replication cost about 25% of the write throughput and 2.2 ms per commit across zones (OpenAether-apps `docs/database-profiles.md`).
 
-What it means for this repository: the 75 s node-loss bar was met (40-63 s), the zone-loss bar of 30 s was not (50-120 s, infra #390 stays), and a zone power-off with the pooler path once took 314.5 s (not explained, filed). The sink (infra #318) results of the same lab are in `docs/audit-sink.md`, section 10.
+What it means for this repository: the 75 s node-loss bar was met (40-63 s), the zone-loss bar of 30 s was not (50-120 s, infra #390 stays), and a zone power-off with the pooler path once took 314.5 s (not explained: OpenAether-apps #158). The sink (infra #318) results of the same lab are in `docs/audit-sink.md`, section 10.
 
 ## UNVERIFIED
 
