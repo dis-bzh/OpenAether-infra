@@ -329,6 +329,7 @@ task security            # contrôles de durcissement
 | [docs/key-management.fr.md](docs/key-management.fr.md) | Chaque clé : période, impact si perdue ou fuitée, remplacement, effacement, écarts consignés (TLS-12, TLS-19) |
 | [docs/incident-response.fr.md](docs/incident-response.fr.md) | Compromission suspectée, dans l'ordre : preuves, sauvegardes, confinement, tableau de rotation, point de restauration, registre |
 | [docs/backup-policy.fr.md](docs/backup-policy.fr.md) | Par jeu de données : mécanisme, objectif RPO/RTO, rétention, destination, détenteur de clé, test de restauration, destruction ; ce qui n'est pas sauvegardé |
+| [docs/audit-sink.fr.md](docs/audit-sink.fr.md) | La seconde copie, hors du cluster, verrouillée et chiffrée, du journal d'audit (classe A) : choix de placement et garanties, chemin des données, clés, comportement en panne, limites, critères de réussite du lab |
 | [docs/disaster-recovery.fr.md](docs/disaster-recovery.fr.md) | La chaîne de reprise ordonnée (OpenBao avant la base de Zitadel), prérequis, objectifs de temps, l'exercice annuel |
 | [docs/security-architecture.fr.md](docs/security-architecture.fr.md) | Actifs, chemins d'administration et authentification de chacun, comptes privilégiés, écarts acceptés |
 | [docs/network.fr.md](docs/network.fr.md) | Zones de confiance, plan d'adressage, les deux couches d'application, la matrice de flux (générée depuis le Terraform), lacunes connues |

@@ -23,7 +23,7 @@ cd "$ROOT" || exit 1
 EXEMPT=" docs/release-checklist.md docs/status.md "
 
 # The pairs written together, where a missing section is a defect and not a backlog.
-STRICT=" key-management incident-response backup-policy disaster-recovery security-architecture network hardening threat-model component-selection audit-register "
+STRICT=" key-management incident-response backup-policy disaster-recovery security-architecture network hardening threat-model component-selection audit-register audit-sink "
 
 BAD=0
 fail() { echo "✗ $*"; BAD=$((BAD + 1)); }
