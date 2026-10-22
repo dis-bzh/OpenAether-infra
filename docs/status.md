@@ -7,7 +7,7 @@ to pick up.
 Open work is **not** here — it is in the GitHub issues, each naming what closes it
 and the rung it needs. This file answers "what is true today", not "what is left".
 
-**The current release is 0.3.1, a patch of 0.3.0 (hotfix, no new scope; pairs with OpenAether-apps 0.3.1): see `[0.3.1]` in `CHANGELOG.md` for what the lab observed and did not. Nothing else in this file changes with it.**
+**The current release is 0.3.2, a security patch of 0.3.1 (no new scope; pairs with OpenAether-apps 0.3.2): see `[0.3.2]` in `CHANGELOG.md` for what was and was not run. Nothing else in this file changes with it.**
 
 **0.3.0 (released 2026-10-19) is described by its `[0.3.0]` section of `CHANGELOG.md`: hardening options (all off by default), a 50 GB default system disk, and labs 11 to 15c on Scaleway, OVH and Outscale (2026-10-16 to 2026-10-18), each once. The table below is the older 0.2.0 measurement and is not re-measured by those labs.**
 
