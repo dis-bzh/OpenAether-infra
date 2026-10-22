@@ -147,3 +147,15 @@ s3_replica_region   = "fr-par"                       # prod: e.g. gra
 # 50 GB per node by default (scw_root_volume_size_gb): the application stack puts ~11 GB of images on a node and Talos
 # keeps them on the system volume, ~4 GB under its size. With deploy_flux the value must be at least 40 (validated).
 # scw_root_volume_size_gb = 50
+
+# Audit sink (infra #318, docs/audit-sink.md): a second copy of the Kubernetes audit log OUTSIDE the cluster, object lock, client-side
+# encryption. Off by default. Also needs the apps component audit-log-sink and a dedicated key pair
+# (scripts/ops/backup-key-recipe.sh <this file> audit-sink; OA_AUDIT_SINK_S3_ACCESS_KEY_ID / OA_AUDIT_SINK_S3_SECRET_ACCESS_KEY at seed time).
+# audit_sink_placement          = "other_provider"   # other_provider | same_provider_other_region | both
+# audit_sink_endpoint           = "https://s3.gra.io.cloud.ovh.net"   # a Scaleway cluster: the sink on OVH
+# audit_sink_region             = "gra"
+# audit_sink_secondary_endpoint = ""                 # only with "both": the cluster's own provider, another region
+# audit_sink_secondary_region   = ""
+# audit_sink_prefix             = "audit"
+# audit_sink_lock_mode          = "governance"       # compliance needs audit_sink_compliance_ack = true (irreversible until the retention ends)
+# audit_sink_retention_days     = 365

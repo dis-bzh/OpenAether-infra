@@ -72,6 +72,105 @@ variable "backup_retention_days" {
   }
 }
 
+# ==============================================================================
+# Audit sink (infra #318): a second copy of the audit logs OUTSIDE the cluster. docs/audit-sink.md.
+# Read from the tfvars by scripts/lib/audit-sink.sh (the buckets exist before OpenTofu runs); the only things OpenTofu does
+# with them are the checks and the two non-secret values it publishes in the cluster-identity ConfigMap (the egress policy
+# needs the sink's host name, and a policy cannot read a Secret). Off by default: nothing changes for a deployed cluster.
+# ==============================================================================
+
+variable "audit_sink_placement" {
+  description = <<-EOT
+    Where the second copy of the Kubernetes audit log lives (class A, zero loss; docs/audit-sink.md):
+
+      off                          (default) no sink; nothing in the cluster or the apps changes.
+      other_provider               another cloud than the cluster's (proposed default when the sink is on): survives an
+                                   account-level event on the cluster's cloud.
+      same_provider_other_region   the cluster's own provider in another region: cheaper, one account, but an account-level
+                                   event reaches both copies unless audit_sink_lock_mode = "compliance".
+      both                         audit_sink_endpoint = another provider AND audit_sink_secondary_endpoint = the cluster's
+                                   provider in another region.
+  EOT
+  type        = string
+  default     = "off"
+  validation {
+    condition     = contains(["off", "other_provider", "same_provider_other_region", "both"], var.audit_sink_placement)
+    error_message = "audit_sink_placement must be off, other_provider, same_provider_other_region or both."
+  }
+  validation {
+    condition     = var.audit_sink_placement == "off" || (var.audit_sink_endpoint != "" && var.audit_sink_region != "")
+    error_message = "audit_sink_placement is on: audit_sink_endpoint and audit_sink_region are required."
+  }
+  validation {
+    condition     = var.audit_sink_placement != "both" || (var.audit_sink_secondary_endpoint != "" && var.audit_sink_secondary_region != "")
+    error_message = "audit_sink_placement = both: audit_sink_secondary_endpoint and audit_sink_secondary_region are required."
+  }
+}
+
+variable "audit_sink_endpoint" {
+  description = "S3 endpoint of the first audit sink (https://...). other_provider and both: another provider than the cluster's; same_provider_other_region: the cluster's provider. Whether it is on the right cloud is checked by scripts/lib/audit-sink.sh and a check block, not here (a plan and a destroy must keep working)."
+  type        = string
+  default     = ""
+}
+
+variable "audit_sink_region" {
+  description = "S3 region of the first audit sink (for same_provider_other_region it must differ from s3_primary_region)."
+  type        = string
+  default     = ""
+}
+
+variable "audit_sink_secondary_endpoint" {
+  description = "Only with audit_sink_placement = both: S3 endpoint of the SAME-provider sink in another region."
+  type        = string
+  default     = ""
+}
+
+variable "audit_sink_secondary_region" {
+  description = "Only with audit_sink_placement = both: its region (must differ from s3_primary_region)."
+  type        = string
+  default     = ""
+}
+
+variable "audit_sink_prefix" {
+  description = "Key prefix inside the sink bucket; the shipper writes <prefix>/<node>/<UTC day>/."
+  type        = string
+  default     = "audit"
+  validation {
+    condition     = can(regex("^[a-z0-9][a-z0-9/_-]{0,62}$", var.audit_sink_prefix)) && !endswith(var.audit_sink_prefix, "/")
+    error_message = "audit_sink_prefix must be lowercase letters, digits, - _ and /, not end with /, at most 63 characters."
+  }
+}
+
+variable "audit_sink_lock_mode" {
+  description = "Object-lock mode of the sink bucket(s): governance (default; a key with the bypass right can still remove a version) or compliance (nobody can, the account owner included, until the retention ends: needs audit_sink_compliance_ack = true)."
+  type        = string
+  default     = "governance"
+  validation {
+    condition     = contains(["governance", "compliance"], var.audit_sink_lock_mode)
+    error_message = "audit_sink_lock_mode must be governance or compliance."
+  }
+  validation {
+    condition     = var.audit_sink_lock_mode != "compliance" || var.audit_sink_compliance_ack
+    error_message = "audit_sink_lock_mode = compliance cannot be undone before the retention ends, by anyone: set audit_sink_compliance_ack = true to say you mean it."
+  }
+}
+
+variable "audit_sink_retention_days" {
+  description = "Default object-lock retention of the sink, in days (also the expiry of non-current versions)."
+  type        = number
+  default     = 365
+  validation {
+    condition     = var.audit_sink_retention_days >= 1 && var.audit_sink_retention_days <= 3650 && floor(var.audit_sink_retention_days) == var.audit_sink_retention_days
+    error_message = "audit_sink_retention_days must be a whole number of days from 1 to 3650."
+  }
+}
+
+variable "audit_sink_compliance_ack" {
+  description = "Explicit opt-in for audit_sink_lock_mode = compliance: the locked objects, and the bucket, cannot be removed before audit_sink_retention_days have passed."
+  type        = bool
+  default     = false
+}
+
 variable "environment" {
   description = "Deployment environment (e.g., dev, prod)"
   type        = string

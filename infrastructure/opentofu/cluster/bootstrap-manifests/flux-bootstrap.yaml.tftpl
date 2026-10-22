@@ -48,6 +48,14 @@ data:
   # values from OpenBao (backup/s3-replica), so a cluster whose ConfigMap predates them keeps its copy.
   BACKUP_REPLICA_S3_BUCKET: ${backup_replica_s3_bucket}
   BACKUP_REPLICA_S3_ENDPOINT: ${backup_replica_s3_endpoint}
+%{ if audit_sink_host != "" ~}
+  # Audit sink (infra #318): only the host names, for the CiliumNetworkPolicy of the opt-in apps component audit-log-sink (a policy
+  # cannot read a Secret). The endpoint, bucket, keys and password are in OpenBao (audit/sink).
+  AUDIT_SINK_HOST: ${audit_sink_host}
+%{ endif ~}
+%{ if audit_sink_secondary_host != "" ~}
+  AUDIT_SINK_SECONDARY_HOST: ${audit_sink_secondary_host}
+%{ endif ~}
 %{ if length(openbao_pgp_keys) > 0 ~}
 ---
 # OpenBao PRODUCTION bootstrap: the operators' PGP PUBLIC keys. openbao-init reads this ConfigMap and encrypts one
