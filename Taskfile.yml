@@ -521,6 +521,8 @@ tasks:
       - ./scripts/dev/test-audit-sink-lib.sh
       # The sink bucket: created with object lock on the right store, read back, a refusal is a failure (class A).
       - ./scripts/dev/test-audit-sink-buckets.sh
+      # audit-sink-check.sh on real restic repositories: a hole, a recorded loss, a bad password, no lock are defects.
+      - ./scripts/dev/test-audit-sink-check.sh
       # `task state` promises it never writes a state. Real task + real tofu on
       # a local-backend fixture; the state's bytes are compared before and after.
       - ./scripts/dev/test-state-task.sh
