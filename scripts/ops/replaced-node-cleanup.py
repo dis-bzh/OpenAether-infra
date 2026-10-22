@@ -86,7 +86,7 @@ def plan(node, nodes, pvs, pvcs, pods, clusters, stss, longhorn):
             if retain and pv.get("status", {}).get("phase") in ("Released", "Available"):
                 items.append(dict(kind="orphan-pv", ns=ns or "-", pod="-", pvc=claim or "-", pv=pvn, state=pv["status"]["phase"],
                                   verdict="clean", why="a retained volume of the old disk, no claim: nothing can use it", group=None,
-                                  cmds=[["delete", "pv", pvn]]))
+                                  cmds=[["delete", "pv", pvn, "--wait=false"]]))
             continue
         users = [p for p in pods if p["metadata"]["namespace"] == ns and any(
             v.get("persistentVolumeClaim", {}).get("claimName") == claim for v in p["spec"].get("volumes", []))]
@@ -101,7 +101,7 @@ def plan(node, nodes, pvs, pvcs, pods, clusters, stss, longhorn):
                 it.update(kind="running", verdict="info", why="Ready on a re-created empty volume: nothing to do")
                 items.append(it)
                 continue
-            drop = [["-n", ns, "delete", "pod/" + name, "pvc/" + claim, "--wait=false"]] + ([["delete", "pv", pvn]] if retain else [])
+            drop = [["-n", ns, "delete", "pod/" + name, "pvc/" + claim, "--wait=false"]] + ([["delete", "pv", pvn, "--wait=false"]] if retain else [])
             labels = pod["metadata"].get("labels", {})
             cl = labels.get("cnpg.io/cluster")
             sts = owner_sts(pod)
