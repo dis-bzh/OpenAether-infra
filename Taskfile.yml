@@ -519,6 +519,8 @@ tasks:
       - ./scripts/dev/test-backup-key-recipe.sh
       # The audit sink settings (infra #318): where a sink may sit, COMPLIANCE only with the opt-in.
       - ./scripts/dev/test-audit-sink-lib.sh
+      # The sink bucket: created with object lock on the right store, read back, a refusal is a failure (class A).
+      - ./scripts/dev/test-audit-sink-buckets.sh
       # `task state` promises it never writes a state. Real task + real tofu on
       # a local-backend fixture; the state's bytes are compared before and after.
       - ./scripts/dev/test-state-task.sh
