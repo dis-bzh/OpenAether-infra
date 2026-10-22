@@ -73,6 +73,8 @@ healthy; echo "{\"items\":[$(pod db w0),$(pod db w0)]}" >"$W/db.json"; run
 { [ "$RC" = 1 ] && grep -q 'database db: no instance outside a' <<<"$OUT"; } && ok_ "a database whose instances share a domain is named" || bad "cnpg not caught: $OUT"
 healthy; echo "{\"items\":[$(rep v1 w0),$(rep v1 w0),$(rep v2 w1),$(rep v2 w2)]}" >"$W/replicas.json"; run
 { [ "$RC" = 1 ] && grep -q 'volume v1: every replica is in a' <<<"$OUT" && ! grep -q 'volume v2' <<<"$OUT"; } && ok_ "a Longhorn volume with all replicas in one domain is named, one spread is not" || bad "longhorn not caught: $OUT"
+healthy; echo '{"items":[]}' >"$W/replicas.json"; run
+{ [ "$RC" = 0 ] && grep -q 'no Longhorn volume exists' <<<"$OUT" && ! grep -q 'Longhorn replicas could not be listed' <<<"$OUT"; } && ok_ "a cluster with no Longhorn volume says so instead of UNCHECKED" || bad "empty Longhorn list: $OUT"
 healthy; echo "{\"items\":[$(vpod w0)]}" >"$W/gw.json"; run
 { [ "$RC" = 1 ] && grep -q 'gateway: every pod is in a' <<<"$OUT"; } && ok_ "a single Gateway pod is a zone SPOF" || bad "gateway not caught: $OUT"
 

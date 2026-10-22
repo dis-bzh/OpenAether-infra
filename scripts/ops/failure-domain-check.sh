@@ -128,6 +128,8 @@ while IFS= read -r Z; do
               | select(all(.[]; .zone == $z)) | .[0].v' <<<"$REPLICAS")"
     if [[ -z "$allin" ]]; then okl "volumes: every Longhorn volume keeps a replica outside ${Z}"
     else while IFS= read -r v; do badl "volume ${v}: every replica is in ${Z} - restore from backup"; done <<<"$allin"; fi
+  elif [[ -n "$REPLICAS" ]] && jq -e '.items | type == "array"' <<<"$REPLICAS" >/dev/null 2>&1; then
+    okl "volumes: no Longhorn volume exists, nothing to lose there (lab 23: this was reported as UNCHECKED)"
   else unkl "Longhorn replicas could not be listed (no Longhorn, or no access)"; fi
   # gateway
   if [[ -n "$PODS_GW" ]] && [[ "$(jq '.items | length' <<<"$PODS_GW")" -gt 0 ]]; then
