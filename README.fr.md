@@ -12,7 +12,7 @@
 Deux profils différents arrivent ici, et ils ne cherchent pas la même page.
 
 **Vous voulez un cluster.** Celui qui ne demande ni compte ni credentials est
-`task local-up`, un cluster Talos de six nœuds dans Docker ; au Talos 1.14.2 livré,
+`task local-up`, un cluster Talos de six nœuds dans Docker ; au Talos 1.14.4 livré,
 il demande un noyau d'hôte 6.15 ou plus récent (#291), et `task local-up` refuse en une seconde un hôte en dessous.
 Puis [Démarrage rapide](#démarrage-rapide) pour un cloud, ou
 [`docs/first-cluster.fr.md`](docs/first-cluster.fr.md) pour la version pas à pas,

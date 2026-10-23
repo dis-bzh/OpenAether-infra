@@ -12,7 +12,7 @@
 Two different people land here, and they want different pages.
 
 **You want a cluster.** The one that needs no account and no credentials is
-`task local-up`, a six-node Talos cluster in Docker; at the shipped Talos 1.14.2
+`task local-up`, a six-node Talos cluster in Docker; at the shipped Talos 1.14.4
 it needs a host kernel of 6.15 or newer (#291), and `task local-up` refuses a host
 below that in a second. Then
 [Quick start](#quick-start) for a cloud, or

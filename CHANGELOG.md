@@ -20,6 +20,10 @@ infra 7e367d9 / apps 75e464f, on branches) ran a nominal `cluster-up` in 9 min 0
 infra issues the series set out to look at: #42 (the API unreachable for seconds during a control-plane roll) and #375 (the OVH hard-reboot window) stay open for 0.4.0, see below.
 Not a compliance claim. The apps-side results (#134 partial, #143, #144) are in the OpenAether-apps CHANGELOG.
 
+
+### Changed (0.4.0: the default Talos pin goes from 1.14.2 to 1.14.4; rung: mocked, offline)
+- `talos_version` defaults to v1.14.4 in the cluster and local roots. 1.14.3 and 1.14.4 are patch releases (Linux 6.18.57, containerd 2.3.7, etcd 3.7.2); the only API change that could touch us is that `TimeService/TimeCheck` is no longer open to `os:reader` and PTP device paths are validated strictly: nothing in this repository calls `talosctl time --check` or sets a PTP device. **Not shown on a cluster yet:** the image build for v1.14.4 on each provider, a fresh cluster at 1.14.4, and the roll of a 1.14.2 cluster to 1.14.4 under the customer probes are checks of the final validation lab. A cluster built at 1.14.2 keeps its pin until its owner changes `talos_version`.
+
 ### Added (0.4.0, infra #318: a second sink outside the cluster for the audit log, class A, opt-in)
 
 - **Design and settings**: `docs/audit-sink.md` (+ FR): the choice `audit_sink_placement` = `off` (default) | `other_provider` (proposed) | `same_provider_other_region` | `both` with what each survives and does not, the data path, key custody, failure behaviour, honest limits and the lab pass criteria. Variables `audit_sink_*` (endpoint and region per sink, prefix, lock mode `governance` by default or `compliance` only with `audit_sink_compliance_ack = true`, retention days); a `check` block and `scripts/lib/audit-sink.sh` refuse a sink that is not where its choice says (not another provider, the same region) before any bucket exists. Only the host names reach `cluster-identity`, and only when the sink is on.
