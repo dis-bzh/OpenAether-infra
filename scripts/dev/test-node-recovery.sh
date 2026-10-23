@@ -44,6 +44,12 @@ case "$argv" in
 esac
 exit 0
 STUB
+# node-recovery.sh checks that talosctl exists (the tunnels are plain TCP listeners here, so it is never called); a stub keeps the
+# test independent of the machine: a CI runner has none.
+cat >"$W/bin/talosctl" <<'STUB'
+#!/usr/bin/env bash
+echo "talosctl $*" >>"${CALLS:-/dev/null}"
+STUB
 cat >"$W/bin/openssl" <<'STUB'
 #!/usr/bin/env bash
 port="$(sed -E 's/.*-connect [^:]*:([0-9]+).*/\1/' <<<"$*")"
