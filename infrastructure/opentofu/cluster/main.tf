@@ -558,6 +558,26 @@ locals {
   # read "openaether-dev" on all three clouds, so they distinguish nothing.
   cluster_id = "${var.cluster_name}-${var.environment}-${local.active_provider}"
 
+  # The data of the `cluster-identity` ConfigMap, names and values exactly as the bootstrap template renders them. Host names,
+  # bucket names and a URL: nothing secret. Talos creates an inline manifest's objects when they are missing and never
+  # updates one that exists (modules/talos, docs/upgrade.md), so a running cluster gets new keys only through
+  # `task cluster-identity-sync`, which reads the `cluster_identity` output.
+  cluster_identity = merge({
+    CLUSTER_NAME = local.cluster_id
+    # Longhorn wants `s3://bucket@region/` (assembled HERE: Flux substitution cannot concatenate conditionally, no `${x:+y}`).
+    BACKUP_TARGET_URL = "s3://${local.backup_data_bucket}@${var.s3_primary_region}/"
+    # CNPG (PITR) wants the bucket and the endpoint SEPARATELY.
+    BACKUP_S3_BUCKET   = local.backup_data_bucket
+    BACKUP_S3_ENDPOINT = var.s3_primary_endpoint
+    # The replica copy: the `-backup` twin of the data bucket, on the replica store (the primary one when none is set).
+    BACKUP_REPLICA_S3_BUCKET   = "${local.backup_data_bucket}-backup"
+    BACKUP_REPLICA_S3_ENDPOINT = var.s3_replica_endpoint != "" ? var.s3_replica_endpoint : var.s3_primary_endpoint
+    },
+    # Audit sink (infra #318): the host names only, for the egress policy of the opt-in component. Empty = not published.
+    local.audit_sink_host != "" ? { AUDIT_SINK_HOST = local.audit_sink_host } : {},
+    local.audit_sink_secondary_host != "" ? { AUDIT_SINK_SECONDARY_HOST = local.audit_sink_secondary_host } : {},
+  )
+
   # Emptied by the SAME switch. modules/talos:116 only tests flux_manifest, so a
   # half-empty pair would inject a manifest with no content — asymmetric and
   # untested. One variable governs both, and the template is not even rendered
@@ -574,20 +594,15 @@ locals {
     # Recovery-share holders of OpenBao (openbao-keys.tf). Empty list = the ConfigMap is not rendered.
     openbao_pgp_keys  = local.openbao_pgp_keys
     openbao_threshold = local.openbao_threshold
-    # Destination for Longhorn volume backups. The full URL is assembled HERE:
-    # on the manifest side `value:` is a plain string and Flux substitution
-    # cannot concatenate conditionally (no `${x:+y}`).
-    backup_target_url = "s3://${local.backup_data_bucket}@${var.s3_primary_region}/"
-    # CNPG (PITR) expects the bucket and the endpoint SEPARATELY, in a different
-    # format from Longhorn — hence three keys rather than one.
-    backup_s3_bucket   = local.backup_data_bucket
-    backup_s3_endpoint = var.s3_primary_endpoint
-    # The replica copy: the `-backup` twin of the data bucket, on the replica store (the primary one when none is set).
-    backup_replica_s3_bucket   = "${local.backup_data_bucket}-backup"
-    backup_replica_s3_endpoint = var.s3_replica_endpoint != "" ? var.s3_replica_endpoint : var.s3_primary_endpoint
-    # Audit sink (infra #318): the host names only, for the egress policy of the opt-in component. Empty = not rendered.
-    audit_sink_host           = local.audit_sink_host
-    audit_sink_secondary_host = local.audit_sink_secondary_host
+    # The ConfigMap's keys are built ONCE, in local.cluster_identity above, and read back here by the template and by
+    # the `cluster_identity` output (`task cluster-identity-sync` writes it to a live cluster).
+    backup_target_url          = local.cluster_identity.BACKUP_TARGET_URL
+    backup_s3_bucket           = local.cluster_identity.BACKUP_S3_BUCKET
+    backup_s3_endpoint         = local.cluster_identity.BACKUP_S3_ENDPOINT
+    backup_replica_s3_bucket   = local.cluster_identity.BACKUP_REPLICA_S3_BUCKET
+    backup_replica_s3_endpoint = local.cluster_identity.BACKUP_REPLICA_S3_ENDPOINT
+    audit_sink_host            = lookup(local.cluster_identity, "AUDIT_SINK_HOST", "")
+    audit_sink_secondary_host  = lookup(local.cluster_identity, "AUDIT_SINK_SECONDARY_HOST", "")
   })
 }
 

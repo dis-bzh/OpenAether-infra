@@ -40,6 +40,8 @@ case "\$(basename "\$0") \$*" in
   ssh-keygen*) exit 1 ;;
   infra-verify.sh*) echo "fixture verifier \$*: exit \${VERIFY_RC:?}"; exit "\$VERIFY_RC" ;;
   adopt-bootstrap.sh*) exit "\${ADOPT_RC:-0}" ;;
+  cluster-identity-sync.sh*--apply*) exit "\${APPLY_RC:-0}" ;;
+  cluster-identity-sync.sh*) exit "\${IDENTITY_RC:-0}" ;;
   talos-image.sh*--retain*) echo "fixture retention \$*"; exit "\${RETAIN_RC:-0}" ;;
 esac
 exit 0
@@ -48,7 +50,7 @@ chmod +x "$W/stub"
 for s in internal/talos-version.sh internal/ensure-buckets.sh internal/check-openbao-keys.sh internal/converge-versions.sh \
          internal/tf-backend.sh internal/bootstrap-in-state.sh internal/explain-failure.sh bootstrap/talos-image.sh \
          bootstrap/render-bootstrap-manifests.sh bootstrap/talos-tunnels.sh bootstrap/adopt-bootstrap.sh bootstrap/grow-nodes.sh internal/refuse-node-deletes.sh \
-         ops/backup-state.sh dev/infra-verify.sh; do
+         ops/backup-state.sh ops/cluster-identity-sync.sh dev/infra-verify.sh; do
   ln -s "$W/stub" "$W/scripts/$s"
 done
 ln -s "$W/stub" "$W/bin/tofu"; ln -s "$W/stub" "$W/bin/ssh-keygen"
@@ -265,6 +267,26 @@ run 0 cluster-verify PROVIDER=scaleway; rc=$?
   || bad "exit $rc, refreshes $(calls '^tofu output -raw kubeconfig'), verifier $(calls '^infra-verify.sh ')"
 [ "$(stat -c %a "$C/kubeconfig" "$C/talosconfig" 2>/dev/null | sort -u)" = 600 ] \
   && ok "kubeconfig and talosconfig are written 0600" || bad "modes: $(stat -c '%n %a' "$C/kubeconfig" "$C/talosconfig" 2>&1 | tr '\n' ' ')"
+
+
+echo "--- cluster-identity: a ConfigMap that differs is written or the run fails, never green over it (lab 25, D9) ---"
+ID='^cluster-identity-sync.sh'
+run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+c="$(line_of "$W/calls.log" '^converge-versions.sh ')"; d="$(line_of "$W/calls.log" "$ID")"; i="$(line_of "$W/calls.log" '^infra-verify.sh')"
+[ "$rc" = 0 ] && [ "$(calls "$ID")" = 1 ] && [ "$(calls "$ID --apply")" = 0 ] && [ -n "$c" ] && [ -n "$d" ] && [ -n "$i" ] && [ "$c" -lt "$d" ] && [ "$d" -lt "$i" ] \
+  && ok "in sync: one dry run, after the roll and before the verifier, nothing written" \
+  || bad "exit $rc, calls: $(grep -c "$ID" "$W/calls.log"), roll ${c:-none}, sync ${d:-none}, verify ${i:-none}"
+EXTRA=IDENTITY_RC=3 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" = 0 ] && [ "$(calls "$ID --apply")" = 1 ] && ok "APPROVE=auto and a difference: it is written, the run goes on" \
+  || bad "exit $rc, applies $(calls "$ID --apply"): $(tail_of)"
+EXTRA=APPLY_RC=1 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" = 0 ] && ok "(control) a sync that was not asked to apply does not fail the run" || bad "control exit $rc"
+EXTRA=IDENTITY_RC=1 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" != 0 ] && ! grep -q 'cluster-up complete' "$O" && ok "a sync failure fails cluster-up" || bad "exit $rc"
+EXTRA=IDENTITY_RC=4 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" = 0 ] && [ "$(calls "$ID --apply")" = 0 ] && ok "ConfigMap not there yet (exit 4): a warning, not a failure" || bad "exit $rc"
+TTY=1 EXTRA=IDENTITY_RC=3 run 0 cluster-up KEY="$W/key" PROVIDER=scaleway; rc=$?
+[ "$(calls "$ID --apply")" = 1 ] && grep -q 'Write these cluster-identity keys' "$O" && ok "at a terminal it asks, and writes on yes" || bad "exit $rc, applies $(calls "$ID --apply"): $(tail_of)"
 
 
 echo

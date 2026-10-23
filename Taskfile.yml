@@ -502,6 +502,9 @@ tasks:
       - ./scripts/dev/test-restore-state.sh
       # The recovery chain as a command: dry-run runs nothing, --execute needs the name, a failing check stops it.
       - ./scripts/dev/test-dr-restore-plan.sh
+      # The live cluster-identity ConfigMap against the rendered map (lab 25, D9): a dry run writes nothing,
+      # --apply patches only the rendered keys.
+      - ./scripts/dev/test-cluster-identity-sync.sh
       # `nc -z` calls a dead ssh -L tunnel healthy. Two local listeners measure
       # the difference the whole tunnel guard rests on.
       - ./scripts/dev/test-endpoint-probe.sh
@@ -950,6 +953,37 @@ tasks:
       # has to reach it. APPROVE=auto inside is not a bypass: the first checkpoint
       # above already asked, and --check had told it what this would roll.
       - ./scripts/internal/converge-versions.sh {{.PROVIDER}} {{.ROLE}} {{.KEY}}
+      # The cluster-identity ConfigMap of a cluster built by an OLDER release is never rewritten by the apply
+      # above: Talos creates an inline manifest's objects when missing and does not update one that exists (lab
+      # 25, D9). The apps that read a new key stay NotReady while cluster-verify can still pass. So the
+      # difference is looked for here and either written (APPROVE=auto, or "yes" at a terminal) or the run
+      # FAILS with the command that writes it: it never ends green over a ConfigMap that is not what the config
+      # renders.
+      - |
+        ID=./scripts/ops/cluster-identity-sync.sh
+        rc=0; $ID || rc=$?
+        case "$rc" in
+          0) ;;
+          4) echo "~ cluster-identity: no ConfigMap yet (Flux bootstrap not applied): nothing to sync." >&2 ;;
+          3)
+            if [ "{{.APPROVE}}" = auto ]; then
+              $ID --apply || exit 1
+            elif [ -t 0 ]; then
+              printf '\nWrite these cluster-identity keys? Only "yes" is accepted: '
+              read -r reply
+              [ "$reply" = yes ] || {
+                echo "✗ not written: the apps that read them stay NotReady. Write them:" >&2
+                echo "    task cluster-identity-sync PROVIDER={{.PROVIDER}} ROLE={{.ROLE}} APPLY=1" >&2
+                exit 1
+              }
+              $ID --apply || exit 1
+            else
+              echo "✗ cluster-identity differs from what the config renders and nobody can be asked. Write it:" >&2
+              echo "    task cluster-identity-sync PROVIDER={{.PROVIDER}} ROLE={{.ROLE}} APPLY=1" >&2
+              exit 1
+            fi ;;
+          *) exit "$rc" ;;
+        esac
       # The verdict, asked of the cluster rather than assumed from the steps
       # above: a failing verify fails cluster-up before the line below.
       # scripts/dev/test-cluster-up.sh runs it.
@@ -2151,6 +2185,27 @@ tasks:
       - task: kubeconfig
         vars: {ROLE: '{{.ROLE}}', PROVIDER: '{{.PROVIDER}}'}
       - ../../../scripts/dev/infra-verify.sh {{.PROVIDER}} {{.ROLE}}
+
+  cluster-identity-sync:
+    desc: >-
+      Make the cluster-identity ConfigMap (flux-system) of a RUNNING cluster match what OpenTofu renders (lab 25, D9:
+      Talos never updates an inline manifest's object that exists, so a key added by a newer release never arrives by
+      itself). Dry run by default: it shows the difference and writes nothing (exit 3 when there is one); APPLY=1 writes
+      only the rendered keys, reads them back and asks Flux to reconcile. Idempotent. No secret is read or printed.
+      Usage: task cluster-identity-sync PROVIDER=… [ROLE=management] [APPLY=1].
+      See scripts/ops/cluster-identity-sync.sh and docs/upgrade.md.
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+      APPLY: '{{.APPLY | default ""}}'
+    env: *provider-env
+    cmds:
+      - task: kubeconfig
+        vars: {ROLE: '{{.ROLE}}', PROVIDER: '{{.PROVIDER}}'}
+      - ../../../scripts/ops/cluster-identity-sync.sh{{if .APPLY}} --apply{{end}}
 
   cluster-exposure:
     desc: >-

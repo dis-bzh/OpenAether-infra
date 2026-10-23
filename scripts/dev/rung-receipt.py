@@ -56,6 +56,7 @@ EXCLUDED = {
     "cluster-security": "reads whatever KUBECONFIG names, local or cloud: no rung to record",
     "cluster-exposure": "probes public addresses from wherever it runs: a check on a cluster, not a rung",
     "cluster-node-state": "read-only: asks the provider and the cluster about one node, changes nothing and proves no change",
+    "cluster-identity-sync": "dry run by default; with APPLY=1 it writes one ConfigMap on whatever the cluster directory's kubeconfig names: a repair, not a rung",
     "cluster-netcheck": "sends traffic that must be denied, on whatever KUBECONFIG names: a check, not a rung",
     "feint-test": "its feint-plan and feint-apply children record for it",
     "feint-up": "starts the emulator, proves nothing about a change",

@@ -194,3 +194,10 @@ output "audit_sink" {
     secondary_region   = var.audit_sink_secondary_region
   }
 }
+
+# What the `cluster-identity` ConfigMap (flux-system) must hold, the same map the bootstrap template renders. Read by
+# scripts/ops/cluster-identity-sync.sh: Talos never updates an inline manifest's object that exists. Host and bucket names only.
+output "cluster_identity" {
+  description = "The data of the cluster-identity ConfigMap as the bootstrap manifest renders it (non-sensitive; empty when deploy_flux is off)."
+  value       = var.deploy_flux ? local.cluster_identity : {}
+}

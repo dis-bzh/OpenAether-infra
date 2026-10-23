@@ -183,3 +183,35 @@ run "a_private_key_or_a_bare_string_is_refused" {
   }
   expect_failures = [var.flux_git_verify]
 }
+
+# The cluster-identity ConfigMap and the `cluster_identity` output (read by `task cluster-identity-sync`) come from ONE map:
+# every key of the map is in the rendered manifest with the same value, and the output is empty without Flux.
+run "cluster_identity_output_matches_rendered_configmap" {
+  command = plan
+  assert {
+    condition = alltrue([
+      for k in ["CLUSTER_NAME", "BACKUP_TARGET_URL", "BACKUP_S3_BUCKET", "BACKUP_S3_ENDPOINT", "BACKUP_REPLICA_S3_BUCKET", "BACKUP_REPLICA_S3_ENDPOINT"] :
+      contains(keys(output.cluster_identity), k) && strcontains(local.flux_bootstrap_manifest, "  ${k}: ${output.cluster_identity[k]}\n")
+    ])
+    error_message = "the cluster_identity output and the rendered cluster-identity ConfigMap must carry the same six keys with the same values"
+  }
+  assert {
+    condition     = output.cluster_identity.BACKUP_REPLICA_S3_BUCKET == "${output.cluster_identity.BACKUP_S3_BUCKET}-backup" && output.cluster_identity.BACKUP_REPLICA_S3_ENDPOINT == "https://s3.fr-par.scw.cloud"
+    error_message = "the replica keys are the -backup twin of the data bucket on the replica endpoint"
+  }
+  assert {
+    condition     = !contains(keys(output.cluster_identity), "AUDIT_SINK_HOST") && !strcontains(local.flux_bootstrap_manifest, "AUDIT_SINK_HOST: ")
+    error_message = "with the audit sink off no host key is published"
+  }
+}
+
+run "cluster_identity_output_empty_without_flux" {
+  command = plan
+  variables {
+    deploy_flux = false
+  }
+  assert {
+    condition     = length(output.cluster_identity) == 0
+    error_message = "deploy_flux = false: no ConfigMap, so nothing to sync"
+  }
+}
