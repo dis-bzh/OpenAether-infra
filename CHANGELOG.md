@@ -21,6 +21,20 @@ infra issues the series set out to look at: #42 (the API unreachable for seconds
 Not a compliance claim. The apps-side results (#134 partial, #143, #144) are in the OpenAether-apps CHANGELOG.
 
 
+### Fixed (0.4.0, lab 25 finding D9: new `cluster-identity` values never reached a running cluster; rung: mocked, offline, UNVERIFIED on a cluster)
+- **Cause, from the code and Talos's source.** The `cluster-identity` ConfigMap (and the GitRepository and Kustomization `openaether-platform`, hence `git_ref`) are objects of the Talos inline manifest `flux-bootstrap`.
+  Talos's manifest-apply controller (`release-1.14`, read through a summarising fetch, not cloned) checks each object with a `Get` and applies it only when it is not found: an object that exists is never updated. The plan's
+  "3 to change" is the control-plane machine configs carrying the new manifest text; the objects on the cluster keep their old data. Lab 25 saw exactly that (4 keys kept, `cnpg` and 8 dependants NotReady, `cluster-up` rc 0
+  because `cluster-verify` reads neither the ConfigMap nor the Kustomizations). Not shown: a `talosctl get manifests` read, and the same test on the GitRepository and Kustomization.
+- **`task cluster-identity-sync PROVIDER=… [ROLE=…] [APPLY=1]`** (`scripts/ops/cluster-identity-sync.sh`): dry run by default, shows the keys to add or change and exits 3 on a difference; `APPLY=1` merges only the rendered keys into
+  the ConfigMap, reads them back, asks Flux to reconcile, and is idempotent. It reads the new non-sensitive root output `cluster_identity`, built once in `cluster/main.tf` (`local.cluster_identity`) and used by the bootstrap
+  template too, so the two cannot drift (`flux-git-verify.tftest.hcl` compares them). `cluster-up` runs the dry run after the node roll and either writes (`APPROVE=auto`, or a typed "yes") or fails naming the command; it no
+  longer ends green over a ConfigMap that is not what the config renders. Tests: `test-cluster-identity-sync.sh` (kubectl and tofu stubs), `test-cluster-up.sh`, the two tofu test runs. Not run on a cluster.
+- **`docs/upgrade.md` (+ FR): "From 0.3.x to 0.4.0 (an existing cluster)"**: the ordered steps, the live `git_ref` patch, the identity sync, the Barman plugin note, and what lab 25 did and did not observe. Gateway API CRDs 1.6.0 and
+  Istio 1.31.3 on an existing cluster are a REBUILD ASIDE, not an in-place hop; lab 25's 5-minute in-place Istio hop is reported but is not the supported path. Every step not run is marked UNVERIFIED. Still open: the `cnpg`
+  Kustomization stayed "Reconciliation in progress" 10 minutes after the keys were added by hand (not investigated); the live `git_ref` has no command of its own (a follow-up if the lab confirms the rule above).
+- The apps side (OpenAether-apps `CHANGELOG.md`): the replica bucket and endpoint default to a non-empty placeholder, so a missing key no longer nulls `endpointURL` and turns the database layer NotReady.
+
 ### Changed (0.4.0: the default Talos pin goes from 1.14.2 to 1.14.4; rung: mocked, offline)
 - `talos_version` defaults to v1.14.4 in the cluster and local roots. 1.14.3 and 1.14.4 are patch releases (Linux 6.18.57, containerd 2.3.7, etcd 3.7.2); the only API change that could touch us is that `TimeService/TimeCheck` is no longer open to `os:reader` and PTP device paths are validated strictly: nothing in this repository calls `talosctl time --check` or sets a PTP device. **Not shown on a cluster yet:** the image build for v1.14.4 on each provider, a fresh cluster at 1.14.4, and the roll of a 1.14.2 cluster to 1.14.4 under the customer probes are checks of the final validation lab. A cluster built at 1.14.2 keeps its pin until its owner changes `talos_version`.
 
