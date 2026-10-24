@@ -727,6 +727,8 @@ module "talos" {
   node_baseline         = var.node_baseline
   coredns_ha            = var.coredns_ha
 
+  node_monitor_grace_period_seconds = var.node_monitor_grace_period_seconds
+
   talos_api_access_namespaces = var.etcd_snapshot_api_access ? ["foundation-databases"] : []
 
   disk_encryption_passphrase_length = var.disk_encryption_passphrase_length

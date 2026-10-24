@@ -302,10 +302,26 @@ locals {
   ) : {}
   baseline_sysctls = merge(local.baseline_sysctls_set, local.nb.sysctls_extra)
 
+  # Failure detection (lab 26, D2/H1): how long the kube-controller-manager waits for a node's heartbeat before it marks the
+  # node NotReady (default 50 s), and the kubelet heartbeat that goes with it. Unset (0), nothing is rendered and the configs
+  # stay byte-identical. The kubelet renews its Lease every nodeLeaseDurationSeconds / 4 (kubelet source, KEP-0009) and posts
+  # its status every nodeStatusUpdateFrequency, so with the grace period G the node gets 4 chances to be heard when the lease
+  # duration is G and the status frequency is G / 4. Above 40 s the Kubernetes defaults (lease 40 s = a renewal every 10 s,
+  # status every 10 s) already leave 4 or more chances, so only the controller manager is told.
+  nfd_grace   = var.node_monitor_grace_period_seconds
+  nfd_cluster = local.nfd_grace > 0 ? { controllerManager = { extraArgs = { "node-monitor-grace-period" = "${local.nfd_grace}s" } } } : {}
+  # Two conditionals of one type each, merged: a single one with a number and a string in it is unified to map(string), and
+  # the kubelet would be sent nodeLeaseDurationSeconds: "20" (a string for an int32).
+  nfd_kubelet_lease  = local.nfd_grace > 0 && local.nfd_grace < 40 ? { nodeLeaseDurationSeconds = local.nfd_grace } : {}
+  nfd_kubelet_status = local.nfd_grace > 0 && local.nfd_grace < 40 ? { nodeStatusUpdateFrequency = "${floor(local.nfd_grace / 4)}s" } : {}
+  nfd_kubelet        = merge(local.nfd_kubelet_lease, local.nfd_kubelet_status)
+  nfd_signature      = local.nfd_grace > 0 ? sha256(jsonencode([local.nfd_cluster, local.nfd_kubelet])) : ""
+
   # kubelet extraConfig shared by every role; the worker seccomp flag is separate (CPs have it already).
   baseline_kubelet_extra = merge(
     local.nb.pod_pids_limit > 0 ? { podPidsLimit = local.nb.pod_pids_limit } : {},
     local.nb.kubelet_server_tls ? { serverTLSBootstrap = true } : {},
+    local.nfd_kubelet,
   )
   baseline_kubelet_worker = merge(
     local.nb.worker_default_seccomp ? { defaultRuntimeSeccompProfileEnabled = true } : {},
@@ -522,6 +538,7 @@ data "talos_machine_configuration" "control_plane" {
           }
         },
         local.coredns_cluster_patch,
+        local.nfd_cluster,
         local.apiserver_vip_certsans
       )
     }),
@@ -717,7 +734,7 @@ resource "terraform_data" "talos_port_ready_worker" {
 # by the two `replace_triggered_by` below. See the comment on them.
 resource "terraform_data" "machine_config_version" {
   count = local.do_apply ? 1 : 0
-  input = "${var.talos_version}/${var.kubernetes_version}${local.resolver_tail == "" ? "" : "/${sha256(local.resolver_tail)}"}${local.node_log_signature == "" ? "" : "/${local.node_log_signature}"}${local.node_baseline_signature == "" ? "" : "/${local.node_baseline_signature}"}${local.talos_api_access_signature == "" ? "" : "/${local.talos_api_access_signature}"}${local.node_zones_signature == "" ? "" : "/${local.node_zones_signature}"}${local.coredns_signature == "" ? "" : "/${local.coredns_signature}"}"
+  input = "${var.talos_version}/${var.kubernetes_version}${local.resolver_tail == "" ? "" : "/${sha256(local.resolver_tail)}"}${local.node_log_signature == "" ? "" : "/${local.node_log_signature}"}${local.node_baseline_signature == "" ? "" : "/${local.node_baseline_signature}"}${local.talos_api_access_signature == "" ? "" : "/${local.talos_api_access_signature}"}${local.node_zones_signature == "" ? "" : "/${local.node_zones_signature}"}${local.coredns_signature == "" ? "" : "/${local.coredns_signature}"}${local.nfd_signature == "" ? "" : "/${local.nfd_signature}"}"
 }
 
 resource "talos_machine_configuration_apply" "control_plane" {

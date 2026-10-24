@@ -444,6 +444,28 @@ variable "node_zones" {
   default = null
 }
 
+variable "node_monitor_grace_period_seconds" {
+  description = <<-EOT
+    How long, in seconds, the kube-controller-manager waits without a heartbeat from a node before it marks the node NotReady
+    (its --node-monitor-grace-period; Kubernetes default 50). 0 (default) sets nothing: the configs stay byte-identical and the
+    Kubernetes defaults apply. This is the longest part of a node-loss failover that our configuration can shorten (lab 26, D2:
+    32-35 s of a 76-79 s database write gap, and the 15-17 s HTTP failure runs when the lost node held a Gateway pod).
+    Below 40 the kubelet is told too, so that the node still has 4 chances to be heard: nodeLeaseDurationSeconds = this value
+    (the Lease is renewed every quarter of it) and nodeStatusUpdateFrequency = this value / 4, rounded down. Between 20 and 300.
+    Kubernetes asks that the grace period be N times the kubelet's status frequency and ALSO more than the HTTP/2 ping and read-idle
+    timeouts of its clients (30 s + 15 s by default, client-go), which no Talos setting changes: a shorter value can mark a node
+    NotReady while only its connection to the API is dead. UNVERIFIED on a cluster: the DEFAULT STAYS 0 until a lab proves a
+    value (docs/resilience.md, "Failure detection time"). Lowering it re-applies every node's machine config (the kubelet restarts).
+  EOT
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.node_monitor_grace_period_seconds == 0 || (var.node_monitor_grace_period_seconds >= 20 && var.node_monitor_grace_period_seconds <= 300 && var.node_monitor_grace_period_seconds == floor(var.node_monitor_grace_period_seconds))
+    error_message = "node_monitor_grace_period_seconds must be 0 (Kubernetes default, 50 s) or a whole number of seconds between 20 and 300: below 20 the node has fewer than 4 heartbeats of 5 s to be heard in."
+  }
+}
+
 variable "node_baseline" {
   description = <<-EOT
     Opt-in kernel and kubelet baseline of the Talos nodes (ANSSI BP-028 R9/R12/R13, batch B23). Null

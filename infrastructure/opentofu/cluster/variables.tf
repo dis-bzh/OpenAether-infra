@@ -398,7 +398,7 @@ variable "scw_root_volume_size_gb" {
 variable "outscale_root_volume_size_gb" {
   description = <<-EOT
     Outscale only: size in GB of the root (BSU) volume of every NEW node. null (the default) keeps the size of the OMI, which is
-    the raw Talos image rounded up to a GiB (about 11-12): Talos then has only a few GB of EPHEMERAL, which the full application
+    the raw Talos image rounded down to a GiB (about 11-12): Talos then has only a few GB of EPHEMERAL, which the full application
     stack (~11 GB of images per worker) does not fit. Set 50 for a cluster that carries the platform; a `check` warns when
     deploy_flux is on and this is null. Applies to nodes created after the change only (the volume of an existing VM
     is not resized in place by this provider; `ignore_changes` keeps a running node from being replaced): to grow a running
@@ -514,6 +514,23 @@ variable "coredns_ha" {
   description = "Run OpenAether's own CoreDNS (min(3, nodes) replicas on different nodes, a budget, a 30 s toleration) instead of the 2-replica Talos one (infra #388, modules/talos). False keeps the Talos Deployment; docs/resilience.md says what each does on a Talos upgrade."
   type        = bool
   default     = true
+}
+
+variable "node_monitor_grace_period_seconds" {
+  description = <<-EOT
+    Seconds the kube-controller-manager waits for a node's heartbeat before marking it NotReady (Kubernetes default 50). 0
+    (default) changes nothing. 20 to 300 sets the controller manager and, below 40, the kubelet heartbeat to match (lease
+    and status frequency, 4 chances to be heard). A node-loss failover is shorter by the difference (lab 26: 32-35 s of 76-79 s),
+    at the price of false NotReady on a flaky link. UNVERIFIED on a cluster: leave it at 0 until docs/resilience.md ("Failure
+    detection time") says a lab proved a value. Details on the variable of the same name in modules/talos/variables.tf.
+  EOT
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.node_monitor_grace_period_seconds == 0 || (var.node_monitor_grace_period_seconds >= 20 && var.node_monitor_grace_period_seconds <= 300 && var.node_monitor_grace_period_seconds == floor(var.node_monitor_grace_period_seconds))
+    error_message = "node_monitor_grace_period_seconds must be 0 (Kubernetes default, 50 s) or a whole number of seconds between 20 and 300."
+  }
 }
 
 variable "node_baseline" {
