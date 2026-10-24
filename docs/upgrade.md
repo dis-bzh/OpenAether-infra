@@ -94,6 +94,9 @@ Written from the branch before the 0.4.0 tag, from lab 25 (a cluster built by in
 commands below are mocked offline; what lab 25 did is said as such. Every step marked UNVERIFIED has not been run on a cluster.** The lab will replay 0.3.2 to 0.4.0 and
 this section is to be corrected by it. Not a compliance claim.
 
+**Supported upgrade path (owner decision, 2026-10-24).** Before 1.0.0 the supported upgrade is from the PREVIOUS minor to the current one only: n-1.x.x to n.x.x, here 0.3.x to 0.4.0.
+No path from an older version is built or documented; from 0.2.x or earlier, go through 0.3.x first or rebuild.
+
 **Why a plain `task cluster-up` is not enough (established from the code, one point from upstream).** The `cluster-identity` ConfigMap, the GitRepository `openaether` and the
 Kustomization `openaether-platform` (with its `GIT_REF`) are all objects of the Talos inline manifest `flux-bootstrap` (`bootstrap-manifests/flux-bootstrap.yaml.tftpl`,
 `modules/talos`). A change to that manifest changes the machine config of the control planes: that is the "3 to change" of the plan, and `tofu apply` sends the new config. What the
@@ -110,9 +113,9 @@ The design does not depend on that point: the sync below reads the cluster and t
 Steps, in order (take a CNPG Backup, a Longhorn backup and `task etcd-snapshot` first; a person runs this, with the plan read):
 
 1. **Decide the path.** The 0.4.0 apps content moves the Gateway API CRDs from 1.2.1 to **1.6.0** and Istio from 1.24.2 to **1.31.3**, the chart repository of Istio, the waypoint class, and
-   moves the CNPG archives to the Barman Cloud plugin. On an EXISTING cluster **the supported path is a rebuild aside**: a new cluster on new buckets from the 0.4.0 tag, then the data moved
-   (`docs/disaster-recovery.md`; a rebuild on the old backup bucket meets the old WAL archive and CNPG refuses to archive into it). The in-place hop below is what lab 25 did; it is **not** the
-   supported path. **Lab 25 observed:** after the Kustomization ref was patched by hand, Istio 1.24.2 to 1.31.3 in place in 5 minutes (istio-base, istiod, istio-cni, ztunnel Ready in that
+   moves the CNPG archives to the Barman Cloud plugin. On an EXISTING cluster a **rebuild aside** stays an option: a new cluster on new buckets from the 0.4.0 tag, then the data moved
+   (`docs/disaster-recovery.md`; a rebuild on the old backup bucket meets the old WAL archive and CNPG refuses to archive into it). The in-place move from the 0.3.x content was observed
+   once, in lab 25 (Istio in 5 minutes, no client traffic judged, see below); the supported, tested path is the one the 0.4.0 release notes name. **Lab 25 observed:** after the Kustomization ref was patched by hand, Istio 1.24.2 to 1.31.3 in place in 5 minutes (istio-base, istiod, istio-cni, ztunnel Ready in that
    order; cni and ztunnel Unknown/False while the old pods rolled), the CRDs at v1.6.0, the GatewayClasses `istio`, `istio-remote`, `istio-waypoint` Accepted, the Gateway and the waypoint Programmed,
    and a test route through the load balancer and the Gateway answering 200; a Talos 1.14.2 to 1.14.4 roll before it (API: 8 failed probes in 2311, isolated 1 s). **Lab 25 did not observe:**
    convergence of the whole apps layer (the hop ended with 9 Kustomizations NotReady, finding D9, fixed below, not re-run), the rebuild-aside path, the Loki 6.55 to 18 hop (0.3.2 already carries
@@ -120,11 +123,15 @@ Steps, in order (take a CNPG Backup, a Longhorn backup and `task etcd-snapshot` 
 2. **Talos first** (patch inside the 1.14 minor: 1.14.2 to 1.14.4): edit `talos_version` in the tfvars, `task cluster-upgrade` or `task cluster-roll` as in the sections below. Lab 25 did this first.
 3. **Move the tools and the config.** Check out the 0.4.0 tag of this repository, then `task cluster-up PROVIDER=… ROLE=…` with the plan read. Expect the control-plane machine configs "to change"
    (the manifest text and the 1.14.4 pin) and the new variables at their defaults (`CHANGELOG.md`, `variables.tf`). `cluster-up` now looks at the identity ConfigMap itself (step 5).
-4. **Point Flux at the new apps ref, on the cluster.** Changing `git_ref` in the tfvars sets the new inline manifest, which Talos does not apply over the existing objects (above), so the live
-   objects need the ref: `kubectl -n flux-system patch kustomization openaether-platform --type merge -p '{"spec":{"postBuild":{"substitute":{"GIT_REF":"refs/tags/<apps tag>"}}}}'` and
-   the same ref in `spec.ref.name` of the GitRepository `openaether` (`kubectl -n flux-system patch gitrepository openaether --type merge -p '{"spec":{"ref":{"name":"refs/tags/<apps tag>"}}}'`).
-   Lab 25 patched the Kustomization only (the apps layer then re-applied the GitRepository from `GIT_REF`). UNVERIFIED: the GitRepository patch, and that a bare tag name is accepted where
-   `refs/tags/…` is. Keep `git_ref` in the tfvars equal to what you patched, or the next rebuild goes back.
+4. **Point Flux at the new apps ref, on the cluster.** Changing `git_ref` in the tfvars sets the new inline manifest, which Talos does not apply over the existing objects (above), so the
+   live objects need the ref. `task cluster-apps-ref PROVIDER=… ROLE=…` (dry run) shows the tfvars value, the ref the GitRepository `openaether` follows and the `GIT_REF` of the Kustomization
+   `openaether-platform`, and exits 3 on a difference. `task cluster-apps-ref PROVIDER=… ROLE=… REF=refs/tags/<apps tag> APPLY=1` rewrites `git_ref` in the tfvars (the diff is shown, the
+   old file is kept as `<tfvars>.apps-ref-bak`), patches `spec.ref.name` of the GitRepository and `GIT_REF` of the Kustomization (those two fields only; `spec.verify` and every other field are
+   never written), asks Flux to reconcile both and waits (300 s by default) for the GitRepository to report the revision of that ref. The ref must be `refs/tags/…` or `refs/heads/…` like
+   `variables.tf`; a branch is a moving ref, warned about loudly and refused as `REF=` unless `ALLOW_BRANCH=1`. `cluster-up` runs the dry run after the node roll and moves the ref
+   (`APPROVE=auto`, or a typed "yes") or fails naming the command; `cluster-verify` fails on any difference, in both directions. Mocked tests only (`test-cluster-apps-ref.sh`,
+   `test-pins-verify.sh`, `test-cluster-up.sh`). UNVERIFIED on a cluster: the GitRepository patch, the exact revision string Flux reports for a `ref.name` (the wait accepts `<ref>@…` and `<tag or branch>@…`), and
+   that Talos does leave the existing objects alone (a `talosctl get manifests` read). Lab 25 patched the Kustomization by hand only.
 5. **Write the identity values.** `task cluster-identity-sync PROVIDER=… ROLE=…` is a dry run: it reads `tofu output cluster_identity` (the map the bootstrap template itself renders: bucket
    names, endpoints, URL and the audit sink host names, no secret) and the live ConfigMap `flux-system/cluster-identity`, and prints each key to add (`+`) or change (`~`); exit 3 means a difference.
    `… APPLY=1` merges ONLY the rendered keys into `data` (nothing else of the ConfigMap, no other object), reads them back, and asks Flux to reconcile its Kustomizations; a second run changes
@@ -140,6 +147,47 @@ Steps, in order (take a CNPG Backup, a Longhorn backup and `task etcd-snapshot` 
    restart, the plugin, or a second error behind the first). If it happens again, read `kubectl -n flux-system describe kustomization cnpg` and the plugin and operator pods before waiting.
 7. **Check.** `task cluster-verify`, then the per-section checks below. `cluster-verify` does not read the Kustomizations: also run `kubectl get kustomizations,helmreleases -A` and expect all Ready.
    The synchronous replication, the Grafana egress rule and the other 0.4.0 changes are in `CHANGELOG.md`; none of them was replayed on an old cluster.
+
+## Which version lives where, and how it reaches a running cluster
+
+The model (infra #408, adopted 2026-10-24): for every pinned thing, **a declared pin, a command that converges a running cluster to it, and a verify check that fails on any difference, in both
+directions** (behind and ahead are both a difference; a value that cannot be read is UNKNOWN, never a pass). Rung of everything marked UNVERIFIED: mocked, offline, not run on a cluster.
+
+| Thing | Declared in | Converged by | Checked by (`task cluster-verify`) | Status |
+|---|---|---|---|---|
+| Talos | `talos_version` (tfvars, else `variables.tf`) | `task cluster-up` (`converge-versions.sh`: one node at a time, refuses a downgrade), `task cluster-upgrade` | "every node runs the pinned Talos" (MIXED fleet named apart) | PROVEN on clouds for earlier releases (1.14.2 to 1.14.4 in lab 25); the 0.4.0 pin UNVERIFIED |
+| Kubernetes | `kubernetes_version` | same, through the machine config (no roll) | "every node runs the pinned Kubernetes" | PROVEN on clouds (2026-10-03 climbs) |
+| Apps ref | `git_ref` | `task cluster-apps-ref` (`REF=… APPLY=1`); `cluster-up` runs its dry run | "the GitRepository and GIT_REF both follow the declared git_ref" (only with `deploy_flux = true`) | UNVERIFIED (mocked) |
+| `cluster-identity` keys | rendered map (`local.cluster_identity`, output `cluster_identity`) | `task cluster-identity-sync`; `cluster-up` runs its dry run | none in `cluster-verify` (gap: only the `cluster-up` dry run looks) | UNVERIFIED (mocked) |
+| Cilium | `CILIUM_VERSION` in `render-bootstrap-manifests.sh`, rendered to `cilium.yaml`, hash in `upstream-artifacts.lock` | no in-place command: **rebuild aside** (below) | "Cilium run the pinned version" (agent and operator image tags) | check UNVERIFIED (mocked); no live upgrade exists |
+| Flux controllers | `FLUX_VERSION`, vendored `flux-install.yaml`, same lock | `task cluster-bootstrap-sync` (`APPLY=1`) | "Flux controllers run the pinned version" (the seven Deployments; only with `deploy_flux = true`) | UNVERIFIED (mocked) |
+| CAPI child clusters | `K8S_VERSION`, `TALOS_VERSION` in `apps/clusters/*.yaml` (OpenAether-apps) | Flux applies the file; Cluster API rolls the machines | none: `check-child-clusters.py` is static; nothing compares a child's running versions | GAP, not built |
+
+`git_ref` is converged by `task cluster-apps-ref`: editing it and running `cluster-up` alone does not move a running cluster. A release channel (a semver range over signed tags that Flux follows) is
+a 1.0 option, not built; today the apps version is an exact ref converged by the tooling.
+
+`cluster-up` ends by saying what it did NOT change: the Cilium and Flux controllers of a running cluster, the apps content beyond the ref, the CAPI children, and any other object Talos created
+earlier from an inline manifest.
+
+## Cilium and Flux on a running cluster
+
+`cilium.yaml` and `flux-install.yaml` are Talos inline manifests, so the rule above applies: a bumped pin reaches a NEW cluster only. `cluster-verify` now fails when the running version differs from the
+pin; this is how each one is closed. Written offline; none of it was run on a cluster.
+
+**Flux controllers: `task cluster-bootstrap-sync PROVIDER=… ROLE=…`** (dry run, exit 3 on a difference; `APPLY=1` writes). It checks the committed `flux-install.yaml` against `upstream-artifacts.lock`,
+reads the image tag of the seven controller Deployments, and with `APPLY=1` runs `kubectl apply --server-side --force-conflicts --field-manager=openaether-bootstrap` of that file, waits for every rollout
+(`OA_ROLLOUT_TIMEOUT`, 300 s) and reads the versions back. It refuses, before any write: a downgrade of any controller; a controller more than one minor ahead of the running one (stricter than upstream,
+which says any v2.x can move to any other v2.x: step through the releases); a running controller the artifact no longer has (server-side apply does not prune); and any moment a Talos or Kubernetes roll may be
+under way (a node not Ready or cordoned, versions that differ between nodes or from the pin). Relied on: the Flux upgrade guide gives `kubectl apply --server-side -f install.yaml` for a cluster installed with
+kubectl (https://fluxcd.io/flux/installation/upgrade/). Take the Flux CRDs into account: they are replaced by the same apply and are not rolled back.
+
+**Cilium: check plus rebuild aside, no in-place command.** The check ("Cilium run the pinned version") and the dry run of `cluster-bootstrap-sync` report the difference; `APPLY=1` on Cilium is refused (exit 5, or 2
+with `COMPONENT=cilium`). Why no server-side apply of `cilium.yaml`, although the Cilium guide describes `helm template` plus `kubectl apply` (https://docs.cilium.io/en/stable/operations/upgrade/):
+(1) the DaemonSets of `cilium.yaml` roll with `maxUnavailable: 2`, so two nodes lose their CNI agent at once, and `docs/admin-access.md` records a 2-node child that came out degraded from a Cilium change (the page
+concerns CAPI children, but the same rolling update is what this would trigger); (2) the guide requires its pre-flight (image pre-pull, policy validation) and says the only tested path is between consecutive
+minor releases; nothing here runs the pre-flight; (3) apply does not prune objects a newer render drops; (4) the ConfigMap is overwritten as a whole, and the agent and operator are not ordered. A person who
+accepts those risks follows the upstream guide with the same pinned values; this repository neither builds nor tests that path. **Rebuild aside** is the documented way: a new cluster from the new tag, the
+data moved (`docs/disaster-recovery.md`), the old one retired.
 
 ## Kubernetes first
 

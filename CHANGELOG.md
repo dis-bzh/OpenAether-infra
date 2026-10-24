@@ -32,8 +32,23 @@ Not a compliance claim. The apps-side results (#134 partial, #143, #144) are in 
   longer ends green over a ConfigMap that is not what the config renders. Tests: `test-cluster-identity-sync.sh` (kubectl and tofu stubs), `test-cluster-up.sh`, the two tofu test runs. Not run on a cluster.
 - **`docs/upgrade.md` (+ FR): "From 0.3.x to 0.4.0 (an existing cluster)"**: the ordered steps, the live `git_ref` patch, the identity sync, the Barman plugin note, and what lab 25 did and did not observe. Gateway API CRDs 1.6.0 and
   Istio 1.31.3 on an existing cluster are a REBUILD ASIDE, not an in-place hop; lab 25's 5-minute in-place Istio hop is reported but is not the supported path. Every step not run is marked UNVERIFIED. Still open: the `cnpg`
-  Kustomization stayed "Reconciliation in progress" 10 minutes after the keys were added by hand (not investigated); the live `git_ref` has no command of its own (a follow-up if the lab confirms the rule above).
+  Kustomization stayed "Reconciliation in progress" 10 minutes after the keys were added by hand (not investigated); the live `git_ref` command is `task cluster-apps-ref` (see Added, infra #408).
 - The apps side (OpenAether-apps `CHANGELOG.md`): the replica bucket and endpoint default to a non-empty placeholder, so a missing key no longer nulls `endpointURL` and turns the database layer NotReady.
+
+### Added (0.4.0, infra #408: every pinned thing gets a declared pin, a converging command and a verify check; rung: mocked, offline, UNVERIFIED on a cluster)
+- **Supported upgrade path, owner decision 2026-10-24:** before 1.0.0 only the previous minor to the current one (0.3.x to 0.4.0). No path from older versions is built or documented. The in-place move of the 0.3.x
+  apps content (Istio, Gateway API CRDs) was observed once, in lab 25; a rebuild aside stays an option; the supported, tested path is the one the release notes name.
+- **`task cluster-apps-ref`** (`scripts/ops/cluster-apps-ref.sh`): dry run shows `git_ref`, the ref the live GitRepository follows and the live `GIT_REF` (exit 3 on a difference); `APPLY=1 [REF=refs/tags/X]` rewrites
+  the tfvars (diff, backup `.apps-ref-bak`), patches those two fields only (never `spec.verify`), reconciles and waits for the revision of that ref with a timeout. Validates the ref like `variables.tf`; a branch is
+  warned about loudly and refused as `REF=` without `ALLOW_BRANCH=1`. `cluster-up` runs the dry run after the node roll like the identity sync and ends by saying what it did NOT change.
+- **`task cluster-bootstrap-sync`** (`scripts/ops/cluster-bootstrap-sync.sh`): compares Cilium and the seven Flux controllers with the lock-checked artifacts; `APPLY=1` server-side applies `flux-install.yaml` only, refusing
+  a downgrade, more than one minor, a running controller the artifact dropped, and any Talos or Kubernetes roll in progress, then waits for the rollouts and re-reads. Cilium is never applied (exit 5): rebuild aside, with
+  the reasons in `docs/upgrade.md`.
+- **`cluster-verify`** (`infra-verify.sh`, shared readers in `scripts/lib/pins.sh`): "Cilium run the pinned version", "Flux controllers run the pinned version" and "the GitRepository and GIT_REF both follow the declared git_ref",
+  each failing in both directions (behind and ahead), UNKNOWN when unreadable. Neither pin moved between 0.3.2 and this branch, so a 0.3.x cluster is not red for them.
+- **`docs/upgrade.md` (+ FR)**: "Which version lives where, and how it reaches a running cluster" (table with PROVEN / UNVERIFIED) and "Cilium and Flux on a running cluster"; a release channel (semver range over signed tags) is a 1.0 option.
+- Tests: `test-cluster-apps-ref.sh`, `test-cluster-bootstrap-sync.sh`, `test-pins-verify.sh` (kubectl stubs, mutation cases), `test-cluster-up.sh`. Not run on a cluster; the Talos inline-manifest rule is still to be shown on a node.
+- Gap, not built: a declared-versus-running check for CAPI child clusters (`K8S_VERSION`, `TALOS_VERSION` in OpenAether-apps `apps/clusters/*.yaml`); `check-child-clusters.py` is static.
 
 ### Changed (0.4.0: the default Talos pin goes from 1.14.2 to 1.14.4; rung: mocked, offline)
 - `talos_version` defaults to v1.14.4 in the cluster and local roots. 1.14.3 and 1.14.4 are patch releases (Linux 6.18.57, containerd 2.3.7, etcd 3.7.2); the only API change that could touch us is that `TimeService/TimeCheck` is no longer open to `os:reader` and PTP device paths are validated strictly: nothing in this repository calls `talosctl time --check` or sets a PTP device. **Not shown on a cluster yet:** the image build for v1.14.4 on each provider, a fresh cluster at 1.14.4, and the roll of a 1.14.2 cluster to 1.14.4 under the customer probes are checks of the final validation lab. A cluster built at 1.14.2 keeps its pin until its owner changes `talos_version`.
