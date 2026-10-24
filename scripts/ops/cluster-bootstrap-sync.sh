@@ -67,7 +67,7 @@ export KUBECONFIG="$CLUSTER_DIR/kubeconfig"
 
 cfg() { local n="TF_VAR_$1" v; v="${!n:-}"; [ -n "$v" ] || { [ -f "$TFVARS" ] && v="$(tfv "$TFVARS" "$1")"; }; printf '%s' "$v"; }
 for k in cilium_manifest flux_manifest; do
-  if [ -f "$TFVARS" ] && grep -qE "^[[:space:]]*$k[[:space:]]*=" "$TFVARS" && ! grep -qE "^[[:space:]]*$k[[:space:]]*=[[:space:]]*null" "$TFVARS"; then
+  if [ -f "$TFVARS" ] && grep -qE "^[[:space:]]*${k}[[:space:]]*=" "$TFVARS" && ! grep -qE "^[[:space:]]*${k}[[:space:]]*=[[:space:]]*null" "$TFVARS"; then
     fail "$k is overridden in $TFVARS: the manifest the cluster was built with is not the committed one, so what it should run is UNKNOWN to this script."
   fi
 done
