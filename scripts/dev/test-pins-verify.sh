@@ -57,6 +57,22 @@ case "\$*" in
   "-n kube-system get daemonsets,deployments -o json") [ -f "$FX/cilium.unreadable" ] && exit 1; render "$FX/cilium.live" ds ;;
   *"gitrepositories.source.toolkit.fluxcd.io openaether -o json") [ -f "$FX/gr.unreadable" ] && exit 1; cat "$FX/gr.json" ;;
   *"kustomizations.kustomize.toolkit.fluxcd.io openaether-platform -o json") cat "$FX/ks.json" ;;
+  *"get clusters.postgresql.cnpg.io -l openaether.io/managed=true -o json")
+    [ -f "$FX/cnpg.nocrd" ] && { echo "error: the server doesn't have a resource type \"clusters\"" >&2; exit 1; }
+    [ -f "$FX/cnpg.unreadable" ] && { echo "Unable to connect to the server" >&2; exit 1; }
+    cat "$FX/cnpg.json" ;;
+  *"exec "*"-c postgres -- psql -U postgres -Atc "*)
+    [ -f "$FX/exec.unreadable" ] && exit 1
+    sql=""; for a; do sql="\$a"; done
+    case "\$sql" in
+      "show synchronous_standby_names") cat "$FX/names.txt" ;;
+      "select application_name, sync_state from pg_stat_replication") cat "$FX/repl.txt" ;;
+      *) exit 1 ;;
+    esac ;;
+  *"get failoverquorums.postgresql.cnpg.io "*)
+    [ -f "$FX/fq.missing" ] && { echo 'Error from server (NotFound): failoverquorums "x" not found' >&2; exit 1; }
+    [ -f "$FX/fq.unreadable" ] && { echo "Unable to connect to the server" >&2; exit 1; }
+    echo "failoverquorum.postgresql.cnpg.io/x" ;;
   *) exit 1 ;;
 esac
 STUB
@@ -69,6 +85,7 @@ mkks() { jq -nc --arg r "$1" '{spec:{postBuild:{substitute:{GIT_REF:$r}}}}' >"$F
 reset() {
   rm -rf "$FX"; mkdir -p "$FX"; cp "$W/flux.target" "$FX/flux.live"; cp "$W/cilium.target" "$FX/cilium.live"
   mkgr refs/tags/0.4.0; mkks refs/tags/0.4.0; mkdns 3 true
+  echo '{"items":[]}' >"$FX/cnpg.json"
   printf 'git_ref = "refs/tags/0.4.0"\ndeploy_flux = true\ncluster_name = "c"\nenvironment = "dev"\n' >"$TFV"
   cp "$REAL_M"/{cilium.yaml,cilium-hubble-drops.yaml,flux-install.yaml} "$M/"
 }
@@ -129,6 +146,51 @@ reset; mkgr refs/heads/lab/x; mkks refs/heads/lab/x; printf 'git_ref = "refs/hea
 has "both follow the declared git_ref" && has "is a branch, a moving ref" && ok "a branch in sync passes but is warned about" || bad "$(grep -i 'ref' "$W/out")"
 reset; EXTRA=TF_VAR_git_ref=refs/tags/0.3.2 run
 [ -n "$(badline 'git_ref declares refs/tags/0.3.2')" ] && ok "TF_VAR_git_ref wins over the tfvars, like tofu" || bad "$(grep -i 'ref' "$W/out")"
+
+echo "--- study LAB-B2: the platform CNPG Clusters run the 0.4.0 synchronous replication and archive ---"
+SYNCB='{"method":"any","number":1,"dataDurability":"required","failoverQuorum":true}'
+mkcl() { # <name> <instances> <sync json|null> <ContinuousArchiving status> [labels json] — the Clusters a list returns (one file)
+  jq -nc --arg n "$1" --argjson i "$2" --argjson s "$3" --arg a "$4" --argjson l "${5:-{\}}" \
+    '{metadata:{name:$n, labels:({"openaether.io/managed":"true"} + $l)}, spec:{instances:$i, postgresql:(if $s == null then {} else {synchronous:$s} end)},
+      status:{currentPrimary:"\($n)-1", conditions:[{type:"ContinuousArchiving", status:$a}]}}'
+}
+cnpg_fx() { jq -sc '{items: .}' >"$FX/cnpg.json"; }
+cnpg_ok() { printf 'ANY 1 ("db-2","db-3")\n' >"$FX/names.txt"; printf 'db-2|quorum\ndb-3|quorum\n' >"$FX/repl.txt"; }
+CNPGH="The platform CNPG Clusters"
+reset; run
+! has "$CNPGH" && ok "no CNPG Cluster in the namespace: the section is silent" || bad "section printed"
+reset; : >"$FX/cnpg.nocrd"; run
+! has "$CNPGH" && ! has "could not list the CNPG" && ok "no CNPG CRD (a pure-infra cluster): silent, not UNKNOWN" || bad "$(grep -i cnpg "$W/out")"
+reset; mkcl db 3 "$SYNCB" True | cnpg_fx; cnpg_ok; run
+has "✓ foundation-databases/db: ContinuousArchiving True" && has "✓ foundation-databases/db: synchronous_standby_names set on db-1, 2 replica(s) quorum/sync" && has "✓ foundation-databases/db: the FailoverQuorum object exists" \
+  && [ -z "$(badline 'foundation-databases/db')" ] && ok "a converged Cluster passes all four checks" || bad "$(grep 'foundation-databases' "$W/out")"
+reset; mkcl db 3 null True | cnpg_fx; printf '\n' >"$FX/names.txt"; : >"$FX/repl.txt"; run
+{ [ -n "$(badline 'foundation-databases/db: spec.postgresql.synchronous is not the 0.4.0 block')" ] && has "task cnpg-presync PROVIDER=stub ROLE=management APPLY=1" && [ "$rc" -ne 0 ]; } \
+  && ok "a 0.3.x Cluster (no block): BAD with the command to run, run fails" || bad "$(grep 'foundation-databases' "$W/out")"
+reset; mkcl db 3 "$(jq -c '.dataDurability = "preferred"' <<<"$SYNCB")" True | cnpg_fx; cnpg_ok; run
+[ -n "$(badline 'is not the 0.4.0 block')" ] && ok "a weaker block (durability preferred) is BAD too" || bad "$(grep 'foundation-databases' "$W/out")"
+reset; mkcl db 3 "$SYNCB" False | cnpg_fx; cnpg_ok; run
+{ [ -n "$(badline 'ContinuousArchiving is False')" ] && has "docs/upgrade.md (break-glass R1, R2)" && has "task backup-verify"; } && ok "ContinuousArchiving False: BAD with the pointers" || bad "$(grep 'foundation-databases' "$W/out")"
+reset; mkcl db 3 "$SYNCB" True | cnpg_fx; printf '\n' >"$FX/names.txt"; printf 'db-2|async\ndb-3|async\n' >"$FX/repl.txt"; run
+{ [ -n "$(badline 'synchronous_standby_names is EMPTY on db-1')" ] && has "cloudnative-pg#11627" && has "select pg_reload_conf()"; } && ok "declared and synchronous_standby_names EMPTY: BAD with the reload" || bad "$(grep 'foundation-databases' "$W/out")"
+reset; mkcl db 3 null True | cnpg_fx; cnpg_ok; run
+[ -n "$(badline 'the running state and the declaration disagree')" ] && ok "running synchronous but not declared: BAD (the other direction)" || bad "$(grep 'foundation-databases' "$W/out")"
+reset; mkcl db 3 "$SYNCB" True | cnpg_fx; printf 'ANY 1 ("db-2")\n' >"$FX/names.txt"; printf 'db-2|quorum\ndb-3|async\n' >"$FX/repl.txt"; run
+[ -n "$(badline 'only 1 of 2 replica(s) are quorum/sync')" ] && ok "one replica not in the quorum: BAD" || bad "$(grep 'foundation-databases' "$W/out")"
+reset; mkcl db 3 "$SYNCB" True | cnpg_fx; cnpg_ok; : >"$FX/fq.missing"; run
+[ -n "$(badline 'FailoverQuorum object does not exist')" ] && ok "declared failoverQuorum and no object: BAD" || bad "$(grep 'foundation-databases' "$W/out")"
+reset; mkcl db 3 null True | cnpg_fx; printf '\n' >"$FX/names.txt"; : >"$FX/repl.txt"; run
+[ -n "$(badline 'a FailoverQuorum object exists but the spec does not declare')" ] && ok "an object the spec does not declare: BAD (the other direction)" || bad "$(grep 'foundation-databases' "$W/out")"
+reset; mkcl db 3 "$SYNCB" True | cnpg_fx; cnpg_ok; : >"$FX/exec.unreadable"; run
+[ -n "$(unkline 'could not ask the primary db-1')" ] && ! has "synchronous_standby_names set on" && [ "$rc" -ne 0 ] && ok "the primary cannot be asked: UNKNOWN, not a pass" || bad "$(grep 'foundation-databases' "$W/out")"
+reset; mkcl db 3 "$SYNCB" True | cnpg_fx; cnpg_ok; : >"$FX/fq.unreadable"; run
+[ -n "$(unkline 'could not read the FailoverQuorum object')" ] && ok "the FailoverQuorum object cannot be read: UNKNOWN" || bad "$(grep 'foundation-databases' "$W/out")"
+reset; : >"$FX/cnpg.unreadable"; run
+[ -n "$(unkline 'could not list the CNPG Clusters of foundation-databases')" ] && ok "the list fails (not 'no CRD'): UNKNOWN" || bad "$(grep -i cnpg "$W/out")"
+reset; { mkcl db 3 "$SYNCB" True; mkcl app-ha 3 null False '{"openaether.io/db-profile":"ha"}'; mkcl rt-x 1 null False; } | cnpg_fx; cnpg_ok; run
+! has "app-ha" && ! has "rt-x" && ok "a profile Cluster and an rt-* copy are not judged (same selection as cnpg-presync)" || bad "$(grep 'foundation-databases' "$W/out")"
+reset; mkcl db 3 null False | cnpg_fx; run local
+! has "$CNPGH" && ok "provider local: not judged" || bad "local judged"
 
 echo "--- K2 (lab 26): CoreDNS runs the declared replica count and spread, both directions ---"
 reset; run

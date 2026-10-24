@@ -412,6 +412,77 @@ else
 fi
 fi
 
+# --- The platform CNPG Clusters run the 0.4.0 synchronous replication and archive (study LAB-B2) ----------------------------
+#
+# Declared: the block spec.postgresql.synchronous = any / 1 / required / failoverQuorum (the 0.4.0 content). Converged by
+# `task cnpg-presync` (BEFORE the apps ref moves; docs/upgrade.md "From 0.3.x to 0.4.0"). Checked here on EVERY Cluster the apps
+# content manages (label openaether.io/managed in OA_CNPG_NAMESPACES, default foundation-databases; not db-profile or rt-*
+# Clusters: the same selection as cnpg-presync): the block is on the spec, ContinuousArchiving is True, the primary holds a
+# non-empty synchronous_standby_names, every replica is quorum/sync in pg_stat_replication, and the FailoverQuorum object exists.
+# BAD says the command; UNKNOWN when a fact cannot be read. A running state that the spec does not declare is BAD too.
+# Nothing is printed from the databases but pod names and the words quorum/sync. Silent when the cluster has no CNPG Cluster.
+if [ "$PROVIDER" != local ]; then
+CNPG_NS="${OA_CNPG_NAMESPACES:-foundation-databases}"
+cnpg_header=0
+cnpg_head() { if [ "$cnpg_header" = 0 ]; then info "The platform CNPG Clusters: synchronous replication, archiving, failover quorum"; cnpg_header=1; fi; }
+for ns in $CNPG_NS; do
+  if ! CL_LIST="$(K -n "$ns" get clusters.postgresql.cnpg.io -l openaether.io/managed=true -o json 2>&1)"; then
+    case "$CL_LIST" in
+      *"doesn't have a resource type"*|*"no matches for kind"*|*"could not find the requested resource"*) ;;
+      *) cnpg_head; unk "could not list the CNPG Clusters of ${ns} — their synchronous replication and archiving are UNCHECKED" ;;
+    esac
+    continue
+  fi
+  while IFS= read -r CL; do
+    [ -n "$CL" ] || continue
+    cnpg_head
+    cname="$(jq -r '.metadata.name' <<<"$CL")"; cid="${ns}/${cname}"
+    cinst="$(jq -r '.spec.instances // 1' <<<"$CL")"; cprim="$(jq -r '.status.currentPrimary // ""' <<<"$CL")"
+    cfix="task cnpg-presync PROVIDER=${PROVIDER} ROLE=${ROLE} APPLY=1"
+    declared=0
+    jq -e '(.spec.postgresql.synchronous // {}) as $s | $s.method == "any" and $s.number == 1 and $s.dataDurability == "required" and $s.failoverQuorum == true' <<<"$CL" >/dev/null && declared=1
+    if [ "$declared" = 0 ]; then
+      bad "${cid}: spec.postgresql.synchronous is not the 0.4.0 block (any / 1 / required / failoverQuorum true): $(jq -c '.spec.postgresql.synchronous // "(none)"' <<<"$CL"). Before the apps ref moves: ${cfix}"
+    fi
+    carch="$(jq -r '[.status.conditions[]? | select(.type == "ContinuousArchiving") | .status] | first // "absent"' <<<"$CL")"
+    case "$carch" in
+      True) ok "${cid}: ContinuousArchiving True" ;;
+      absent) unk "${cid}: no ContinuousArchiving condition on the Cluster — archiving is UNCHECKED" ;;
+      *) bad "${cid}: ContinuousArchiving is ${carch}: WAL is not reaching the store. Read: kubectl cnpg status ${cname} -n ${ns}; a Cluster stuck after the 0.4.0 move: docs/upgrade.md (break-glass R1, R2). Then: task backup-verify" ;;
+    esac
+    if [ -z "$cprim" ]; then
+      unk "${cid}: no current primary in the status — synchronous replication is UNCHECKED"
+    elif ! SNAMES="$(K -n "$ns" exec "$cprim" -c postgres -- psql -U postgres -Atc "show synchronous_standby_names" 2>/dev/null)"; then
+      unk "${cid}: could not ask the primary ${cprim} for synchronous_standby_names — UNCHECKED"
+    elif ! REPL="$(K -n "$ns" exec "$cprim" -c postgres -- psql -U postgres -Atc "select application_name, sync_state from pg_stat_replication" 2>/dev/null)"; then
+      unk "${cid}: could not read pg_stat_replication on ${cprim} — UNCHECKED"
+    else
+      nsync="$(grep -cE '\|(quorum|sync)$' <<<"$REPL" || true)"
+      if [ -n "$SNAMES" ]; then
+        if [ "$declared" = 0 ]; then
+          bad "${cid}: the primary runs synchronous replication (synchronous_standby_names is set) but the spec does not declare the 0.4.0 block — the running state and the declaration disagree. ${cfix}"
+        elif [ "$nsync" -ge $((cinst - 1)) ]; then
+          ok "${cid}: synchronous_standby_names set on ${cprim}, ${nsync} replica(s) quorum/sync"
+        else
+          bad "${cid}: synchronous_standby_names is set but only ${nsync} of $((cinst - 1)) replica(s) are quorum/sync in pg_stat_replication. Read: kubectl cnpg status ${cname} -n ${ns}"
+        fi
+      elif [ "$declared" = 1 ]; then
+        bad "${cid}: the spec asks for synchronous replication and synchronous_standby_names is EMPTY on ${cprim} (the lost reload, cloudnative-pg#11627). Reload: kubectl -n ${ns} exec <pod> -c postgres -- psql -U postgres -Atc \"select pg_reload_conf()\" on every instance; docs/upgrade.md (break-glass R1, R2)"
+      fi
+    fi
+    if FQ="$(K -n "$ns" get failoverquorums.postgresql.cnpg.io "$cname" -o name 2>&1)"; then
+      if [ "$declared" = 1 ]; then ok "${cid}: the FailoverQuorum object exists"
+      else bad "${cid}: a FailoverQuorum object exists but the spec does not declare failoverQuorum true — the running state and the declaration disagree"; fi
+    else
+      case "$FQ" in
+        *NotFound*|*"not found"*) [ "$declared" = 0 ] || bad "${cid}: the spec declares failoverQuorum true and the FailoverQuorum object does not exist. Read: kubectl cnpg status ${cname} -n ${ns}; the operator creates it at its next reconcile (a single 'not found' line right after the patch is normal)" ;;
+        *) unk "${cid}: could not read the FailoverQuorum object — UNCHECKED" ;;
+      esac
+    fi
+  done < <(jq -c '.items[] | select(((.metadata.labels["openaether.io/db-profile"] // "") == "") and (.metadata.name | startswith("rt-") | not))' <<<"$CL_LIST")
+done
+fi
+
 # --- The fleet runs the image the config names ----------------------------------
 #
 # The version tag is not the image. The schematic carries the system extensions,
