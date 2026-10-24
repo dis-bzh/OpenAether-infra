@@ -509,6 +509,9 @@ tasks:
       # controller
       # versions against the pinned artifacts (infra #408): dry runs write nothing, refusals come before any write.
       - ./scripts/dev/test-cluster-apps-ref.sh
+      # The 0.4.0 synchronous block on the live CNPG Clusters, before the apps ref moves (study LAB-B2): dry run writes
+      # nothing, one patch of spec.postgresql.synchronous only, refusals before any write, no delete and no force.
+      - ./scripts/dev/test-cnpg-presync.sh
       - ./scripts/dev/test-cluster-bootstrap-sync.sh
       - ./scripts/dev/test-pins-verify.sh
       # `nc -z` calls a dead ssh -L tunnel healthy. Two local listeners measure
@@ -2267,6 +2270,36 @@ tasks:
       - task: kubeconfig
         vars: {ROLE: '{{.ROLE}}', PROVIDER: '{{.PROVIDER}}'}
       - ../../../scripts/ops/cluster-identity-sync.sh{{if .APPLY}} --apply{{end}}
+
+  cnpg-presync:
+    desc: >-
+      Enable the 0.4.0 synchronous replication on the LIVE CloudNativePG Clusters of a 0.3.x platform BEFORE the
+      apps ref moves (study LAB-B2; docs/upgrade.md "From 0.3.x to 0.4.0"): applying it together with the plugin
+      sidecar in one Flux apply can leave a Cluster stuck (cloudnative-pg#11627). Selects every Cluster the apps
+      content manages (label openaether.io/managed, namespaces foundation-databases or OA_CNPG_NAMESPACES, not
+      profile or rt-* Clusters). Dry run by default: lists each Cluster without the block, writes nothing, exit 3
+      on a difference. APPLY=1 patches ONLY spec.postgresql.synchronous (any / 1 / required / failoverQuorum),
+      then waits for healthy, all instances ready, synchronous_standby_names set and the replicas in the quorum;
+      after 120 s it reloads the configuration on every instance (R1); at the timeout it prints the break-glass
+      steps (R2) and fails: it never deletes a pod. Refuses (exit 2) on an unhealthy Cluster, no recent Backup, a
+      roll under way, a pod that predates the plugin sidecar, or a Cluster with fewer than 3 instances unless
+      SCALE=1 (instances 3 in the same patch). Mocked offline; a full platform has not re-proven it. No secret is
+      read or printed. Usage: task cnpg-presync PROVIDER=… [ROLE=management] [APPLY=1] [SCALE=1].
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+      APPLY: '{{.APPLY | default ""}}'
+      SCALE: '{{.SCALE | default ""}}'
+    env: *provider-env
+    cmds:
+      - task: kubeconfig
+        vars: {ROLE: '{{.ROLE}}', PROVIDER: '{{.PROVIDER}}'}
+      - >-
+        ../../../scripts/ops/cnpg-presync.sh --tfvars "envs/{{.ROLE}}-{{.PROVIDER}}.tfvars"
+        {{if .SCALE}}--scale{{end}} {{if .APPLY}}--apply{{end}}
 
   cluster-apps-ref:
     desc: >-
