@@ -143,22 +143,11 @@ gate_flux() { # prints the reasons a Flux apply is refused, nothing when it is a
     grep -q " $n " <<<"$FLUX_PINS" || echo "$n runs $have and the artifact no longer contains it: server-side apply does not prune it"
   done <<<"$FLUX_LIVE"
 }
-gate_roll() { # prints why a Talos or Kubernetes roll may be under way, nothing when the fleet is quiet and at its pins
-  local nodes bad tv kv wt wk
-  nodes="$(timeout 60 kubectl get nodes -o json 2>/dev/null)" || { echo "the nodes cannot be read: whether a roll is under way is UNKNOWN"; return; }
-  bad="$(jq -r '[.items[] | select(((.status.conditions[]? | select(.type == "Ready") | .status) != "True") or (.spec.unschedulable == true)) | .metadata.name] | join(" ")' <<<"$nodes")"
-  [ -z "$bad" ] || echo "node(s) not Ready or cordoned (a drain or a roll is under way): $bad"
-  tv="$(oa_fleet_versions '.status.nodeInfo.osImage')"; kv="$(oa_fleet_versions '.status.nodeInfo.kubeletVersion')"
-  case "$tv$kv" in *,*) echo "the nodes disagree on Talos ($tv) or Kubernetes ($kv): a roll stopped part way or is running" ;; esac
-  wt="$(oa_pinned_version "$CLUSTER_DIR" "$TFVARS" talos_version)"; wk="$(oa_pinned_version "$CLUSTER_DIR" "$TFVARS" kubernetes_version)"
-  { [ -z "$wt" ] || [ "$tv" = "$wt" ]; } || echo "the fleet runs Talos ${tv:-?}, the config pins $wt: the Talos roll is pending (task cluster-up converges it first)"
-  { [ -z "$wk" ] || [ "$kv" = "$wk" ]; } || echo "the fleet runs Kubernetes ${kv:-?}, the config pins $wk: the Kubernetes roll is pending (task cluster-up converges it first)"
-}
 
 REASONS=""
 if [ -n "$FLUX_DIFF" ]; then REASONS="$(gate_flux)"; fi
 ROLLWHY=""
-if [ -n "$FLUX_DIFF" ]; then ROLLWHY="$(gate_roll)"; fi
+if [ -n "$FLUX_DIFF" ]; then ROLLWHY="$(oa_roll_gate "$CLUSTER_DIR" "$TFVARS")"; fi
 
 if [ "$APPLY" -ne 1 ]; then
   [ -z "$FLUX_DIFF" ] || echo "Flux differs from the pin."

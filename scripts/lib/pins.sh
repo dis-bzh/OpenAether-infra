@@ -7,7 +7,7 @@
 # each of them the model is: a declared pin, a command that converges the cluster to it, a verify check that fails on any
 # difference. Both the commands and the verifier read the pins through THESE functions, so they cannot disagree.
 #
-# Needs common.sh (tfv, oa_pinned_version) sourced first. Reads files and prints; touches nothing.
+# Needs common.sh (tfv, oa_pinned_version, oa_fleet_versions) sourced first. Reads files and prints; touches nothing.
 # ==============================================================================
 
 # A fully qualified Git ref, as variables.tf demands (refs/(heads|tags)/...), restricted to the characters a tag or branch
@@ -84,4 +84,19 @@ oa_pin_diff() {
       }
       for (n in have) if (!(n in want)) print kind[n], n, "running", have[n], "not pinned"
     }' <(printf '%s\n' "$1") <(printf '%s\n' "$2") | sort
+}
+
+# Why a Talos or Kubernetes roll may be under way: prints one reason per line, nothing when the fleet is quiet and at its pins.
+# Shared by cluster-bootstrap-sync and cnpg-presync: neither may write while the nodes are moving. Needs common.sh (oa_fleet_versions,
+# oa_pinned_version) and a kubeconfig in KUBECONFIG. Usage: oa_roll_gate <cluster-dir> <tfvars-file>
+oa_roll_gate() {
+  local nodes bad tv kv wt wk
+  nodes="$(timeout 60 kubectl get nodes -o json 2>/dev/null)" || { echo "the nodes cannot be read: whether a roll is under way is UNKNOWN"; return; }
+  bad="$(jq -r '[.items[] | select(((.status.conditions[]? | select(.type == "Ready") | .status) != "True") or (.spec.unschedulable == true)) | .metadata.name] | join(" ")' <<<"$nodes")"
+  [ -z "$bad" ] || echo "node(s) not Ready or cordoned (a drain or a roll is under way): $bad"
+  tv="$(oa_fleet_versions '.status.nodeInfo.osImage')"; kv="$(oa_fleet_versions '.status.nodeInfo.kubeletVersion')"
+  case "$tv$kv" in *,*) echo "the nodes disagree on Talos ($tv) or Kubernetes ($kv): a roll stopped part way or is running" ;; esac
+  wt="$(oa_pinned_version "$1" "$2" talos_version)"; wk="$(oa_pinned_version "$1" "$2" kubernetes_version)"
+  { [ -z "$wt" ] || [ "$tv" = "$wt" ]; } || echo "the fleet runs Talos ${tv:-?}, the config pins $wt: the Talos roll is pending (task cluster-up converges it first)"
+  { [ -z "$wk" ] || [ "$kv" = "$wk" ]; } || echo "the fleet runs Kubernetes ${kv:-?}, the config pins $wk: the Kubernetes roll is pending (task cluster-up converges it first)"
 }
