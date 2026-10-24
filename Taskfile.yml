@@ -966,6 +966,44 @@ tasks:
       # has to reach it. APPROVE=auto inside is not a bypass: the first checkpoint
       # above already asked, and --check had told it what this would roll.
       - ./scripts/internal/converge-versions.sh {{.PROVIDER}} {{.ROLE}} {{.KEY}}
+      # CNPG presync (study LAB-B2), BEFORE the identity and apps-ref steps: the 0.4.0 apps content changes
+      # the pod spec (Barman plugin sidecar) and the PostgreSQL `synchronous` settings in one Flux apply,
+      # which stuck a Cluster on a reduced lab. Enabling `synchronous` first, as its own step, did not. On a
+      # plain bring-up of a NEW cluster no CNPG Cluster exists yet: the script exits 0 and says nothing.
+      # Same shape as the steps below: the TASK (backend env, kubeconfig), `task -x` for the script's own
+      # exit code, written at APPROVE=auto or a typed "yes", else the run FAILS naming the command. A
+      # refusal (exit 2: unhealthy Cluster, no recent Backup, a roll, fewer than 3 instances...) is a
+      # failure here too: never worked around.
+      - |
+        PS="task -x cnpg-presync PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}"
+        PSW="task cnpg-presync PROVIDER={{.PROVIDER}} ROLE={{.ROLE}} APPLY=1"
+        rc=0; $PS || rc=$?
+        case "$rc" in
+          0) ;;
+          3)
+            if [ "{{.APPROVE}}" = auto ]; then
+              $PS APPLY=1 || exit 1
+            elif [ -t 0 ]; then
+              printf '\nEnable synchronous replication on these CNPG Clusters now? Only "yes" is accepted: '
+              read -r reply
+              [ "$reply" = yes ] || {
+                echo "✗ not enabled: moving the apps ref over Clusters without it can leave them stuck. Enable it:" >&2
+                echo "    $PSW" >&2
+                echo "  (a dry run ends with exit status 3; a bare 'task' shows it as 201.)" >&2
+                exit 1
+              }
+              $PS APPLY=1 || exit 1
+            else
+              echo "✗ CNPG Clusters lack the 0.4.0 synchronous settings and nobody can be asked. Enable them:" >&2
+              echo "    $PSW" >&2
+              echo "  (a dry run ends with exit status 3; a bare 'task' shows it as 201.)" >&2
+              exit 1
+            fi ;;
+          *)
+            echo "✗ cnpg-presync failed (exit $rc). Run it alone to see why (no APPLY=1: writes nothing):" >&2
+            echo "    task cnpg-presync PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}" >&2
+            exit "$rc" ;;
+        esac
       # The cluster-identity ConfigMap of a cluster built by an OLDER release is never rewritten by the apply
       # above: Talos creates an inline manifest's objects when missing and does not update one that exists (lab
       # 25, D9). The apps that read a new key stay NotReady while cluster-verify can still pass. So the

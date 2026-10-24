@@ -50,6 +50,8 @@ case "\$(basename "\$0") \$*" in
   # The real scripts run tofu from the cluster directory, as the task leaves them; so does the stub.
   cluster-identity-sync.sh*) (cd "$C" && tofu output -json cluster_identity >/dev/null) || { echo "✗ tofu output cluster_identity failed" >&2; exit 1; }
                              case "\$*" in *--apply*) exit "\${APPLY_RC:-0}" ;; *) exit "\${IDENTITY_RC:-0}" ;; esac ;;
+  cnpg-presync.sh*--apply*) exit "\${PSAPPLY_RC:-0}" ;;
+  cnpg-presync.sh*) [ -n "\${PSAPPLY_RC:-}" ] && exit 3; exit "\${PRESYNC_RC:-0}" ;;
   cluster-apps-ref.sh*--apply*) exit "\${REFAPPLY_RC:-0}" ;;
   cluster-apps-ref.sh*) exit "\${REF_RC:-0}" ;;
   cluster-netcheck.sh*|cluster-security-tests.sh*) echo "\$(basename "\$0") KUBECONFIG=\${KUBECONFIG:-unset}" >>"$W/kc.log" ;;
@@ -61,7 +63,7 @@ chmod +x "$W/stub"
 for s in internal/talos-version.sh internal/ensure-buckets.sh internal/check-openbao-keys.sh internal/converge-versions.sh \
          internal/tf-backend.sh internal/bootstrap-in-state.sh internal/explain-failure.sh bootstrap/talos-image.sh \
          bootstrap/render-bootstrap-manifests.sh bootstrap/talos-tunnels.sh bootstrap/adopt-bootstrap.sh bootstrap/grow-nodes.sh internal/refuse-node-deletes.sh \
-         ops/backup-state.sh ops/cluster-identity-sync.sh ops/cluster-apps-ref.sh ops/cluster-netcheck.sh ops/cluster-security-tests.sh dev/infra-verify.sh; do
+         ops/backup-state.sh ops/cnpg-presync.sh ops/cluster-identity-sync.sh ops/cluster-apps-ref.sh ops/cluster-netcheck.sh ops/cluster-security-tests.sh dev/infra-verify.sh; do
   ln -s "$W/stub" "$W/scripts/$s"
 done
 ln -s "$W/stub" "$W/bin/tofu"; ln -s "$W/stub" "$W/bin/ssh-keygen"
@@ -318,6 +320,37 @@ EXTRA=IDENTITY_RC=1 run 0 "${UP[@]}" PROVIDER=scaleway ROLE=management; rc=$?
 [ "$rc" != 0 ] && grep -qF 'task cluster-identity-sync PROVIDER=scaleway ROLE=management' "$O" && grep -q 'failed (exit 1)' "$O" \
   && ok "any other failure keeps its own exit code in the message and names the command to run alone" || bad "exit $rc: $(tail_of)"
 
+
+echo "--- CNPG presync (study LAB-B2): synchronous replication is enabled BEFORE the apps ref moves, or the run fails ---"
+PS='^cnpg-presync.sh'
+PSA='^cnpg-presync.sh --tfvars [^ ]* --apply'
+run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+c="$(line_of "$W/calls.log" '^converge-versions.sh ')"; p="$(line_of "$W/calls.log" "$PS")"; a="$(line_of "$W/calls.log" '^cluster-apps-ref.sh')"
+d="$(line_of "$W/calls.log" '^cluster-identity-sync.sh')"; i="$(line_of "$W/calls.log" '^infra-verify.sh')"
+[ "$rc" = 0 ] && [ "$(calls "$PS")" = 1 ] && [ "$(calls "$PSA")" = 0 ] && [ -n "$p" ] && [ "$c" -lt "$p" ] && [ "$p" -lt "$a" ] && [ "$p" -lt "$d" ] && [ "$a" -lt "$i" ] \
+  && ok "nothing to presync (exit 0): one dry run, after the roll and BEFORE the apps ref and the identity steps, nothing written" \
+  || bad "exit $rc, calls $(calls "$PS"), roll ${c:-none}, presync ${p:-none}, apps-ref ${a:-none}, identity ${d:-none}"
+! grep -qE '^(CNPG Clusters|✓ synchronous|✗ .*(cnpg|CNPG))' "$O" && ok "and it is quiet: a new cluster's bring-up never mentions it" || bad "output mentions the presync: $(grep -E '^(CNPG|✓ synch|✗)' "$O" | head -2)"
+K='^tofu output -raw kubeconfig'
+[ "$(awk -v p="$p" -v k="$K" 'NR < p && $0 ~ k' "$W/calls.log" | wc -l)" -ge 2 ] \
+  && ok "the TASK ran the script: the kubeconfig was fetched again before it (lab 26, F1)" || bad "kubeconfig fetches before the presync: $(grep -n "$K" "$W/calls.log" | tr '\n' ' ')"
+EXTRA=PRESYNC_RC=3 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+p2="$(line_of "$W/calls.log" "$PSA")"; a="$(line_of "$W/calls.log" '^cluster-apps-ref.sh')"
+[ "$rc" = 0 ] && [ "$(calls "$PSA")" = 1 ] && [ -n "$p2" ] && [ "$p2" -lt "$a" ] && ok "APPROVE=auto and a difference: it is applied, before the apps ref, and the run goes on" || bad "exit $rc, applies $(calls "$PSA"): $(tail_of)"
+run 0 cluster-up KEY="$W/key" PROVIDER=ovh ROLE=workload APPROVE=auto; rc=$?
+grep -qx 'cnpg-presync.sh --tfvars envs/workload-ovh.tfvars' "$W/calls.log" && ok "ROLE and PROVIDER reach the script (the tfvars of this cluster)" || bad "calls: $(grep '^cnpg-presync' "$W/calls.log")"
+TTY=1 TTY_YES=2 EXTRA=PRESYNC_RC=3 run 0 cluster-up KEY="$W/key" PROVIDER=scaleway ROLE=management; rc=$?
+[ "$rc" != 0 ] && grep -q 'Enable synchronous replication on these CNPG Clusters' "$O" && grep -qF '    task cnpg-presync PROVIDER=scaleway ROLE=management APPLY=1' "$O" && [ "$(calls "$PSA")" = 0 ] && [ "$(calls '^cluster-apps-ref.sh')" = 0 ] \
+  && ok "at a terminal an answer other than yes: it fails naming the command, apps ref untouched" || bad "exit $rc: $(tail_of)"
+TTY=1 EXTRA=PRESYNC_RC=3 run 0 cluster-up KEY="$W/key" PROVIDER=scaleway; rc=$?
+[ "$(calls "$PSA")" = 1 ] && grep -q 'Enable synchronous replication on these CNPG Clusters' "$O" && ok "at a terminal it asks, and applies on yes" || bad "exit $rc, applies $(calls "$PSA"): $(tail_of)"
+EXTRA=PSAPPLY_RC=1 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" != 0 ] && [ "$(calls '^cluster-apps-ref.sh')" = 0 ] && ! grep -q 'cluster-up complete' "$O" && ok "an apply that fails (timeout, break-glass printed) fails cluster-up before the apps ref" || bad "exit $rc, apps-ref calls $(calls '^cluster-apps-ref.sh')"
+for r in 1 2; do
+  EXTRA=PRESYNC_RC=$r run 0 "${UP[@]}" PROVIDER=scaleway ROLE=management; rc=$?
+  [ "$rc" != 0 ] && grep -q "cnpg-presync failed (exit $r)" "$O" && grep -qF 'task cnpg-presync PROVIDER=scaleway ROLE=management' "$O" && [ "$(calls '^cluster-apps-ref.sh')" = 0 ] \
+    && ok "exit $r ($([ "$r" = 2 ] && echo a refusal || echo a failure)): cluster-up fails, names the command to run alone, the apps ref is not reached" || bad "exit $rc: $(tail_of)"
+done
 
 echo "--- K3 (lab 26): cluster-netcheck and cluster-security hand their script a KUBECONFIG ---"
 : >"$W/kc.log"
