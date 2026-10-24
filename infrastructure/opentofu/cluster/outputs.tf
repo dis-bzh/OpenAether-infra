@@ -70,6 +70,11 @@ output "control_plane_zones" {
   value       = local.control_plane_zones
 }
 
+output "worker_zones" {
+  description = "Failure domain of each worker, in worker_private_ips order, as placed and not measured (read by failure-domain-check.sh)"
+  value       = local.worker_zones
+}
+
 output "worker_private_ips" {
   description = "Private IPs of worker nodes"
   value       = local.worker_ips
@@ -173,4 +178,26 @@ output "installer_image" {
 output "cilium_manifest_file" {
   description = "Which bootstrap manifest the nodes boot Cilium from: cilium.yaml, cilium-hubble-drops.yaml (cilium_hubble_drop_log), or an override."
   value       = local.cilium_manifest_file
+}
+
+# Audit sink (infra #318): what was asked for, without a key. The buckets and keys are made by the shell scripts (docs/audit-sink.md).
+output "audit_sink" {
+  description = "The audit sink settings read from the tfvars (placement, prefix, lock mode, retention, endpoints); no key or password."
+  value = {
+    placement          = var.audit_sink_placement
+    prefix             = var.audit_sink_prefix
+    lock_mode          = var.audit_sink_lock_mode
+    retention_days     = var.audit_sink_retention_days
+    endpoint           = var.audit_sink_endpoint
+    region             = var.audit_sink_region
+    secondary_endpoint = var.audit_sink_secondary_endpoint
+    secondary_region   = var.audit_sink_secondary_region
+  }
+}
+
+# What the `cluster-identity` ConfigMap (flux-system) must hold, the same map the bootstrap template renders. Read by
+# scripts/ops/cluster-identity-sync.sh: Talos never updates an inline manifest's object that exists. Host and bucket names only.
+output "cluster_identity" {
+  description = "The data of the cluster-identity ConfigMap as the bootstrap manifest renders it (non-sensitive; empty when deploy_flux is off)."
+  value       = var.deploy_flux ? local.cluster_identity : {}
 }

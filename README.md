@@ -12,7 +12,7 @@
 Two different people land here, and they want different pages.
 
 **You want a cluster.** The one that needs no account and no credentials is
-`task local-up`, a six-node Talos cluster in Docker; at the shipped Talos 1.14.2
+`task local-up`, a six-node Talos cluster in Docker; at the shipped Talos 1.14.4
 it needs a host kernel of 6.15 or newer (#291), and `task local-up` refuses a host
 below that in a second. Then
 [Quick start](#quick-start) for a cloud, or
@@ -236,7 +236,7 @@ ours, and its `apps/clusters` is not yours.
 
 ```bash
 # Quotas: OVH and Outscale only — the script does not cover Scaleway.
-# On Scaleway, check the console: 3 control planes + 3 workers needs 6 instances
+# On Scaleway, check the console: 3 control planes + 4 workers needs 7 instances
 # of the type in your tfvars, and a new account may be capped at 1.
 task preflight-quotas PROVIDER=ovh
 
@@ -312,6 +312,7 @@ task security            # hardening checks
 | [docs/admin-access.md](docs/admin-access.md) | Day-1 path for the application platform: escrow, offline PKI, UI access, browser tests. **Not needed for an infrastructure-only cluster** |
 | [docs/capi-bootstrap.md](docs/capi-bootstrap.md) | Bootstrap a management via CAPI and make it self-managed |
 | [docs/deployment-test-matrix.md](docs/deployment-test-matrix.md) | What is validated, where, and how |
+| [docs/resilience.md](docs/resilience.md) | Losing a node, a control plane or a zone: what survives, the commands to run, the drills and their pass criteria |
 | [docs/capacity.md](docs/capacity.md) | What a cluster consumes per provider, and the sizing floor |
 | [docs/clea.md](docs/clea.md) | What the dependency report pins, and what a green report may claim |
 | [docs/emulated-cloud.md](docs/emulated-cloud.md) | Testing Scaleway/Outscale against a local emulator — and the limits of that |
@@ -321,6 +322,7 @@ task security            # hardening checks
 | [docs/key-management.md](docs/key-management.md) | Every key: period, impact if lost or leaked, replacement, erasure, recorded deviations (TLS-12, TLS-19) |
 | [docs/incident-response.md](docs/incident-response.md) | Suspected compromise, in order: evidence, backups, containment, rotation table, restore point, register |
 | [docs/backup-policy.md](docs/backup-policy.md) | Per dataset: mechanism, RPO/RTO target, retention, destination, key holder, restore test, destruction; what is not backed up |
+| [docs/audit-sink.md](docs/audit-sink.md) | The second, out-of-cluster, object-locked and encrypted copy of the audit log (class A): placement choices and their guarantees, data path, keys, failure behaviour, limits, lab pass criteria |
 | [docs/disaster-recovery.md](docs/disaster-recovery.md) | The one ordered recovery chain (OpenBao before Zitadel's database), prerequisites, time targets, the yearly drill |
 | [docs/security-architecture.md](docs/security-architecture.md) | Assets, administration paths and how each is authenticated, privileged accounts, accepted deviations |
 | [docs/network.md](docs/network.md) | Trust zones, CIDR plan, the two enforcement layers, the flow matrix (generated from the Terraform), known gaps |

@@ -33,6 +33,13 @@ echo "\$(basename "\$0") \$*" >>"$W/calls.log"
 case "\$(basename "\$0") \$*" in
   "tofu plan"*) for a in "\$@"; do case "\$a" in -out=*) : >"\${a#-out=}" ;; esac; done ;;
   "tofu output -raw "*) echo "fixture-\$3" ;;
+  # The real tofu, in a cluster directory whose backend was not initialised in THIS shell (lab 26, F1): it refuses unless
+  # the task env (TF_DATA_DIR and the S3 credentials of *provider-env) is there.
+  "tofu output -json cluster_identity")
+    if [ -z "\${TF_DATA_DIR:-}" ] || [ -z "\${AWS_ACCESS_KEY_ID:-}" ] || [ -z "\${AWS_SECRET_ACCESS_KEY:-}" ]; then
+      echo "Error: Backend initialization required, please run \"tofu init\"" >&2; exit 1
+    fi
+    echo '{}' ;;
   "talos-version.sh workload-"*) echo v0.0.1-fixture ;;
   talos-version.sh*) echo v0.0.0-fixture ;;
   tf-backend.sh*) echo -backend-config=path=fixture.tfstate ;;
@@ -40,6 +47,12 @@ case "\$(basename "\$0") \$*" in
   ssh-keygen*) exit 1 ;;
   infra-verify.sh*) echo "fixture verifier \$*: exit \${VERIFY_RC:?}"; exit "\$VERIFY_RC" ;;
   adopt-bootstrap.sh*) exit "\${ADOPT_RC:-0}" ;;
+  # The real scripts run tofu from the cluster directory, as the task leaves them; so does the stub.
+  cluster-identity-sync.sh*) (cd "$C" && tofu output -json cluster_identity >/dev/null) || { echo "✗ tofu output cluster_identity failed" >&2; exit 1; }
+                             case "\$*" in *--apply*) exit "\${APPLY_RC:-0}" ;; *) exit "\${IDENTITY_RC:-0}" ;; esac ;;
+  cluster-apps-ref.sh*--apply*) exit "\${REFAPPLY_RC:-0}" ;;
+  cluster-apps-ref.sh*) exit "\${REF_RC:-0}" ;;
+  cluster-netcheck.sh*|cluster-security-tests.sh*) echo "\$(basename "\$0") KUBECONFIG=\${KUBECONFIG:-unset}" >>"$W/kc.log" ;;
   talos-image.sh*--retain*) echo "fixture retention \$*"; exit "\${RETAIN_RC:-0}" ;;
 esac
 exit 0
@@ -48,7 +61,7 @@ chmod +x "$W/stub"
 for s in internal/talos-version.sh internal/ensure-buckets.sh internal/check-openbao-keys.sh internal/converge-versions.sh \
          internal/tf-backend.sh internal/bootstrap-in-state.sh internal/explain-failure.sh bootstrap/talos-image.sh \
          bootstrap/render-bootstrap-manifests.sh bootstrap/talos-tunnels.sh bootstrap/adopt-bootstrap.sh bootstrap/grow-nodes.sh internal/refuse-node-deletes.sh \
-         ops/backup-state.sh dev/infra-verify.sh; do
+         ops/backup-state.sh ops/cluster-identity-sync.sh ops/cluster-apps-ref.sh ops/cluster-netcheck.sh ops/cluster-security-tests.sh dev/infra-verify.sh; do
   ln -s "$W/stub" "$W/scripts/$s"
 done
 ln -s "$W/stub" "$W/bin/tofu"; ln -s "$W/stub" "$W/bin/ssh-keygen"
@@ -67,7 +80,7 @@ run() { # PCHK=<mode> sets OA_PASSPHRASE_CHECK; <verifier rc> <task args...> —
       ${PCHK:+OA_PASSPHRASE_CHECK="$PCHK"} ${EXTRA:+"$EXTRA"}
       "$TASK" -d "$W" "$@")
   if [ -n "${TTY:-}" ]; then
-    printf 'yes\n%.0s' 1 2 3 4 5 6 7 8 9 | script -qefc "$(printf '%q ' "${cmd[@]}")" /dev/null >"$O" 2>&1
+    { printf 'yes\n%.0s' $(seq 1 "${TTY_YES:-9}"); printf 'no\n%.0s' 1 2 3; } | script -qefc "$(printf '%q ' "${cmd[@]}")" /dev/null >"$O" 2>&1
     local st=$?; tr -d '\r' <"$O" >"$O.lf" && mv "$O.lf" "$O"; return "$st"
   fi
   "${cmd[@]}" </dev/null >"$O" 2>&1
@@ -139,7 +152,8 @@ adopted_once workload ovh
 K='^tofu output -raw kubeconfig'
 k1="$(grep -n "$K" "$W/calls.log" | head -1 | cut -d: -f1)"; k2="$(line_of "$W/calls.log" "$K")"
 c="$(line_of "$W/calls.log" '^converge-versions.sh ')"; i="$(line_of "$W/calls.log" '^infra-verify.sh')"
-[ "$(calls "$K")" = 2 ] && [ -n "$c" ] && [ -n "$i" ] && [ "${k1:-0}" -lt "$c" ] && [ "$c" -lt "${k2:-0}" ] && [ "$k2" -lt "$i" ] \
+# The identity and apps-ref TASKS fetch it too (lab 26, F1), so "at least two": one before the roll, the last after it.
+[ "$(calls "$K")" -ge 2 ] && [ -n "$c" ] && [ -n "$i" ] && [ "${k1:-0}" -lt "$c" ] && [ "$c" -lt "${k2:-0}" ] && [ "$k2" -lt "$i" ] \
   && ok "kubeconfig is fetched before the roll, and again between the roll and the verifier" \
   || bad "fetches: $(calls "$K"), first ${k1:-none}, last ${k2:-none}; roll at ${c:-none}; verify at ${i:-none}"
 
@@ -265,6 +279,85 @@ run 0 cluster-verify PROVIDER=scaleway; rc=$?
   || bad "exit $rc, refreshes $(calls '^tofu output -raw kubeconfig'), verifier $(calls '^infra-verify.sh ')"
 [ "$(stat -c %a "$C/kubeconfig" "$C/talosconfig" 2>/dev/null | sort -u)" = 600 ] \
   && ok "kubeconfig and talosconfig are written 0600" || bad "modes: $(stat -c '%n %a' "$C/kubeconfig" "$C/talosconfig" 2>&1 | tr '\n' ' ')"
+
+
+echo "--- cluster-identity: a ConfigMap that differs is written or the run fails, never green over it (lab 25, D9) ---"
+ID='^cluster-identity-sync.sh'
+run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+c="$(line_of "$W/calls.log" '^converge-versions.sh ')"; d="$(line_of "$W/calls.log" "$ID")"; i="$(line_of "$W/calls.log" '^infra-verify.sh')"
+[ "$rc" = 0 ] && [ "$(calls "$ID")" = 1 ] && [ "$(calls "$ID --apply")" = 0 ] && [ -n "$c" ] && [ -n "$d" ] && [ -n "$i" ] && [ "$c" -lt "$d" ] && [ "$d" -lt "$i" ] \
+  && ok "in sync: one dry run, after the roll and before the verifier, nothing written" \
+  || bad "exit $rc, calls: $(grep -c "$ID" "$W/calls.log"), roll ${c:-none}, sync ${d:-none}, verify ${i:-none}"
+EXTRA=IDENTITY_RC=3 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" = 0 ] && [ "$(calls "$ID --apply")" = 1 ] && ok "APPROVE=auto and a difference: it is written, the run goes on" \
+  || bad "exit $rc, applies $(calls "$ID --apply"): $(tail_of)"
+EXTRA=APPLY_RC=1 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" = 0 ] && ok "(control) a sync that was not asked to apply does not fail the run" || bad "control exit $rc"
+EXTRA=IDENTITY_RC=1 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" != 0 ] && ! grep -q 'cluster-up complete' "$O" && ok "a sync failure fails cluster-up" || bad "exit $rc"
+EXTRA=IDENTITY_RC=4 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" = 0 ] && [ "$(calls "$ID --apply")" = 0 ] && ok "ConfigMap not there yet (exit 4): a warning, not a failure" || bad "exit $rc"
+TTY=1 EXTRA=IDENTITY_RC=3 run 0 cluster-up KEY="$W/key" PROVIDER=scaleway; rc=$?
+[ "$(calls "$ID --apply")" = 1 ] && grep -q 'Write these cluster-identity keys' "$O" && ok "at a terminal it asks, and writes on yes" || bad "exit $rc, applies $(calls "$ID --apply"): $(tail_of)"
+
+
+echo "--- F1 (lab 26): the steps run through the TASKS, so tofu has its backend and credentials; the messages name the exact command ---"
+# The env of run() holds no TF_DATA_DIR and no AWS_* variable. The stub tofu refuses `output` without them, as the real one does.
+run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" = 0 ] && grep -q '^tofu output -json cluster_identity' "$W/calls.log" \
+  && ok "cluster-up resolved the backend and the S3 credentials for the identity step (tofu output answered)" \
+  || bad "exit $rc, identity step without the provider env: $(grep -h 'Backend\|failed' "$O" | head -2 | tr '\n' ' ')"
+TTY=1 TTY_YES=2 EXTRA=IDENTITY_RC=3 run 0 cluster-up KEY="$W/key" PROVIDER=scaleway ROLE=management; rc=$?
+[ "$rc" != 0 ] && grep -qF '    task cluster-identity-sync PROVIDER=scaleway ROLE=management APPLY=1' "$O" && grep -q 'shows it as 201' "$O" \
+  && ok "an answer other than yes: the failure names the command with PROVIDER and ROLE filled in, and says 201" \
+  || bad "exit $rc: $(tail_of)"
+TTY=1 TTY_YES=2 EXTRA=REF_RC=3 run 0 cluster-up KEY="$W/key" PROVIDER=scaleway ROLE=management; rc=$?
+[ "$rc" != 0 ] && grep -qF '    task cluster-apps-ref PROVIDER=scaleway ROLE=management APPLY=1' "$O" && grep -q 'shows it as 201' "$O" \
+  && ok "the same for the apps ref" || bad "exit $rc: $(tail_of)"
+EXTRA=IDENTITY_RC=1 run 0 "${UP[@]}" PROVIDER=scaleway ROLE=management; rc=$?
+[ "$rc" != 0 ] && grep -qF 'task cluster-identity-sync PROVIDER=scaleway ROLE=management' "$O" && grep -q 'failed (exit 1)' "$O" \
+  && ok "any other failure keeps its own exit code in the message and names the command to run alone" || bad "exit $rc: $(tail_of)"
+
+
+echo "--- K3 (lab 26): cluster-netcheck and cluster-security hand their script a KUBECONFIG ---"
+: >"$W/kc.log"
+run 0 cluster-netcheck PROVIDER=scaleway; rc=$?
+[ "$rc" = 0 ] && grep -qx "cluster-netcheck.sh KUBECONFIG=$C/kubeconfig" "$W/kc.log" \
+  && ok "cluster-netcheck: the script sees this cluster's kubeconfig in a shell that exported none" \
+  || bad "netcheck exit $rc, saw: $(tr '\n' ' ' <"$W/kc.log")"
+: >"$W/kc.log"
+EXTRA=KUBECONFIG=/elsewhere/other-cluster run 0 cluster-netcheck PROVIDER=scaleway; rc=$?
+grep -qx "cluster-netcheck.sh KUBECONFIG=$C/kubeconfig" "$W/kc.log" \
+  && ok "cluster-netcheck: an exported KUBECONFIG of another cluster is not followed" || bad "netcheck followed the caller: $(tr '\n' ' ' <"$W/kc.log")"
+: >"$W/kc.log"
+run 0 cluster-security; rc=$?
+[ "$rc" = 0 ] && grep -qx "cluster-security-tests.sh KUBECONFIG=$W/infrastructure/opentofu/cluster/kubeconfig" "$W/kc.log" \
+  && ok "cluster-security: KUBECONFIG defaults to this checkout's cluster" || bad "security exit $rc, saw: $(tr '\n' ' ' <"$W/kc.log")"
+: >"$W/kc.log"
+EXTRA=KUBECONFIG=/elsewhere/other-cluster run 0 cluster-security; rc=$?
+grep -qx "cluster-security-tests.sh KUBECONFIG=/elsewhere/other-cluster" "$W/kc.log" \
+  && ok "cluster-security: the caller's own KUBECONFIG wins" || bad "security overrode the caller: $(tr '\n' ' ' <"$W/kc.log")"
+
+
+echo "--- apps ref: a live ref that differs from git_ref is moved or the run fails, never green over it (infra #408) ---"
+AR='^cluster-apps-ref.sh'
+run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+c="$(line_of "$W/calls.log" '^converge-versions.sh ')"; d="$(line_of "$W/calls.log" "$AR")"; i="$(line_of "$W/calls.log" '^infra-verify.sh')"
+[ "$rc" = 0 ] && [ "$(calls "$AR")" = 1 ] && [ "$(calls "$AR --tfvars [^ ]* --apply")" = 0 ] && [ -n "$d" ] && [ "$c" -lt "$d" ] && [ "$d" -lt "$i" ] \
+  && ok "in sync: one dry run, after the roll and before the verifier, nothing written" || bad "exit $rc, sync ${d:-none}"
+EXTRA=REF_RC=3 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" = 0 ] && [ "$(calls "$AR --tfvars [^ ]* --apply")" = 1 ] && ok "APPROVE=auto and a difference: the ref is moved, the run goes on" || bad "exit $rc: $(tail_of)"
+EXTRA=REF_RC=1 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" != 0 ] && ! grep -q 'cluster-up complete' "$O" && ok "a failure of the ref sync fails cluster-up" || bad "exit $rc"
+EXTRA=REF_RC=2 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" != 0 ] && ok "a refusal (exit 2) fails cluster-up" || bad "exit $rc"
+EXTRA=REF_RC=4 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" = 0 ] && [ "$(calls "$AR --tfvars [^ ]* --apply")" = 0 ] && ok "no GitRepository (exit 4): a note, not a failure" || bad "exit $rc"
+TTY=1 EXTRA=REF_RC=3 run 0 cluster-up KEY="$W/key" PROVIDER=scaleway; rc=$?
+[ "$(calls "$AR --tfvars [^ ]* --apply")" = 1 ] && grep -q 'Point the live GitRepository' "$O" && ok "at a terminal it asks, and moves on yes" || bad "exit $rc: $(tail_of)"
+run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+grep -q 'cluster-up did NOT change' "$O" && grep -q 'cluster-bootstrap-sync' "$O" && grep -q 'CAPI child' "$O" \
+  && ok "the end of cluster-up says what it did NOT change" || bad "no 'did NOT change' statement: $(tail_of)"
 
 
 echo

@@ -217,6 +217,36 @@ check "compliance_lock_on_dev" {
   }
 }
 
+# Audit sink (infra #318): where each sink sits, against the cluster's own provider. Mirrors scripts/lib/audit-sink.sh, which is
+# the one that REFUSES (ensure-buckets.sh, before a bucket is created): a check is only a warning, so that a plan and a destroy
+# keep working on a cluster whose tfvars drifted.
+locals {
+  audit_sink_provider_of = {
+    for ep in distinct(compact([var.audit_sink_endpoint, var.audit_sink_secondary_endpoint, var.s3_primary_endpoint])) : ep =>
+    can(regex("\\.scw\\.cloud", lower(ep))) ? "scaleway" : can(regex("\\.outscale\\.com", lower(ep))) ? "outscale" : can(regex("\\.io\\.cloud\\.ovh\\.net", lower(ep))) ? "ovh" : ""
+  }
+  audit_sink_other_ok = var.audit_sink_placement == "off" || !contains(["other_provider", "both"], var.audit_sink_placement) || (
+    var.audit_sink_endpoint != var.s3_primary_endpoint &&
+    (local.audit_sink_provider_of[var.audit_sink_endpoint] == "" || local.audit_sink_provider_of[var.audit_sink_endpoint] != local.active_provider)
+  )
+  audit_sink_same_ep = var.audit_sink_placement == "same_provider_other_region" ? var.audit_sink_endpoint : (var.audit_sink_placement == "both" ? var.audit_sink_secondary_endpoint : "")
+  audit_sink_same_rg = var.audit_sink_placement == "same_provider_other_region" ? var.audit_sink_region : (var.audit_sink_placement == "both" ? var.audit_sink_secondary_region : "")
+  audit_sink_same_ok = local.audit_sink_same_ep == "" || (
+    local.audit_sink_same_rg != var.s3_primary_region &&
+    (local.audit_sink_provider_of[local.audit_sink_same_ep] == local.active_provider || (local.audit_sink_provider_of[local.audit_sink_same_ep] == "" && local.audit_sink_same_ep == var.s3_primary_endpoint))
+  )
+  # What the cluster-identity ConfigMap publishes: host names only (the egress policy cannot read a Secret).
+  audit_sink_host           = var.audit_sink_placement == "off" ? "" : try(regex("^https?://([^/:]+)", var.audit_sink_endpoint)[0], "")
+  audit_sink_secondary_host = var.audit_sink_placement != "both" ? "" : try(regex("^https?://([^/:]+)", var.audit_sink_secondary_endpoint)[0], "")
+}
+
+check "audit_sink_placement_matches_providers" {
+  assert {
+    condition     = local.audit_sink_other_ok && local.audit_sink_same_ok
+    error_message = "audit_sink_placement = ${var.audit_sink_placement}: the sink endpoint is not where that choice says (other_provider/both: the first endpoint must be on another provider than the cluster's; same_provider_other_region/both: the same-provider sink must be on the cluster's provider and in a region other than s3_primary_region). scripts/internal/ensure-buckets.sh refuses this before creating a bucket; docs/audit-sink.md, section 2."
+  }
+}
+
 # A warning, not a failure: the root disk of an Outscale node is the OMI's (the raw Talos image, ~11-12 GiB), and the full
 # application stack puts ~11 GB of images on each worker (lab 12, measured on Scaleway). Not yet measured on Outscale.
 check "outscale_root_volume_for_platform" {
@@ -484,6 +514,12 @@ locals {
     coalesce(one(module.outscale[*].control_plane_zones), []),
     coalesce(one(module.proxmox[*].control_plane_zones), []),
   )
+  worker_zones = concat(
+    coalesce(one(module.scw[*].worker_zones), []),
+    coalesce(one(module.ovh[*].worker_zones), []),
+    coalesce(one(module.outscale[*].worker_zones), []),
+    coalesce(one(module.proxmox[*].worker_zones), []),
+  )
 
   worker_ips = coalesce(
     length(coalesce(one(module.scw[*].worker_private_ips), [])) > 0 ? module.scw[0].worker_private_ips : null,
@@ -522,6 +558,26 @@ locals {
   # read "openaether-dev" on all three clouds, so they distinguish nothing.
   cluster_id = "${var.cluster_name}-${var.environment}-${local.active_provider}"
 
+  # The data of the `cluster-identity` ConfigMap, names and values exactly as the bootstrap template renders them. Host names,
+  # bucket names and a URL: nothing secret. Talos creates an inline manifest's objects when they are missing and never
+  # updates one that exists (modules/talos, docs/upgrade.md), so a running cluster gets new keys only through
+  # `task cluster-identity-sync`, which reads the `cluster_identity` output.
+  cluster_identity = merge({
+    CLUSTER_NAME = local.cluster_id
+    # Longhorn wants `s3://bucket@region/` (assembled HERE: Flux substitution cannot concatenate conditionally, no `${x:+y}`).
+    BACKUP_TARGET_URL = "s3://${local.backup_data_bucket}@${var.s3_primary_region}/"
+    # CNPG (PITR) wants the bucket and the endpoint SEPARATELY.
+    BACKUP_S3_BUCKET   = local.backup_data_bucket
+    BACKUP_S3_ENDPOINT = var.s3_primary_endpoint
+    # The replica copy: the `-backup` twin of the data bucket, on the replica store (the primary one when none is set).
+    BACKUP_REPLICA_S3_BUCKET   = "${local.backup_data_bucket}-backup"
+    BACKUP_REPLICA_S3_ENDPOINT = var.s3_replica_endpoint != "" ? var.s3_replica_endpoint : var.s3_primary_endpoint
+    },
+    # Audit sink (infra #318): the host names only, for the egress policy of the opt-in component. Empty = not published.
+    local.audit_sink_host != "" ? { AUDIT_SINK_HOST = local.audit_sink_host } : {},
+    local.audit_sink_secondary_host != "" ? { AUDIT_SINK_SECONDARY_HOST = local.audit_sink_secondary_host } : {},
+  )
+
   # Emptied by the SAME switch. modules/talos:116 only tests flux_manifest, so a
   # half-empty pair would inject a manifest with no content — asymmetric and
   # untested. One variable governs both, and the template is not even rendered
@@ -538,14 +594,15 @@ locals {
     # Recovery-share holders of OpenBao (openbao-keys.tf). Empty list = the ConfigMap is not rendered.
     openbao_pgp_keys  = local.openbao_pgp_keys
     openbao_threshold = local.openbao_threshold
-    # Destination for Longhorn volume backups. The full URL is assembled HERE:
-    # on the manifest side `value:` is a plain string and Flux substitution
-    # cannot concatenate conditionally (no `${x:+y}`).
-    backup_target_url = "s3://${local.backup_data_bucket}@${var.s3_primary_region}/"
-    # CNPG (PITR) expects the bucket and the endpoint SEPARATELY, in a different
-    # format from Longhorn — hence three keys rather than one.
-    backup_s3_bucket   = local.backup_data_bucket
-    backup_s3_endpoint = var.s3_primary_endpoint
+    # The ConfigMap's keys are built ONCE, in local.cluster_identity above, and read back here by the template and by
+    # the `cluster_identity` output (`task cluster-identity-sync` writes it to a live cluster).
+    backup_target_url          = local.cluster_identity.BACKUP_TARGET_URL
+    backup_s3_bucket           = local.cluster_identity.BACKUP_S3_BUCKET
+    backup_s3_endpoint         = local.cluster_identity.BACKUP_S3_ENDPOINT
+    backup_replica_s3_bucket   = local.cluster_identity.BACKUP_REPLICA_S3_BUCKET
+    backup_replica_s3_endpoint = local.cluster_identity.BACKUP_REPLICA_S3_ENDPOINT
+    audit_sink_host            = lookup(local.cluster_identity, "AUDIT_SINK_HOST", "")
+    audit_sink_secondary_host  = lookup(local.cluster_identity, "AUDIT_SINK_SECONDARY_HOST", "")
   })
 }
 
@@ -605,8 +662,10 @@ module "node_ports" {
 module "talos" {
   source = "../modules/talos"
 
-  cluster_name       = "${var.cluster_name}-${var.environment}"
-  cluster_endpoint   = "https://${local.k8s_lb_ip}:6443"
+  cluster_name     = "${var.cluster_name}-${var.environment}"
+  cluster_endpoint = "https://${local.k8s_lb_ip}:6443"
+  # Where the provider placed each node: the zone label the zone-loss alert and failure-domain-check read (0.4.0 M4).
+  node_zones         = { control_plane = local.control_plane_zones, worker = local.worker_zones }
   kubernetes_version = var.kubernetes_version
   talos_version      = var.talos_version
   # Container mode has no installer and no extensions; everywhere else the
@@ -666,6 +725,11 @@ module "talos" {
   node_log_forwarding   = var.node_log_forwarding
   node_time_servers     = var.node_time_servers
   node_baseline         = var.node_baseline
+  coredns_ha            = var.coredns_ha
+
+  node_monitor_grace_period_seconds = var.node_monitor_grace_period_seconds
+
+  talos_api_access_namespaces = var.etcd_snapshot_api_access ? ["foundation-databases"] : []
 
   disk_encryption_passphrase_length = var.disk_encryption_passphrase_length
 

@@ -413,7 +413,7 @@ script or runbook wraps `talosctl rollback`. The notes say it is unproven.
 ## 8. Release mechanics
 
 Only once everything above is green. There is **no release workflow**
-(`.github/workflows` holds `ci`, `clea`, `repo-settings`, `security`, and the manual,
+(`.github/workflows` holds `ci`, `clea`, `repo-settings`, `release-tag` (it only checks the tag), `security`, and the manual,
 dormant `real-cloud-regression`, which is not one): the tag and
 the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
 
@@ -463,6 +463,18 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       `repo-settings.yml` only warns about it. The `tags` ruleset blocks moving
       or deleting any tag, so **0.1.0's re-cut is not available**: §9 runs first,
       and the release skill's "Withdrawing a tag" needs an admin to relax it.
+- [ ] the tag is **annotated and signed** by a key of the signer table (`docs/signed-commits.md`, #386), made on the
+      release sha and pushed before the release exists:
+      ```bash
+      git tag -s -u 1D5895FDC14F5BAD6D1B170B5CA26229559044A2 -m "OpenAether-infra <tag>" <tag> <release sha>
+      ./scripts/dev/check-release-tag.sh <tag> --notes notes.md    # annotated, signer in the table, notes name the sha
+      git push origin <tag>
+      gh release create <tag> --verify-tag --notes-file notes.md   # refuses when the tag is not on the remote
+      ```
+      The notes carry the release commit sha in full. A client verifies with `git verify-tag <tag>` (public key
+      `docs/signers/release-vps.asc`, fingerprint compared with the table) and `git rev-parse <tag>^{commit}` against the
+      notes. Immutable releases are on (owner, 2026-10); `.github/workflows/release-tag.yml` repeats the check when a tag
+      arrives. It is a verdict after the fact: run it before pushing.
 - [ ] §9's stranger clone ran on the release commit; then tag it. `git describe
       --tags` is clean and `git rev-parse 0.2.0^{commit}` is the sha §9 tested.
 - [ ] a GitHub Release by hand, whose notes name the limits and end with an **Open

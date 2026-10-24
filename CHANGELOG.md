@@ -14,19 +14,167 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ## [Unreleased]
 
-## [0.3.2] — 2026-10-22
-
-0.3.2 is a **security patch** of 0.3.1. It pairs with OpenAether-apps 0.3.2, which carries the actual change (Zitadel v4.19.5 against three HIGH account-takeover advisories, a generated login session
-cookie secret, wait4x 3.7.2, dated VEX waivers and an issue when the image scan fails: see its CHANGELOG). On this side the release only moves the pin: the `git_ref` default and the twelve
-`envs/*.tfvars.example` now point at OpenAether-apps `refs/tags/0.3.2` (they pointed at `refs/tags/0.3.1`), so apps 0.3.2 must be tagged first, and the tftest assertion on the rendered GitRepository
-follows. Nothing in the infrastructure is patched for these advisories; the infra image scan was green. The fixes below were merged on main after 0.3.1 and ship in this release. Bug fixes, documentation
-corrections and safety nets, no new scope. Rung reached by the lines below: **mocked** (self-tests and doc checks); the infra items were not observed on a cloud. Lab 18 (Scaleway,
+Bug fixes, documentation corrections and safety nets after 0.3.1, for the next release (a 0.3.2 patch was prepared and abandoned: there is no 0.3.2 tag, and `git_ref` still pins
+OpenAether-apps `refs/tags/0.3.1`). No new scope. Rung reached by the lines below: **mocked** (self-tests and doc checks); the infra items were not observed on a cloud. Lab 18 (Scaleway,
 infra 7e367d9 / apps 75e464f, on branches) ran a nominal `cluster-up` in 9 min 07 s with `cluster-verify` at 15 passed, 0 failed; it did not exercise #293 or #360. It does not fix the two
 infra issues the series set out to look at: #42 (the API unreachable for seconds during a control-plane roll) and #375 (the OVH hard-reboot window) stay open for 0.4.0, see below.
 Not a compliance claim. The apps-side results (#134 partial, #143, #144) are in the OpenAether-apps CHANGELOG.
 
+
+### Fixed (0.4.0, lab 26 findings F1, K1, K2, K3, C1; rung: mocked, offline, UNVERIFIED on a cluster; lab 26 reproduced each defect on Scaleway)
+- **F1** `task cluster-up` ran `cluster-identity-sync.sh` and `cluster-apps-ref.sh` directly, outside the task environment, so `tofu output` stopped with "Backend initialization required" after the 41-minute roll (seen twice). It now runs the tasks (`task -x`), which carry the backend, the S3 credentials and the kubeconfig step. `test-cluster-up.sh` runs the step with no `TF_DATA_DIR` and no S3 variable against a tofu stub that refuses as the real one does (33 assertions fail without the change).
+- **K1** A bare `task` reports the scripts' exit 3 ("differs") as 201. The `cluster-up` messages say so and name the exact command with `PROVIDER` and `ROLE` filled in; `docs/upgrade.md` lists the codes.
+- **K2** The 0.4.0 CoreDNS HA does not reach a cluster built by an older release (Talos creates inline-manifest objects only when absent). `cluster-verify` gains "CoreDNS runs the declared replica count and spread" (BAD both ways, with the command); `scripts/ops/coredns-ha-patch.json` is the documented one-time patch; `docs/resilience.md` and `docs/upgrade.md` are corrected.
+- **K3** `cluster-security` and `cluster-netcheck` export the cluster's `KUBECONFIG` to their scripts.
+- **C1** After a drained `cluster-roll -- --node=` the Node object is kept, so `cluster-replaced-node-cleanup` found nothing while local-path pods crash-looped. It now names those pods, exits 1 and prints `... -- --disk-replaced`, which treats every volume pinned to the node as the old disk's with every safety rule kept; `cluster-roll` prints the command after a worker replace.
+
+### Added (0.4.0, lab 26 findings D2 and H1; rung: mocked, default unchanged, UNVERIFIED on a cluster)
+- `node_monitor_grace_period_seconds` (default 0 = Kubernetes' 50 s): the kube-controller-manager's grace period and the matching kubelet heartbeat, 20 to 300 s. Nothing changes unless it is set, and it is not to be set until a lab proves a value: `docs/resilience.md` ("Failure detection time") gives the numbers, the CNPG `primaryLease` lever on the apps side and the experiment to run.
+
+### Fixed (0.4.0, lab 25 finding D9: new `cluster-identity` values never reached a running cluster; rung: mocked, offline, UNVERIFIED on a cluster)
+- **Cause, from the code and Talos's source.** The `cluster-identity` ConfigMap (and the GitRepository and Kustomization `openaether-platform`, hence `git_ref`) are objects of the Talos inline manifest `flux-bootstrap`.
+  Talos's manifest-apply controller (`release-1.14`, read through a summarising fetch, not cloned) checks each object with a `Get` and applies it only when it is not found: an object that exists is never updated. The plan's
+  "3 to change" is the control-plane machine configs carrying the new manifest text; the objects on the cluster keep their old data. Lab 25 saw exactly that (4 keys kept, `cnpg` and 8 dependants NotReady, `cluster-up` rc 0
+  because `cluster-verify` reads neither the ConfigMap nor the Kustomizations). Not shown: a `talosctl get manifests` read, and the same test on the GitRepository and Kustomization.
+- **`task cluster-identity-sync PROVIDER=… [ROLE=…] [APPLY=1]`** (`scripts/ops/cluster-identity-sync.sh`): dry run by default, shows the keys to add or change and exits 3 on a difference; `APPLY=1` merges only the rendered keys into
+  the ConfigMap, reads them back, asks Flux to reconcile, and is idempotent. It reads the new non-sensitive root output `cluster_identity`, built once in `cluster/main.tf` (`local.cluster_identity`) and used by the bootstrap
+  template too, so the two cannot drift (`flux-git-verify.tftest.hcl` compares them). `cluster-up` runs the dry run after the node roll and either writes (`APPROVE=auto`, or a typed "yes") or fails naming the command; it no
+  longer ends green over a ConfigMap that is not what the config renders. Tests: `test-cluster-identity-sync.sh` (kubectl and tofu stubs), `test-cluster-up.sh`, the two tofu test runs. Not run on a cluster.
+- **`docs/upgrade.md` (+ FR): "From 0.3.x to 0.4.0 (an existing cluster)"**: the ordered steps, the live `git_ref` patch, the identity sync, the Barman plugin note, and what lab 25 did and did not observe. Gateway API CRDs 1.6.0 and
+  Istio 1.31.3 on an existing cluster are a REBUILD ASIDE, not an in-place hop; lab 25's 5-minute in-place Istio hop is reported but is not the supported path. Every step not run is marked UNVERIFIED. Still open: the `cnpg`
+  Kustomization stayed "Reconciliation in progress" 10 minutes after the keys were added by hand (not investigated); the live `git_ref` command is `task cluster-apps-ref` (see Added, infra #408).
+- The apps side (OpenAether-apps `CHANGELOG.md`): the replica bucket and endpoint default to a non-empty placeholder, so a missing key no longer nulls `endpointURL` and turns the database layer NotReady.
+
+### Added (0.4.0, infra #408: every pinned thing gets a declared pin, a converging command and a verify check; rung: mocked, offline, UNVERIFIED on a cluster)
+- **Supported upgrade path, owner decision 2026-10-24:** before 1.0.0 only the previous minor to the current one (0.3.x to 0.4.0). No path from older versions is built or documented. The in-place move of the 0.3.x
+  apps content (Istio, Gateway API CRDs) was observed once, in lab 25; a rebuild aside stays an option; the supported, tested path is the one the release notes name.
+- **`task cluster-apps-ref`** (`scripts/ops/cluster-apps-ref.sh`): dry run shows `git_ref`, the ref the live GitRepository follows and the live `GIT_REF` (exit 3 on a difference); `APPLY=1 [REF=refs/tags/X]` rewrites
+  the tfvars (diff, backup `.apps-ref-bak`), patches those two fields only (never `spec.verify`), reconciles and waits for the revision of that ref with a timeout. Validates the ref like `variables.tf`; a branch is
+  warned about loudly and refused as `REF=` without `ALLOW_BRANCH=1`. `cluster-up` runs the dry run after the node roll like the identity sync and ends by saying what it did NOT change.
+- **`task cluster-bootstrap-sync`** (`scripts/ops/cluster-bootstrap-sync.sh`): compares Cilium and the seven Flux controllers with the lock-checked artifacts; `APPLY=1` server-side applies `flux-install.yaml` only, refusing
+  a downgrade, more than one minor, a running controller the artifact dropped, and any Talos or Kubernetes roll in progress, then waits for the rollouts and re-reads. Cilium is never applied (exit 5): rebuild aside, with
+  the reasons in `docs/upgrade.md`.
+- **`cluster-verify`** (`infra-verify.sh`, shared readers in `scripts/lib/pins.sh`): "Cilium run the pinned version", "Flux controllers run the pinned version" and "the GitRepository and GIT_REF both follow the declared git_ref",
+  each failing in both directions (behind and ahead), UNKNOWN when unreadable. Neither pin moved between 0.3.2 and this branch, so a 0.3.x cluster is not red for them.
+- **`docs/upgrade.md` (+ FR)**: "Which version lives where, and how it reaches a running cluster" (table with PROVEN / UNVERIFIED) and "Cilium and Flux on a running cluster"; a release channel (semver range over signed tags) is a 1.0 option.
+- Tests: `test-cluster-apps-ref.sh`, `test-cluster-bootstrap-sync.sh`, `test-pins-verify.sh` (kubectl stubs, mutation cases), `test-cluster-up.sh`. Not run on a cluster; the Talos inline-manifest rule is still to be shown on a node.
+- Gap, not built: a declared-versus-running check for CAPI child clusters (`K8S_VERSION`, `TALOS_VERSION` in OpenAether-apps `apps/clusters/*.yaml`); `check-child-clusters.py` is static.
+
+### Changed (0.4.0: the default Talos pin goes from 1.14.2 to 1.14.4; rung: mocked, offline)
+- `talos_version` defaults to v1.14.4 in the cluster and local roots. 1.14.3 and 1.14.4 are patch releases (Linux 6.18.57, containerd 2.3.7, etcd 3.7.2); the only API change that could touch us is that `TimeService/TimeCheck` is no longer open to `os:reader` and PTP device paths are validated strictly: nothing in this repository calls `talosctl time --check` or sets a PTP device. **Not shown on a cluster yet:** the image build for v1.14.4 on each provider, a fresh cluster at 1.14.4, and the roll of a 1.14.2 cluster to 1.14.4 under the customer probes are checks of the final validation lab. A cluster built at 1.14.2 keeps its pin until its owner changes `talos_version`.
+
+### Added (0.4.0, infra #318: a second sink outside the cluster for the audit log, class A, opt-in)
+
+- **Design and settings**: `docs/audit-sink.md` (+ FR): the choice `audit_sink_placement` = `off` (default) | `other_provider` (proposed) | `same_provider_other_region` | `both` with what each survives and does not, the data path, key custody, failure behaviour, honest limits and the lab pass criteria. Variables `audit_sink_*` (endpoint and region per sink, prefix, lock mode `governance` by default or `compliance` only with `audit_sink_compliance_ack = true`, retention days); a `check` block and `scripts/lib/audit-sink.sh` refuse a sink that is not where its choice says (not another provider, the same region) before any bucket exists. Only the host names reach `cluster-identity`, and only when the sink is on.
+- **Buckets**: `ensure-buckets.sh` creates the sink bucket WITH object lock on the store of the cloud that holds it, reads the mode and retention back, and **fails** (not warns) on any refusal. `backup-key-recipe.sh <tfvars> audit-sink|audit-sink-secondary`: a pair with no delete right at all; the OVH per-bucket isolation limit is stated.
+- **Keys**: `seed-openbao.sh` writes `secret/audit/sink` (and `audit/sink-secondary`), create-only: endpoint, bucket, own S3 pair (`OA_AUDIT_SINK_S3_*`, else the holding cloud's keys, said loudly) and a 48-character repository password drawn there, printed nowhere, distinct from the backups'. `escrow-openbao.sh` escrows it to the custodians and `verify` compares it with the live one.
+- **Proof**: `scripts/ops/audit-sink-check.sh` reads the lock back, checks per node and inode that the shipped ranges chain with no hole, reports a loss the shipper recorded, and decrypts a sample with the escrowed password into a scratch directory. Tests: `test-audit-sink-lib.sh`, `-buckets.sh`, `-check.sh` (real restic repositories), seed and escrow cases, `audit-sink.tftest.hcl`, the flux-bootstrap render. The apps side (shipper, delivery check, alerts) is in OpenAether-apps. **Rung: mocked/static; never run against a provider's object store or a cluster.** Not a compliance claim.
+
+### Added (0.4.0, owner rule of 2026-10-22: no acknowledged data loss)
+
+- **Databases replicate synchronously** (OpenAether-apps: `zitadel-db` and `grafana-db`, quorum, `dataDurability: required`, failover quorum; `grafana-db` at 3 instances). The write gap stays bounded, not zero (one writer; clients mask it by retrying); what is zero is the loss of acknowledged commits. Writes block, losing nothing, when no replica streams (alert `CnpgSyncReplicaMissing`). `docs/resilience.md` (+ FR): target row and the lab pass criteria of the zero-loss proof (NOT run on a cluster).
+- **Capacity, honestly**: the third `grafana-db` instance adds about 100 m of CPU requests (derived +2.5 points of a worker: 4 workers about 226-231% against 300%, still passing; the two-worker zone still short, by about 1.1-1.2 vCPU instead of 1.0). `docs/capacity.md` (+ FR) say so; `check-doc-inputs.sh` fails if a capacity page stops accounting for it and no longer quotes a stale "0.45 vCPU of margin" in its 4-worker message.
+
+### Added (0.4.0, owner decisions of 2026-10-21: signing, release tags, capacity)
+
+- **Signer table and signed-commit policy** (#332): `docs/signed-commits.md` (+ FR) lists the VPS release key and GitHub `web-flow` with their fingerprints and public keys under `docs/signers/`
+  (machine-readable: `docs/signers/signers.txt`). Policy: every commit on `main` is signed by a table key or `web-flow`, squash merges through the web interface, Renovate included. Flux has **no
+  warning mode** for `spec.verify`; the warning period is the CI signature report, and `enabled = true` (refuse) is for 1.0.0. **Open: the maintainer's own key fingerprint** (placeholder, not invented).
+  Rung: documentation, nothing run on a cluster.
+- **Release tags are annotated and signed** (#386): `scripts/dev/check-release-tag.sh` refuses a lightweight tag, an unsigned one, and one signed by a key outside the table; the release checklist and skill
+  push the signed tag first and use `gh release create --verify-tag`; `.github/workflows/release-tag.yml` repeats the check on a tag push. Rung: mocked (`test-check-release-tag.sh`, throwaway repository and keys).
+- **Capacity, said plainly** (#389): the 4-worker examples survive one worker and either single-worker zone, not the zone holding two (224% requested for 200% left). A documented "5 workers zone-HA" profile (2 + 2 + 1)
+  with a commented block in the Scaleway and OVH management examples; `test-failure-domain-check.sh` covers both shapes. Rung: arithmetic on stubs, no zone loss on five workers recorded.
+
+### Added (0.4.0, milestone M4: loss of a node, a control plane or a zone, and its rebuild)
+
+Owner rule: the OpenTofu-built management cluster has NO node self-healing and NO node autoscaling (those stay optional modules for the Cluster API clusters); it survives a loss through
+spreading, budgets and replicas (OpenAether-apps `scripts/check-ha.py`), says so loudly with alerts that name the command, and is rebuilt by an operator command. Rung: **mocked** (stub tests,
+fake provider API, mocked OpenTofu tests); **UNVERIFIED on a cluster**; the drills and pass criteria are in `docs/resilience.md` (EN, FR). Not a compliance claim.
+
+- **`task cluster-node-state`, `cluster-node-recover`, `cluster-replace-node`** (`scripts/ops/node-recovery.sh`, `node-provider.py`). `state` is read-only (provider state, kubelet, Talos port, `VERDICT=`);
+  `recover` hard-reboots a machine the provider says runs but is silent (OVH ACTIVE while dead, #49, #371), refuses when the tunnels rather than the node are down, bounded wait, destroys nothing;
+  `replace` runs `rolling-replace.sh --dead --node=…` (new flags `--node`, `--ip`, `--dead`): a survey of the survivors (one node down only; etcd quorum without it, else `dr-restore-plan`), cordon without
+  a drain, the etcd member removed BEFORE the Node object is deleted (its pods are freed at once instead of after the 5 minute toleration), the same saved-plan applies and gates as `cluster-roll`.
+  Tests: `test-node-recovery.sh` (fake repository, real listeners for the tunnels), `test-dead-node-roll.sh`, `test-node-provider.sh` (fake provider API for OVH, Scaleway, Outscale). Scaleway and
+  Outscale calls are written from the API documentation and UNVERIFIED against an account. A set -e trap in the `--node` lookup was found and fixed by the tests.
+- **Roll gate for the API blip of a control-plane roll (#42).** After a control plane reboots the roll waits for its kube-apiserver static pod to be Ready and `/readyz` to answer, three polls in a row,
+  and refuses to take a control plane down unless every apiserver serves (`wait_apiserver_ready`, `wait_apiservers_all_ready`; `test-roll-apiserver-gate.sh`, fails without the change). Whether this
+  removes the 5-8 s blip is a cloud measurement. NOT done, owner decision 2026-10-21 (keep the roll gate only): HTTPS `/readyz` load-balancer checks (needs anonymous access to the health endpoints) and `--shutdown-delay-duration`; `docs/network.md` section 9.
+- **Scaleway and OVH examples ship 4 workers of 4 vCPU** (owner decision 2026-10-21; 3 + 4 = 8 instances, 30 vCPU with the bastion; Scaleway 114 GB, OVH 64 GB of RAM). Lab 21 MEASURED the full platform on 4 workers at 223-228% of one worker (about 9 vCPU), 1.2 vCPU above the derivation: on 3 workers the same load is above the 8 vCPU `cluster-roll` leaves, so 3 would be refused and `cluster-roll`'s survey on the 4-worker cluster printed `223% requested, 300% available without one worker` (test fixtures now carry the measured figures; the old 7.55/7.85 derivation is gone from the docs). Losing the zone that holds two of four workers still leaves 200% for 224% (`failure-domain-check` says so; a fifth worker made it green, 243% in 300%). Quota flags, `first-cluster`, README, `check-doc-inputs` (requires 4) updated, EN and FR. The Outscale examples stay inside the 20 vCPU quota and say so. Rung: observed on Scaleway (lab 21).
+- **Lab 21 (Scaleway, 3 control planes + 4 workers, 2026-10-21) drilled M4 for the first time; rung: observed on Scaleway.** Worker, control-plane and zone power-offs, undrained reboots, `cluster-roll -- --cp-only` (17 min 34 s, apiserver gate in the log between the three control planes, longest `/readyz` run 1 s), `cluster-replace-node` of a dead worker (260 s) and of a dead control plane (335 s, etcd member removed before the Node object, etcd 3/3, 3 apiservers), `cluster-node-recover` (one hard reboot; tunnels closed on purpose: nothing rebooted; kubelet silence simulated). Table in `docs/resilience.md` ("Measured in lab 21"): no data difference in any drill, HTTP longest failed run at most 3 s, but the criteria NOT met are named there: total failed HTTP samples per node loss 8-16 (target 5), database write gap 287-333 s when DNS or the primary sat on the lost node and 59 s on a reboot (target 30 s), and `NodeUnreachable` firing 6 min after a loss. Found and fixed in OpenAether-apps (NodeScrapeDown, FailureDomainLost on the kubelet scrape, AlertmanagerClusterDegraded, zone spread of the CNPG clusters and operator). Fixed here: `cluster-replace-node` now says what a CNPG instance crash-looping on the replaced disk needs (verified: delete its PVC and pod, clone in under a minute); the docs carry the measured CPU figures and the corrected Alertmanager criterion. Open, with issues: CoreDNS placement (Talos-owned), the 5 minute database failover on a lost node, the capacity of the two-worker zone.
+- **`task failure-domain-check`** (`scripts/ops/failure-domain-check.sh`, read-only): for each failure domain, would its loss stop etcd, leave too few workers or too little CPU, break the OpenBao quorum, take a
+  database or a Longhorn volume, or remove the Gateway. `worker_zones` joins `control_plane_zones` in the provider contract and the root outputs, and every node now carries the label
+  `topology.kubernetes.io/zone` (talos module `node_zones`, `machine.nodeLabels`, folded into the replace trigger; byte-identical when a provider reports nothing). Tests: `test-failure-domain-check.sh`,
+  `control-plane-zones.tftest.hcl` (workers), `node-zones.tftest.hcl`. That a Talos node accepts the label is UNVERIFIED.
+- **Docs**: new `docs/resilience.md` and `resilience.fr.md`; `upgrade.md` ("A node that is already dead"), `network.md` section 9, `capacity.md` (about 345 m of CPU requests added by the HA work, derived, about 0.45 vCPU of margin left on the shipped 3 x 4 vCPU example), EN and FR.
+
+### Observed and fixed (lab 23, Scaleway cluster + OVH buckets, 3 control planes + 5 workers, rung: observed on a cluster)
+
+- **Synchronous replication, zero-loss proof, observed** (OpenAether-apps does the work; the table is in `docs/resilience.md`, "Measured in lab 23"): 0 acknowledged ids lost in every synchronous run; 817 and 1409 lost in the asynchronous control with a double fault. A primary lost together with a replica is not promoted (FailoverQuorum): a write outage for its whole length.
+- **Audit sink (infra #318), first run on a real cluster and a real OVH store**: delivery, GOVERNANCE lock read back, decryption from the escrow, a window of 2 h 29 min without a gap, the outage drill (`AuditSinkStale` 22 min, `AuditSinkDown` 16 min 41 s: now `for: 5m` in the apps rule), the apiserver rotation window recorded. **Measured limit on OVH**: the dedicated pair lists every bucket of the project, can write a delete marker and can change the bucket's default retention (it cannot delete or shorten a locked version): `docs/audit-sink.md` sections 4 and 10 (EN, FR). The fix of the shipper that chased the growing file is in OpenAether-apps.
+- `failure-domain-check`: a cluster with no Longhorn volume says so instead of printing UNCHECKED for every zone; it also named the single-instance `light` profile as losing its data with its zone. Capacity measured: 249% with the platform alone, 294% with three database profiles (`docs/capacity.md`, EN, FR).
+
+### Observed and fixed (lab 22, Scaleway, 3 control planes + 5 workers, rung: observed on a cluster)
+
+- The offline changes of the lab 21 follow-up below ran on a cluster: CoreDNS on three nodes (write gap 6 s when a replica's worker is lost, was 287 s), the 30 s toleration (database write gap 44-64 s for a primary on a powered-off worker), kube-state-metrics at two replicas (`NodeUnreachable` fires with one pod killed and the other lost), the 5-worker zone-HA profile (`failure-domain-check` green at 246%; each two-worker zone powered off 10 minutes, nothing Pending for lack of CPU), the replaced-node cleanup. Numbers and what stays open (a database primary inside a lost zone: 122 s) in `docs/resilience.md`, "Measured in lab 22".
+- **`replaced-node-cleanup.py --clean` deleted nothing**: it ran `kubectl delete pod NAME pvc CLAIM` (three pod names) and then blocked on `kubectl delete pv`. Now `pod/NAME pvc/CLAIM` and `--wait=false`; the offline test pinned the broken string with a fake kubectl and now fails on any untyped `pvc` argument. Observed: every replica full 61 s after the command.
+- `oa_protect_bucket` no longer reports a fully locked bucket as "NOT fully protected" when the store refuses to re-enable versioning on a bucket created with object lock (Outscale: `InvalidBucketState`), as long as the read-back confirms versioning. COMPLIANCE object lock itself was tried on a throwaway bucket per provider (see `docs/backup-policy.md`).
+- Capacity numbers of the 5-worker profile measured (243-247%, not the derived 230%), `docs/capacity.md` EN and FR; example comments say 245%.
+
+### Fixed (lab 21 follow-up, offline: infra #388, apps #154; to be proven by the next lab)
+
+Rung: **mocked/static** (`tofu test`, a rendered-manifest test, a fake `kubectl`). Not a compliance claim; the lab pass criteria are in `docs/resilience.md`.
+
+- **CoreDNS** (#388): `coredns_ha` (default on) disables the Talos-owned Deployment (`cluster.coreDNS.disabled`) and injects an inline `coredns` manifest with the same names, labels and ClusterIP:
+  `min(3, nodes)` replicas on different nodes (hard hostname spread with `minDomains`, so a replica created before the other nodes exist waits instead of sharing one), a zone preference, a budget
+  allowing one disruption, 30 s tolerations, requests 150 m in all (was 200 m). `coredns_image_tag` is Renovate-tracked. `tests/coredns.tftest.hcl` and `test-coredns-manifest.sh`. What a Talos upgrade does is
+  written down, with what is UNVERIFIED. A NodeLocal DNS cache was evaluated and not shipped.
+- **After `cluster-replace-node`**: `scripts/ops/replaced-node-cleanup.py` lists the volumes the old disk left behind (PVs pinned to the node and older than its new Node object) and the pods stuck on them,
+  and prints the `kubectl` commands; `-- --clean` runs them for a CNPG replica with a healthy primary elsewhere, an OpenBao member with a raft majority left, Loki, vmstorage and vmselect with another Ready
+  replica, and refuses the rest (the primary of record, an unknown workload, a lost majority). `task cluster-replaced-node-cleanup`; `test-replaced-node-cleanup.sh` (fake `kubectl`, 21 cases).
+
+### Fixed (0.4.0, lab 20 finding, apps #153)
+
+- **A cluster rebuilt by `dr-restore-plan` no longer archives into the dead cluster's WAL path.** New step `generation` (after `hold`): it lists `cnpg/<cluster>/` in both stores, takes the highest archive generation plus one and writes the ConfigMap `cnpg-archive-generation` (flux-system: `CNPG_ARCHIVE_SUFFIX`, `CNPG_ARCHIVE_PREVIOUS_SUFFIX`) that
+  Flux substitutes into the Clusters' `serverName` (apps: `<cluster>-g2`…; no ConfigMap, no suffix, so installs and the lab 19/20 paths do not move). `--archive-generation N` forces it. Step `dbs` waits for Flux to apply the new name before the load and its PITR recovery reads the PREVIOUS path; step `verify` takes a base
+  backup of each new archive, forces `pg_switch_wal`, requires `ContinuousArchiving` True and runs `cnpg-store-replicate` once before the restore test. `docs/disaster-recovery.md` (EN, FR): the RPO and the paths after a rebuild, what is UNVERIFIED and the pass criteria of the next drill. Test: `test-dr-restore-plan.sh`
+  (generation from fake stores, previous path, order, failures, no aws call with `--archive-generation`). Rung: **mocked**; **UNVERIFIED on a cluster**. The apps side is in the OpenAether-apps CHANGELOG.
+
+### Added (0.4.0, milestone M3: restore tests and disaster recovery)
+
+- **`task dr-restore-plan`** (`scripts/ops/dr-restore-plan.sh`): the chain of `docs/disaster-recovery.md` as one command. Dry-run by default (prints the ordered steps with this cluster's commands, the inputs each step needs and which are missing; `--strict` makes
+  a missing input an error, for a readiness check before the day). `--execute --confirm <cluster_name>` runs it: restore the artifacts, `cluster-up` with Flux held, the OpenBao seal key Secret, Flux on, hold the Kustomizations outside OpenBao's closure, restore the raft snapshot
+  from the chosen store, put the recovery shares back, resume, restore the databases (a scratch Cluster recovered from the ObjectStore, optionally at a point in time, then `pg_dump | pg_restore` into the empty live Cluster, or the restic dump), resume identity, verify with a restore test on the rebuilt
+  cluster. A check after each step stops the chain at the first failure and names the step to resume from; a TSV report gives seconds and target per step against the 8 h RTO. `--scenario etcd` restores the newest etcd snapshot with `talosctl bootstrap --recover-from`. Secrets travel on stdin or as
+  files, never in argv. Offline test `scripts/dev/test-dr-restore-plan.sh` (stateful kubectl double, stub task, restic and talosctl): dry-run runs nothing, `--execute` needs the cluster name, the order, a failing step stops the chain, no secret in argv or output.
+  Rung: **mocked**. The chain has not been run on a cluster; `docs/disaster-recovery.md` (EN and FR) now states the RPO of each dataset, the RTO target, the measured pieces (lab 15A, 15c, 19) and what is not proven.
+- The application restore tests (daily CNPG recovery from both stores with a canary compare, weekly point in time, the dumps loaded daily, an opt-in Longhorn canary) are in the OpenAether-apps CHANGELOG; `docs/backup-policy.md` rows follow them.
+
+### Added (0.4.0, milestone M2: backups complete, replicated, verified)
+
+- **Talos API access for the scheduled etcd snapshot** (`etcd_snapshot_api_access`, default true): the control planes enable `machine.features.kubernetesTalosAPIAccess` with the single role `os:etcd:backup` for the namespace `foundation-databases`,
+  so the apps `etcd-snapshot` CronJob can take a snapshot without a credential on the bastion. On an existing cluster the next apply re-applies the control planes' machine configuration, one at a time; a reboot is not expected (UNVERIFIED on a
+  cluster); `false` keeps the configs as they were. `tofu test` in `modules/talos/tests/talos-api-access.tftest.hcl` (off renders nothing and keeps the replace trigger; on grants only that role, only on the control planes).
+- **`cluster-identity` carries `BACKUP_REPLICA_S3_BUCKET` and `BACKUP_REPLICA_S3_ENDPOINT`** (the `-backup` twin of the data bucket and the replica endpoint): the ObjectStores that read the CNPG archive copy from the replica store need them.
+- **`scripts/ops/backup-key-recipe.sh`** (#368): prints, for the primary, replica or Loki pair, the rights it needs, its own bucket policy and the operator-only policy of every other bucket, with the real bucket names and no identifier; `docs/backup-policy.md`
+  section 4 says how to use it (Scaleway measured, OVH and Outscale expectations, Outscale a source only while #377 stands).
+- Documentation (EN and FR): the etcd snapshot and CNPG archive rows of the backup policy (the CNPG archive has no client-side encryption, stated), a deviation row in the key management page, the etcd restore from the restic repository.
+
+### Fixed (found by lab 20, 2026-10-20)
+
+- `dr-restore-plan` looked for the restic repositories under the bare `cluster_name` of the tfvars; they live under `CLUSTER_NAME` of the cluster-identity ConfigMap, which is `<cluster_name>-<environment>-<provider>`. Found by the dry run on a lab cluster; the test now expects the full name.
+- `dr-restore-plan` kept the old cluster's kubeconfig and talosconfig after rebuilding: a cluster brought up after its state was destroyed has a new PKI, so the step `cluster` ended "the API does not answer" on a healthy, verified cluster. After each `cluster-up` the chain takes the identity OpenTofu has just written (the restored files stay as `*.old`). It also puts the recovery shares into `openbao-recovery-dev` when the fresh OpenBao is a development one.
+- `dr-restore-plan` asked `kubectl get cluster`, which on a management cluster is the Cluster API `Cluster`: the step `dbs` waited 30 minutes for a database that was healthy. It names `clusters.postgresql.cnpg.io`, and the kubectl double refuses the bare name.
+- `dr-restore-plan` failed the step `dbs` on `pg_restore --clean` exiting 1 for six "cannot drop inherited constraint" errors on Zitadel's partitioned cache tables, although the data had been loaded (151 tables, the canary chain intact). That one error is tolerated, any other still fails the step; the canary check follows.
+- `dr-restore-plan` restored the databases with `pg_restore --no-owner` as postgres, so every table of the rebuilt Zitadel belonged to postgres and Zitadel logged "permission denied for schema queue" (145 tables of one owner, caught on a real rebuild). The restore runs `--role=<owner of the database>`; the double refuses a restore without it.
+- The step `verify` of `dr-restore-plan` passed when the restore test Job only skipped (four SKIPs, exit 0). It needs a PASS line and no SKIP.
+- `dr-restore-plan --scenario etcd` gave `talosctl` the talosconfig endpoint as the node: behind a bastion that is a tunnel (`127.0.0.1:52000`) and the call ended "invalid target". The node is `--control-plane-ip` (or the talosconfig's first node); the chain refuses a tunnel as the node.
+- After an etcd restore the Cilium agents kept the old watch and no backend for the API Service, and about twenty controllers (Flux, CNPG, cert-manager) crash-looped until the agents were restarted; the etcd check restarts the agents and operator once the API and the nodes are back.
+
 ### Fixed
 
+- **Documentation (EN and FR, second pass on lab 19):** `docs/backup-policy` says exactly what is not client-side encrypted: the CNPG WAL and base backups, and their copy on the replica store (same bytes, SSE-S3 requested; header read back on OVH objects in lab 19); the restic datasets are. The scheduled etcd snapshot now finds the control planes itself through the Kubernetes API (apps #150, OpenAether-apps CHANGELOG); the Talos API access feature of this repository is unchanged, and its endpoint `talos.default` is not relied on. Not proven on a cluster yet. Open: apps #149.
 - **The repository settings check no longer goes red on a cancelled, unexpanded matrix run** (#293): `check-required-checks.sh` skips a check run whose name still contains a literal
   `${{` AND whose conclusion is `cancelled` (what editing a PR body while CI runs leaves behind). A successful run of that name and a cancelled plain unrequired one still fail. Three
   self-test cases, the first red without the change. Rung: mocked.

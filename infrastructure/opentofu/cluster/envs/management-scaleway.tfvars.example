@@ -36,7 +36,11 @@ deploy_app_lb   = true
 node_distribution = {
   scaleway = {
     control_planes = 3 # HA needs 3; new Scaleway accounts may have a per-type quota of 1 — request an increase (Console → Quotas) or start with 1
-    workers        = 3 # not 2: lab 16 measured 172% of one worker's CPU requested on 2 (cluster-roll refuses above (n-1)*100%); 3 gives ~90%, docs/capacity.md
+    workers        = 4 # not 3: lab 16 measured 172% of one worker's CPU requested on 2 (cluster-roll refuses above (n-1)*100%); the full platform measured ~9 vCPU (223-228% of a worker) in lab 21, above the 8 vCPU 3 workers leave; 4 pass at ~75% of the limit, docs/capacity.md
+    # "5 workers zone-HA" profile (infra #389): set `workers = 5` and nothing else. Workers go round-robin over `zones`, so 5 land
+    # 2 + 2 + 1 on fr-par-1/2/3 and the loss of ANY ONE zone leaves 3 workers (300%) for about 245% requested (measured on Scaleway, lab 22). With 4 (this example)
+    # the zone holding two workers cannot be lost: 2 stay (200%) for 224%. `task failure-domain-check PROVIDER=scaleway` says which
+    # (script test: scripts/dev/test-failure-domain-check.sh). Costs one more instance; check your quota first (docs/capacity.md).
     region         = "fr-par"
     zone           = "fr-par-1"
     instance_type  = "POP2-4C-16G" # 4 vCPU / 16 GB: meets the sizing floor (docs/capacity.md). Block-storage, dedicated CPU, in all 3 fr-par zones (DEV1-M is l_ssd + not in fr-par-3; DEV1-L isn't in fr-par-3 either — verify any instance_type change against the API before assuming 3-zone coverage)
@@ -143,3 +147,15 @@ s3_replica_region   = "fr-par"                       # prod: e.g. gra
 # 50 GB per node by default (scw_root_volume_size_gb): the application stack puts ~11 GB of images on a node and Talos
 # keeps them on the system volume, ~4 GB under its size. With deploy_flux the value must be at least 40 (validated).
 # scw_root_volume_size_gb = 50
+
+# Audit sink (infra #318, docs/audit-sink.md): a second copy of the Kubernetes audit log OUTSIDE the cluster, object lock, client-side
+# encryption. Off by default. Also needs the apps component audit-log-sink and a dedicated key pair
+# (scripts/ops/backup-key-recipe.sh <this file> audit-sink; OA_AUDIT_SINK_S3_ACCESS_KEY_ID / OA_AUDIT_SINK_S3_SECRET_ACCESS_KEY at seed time).
+# audit_sink_placement          = "other_provider"   # other_provider | same_provider_other_region | both
+# audit_sink_endpoint           = "https://s3.gra.io.cloud.ovh.net"   # a Scaleway cluster: the sink on OVH
+# audit_sink_region             = "gra"
+# audit_sink_secondary_endpoint = ""                 # only with "both": the cluster's own provider, another region
+# audit_sink_secondary_region   = ""
+# audit_sink_prefix             = "audit"
+# audit_sink_lock_mode          = "governance"       # compliance needs audit_sink_compliance_ack = true (irreversible until the retention ends)
+# audit_sink_retention_days     = 365

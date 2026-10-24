@@ -104,13 +104,18 @@ if [ "${STRICT_EXAMPLES:-1}" = "1" ]; then
   done
 
   # infra #378: cluster-roll refuses above (workers - 1) x 100% of CPU requested; lab 16 measured 172% on 2 x 4 vCPU workers with the
-  # platform, so a 4 vCPU example needs 3 workers. Outscale cannot (20 vCPU quota) and says so in its comment instead, and sets the
+  # platform, so a 4 vCPU example needs 3 workers, and 4 since the 0.4.0 HA additions (owner decision 2026-10-21: ~0.45 vCPU of margin on 3). Outscale cannot (20 vCPU quota) and says so in its comment instead, and sets the
   # root volume (#376) because the platform does not fit the OMI's own size.
   echo
-  echo "=== the Scaleway and OVH examples can be rolled (3 workers), the Outscale ones set the root size ==="
+  echo "=== the Scaleway and OVH examples can be rolled (4 workers), the Outscale ones set the root size ==="
   for ex in "$ENVS"/{management,failover,workload}-{scaleway,ovh}.tfvars.example; do
     w="$(grep -E '^[[:space:]]*workers[[:space:]]*=' "$ex" | head -1 | sed -E 's/^[^=]*=[[:space:]]*([0-9]+).*/\1/')"
-    if [ "${w:-0}" -ge 3 ]; then ok "$(basename "$ex") — $w workers"; else bad "$(basename "$ex") — ${w:-no} workers: cluster-roll refuses 2 (#378)"; fi
+    if [ "${w:-0}" -ge 4 ]; then ok "$(basename "$ex") — $w workers"; else bad "$(basename "$ex") — ${w:-no} workers: the full platform measured ~9 vCPU of requests (lab 21), more than 3 workers leave the gate; ship 4 (#378, docs/capacity.md)"; fi
+  done
+  # 0.4.0 owner rule 2026-10-22: the third grafana-db instance (synchronous replication) adds ~100 m of CPU requests to that arithmetic;
+  # the capacity pages must say so, in both languages, instead of keeping the figures from before it.
+  for cap in "$ROOT/docs/capacity.md" "$ROOT/docs/capacity.fr.md"; do
+    if grep -q 'grafana-db' "$cap" && grep -q '100 m' "$cap"; then ok "$(basename "$cap") — counts the third grafana-db instance (+100 m of CPU requests)"; else bad "$(basename "$cap") — does not account for the third grafana-db instance (+100 m): the 4-worker arithmetic is stale"; fi
   done
   for ex in "$ENVS"/{management,failover,workload}-outscale.tfvars.example; do
     if grep -qE '^outscale_root_volume_size_gb[[:space:]]*=' "$ex"; then ok "$(basename "$ex") — sets outscale_root_volume_size_gb"; else bad "$(basename "$ex") — outscale_root_volume_size_gb is commented out (#376)"; fi

@@ -130,6 +130,18 @@ do_export() {
   restic="$(bao_read backup/restic password)" && [ -n "$restic" ] || die "could not read secret/backup/restic through the pod (is OpenBao unsealed and the bootstrap done?)"
   printf '%s' "$restic" | gpg_enc "$OUT/restic-password.gpg" 2>/dev/null || die "could not encrypt the restic password"
 
+  # The audit sink's repository passwords (infra #318), when a sink was seeded: without them the sink is unreadable the day OpenBao is
+  # lost. Each is its own file and its own hash; a cluster with no sink has no such path, which is not an error.
+  local sink_files='{}' sink_hashes='{}' sp sname spw
+  for sp in audit/sink audit/sink-secondary; do
+    sname="$(tr '/' '-' <<<"$sp")-password"
+    if spw="$(bao_read "$sp" restic_password 2>/dev/null)" && [ -n "$spw" ]; then
+      printf '%s' "$spw" | gpg_enc "$OUT/$sname.gpg" 2>/dev/null || die "could not encrypt the password of secret/$sp"
+      sink_files="$(jq -c --arg f "$sname.gpg" --arg h "$(sha <"$OUT/$sname.gpg")" '. + {($f):$h}' <<<"$sink_files")"
+      sink_hashes="$(jq -c --arg k "$sp" --arg h "$(printf '%s' "$spw" | sha)" '. + {($k):$h}' <<<"$sink_hashes")"
+    fi
+  done
+
   # The recovery shares are PGP-encrypted to the operators already (one decode gives the text the break-glass runbook decodes again).
   if shares_json="$(kubectl -n "$NS" get secret openbao-recovery-shares -o json 2>/dev/null)"; then
     for key in $(jq -r '.data // {} | keys[] | select(test("^share-[0-9]+$"))' <<<"$shares_json"); do
@@ -142,15 +154,17 @@ do_export() {
   fi
   receipt_files="$(jq -nc --arg a "$(sha <"$OUT/openbao-seal-key.gpg")" --arg b "$(sha <"$OUT/restic-password.gpg")" \
     '{"openbao-seal-key.gpg":$a,"restic-password.gpg":$b}')"
+  receipt_files="$(jq -c --argjson s "$sink_files" '. + $s' <<<"$receipt_files")"
 
   # Non-secret: the hashes only let an operator compare something reconstructed with what the cluster holds.
   jq -n --arg at "$(date -u +%FT%TZ)" --arg seal "$(b64_sha "$seal")" --arg restic "$(printf '%s' "$restic" | sha)" \
-        --argjson files "$receipt_files" --argjson shares "$share_files" \
+        --argjson files "$receipt_files" --argjson shares "$share_files" --argjson sinks "$sink_hashes" \
         --argjson recipients "$(printf '%s\n' "${fprs[@]}" | jq -R . | jq -sc .)" \
     '{format:1, escrowed_at:$at, seal_key_sha256:$seal, restic_password_sha256:$restic, recipients:$recipients,
-      holders:($recipients|length), files:$files, recovery_shares:$shares}' >"$OUT/$RECEIPT"
+      holders:($recipients|length), files:$files, recovery_shares:$shares}
+     + (if ($sinks|length) > 0 then {audit_sink_password_sha256:$sinks} else {} end)' >"$OUT/$RECEIPT"
 
-  echo "✓ escrow written to $OUT: openbao-seal-key.gpg, restic-password.gpg, ${#fprs[@]} custodian key(s), $(jq '.recovery_shares|length' "$OUT/$RECEIPT") recovery share(s), $RECEIPT"
+  echo "✓ escrow written to $OUT: openbao-seal-key.gpg, restic-password.gpg, $(jq '.audit_sink_password_sha256 // {} | length' "$OUT/$RECEIPT") audit sink password(s), ${#fprs[@]} custodian key(s), $(jq '.recovery_shares|length' "$OUT/$RECEIPT") recovery share(s), $RECEIPT"
   printf '  custodian %s\n' "${fprs[@]}"
   echo "  Compare each fingerprint with the one its owner holds: --trust-model always was used (the keys are the ones you named)."
   echo "  Any ONE of them opens the seal key and the restic password. Next: copy the directory to its places (not the cluster, not a repository),"
@@ -196,6 +210,20 @@ do_verify() {
   else
     echo "⚠ restic password: this machine cannot open restic-password.gpg (a key reconstructed from a split proves the seal key only)" >&2
   fi
+
+  # 2b. the audit sink passwords (infra #318): a receipt that lists one must find it opening, and equal to the live one
+  local sp sname swant sgot slive
+  while IFS= read -r sp; do
+    [ -n "$sp" ] || continue
+    sname="$(tr '/' '-' <<<"$sp")-password"; swant="$(jq -r --arg k "$sp" '.audit_sink_password_sha256[$k]' "$r")"
+    if sgot="$(gpg --quiet --decrypt "$FROM/$sname.gpg" 2>/dev/null)" && [ -n "$sgot" ]; then
+      if [ "$(printf '%s' "$sgot" | sha)" != "$swant" ]; then echo "✗ MISMATCH: $sname.gpg is not what its receipt says" >&2; bad=1
+      elif slive="$(bao_read "$sp" restic_password)" && [ -n "$slive" ]; then
+        if [ "$(printf '%s' "$slive" | sha)" = "$swant" ]; then echo "✓ audit sink password ($sp): escrow opens, same as the live secret"
+        else echo "✗ MISMATCH: secret/$sp changed since the escrow (re-run export)" >&2; bad=1; fi
+      else echo "⚠ audit sink password ($sp): escrow opens and matches its receipt; the live value could not be read to compare" >&2; fi
+    else echo "✗ audit sink password ($sp): cannot open $sname.gpg with this machine's keys" >&2; bad=1; fi
+  done < <(jq -r '.audit_sink_password_sha256 // {} | keys[]' "$r")
 
   # 3. the recovery shares: copies of what the Secret holds
   local line f h shares_json

@@ -22,6 +22,7 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/bucket-protection.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/audit-sink.sh"
 
 TFVARS="${1:?usage: ensure-buckets.sh <cluster.tfvars> [--preflight]}"
 case "${2:-}" in
@@ -46,6 +47,10 @@ PU="$(provider_pu "$PROVIDER")" || { echo "✗ could not detect provider from no
   echo "✗ could not read cluster_name/cluster_role/environment from $TFVARS"; exit 1; }
 [ -n "$PRIMARY_EP" ] && [ -n "$REPLICA_EP" ] || {
   echo "✗ could not read s3_primary_endpoint/s3_replica_endpoint from $TFVARS"; exit 1; }
+
+# The audit sink (infra #318, docs/audit-sink.md) is checked BEFORE anything is created or spent: a sink that is not where its
+# tfvars say it is, or a COMPLIANCE lock nobody opted into, stops the run here.
+oa_audit_sink_load "$TFVARS" || exit 1
 
 PROJECT="$(oa_project "$CLUSTER" "$(tfv "$TFVARS" bucket_suffix)")"
 PRIMARY_AK="$(s3_cred "$PROVIDER" primary ak)"
@@ -226,6 +231,36 @@ if [ "$IMMUT" != off ]; then
   fi
 elif [ "$ENVN" = prod ]; then
   echo "  ~ backup_immutability = off: nothing here stops a stolen S3 key from deleting the copies (docs/backup-policy.md, section 3)"
+fi
+
+# --- Audit sink (audit_sink_placement) ------------------------------------------------------------------------------------
+#
+# Class A, zero loss: unlike every bucket above, a sink bucket that cannot be created WITH its object lock, or whose lock mode and
+# retention cannot be read back as asked, is a FAILURE, not a warning. A log copy that is not locked is a copy the attacker
+# it is meant for can delete. The keys that open it are those of the cloud that HOLDS it (as for the replica store).
+if [ "$AS_PLACEMENT" != off ]; then
+  AUDIT_BUCKET="$(oa_audit_bucket "$PROJECT" "$PROVIDER" "$ENVN")"
+  AS_FAIL=()
+  echo "▶ Audit sink (${AS_PLACEMENT}, object lock ${AS_MODE} ${AS_DAYS} days)"
+  for n in 1 2; do
+    v="AS_EP$n"; as_ep="${!v}"; v="AS_RG$n"; as_rg="${!v}"; v="AS_KIND$n"; as_kind="${!v}"
+    [ -n "$as_ep" ] || continue
+    as_ak="$(oa_audit_sink_operator_cred "$PROVIDER" "$as_ep" ak)"; as_sk="$(oa_audit_sink_operator_cred "$PROVIDER" "$as_ep" sk)"
+    if [ -z "$as_ak" ] || [ -z "$as_sk" ]; then
+      echo "✗ no S3 credentials in scope for the audit sink ${as_ep} (the keys of the cloud that HOLDS it: see docs/audit-sink.md)" >&2
+      AS_FAIL+=("${AUDIT_BUCKET}@${as_ep}"); continue
+    fi
+    LOCKING=yes   # create_bucket reads it: a sink bucket is ALWAYS created with object lock, whatever backup_immutability says
+    if ! ensure_bucket "$AUDIT_BUCKET" "$as_ep" "$as_rg" "$as_ak" "$as_sk" lock; then AS_FAIL+=("${AUDIT_BUCKET}@${as_ep}"); continue; fi
+    oa_protect_bucket "$AUDIT_BUCKET" "$as_ep" "$as_rg" "$as_ak" "$as_sk" "$(tr '[:upper:]' '[:lower:]' <<<"$AS_MODE")" "$AS_DAYS" lock ||
+      AS_FAIL+=("${AUDIT_BUCKET}@${as_ep}")
+    echo "    ${as_kind}: ${as_ep} (${as_rg})"
+  done
+  if [ "${#AS_FAIL[@]}" -gt 0 ]; then
+    echo "✗ audit sink NOT ready: ${AS_FAIL[*]}. Class A means no sink is better than a sink that is not locked: nothing was loosened;" >&2
+    echo "  fix the cause above (the provider refused, or the keys do not open that store) and run this again." >&2
+    exit 1
+  fi
 fi
 
 echo "✓ buckets ready"

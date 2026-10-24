@@ -28,10 +28,10 @@ ended (seeding OpenBao, signing the PKI intermediate): [`admin-access.md`](admin
 
 ## Before you start
 
-- A Scaleway account, and the quota to run **6 instances** of the type in your
+- A Scaleway account, and the quota to run **7 instances** of the type in your
   tfvars. A new account may be capped at 1 — Console → Quotas. There is no
   preflight script for Scaleway (`preflight-quotas.py` covers OVH and Outscale
-  only), so this check is yours to make. The bastion adds one `DEV1-S`; what
+  only), so this check is yours to make. The shipped examples have 3 control planes and 4 workers; the bastion adds one `DEV1-S`; what
   each provider consumes, and whether its example meets the sizing floor:
   [`capacity.md`](capacity.md).
 - An SSH keypair you already have, or `ssh-keygen -t ed25519`.

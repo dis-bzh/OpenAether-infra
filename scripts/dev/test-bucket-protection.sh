@@ -124,6 +124,15 @@ is "completes" 0 "$RC"
 grep -q "$LG: NOT fully protected: versioning refused (.*does not support versioning)" <<<"$OUT" && ok "the bucket and the provider's text" || bad "$OUT"
 grep -q "✓ $BK:" <<<"$OUT" && ok "the other buckets are still protected" || bad "one refusal stopped the rest"
 
+echo "--- a bucket created with the lock is versioned already and the store refuses the PUT (Outscale, lab 22): no warning ---"
+reset; mk_tfvars 'backup_immutability = "versioned"'
+mkdir -p "$(b "$LG")"; printf Enabled >"$(b "$LG")/versioning"
+echo "InvalidBucketState: An Object Lock configuration is present on this bucket, so versioning cannot be changed" >"$FAKE_S3/refuse/put-bucket-versioning.$LG"
+OUT="$(run)"; RC=$?
+is "completes" 0 "$RC"
+grep -q "$LG: NOT fully protected" <<<"$OUT" && bad "a refused PUT on an already versioned bucket was reported: $OUT" || ok "no warning when the read-back confirms Enabled"
+grep -q "✓ $LG:" <<<"$OUT" && ok "the bucket is reported protected" || bad "$OUT"
+
 echo "--- lifecycle rules that cannot be read are not overwritten ---"
 reset; mk_tfvars 'backup_immutability = "versioned"'
 echo "Access Denied" >"$FAKE_S3/refuse/get-bucket-lifecycle-configuration"

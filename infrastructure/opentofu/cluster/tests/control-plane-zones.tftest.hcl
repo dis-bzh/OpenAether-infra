@@ -112,3 +112,84 @@ run "proxmox_reports_the_host" {
     error_message = "proxmox must report the hypervisor host of each control plane, in node order."
   }
 }
+
+# worker_zones (0.4.0 M4): the same rule for the workers, read by task failure-domain-check and used as the zone label of
+# the node. Each module reports what it placed, one entry per worker, in worker_private_ips order.
+run "scaleway_workers_report_each_zone" {
+  command = plan
+  module { source = "../modules/providers/scw" }
+  providers = { scaleway = scaleway }
+  plan_options { target = [scaleway_instance_server.worker] }
+
+  variables {
+    worker_count     = 3
+    additional_zones = ["fr-par-1", "fr-par-2", "fr-par-3"]
+    image_id         = "fr-par-1/11111111-1111-1111-1111-111111111111"
+    deploy_app_lb    = false
+  }
+
+  assert {
+    condition     = output.worker_zones == ["fr-par-1", "fr-par-2", "fr-par-3"]
+    error_message = "scw must report the zone of each worker, in node order."
+  }
+}
+
+run "ovh_workers_report_the_availability_zone" {
+  command = plan
+  module { source = "../modules/providers/ovh" }
+  providers = { openstack = openstack }
+  plan_options { target = [openstack_compute_instance_v2.worker] }
+
+  variables {
+    worker_count       = 3
+    availability_zones = ["zone-a", "zone-b", "zone-c"]
+    image_id           = "dummy-talos-ovh-image"
+  }
+
+  assert {
+    condition     = output.worker_zones == ["zone-a", "zone-b", "zone-c"]
+    error_message = "ovh must report the availability zone of each worker, in node order."
+  }
+}
+
+run "outscale_workers_report_the_vm_placement" {
+  command = plan
+  module { source = "../modules/providers/outscale" }
+  providers = { outscale = outscale }
+  plan_options { target = [outscale_vm.worker] }
+
+  variables {
+    worker_count       = 3
+    availability_zones = ["eu-west-2a", "eu-west-2b", "eu-west-2c"]
+    image_id           = "ami-11111111"
+  }
+  override_resource {
+    target = outscale_vm.worker
+    values = { placement_subregion_name = "eu-west-2b" }
+  }
+
+  assert {
+    condition     = output.worker_zones == ["eu-west-2b", "eu-west-2b", "eu-west-2b"]
+    error_message = "outscale must report the subregion the worker VMs were placed in, not var.availability_zones."
+  }
+}
+
+run "proxmox_workers_report_the_host" {
+  command = plan
+  module { source = "../modules/providers/proxmox" }
+  providers = { proxmox = proxmox }
+  plan_options { target = [proxmox_virtual_environment_vm.worker] }
+
+  variables {
+    worker_count        = 3
+    node_names          = ["pve1", "pve2", "pve3"]
+    gateway_ip          = "10.0.0.1"
+    apiserver_vip       = "10.0.0.100"
+    talos_image_file_id = "local:iso/talos.img"
+  }
+
+  assert {
+    condition     = output.worker_zones == ["pve1", "pve2", "pve3"]
+    error_message = "proxmox must report the hypervisor host of each worker, in node order."
+  }
+}

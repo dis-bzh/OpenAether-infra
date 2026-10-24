@@ -190,6 +190,25 @@ variable "cilium_manifest" {
   type        = string
 }
 
+variable "coredns_ha" {
+  description = <<-EOT
+    Ship OpenAether's own CoreDNS (min(3, number of nodes) replicas on different nodes, a PodDisruptionBudget, a 30 s
+    not-ready/unreachable toleration) as an inline manifest and set cluster.coreDNS.disabled = true, instead of the
+    2-replica Deployment that Talos owns (infra #388: lab 21 had 4 min 46 s without DNS when both replicas shared a
+    worker). False keeps the Talos one. The ClusterIP is 10.96.0.10 (Talos's default service range 10.96.0.0/12).
+    Enabling it on a running cluster replaces the Deployment in place at the next apply (docs/resilience.md, Talos upgrades).
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "coredns_image_tag" {
+  description = "CoreDNS image tag of the shipped manifest (registry.k8s.io/coredns/coredns). Talos no longer upgrades it when coredns_ha is on: bump it here."
+  type        = string
+  # renovate: datasource=docker depName=registry.k8s.io/coredns/coredns
+  default = "v1.12.4"
+}
+
 variable "flux_manifest" {
   description = "Flux install manifest YAML content (from bootstrap-manifests/flux-install.yaml)"
   type        = string
@@ -331,6 +350,23 @@ variable "node_dns_boot_timeout" {
   }
 }
 
+variable "talos_api_access_namespaces" {
+  description = <<-EOT
+    Kubernetes namespaces whose pods may be granted the Talos role `os:etcd:backup` through a talos.dev ServiceAccount object
+    (machine.features.kubernetesTalosAPIAccess, control planes only). The role takes an etcd snapshot and nothing else; the
+    apps repository's etcd-snapshot CronJob (foundation-databases) is its only user. Empty (module default) renders nothing and
+    leaves every config byte-identical; the cluster variable etcd_snapshot_api_access sets it. One apply re-applies the
+    control planes' machine configuration.
+  EOT
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for n in var.talos_api_access_namespaces : can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", n))])
+    error_message = "talos_api_access_namespaces must be Kubernetes namespace names."
+  }
+}
+
 variable "node_log_forwarding" {
   description = <<-EOT
     Ships the nodes' Talos service logs (machine.logging, json_lines) and, unless
@@ -391,6 +427,42 @@ variable "node_time_servers" {
   validation {
     condition     = length(var.node_time_servers) == length(distinct(var.node_time_servers))
     error_message = "node_time_servers: duplicate entries."
+  }
+}
+
+variable "node_zones" {
+  description = <<-EOT
+    Failure domain of each node, as the provider placed it (the root passes control_plane_zones and worker_zones). When
+    set, every node carries the label topology.kubernetes.io/zone (machine.nodeLabels), which the zone-loss alert, the
+    kube-state-metrics allowlist and `task failure-domain-check` read. Null, or an entry that is empty, labels nothing.
+    The lists are in the order of control_plane_ips and worker_ips.
+  EOT
+  type = object({
+    control_plane = optional(list(string), [])
+    worker        = optional(list(string), [])
+  })
+  default = null
+}
+
+variable "node_monitor_grace_period_seconds" {
+  description = <<-EOT
+    How long, in seconds, the kube-controller-manager waits without a heartbeat from a node before it marks the node NotReady
+    (its --node-monitor-grace-period; Kubernetes default 50). 0 (default) sets nothing: the configs stay byte-identical and the
+    Kubernetes defaults apply. This is the longest part of a node-loss failover that our configuration can shorten (lab 26, D2:
+    32-35 s of a 76-79 s database write gap, and the 15-17 s HTTP failure runs when the lost node held a Gateway pod).
+    Below 40 the kubelet is told too, so that the node still has 4 chances to be heard: nodeLeaseDurationSeconds = this value
+    (the Lease is renewed every quarter of it) and nodeStatusUpdateFrequency = this value / 4, rounded down. Between 20 and 300.
+    Kubernetes asks that the grace period be N times the kubelet's status frequency and ALSO more than the HTTP/2 ping and read-idle
+    timeouts of its clients (30 s + 15 s by default, client-go), which no Talos setting changes: a shorter value can mark a node
+    NotReady while only its connection to the API is dead. UNVERIFIED on a cluster: the DEFAULT STAYS 0 until a lab proves a
+    value (docs/resilience.md, "Failure detection time"). Lowering it re-applies every node's machine config (the kubelet restarts).
+  EOT
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.node_monitor_grace_period_seconds == 0 || (var.node_monitor_grace_period_seconds >= 20 && var.node_monitor_grace_period_seconds <= 300 && var.node_monitor_grace_period_seconds == floor(var.node_monitor_grace_period_seconds))
+    error_message = "node_monitor_grace_period_seconds must be 0 (Kubernetes default, 50 s) or a whole number of seconds between 20 and 300: below 20 the node has fewer than 4 heartbeats of 5 s to be heard in."
   }
 }
 

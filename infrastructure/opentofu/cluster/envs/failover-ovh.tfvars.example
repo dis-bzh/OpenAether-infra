@@ -32,9 +32,10 @@ talos_bootstrap    = false # Set to true after infra is up
 node_distribution = {
   ovh = {
     control_planes     = 3
-    workers            = 3
-    # 3 workers, not 2: lab 16 measured 82% + 91% = 172% of one worker's CPU requested on 2 c3-8, and `cluster-roll`
-    # refuses above (workers - 1) x 100%. With 3 the same load is about 90% of that limit (docs/capacity.md).
+    workers            = 4
+    # 4 workers, not 3 (nor 2): lab 16 measured 82% + 91% = 172% of one worker's CPU requested on 2 c3-8, and `cluster-roll`
+    # refuses above (workers - 1) x 100%. The full platform measured about 9 vCPU (223-228% of a worker) on Scaleway in lab 21,
+    # above the 8 vCPU that 3 workers of 4 vCPU leave; with 4 it is about 75% of that limit (docs/capacity.md).
     region             = "EU-WEST-PAR"
     # c3-8 (4 vCPU / 8 GB), not b3-8 (2 vCPU): measured 2026-08-15, three b3-8
     # workers sit at ~99% of CPU requests with the platform on them, so no node
