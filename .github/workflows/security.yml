@@ -92,7 +92,7 @@ jobs:
       # control's job: repo-settings.yml compares it with what reports on a PR.
       - name: Plumber
         # renovate: datasource=github-releases depName=getplumber/plumber
-        uses: getplumber/plumber@d3536bae4727b9290d9e69ee25c4350ddbcd91cd  # v0.6.0
+        uses: getplumber/plumber@ccd274c2abc9f66d7e44051d612d49c8ed1747ac  # v0.7.2
         with:
           # Publishing the score sends this repository's name to a hosted badge
           # service. That is a decision to take on purpose, not a CI default.
