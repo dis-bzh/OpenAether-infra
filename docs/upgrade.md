@@ -129,14 +129,18 @@ Steps, in order (take a CNPG Backup, a Longhorn backup and `task etcd-snapshot` 
    old file is kept as `<tfvars>.apps-ref-bak`), patches `spec.ref.name` of the GitRepository and `GIT_REF` of the Kustomization (those two fields only; `spec.verify` and every other field are
    never written), asks Flux to reconcile both and waits (300 s by default) for the GitRepository to report the revision of that ref. The ref must be `refs/tags/…` or `refs/heads/…` like
    `variables.tf`; a branch is a moving ref, warned about loudly and refused as `REF=` unless `ALLOW_BRANCH=1`. `cluster-up` runs the dry run after the node roll and moves the ref
-   (`APPROVE=auto`, or a typed "yes") or fails naming the command; `cluster-verify` fails on any difference, in both directions. Mocked tests only (`test-cluster-apps-ref.sh`,
-   `test-pins-verify.sh`, `test-cluster-up.sh`). UNVERIFIED on a cluster: the GitRepository patch, the exact revision string Flux reports for a `ref.name` (the wait accepts `<ref>@…` and `<tag or branch>@…`), and
-   that Talos does leave the existing objects alone (a `talosctl get manifests` read). Lab 25 patched the Kustomization by hand only.
+   (`APPROVE=auto`, or a typed "yes") or fails naming the command; `cluster-verify` fails on any difference, in both directions. Lab 26 (Scaleway) ran the dry run (a bare `task` shows exit 201 for the
+   script's 3, see step 5), `APPLY=1` (19 s: both objects patched and read back; Flux reports the revision as `<ref>@sha1:<commit>`, which the wait accepts) and the second run ("in sync"); the Talos
+   rule was read with `talosctl get manifests` (the manifest set is updated, the existing objects are not). Not run: `REF=refs/tags/… ` with the tfvars rewrite.
 5. **Write the identity values.** `task cluster-identity-sync PROVIDER=… ROLE=…` is a dry run: it reads `tofu output cluster_identity` (the map the bootstrap template itself renders: bucket
    names, endpoints, URL and the audit sink host names, no secret) and the live ConfigMap `flux-system/cluster-identity`, and prints each key to add (`+`) or change (`~`); exit 3 means a difference.
    `… APPLY=1` merges ONLY the rendered keys into `data` (nothing else of the ConfigMap, no other object), reads them back, and asks Flux to reconcile its Kustomizations; a second run changes
    nothing. A key the live ConfigMap has and the map does not is reported and kept. `cluster-up` runs the dry run after the node roll and writes with `APPROVE=auto` or at a "yes" typed
-   in a terminal; otherwise it **fails** and prints the command. Mocked tests only (`test-cluster-identity-sync.sh`, `test-cluster-up.sh`); UNVERIFIED on a cluster.
+   in a terminal; otherwise it **fails** and prints the command. Run on a cluster in lab 26 (Scaleway): the dry run listed the two missing keys, `APPLY=1` wrote them in 18 s, the second run said "in sync".
+   **`cluster-up` calls the tasks, not the scripts** (lab 26 F1: called directly, the identity step ran `tofu output` outside the task environment and stopped with "Backend initialization required",
+   twice, after a 41-minute roll; fixed, test `test-cluster-up.sh` runs the step with no `TF_DATA_DIR` and no S3 variable). **Exit codes you will see:** the scripts exit 3 on a difference and 4 when the object
+   is not there yet, but a bare `task cluster-identity-sync` / `task cluster-apps-ref` / `task cluster-bootstrap-sync` reports **201** (`task: Failed to run task ... exit status 3`); `task -x …` (`--exit-code`)
+   returns the script's own code. Inside `cluster-up` the same is handled for you, and each failure names the exact command with `PROVIDER` and `ROLE` filled in.
    Safety net on the apps side: the replica bucket and endpoint now default to `replica-not-set` and `https://replica-not-set.invalid` when the key is missing or empty, so a cluster that is
    late on this step has idle replica ObjectStores and not a NotReady database layer. The cause of the lab's `endpointURL ... "null"`: kustomize prints the field without quotes and Flux turns
    an empty substitution into YAML null (reproduced with `flux build` 2.9.3).

@@ -135,14 +135,18 @@ La conception ne dépend pas de ce point : la synchronisation ci-dessous lit le 
    (le diff est montré, l'ancien fichier reste en `<tfvars>.apps-ref-bak`), patche `spec.ref.name` du GitRepository et `GIT_REF` de la Kustomization (ces deux champs seulement ; `spec.verify` et tout
    autre champ ne sont jamais écrits), demande à Flux de réconcilier les deux et attend (300 s par défaut) que le GitRepository annonce la révision de cette ref. La ref doit être `refs/tags/…` ou
    `refs/heads/…` comme dans `variables.tf` ; une branche est une ref mobile, signalée bruyamment et refusée en `REF=` sauf `ALLOW_BRANCH=1`. `cluster-up` lance l'essai à blanc après le roll des nœuds et
-   déplace la ref (`APPROVE=auto`, ou un « yes » tapé) ou échoue en nommant la commande ; `cluster-verify` échoue à toute différence, dans les deux sens. Tests avec doublures seulement
-   (`test-cluster-apps-ref.sh`, `test-pins-verify.sh`, `test-cluster-up.sh`). UNVERIFIED sur un cluster : le patch du GitRepository, la chaîne exacte de révision que Flux annonce pour un `ref.name` (l'attente
-   accepte `<ref>@…` et `<tag ou branche>@…`), et que Talos laisse bien les objets existants tranquilles (une lecture `talosctl get manifests`). Le lab 25 n'a patché que la Kustomization, à la main.
+   déplace la ref (`APPROVE=auto`, ou un « yes » tapé) ou échoue en nommant la commande ; `cluster-verify` échoue à toute différence, dans les deux sens. Le lab 26 (Scaleway) a lancé l'essai à blanc (un `task` nu affiche 201 pour le 3 du
+   script, voir l'étape 5), `APPLY=1` (19 s : les deux objets patchés et relus ; Flux annonce la révision `<ref>@sha1:<commit>`, que l'attente accepte) et la seconde exécution (« in sync ») ; la règle de Talos
+   a été lue avec `talosctl get manifests` (l'ensemble des manifestes est mis à jour, les objets existants non). Non exécuté : `REF=refs/tags/…` avec la réécriture du tfvars.
 5. **Écrire les valeurs d'identité.** `task cluster-identity-sync PROVIDER=… ROLE=…` est un essai à blanc : il lit `tofu output cluster_identity` (la table que le gabarit de bootstrap rend lui-même :
    noms de buckets, endpoints, URL et noms d'hôtes du puits d'audit, aucun secret) et le ConfigMap vivant `flux-system/cluster-identity`, et affiche chaque clé à ajouter (`+`) ou changer (`~`) ; le code 3
    signale une différence. `… APPLY=1` fusionne SEULEMENT les clés rendues dans `data` (rien d'autre du ConfigMap, aucun autre objet), les relit, et demande à Flux de réconcilier ses Kustomizations ;
    une seconde exécution ne change rien. Une clé que le ConfigMap vivant a et que la table n'a pas est signalée et conservée. `cluster-up` lance l'essai à blanc après le roll des nœuds et écrit avec
-   `APPROVE=auto` ou sur un « yes » tapé dans un terminal ; sinon il **échoue** et affiche la commande. Tests avec doublures seulement (`test-cluster-identity-sync.sh`, `test-cluster-up.sh`) ; UNVERIFIED sur un cluster.
+   `APPROVE=auto` ou sur un « yes » tapé dans un terminal ; sinon il **échoue** et affiche la commande. Exécuté sur un cluster au lab 26 (Scaleway) : l'essai à blanc a listé les deux clés manquantes, `APPLY=1` les a écrites en 18 s, la seconde exécution a dit « in sync ».
+   **`cluster-up` appelle les tâches, pas les scripts** (lab 26 F1 : appelé directement, le pas d'identité lançait `tofu output` hors de l'environnement de la tâche et s'arrêtait sur « Backend initialization required »,
+   deux fois, après un roll de 41 minutes ; corrigé, `test-cluster-up.sh` lance le pas sans `TF_DATA_DIR` ni variable S3). **Codes de sortie que vous verrez :** les scripts sortent 3 sur une différence et 4 quand l'objet
+   n'existe pas encore, mais un `task cluster-identity-sync` / `task cluster-apps-ref` / `task cluster-bootstrap-sync` nu rapporte **201** (`task: Failed to run task ... exit status 3`) ; `task -x …` (`--exit-code`)
+   rend le code du script. Dans `cluster-up` c'est géré pour vous, et chaque échec nomme la commande exacte avec `PROVIDER` et `ROLE` remplis.
    Filet de sécurité côté apps : le bucket et l'endpoint de réplica valent maintenant `replica-not-set` et `https://replica-not-set.invalid` quand la clé manque ou est vide, de sorte qu'un cluster en
    retard sur cette étape a des ObjectStores de réplica inactifs et non une couche base de données NotReady. Cause du `endpointURL ... "null"` du lab : kustomize affiche le champ sans guillemets et Flux
    transforme une substitution vide en null YAML (reproduit avec `flux build` 2.9.3).

@@ -965,59 +965,75 @@ tasks:
       # difference is looked for here and either written (APPROVE=auto, or "yes" at a terminal) or the run
       # FAILS with the command that writes it: it never ends green over a ConfigMap that is not what the config
       # renders.
+      # Both steps go through the TASKS (cluster-identity-sync, cluster-apps-ref), never the scripts: the tasks carry
+      # `env: *provider-env` (TF_DATA_DIR and the S3 credentials, without which `tofu output` stops at "Backend
+      # initialization required") and fetch the kubeconfig first. Calling the script from here failed lab 26 twice,
+      # after a 41-minute roll (F1). `task -x` hands back the script's own exit code: without it the script's 3
+      # ("differs") and 4 ("not there yet") both reach this shell as 201 ("task: Failed to run task ... exit status 3").
       - |
-        ID=./scripts/ops/cluster-identity-sync.sh
+        ID="task -x cluster-identity-sync PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}"
+        WRITE="task cluster-identity-sync PROVIDER={{.PROVIDER}} ROLE={{.ROLE}} APPLY=1"
         rc=0; $ID || rc=$?
         case "$rc" in
           0) ;;
           4) echo "~ cluster-identity: no ConfigMap yet (Flux bootstrap not applied): nothing to sync." >&2 ;;
           3)
             if [ "{{.APPROVE}}" = auto ]; then
-              $ID --apply || exit 1
+              $ID APPLY=1 || exit 1
             elif [ -t 0 ]; then
               printf '\nWrite these cluster-identity keys? Only "yes" is accepted: '
               read -r reply
               [ "$reply" = yes ] || {
                 echo "✗ not written: the apps that read them stay NotReady. Write them:" >&2
-                echo "    task cluster-identity-sync PROVIDER={{.PROVIDER}} ROLE={{.ROLE}} APPLY=1" >&2
+                echo "    $WRITE" >&2
+                echo "  (a dry run ends with exit status 3; a bare 'task' shows it as 201.)" >&2
                 exit 1
               }
-              $ID --apply || exit 1
+              $ID APPLY=1 || exit 1
             else
               echo "✗ cluster-identity differs from what the config renders and nobody can be asked. Write it:" >&2
-              echo "    task cluster-identity-sync PROVIDER={{.PROVIDER}} ROLE={{.ROLE}} APPLY=1" >&2
+              echo "    $WRITE" >&2
+              echo "  (a dry run ends with exit status 3; a bare 'task' shows it as 201.)" >&2
               exit 1
             fi ;;
-          *) exit "$rc" ;;
+          *)
+            echo "✗ cluster-identity-sync failed (exit $rc). Run it alone to see why (no APPLY=1: writes nothing):" >&2
+            echo "    task cluster-identity-sync PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}" >&2
+            exit "$rc" ;;
         esac
       # The apps ref is an inline-manifest object too: git_ref in the tfvars does not move a running cluster (infra
       # #408).
       # Same rule as above: written (APPROVE=auto, or "yes" at a terminal) or the run FAILS naming the command.
       - |
-        AR=./scripts/ops/cluster-apps-ref.sh
-        TFV="infrastructure/opentofu/cluster/envs/{{.ROLE}}-{{.PROVIDER}}.tfvars"
-        rc=0; $AR --tfvars "$TFV" || rc=$?
+        AR="task -x cluster-apps-ref PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}"
+        MOVE="task cluster-apps-ref PROVIDER={{.PROVIDER}} ROLE={{.ROLE}} APPLY=1"
+        rc=0; $AR || rc=$?
         case "$rc" in
           0) ;;
           4) echo "~ apps ref: no GitRepository yet (Flux bootstrap not applied): nothing to move." >&2 ;;
           3)
             if [ "{{.APPROVE}}" = auto ]; then
-              $AR --tfvars "$TFV" --apply || exit 1
+              $AR APPLY=1 || exit 1
             elif [ -t 0 ]; then
               printf '\nPoint the live GitRepository and GIT_REF at the git_ref of the tfvars? Only "yes" is accepted: '
               read -r reply
               [ "$reply" = yes ] || {
                 echo "✗ not moved: Flux keeps following the old ref. Move it:" >&2
-                echo "    task cluster-apps-ref PROVIDER={{.PROVIDER}} ROLE={{.ROLE}} APPLY=1" >&2
+                echo "    $MOVE" >&2
+                echo "  (a dry run ends with exit status 3; a bare 'task' shows it as 201.)" >&2
                 exit 1
               }
-              $AR --tfvars "$TFV" --apply || exit 1
+              $AR APPLY=1 || exit 1
             else
               echo "✗ the apps ref Flux follows differs from git_ref and nobody can be asked. Move it:" >&2
-              echo "    task cluster-apps-ref PROVIDER={{.PROVIDER}} ROLE={{.ROLE}} APPLY=1" >&2
+              echo "    $MOVE" >&2
+              echo "  (a dry run ends with exit status 3; a bare 'task' shows it as 201.)" >&2
               exit 1
             fi ;;
-          *) exit "$rc" ;;
+          *)
+            echo "✗ cluster-apps-ref failed (exit $rc). Run it alone to see why (no APPLY=1: writes nothing):" >&2
+            echo "    task cluster-apps-ref PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}" >&2
+            exit "$rc" ;;
         esac
       # The verdict, asked of the cluster rather than assumed from the steps
       # above: a failing verify fails cluster-up before the line below.
