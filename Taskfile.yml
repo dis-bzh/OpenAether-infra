@@ -725,7 +725,11 @@ tasks:
     env:
       OA_ENVIRONMENT: '{{.ENVIRONMENT | default ""}}'
     cmds:
-      - ./scripts/ops/cluster-security-tests.sh
+      # The script reads KUBECONFIG and nothing else (lab 26, K3: "Cannot reach cluster" in a shell that had not
+      # exported it). The caller's own value wins, so a cluster outside this checkout can still be tested.
+      - |
+        export KUBECONFIG="${KUBECONFIG:-$PWD/infrastructure/opentofu/cluster/kubeconfig}"
+        ./scripts/ops/cluster-security-tests.sh
 
   # ===========================================================================
   # Talos image (decoupled — build once per Talos version, reused by clusters)
@@ -2353,7 +2357,9 @@ tasks:
     cmds:
       - task: kubeconfig
         vars: {ROLE: '{{.ROLE}}', PROVIDER: '{{.PROVIDER}}'}
-      - ../../../scripts/ops/cluster-netcheck.sh {{if .CILIUM}}--cilium{{end}}
+      # The kubeconfig the task above just wrote, pinned (lab 26, K3): the script only reads KUBECONFIG, and an
+      # exported one would aim it at another cluster (as kubeconfig-new and talosconfig-new do).
+      - KUBECONFIG="$PWD/kubeconfig" ../../../scripts/ops/cluster-netcheck.sh {{if .CILIUM}}--cilium{{end}}
 
   escrow:
     desc: >-

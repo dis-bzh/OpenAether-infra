@@ -52,6 +52,7 @@ case "\$(basename "\$0") \$*" in
                              case "\$*" in *--apply*) exit "\${APPLY_RC:-0}" ;; *) exit "\${IDENTITY_RC:-0}" ;; esac ;;
   cluster-apps-ref.sh*--apply*) exit "\${REFAPPLY_RC:-0}" ;;
   cluster-apps-ref.sh*) exit "\${REF_RC:-0}" ;;
+  cluster-netcheck.sh*|cluster-security-tests.sh*) echo "\$(basename "\$0") KUBECONFIG=\${KUBECONFIG:-unset}" >>"$W/kc.log" ;;
   talos-image.sh*--retain*) echo "fixture retention \$*"; exit "\${RETAIN_RC:-0}" ;;
 esac
 exit 0
@@ -60,7 +61,7 @@ chmod +x "$W/stub"
 for s in internal/talos-version.sh internal/ensure-buckets.sh internal/check-openbao-keys.sh internal/converge-versions.sh \
          internal/tf-backend.sh internal/bootstrap-in-state.sh internal/explain-failure.sh bootstrap/talos-image.sh \
          bootstrap/render-bootstrap-manifests.sh bootstrap/talos-tunnels.sh bootstrap/adopt-bootstrap.sh bootstrap/grow-nodes.sh internal/refuse-node-deletes.sh \
-         ops/backup-state.sh ops/cluster-identity-sync.sh ops/cluster-apps-ref.sh dev/infra-verify.sh; do
+         ops/backup-state.sh ops/cluster-identity-sync.sh ops/cluster-apps-ref.sh ops/cluster-netcheck.sh ops/cluster-security-tests.sh dev/infra-verify.sh; do
   ln -s "$W/stub" "$W/scripts/$s"
 done
 ln -s "$W/stub" "$W/bin/tofu"; ln -s "$W/stub" "$W/bin/ssh-keygen"
@@ -316,6 +317,26 @@ TTY=1 TTY_YES=2 EXTRA=REF_RC=3 run 0 cluster-up KEY="$W/key" PROVIDER=scaleway R
 EXTRA=IDENTITY_RC=1 run 0 "${UP[@]}" PROVIDER=scaleway ROLE=management; rc=$?
 [ "$rc" != 0 ] && grep -qF 'task cluster-identity-sync PROVIDER=scaleway ROLE=management' "$O" && grep -q 'failed (exit 1)' "$O" \
   && ok "any other failure keeps its own exit code in the message and names the command to run alone" || bad "exit $rc: $(tail_of)"
+
+
+echo "--- K3 (lab 26): cluster-netcheck and cluster-security hand their script a KUBECONFIG ---"
+: >"$W/kc.log"
+run 0 cluster-netcheck PROVIDER=scaleway; rc=$?
+[ "$rc" = 0 ] && grep -qx "cluster-netcheck.sh KUBECONFIG=$C/kubeconfig" "$W/kc.log" \
+  && ok "cluster-netcheck: the script sees this cluster's kubeconfig in a shell that exported none" \
+  || bad "netcheck exit $rc, saw: $(tr '\n' ' ' <"$W/kc.log")"
+: >"$W/kc.log"
+EXTRA=KUBECONFIG=/elsewhere/other-cluster run 0 cluster-netcheck PROVIDER=scaleway; rc=$?
+grep -qx "cluster-netcheck.sh KUBECONFIG=$C/kubeconfig" "$W/kc.log" \
+  && ok "cluster-netcheck: an exported KUBECONFIG of another cluster is not followed" || bad "netcheck followed the caller: $(tr '\n' ' ' <"$W/kc.log")"
+: >"$W/kc.log"
+run 0 cluster-security; rc=$?
+[ "$rc" = 0 ] && grep -qx "cluster-security-tests.sh KUBECONFIG=$W/infrastructure/opentofu/cluster/kubeconfig" "$W/kc.log" \
+  && ok "cluster-security: KUBECONFIG defaults to this checkout's cluster" || bad "security exit $rc, saw: $(tr '\n' ' ' <"$W/kc.log")"
+: >"$W/kc.log"
+EXTRA=KUBECONFIG=/elsewhere/other-cluster run 0 cluster-security; rc=$?
+grep -qx "cluster-security-tests.sh KUBECONFIG=/elsewhere/other-cluster" "$W/kc.log" \
+  && ok "cluster-security: the caller's own KUBECONFIG wins" || bad "security overrode the caller: $(tr '\n' ' ' <"$W/kc.log")"
 
 
 echo "--- apps ref: a live ref that differs from git_ref is moved or the run fails, never green over it (infra #408) ---"
