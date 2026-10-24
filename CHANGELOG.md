@@ -21,6 +21,19 @@ infra issues the series set out to look at: #42 (the API unreachable for seconds
 Not a compliance claim. The apps-side results (#134 partial, #143, #144) are in the OpenAether-apps CHANGELOG.
 
 
+### Added (0.4.0, study LAB-B2 on blocker B2: moving existing CNPG databases from the 0.3.x spec to the 0.4.0 spec; rung: mocked, offline; evidence: a REDUCED real lab, UNVERIFIED on the full platform)
+- **`task cnpg-presync PROVIDER=… [ROLE=…] [APPLY=1] [SCALE=1]`** (`scripts/ops/cnpg-presync.sh`): enables the 0.4.0 `spec.postgresql.synchronous` block on the live CloudNativePG Clusters BEFORE the apps ref moves. Selects the Clusters by the
+  `openaether.io/managed` label in the platform namespaces (no name in the script; profile and `rt-*` Clusters left out). Dry run by default (exit 3 on a difference, exit 0 and silence when there is no CNPG Cluster); `APPLY=1` patches only that block,
+  waits for healthy, all instances ready, `synchronous_standby_names` set and the replicas in the quorum, reloads the configuration on every instance after 120 s (R1), and at the timeout prints the break-glass steps (R2) and fails. It never deletes a pod
+  and never forces. Refuses on an unhealthy Cluster, no recent Backup, a Talos or Kubernetes roll (the gate of `cluster-bootstrap-sync`, now shared as `oa_roll_gate` in `scripts/lib/pins.sh`), a pod that predates the plugin sidecar, and fewer than 3
+  instances unless `SCALE=1`. `cluster-up` runs its dry run after the roll and before the identity and apps-ref steps (applied at `APPROVE=auto` or a typed "yes", else it fails naming the command). `cluster-verify` gains, for every such Cluster,
+  the block, ContinuousArchiving, `synchronous_standby_names`, the replicas' `quorum`/`sync` state and the FailoverQuorum object (BAD with the command, UNKNOWN when unreadable). Tests: `test-cnpg-presync.sh`, `test-cluster-up.sh`, `test-pins-verify.sh`
+  (each change mutation-checked).
+- **Evidence, said plainly.** The study ran on Scaleway on a REDUCED lab: one k3s node per VM, no Flux, Talos, Cilium or zones, the real Cluster specs of 0.3.2 and the 0.4.0 branch, 20-35 commits/s per database, the recipe twice. Presync 54-57 s with no
+  write gap; then the one apply of the 0.4.0 content: healthy in 95-100 s, write gap 17-22 s, 0 acknowledged commits lost, WAL archive contiguous (MISSING 0), replicas in the quorum. The 0.4.0 content applied in one go, without the presync, left a Cluster
+  stuck in some runs (cloudnative-pg#11627, and an enabled plugin freezes every pod that predates the sidecar). **Not proven:** the real Flux apply, Talos, Cilium policies, three zones, production load and data, a node loss in the window, Outscale and OVH.
+  `docs/upgrade.md` ("From 0.3.x to 0.4.0") has the steps, the break-glass R1/R2 and the rule: no promote or switchover while a pod predates the plugin sidecar. Not a compliance claim.
+
 ### Fixed (0.4.0, lab 26 findings F1, K1, K2, K3, C1; rung: mocked, offline, UNVERIFIED on a cluster; lab 26 reproduced each defect on Scaleway)
 - **F1** `task cluster-up` ran `cluster-identity-sync.sh` and `cluster-apps-ref.sh` directly, outside the task environment, so `tofu output` stopped with "Backend initialization required" after the 41-minute roll (seen twice). It now runs the tasks (`task -x`), which carry the backend, the S3 credentials and the kubeconfig step. `test-cluster-up.sh` runs the step with no `TF_DATA_DIR` and no S3 variable against a tofu stub that refuses as the real one does (33 assertions fail without the change).
 - **K1** A bare `task` reports the scripts' exit 3 ("differs") as 201. The `cluster-up` messages say so and name the exact command with `PROVIDER` and `ROLE` filled in; `docs/upgrade.md` lists the codes.
