@@ -49,6 +49,7 @@ case "\$*" in
   *"custom-columns=V:.status.nodeInfo.kubeletVersion"*) echo "v1.37.1" ;;
   *"get nodes"*"--no-headers"*) printf 'a Ready cp 1d\nb Ready w 1d\nc Ready w 1d\n' ;;
   *"k8s-app=cilium"*) printf 'c1 1/1 Running\nc2 1/1 Running\nc3 1/1 Running\n' ;;
+  *"deploy coredns -o json") [ -f "$FX/coredns.unreadable" ] && exit 1; cat "$FX/coredns.json" ;;
   *"deploy coredns"*) echo 2 ;;
   *"get ns "*|*"get namespace "*) [ -f "$FX/no-flux-ns" ] && exit 1; echo Active ;;
   *"wait --for=condition=Available"*) echo ok ;;
@@ -61,11 +62,13 @@ esac
 STUB
 chmod +x "$W/stub"; for t in kubectl sleep; do ln -s "$W/stub" "$W/bin/$t"; done
 
+mkdns() { # <replicas> <hard hostname spread: true|false> — the Deployment kube-system/coredns as the apiserver returns it
+  jq -nc --argjson r "$1" --argjson h "$2" '{spec:{replicas:$r,template:{spec:(if $h then {topologySpreadConstraints:[{topologyKey:"kubernetes.io/hostname",whenUnsatisfiable:"DoNotSchedule",maxSkew:1}]} else {} end)}}}' >"$FX/coredns.json"; }
 mkgr() { jq -nc --arg r "$1" '{spec:{ref:{name:$r}}}' >"$FX/gr.json"; }
 mkks() { jq -nc --arg r "$1" '{spec:{postBuild:{substitute:{GIT_REF:$r}}}}' >"$FX/ks.json"; }
 reset() {
   rm -rf "$FX"; mkdir -p "$FX"; cp "$W/flux.target" "$FX/flux.live"; cp "$W/cilium.target" "$FX/cilium.live"
-  mkgr refs/tags/0.4.0; mkks refs/tags/0.4.0
+  mkgr refs/tags/0.4.0; mkks refs/tags/0.4.0; mkdns 3 true
   printf 'git_ref = "refs/tags/0.4.0"\ndeploy_flux = true\ncluster_name = "c"\nenvironment = "dev"\n' >"$TFV"
   cp "$REAL_M"/{cilium.yaml,cilium-hubble-drops.yaml,flux-install.yaml} "$M/"
 }
@@ -126,6 +129,33 @@ reset; mkgr refs/heads/lab/x; mkks refs/heads/lab/x; printf 'git_ref = "refs/hea
 has "both follow the declared git_ref" && has "is a branch, a moving ref" && ok "a branch in sync passes but is warned about" || bad "$(grep -i 'ref' "$W/out")"
 reset; EXTRA=TF_VAR_git_ref=refs/tags/0.3.2 run
 [ -n "$(badline 'git_ref declares refs/tags/0.3.2')" ] && ok "TF_VAR_git_ref wins over the tfvars, like tofu" || bad "$(grep -i 'ref' "$W/out")"
+
+echo "--- K2 (lab 26): CoreDNS runs the declared replica count and spread, both directions ---"
+reset; run
+has "✓ CoreDNS runs the declared 3 replica(s) with a hard spread over nodes" && ok "3 nodes, 3 replicas, hard spread: passes" || bad "$(grep -i coredns "$W/out")"
+reset; mkdns 2 false; run
+{ [ -n "$(badline 'CoreDNS has 2 replica(s) (spec), the config declares 3')" ] && has "BEHIND the declaration" \
+  && has "kubectl -n kube-system patch deployment coredns --type merge --patch-file scripts/ops/coredns-ha-patch.json" && [ "$rc" -ne 0 ]; } \
+  && ok "the Talos-created Deployment (2 replicas, no spread): BAD with the one-time command, run fails" || bad "$(grep -i coredns "$W/out")"
+reset; mkdns 5 true; run
+{ [ -n "$(badline 'CoreDNS has 5 replica(s) (spec), the config declares 3')" ] && has "AHEAD of the declaration"; } && ok "more replicas than declared: BAD too (both directions)" || bad "$(grep -i coredns "$W/out")"
+reset; mkdns 3 false; run
+{ [ -n "$(badline 'no hard spread over nodes')" ] && [ "$rc" -ne 0 ]; } && ok "the right count without the hard spread: BAD" || bad "$(grep -i coredns "$W/out")"
+reset; : >"$FX/coredns.unreadable"; run
+{ [ -n "$(unkline 'could not read Deployment kube-system/coredns')" ] && ! has "✓ CoreDNS runs the declared"; } && ok "unreadable: UNKNOWN, not a pass" || bad "$(grep -i coredns "$W/out")"
+reset; mkdns 2 false; printf 'coredns_ha = false\n' >>"$TFV"; run
+! has "✓ CoreDNS runs the declared" && [ -z "$(badline 'CoreDNS has')" ] && ok "coredns_ha = false: the Talos Deployment is what is declared, nothing to compare" || bad "$(grep -i coredns "$W/out")"
+reset; mkdns 2 false; run local
+! has "✓ CoreDNS runs the declared" && ok "provider local: not judged" || bad "local judged"
+# the one-time patch must say what the manifest says (drift guard)
+python3 -I - "$PWD/scripts/ops/coredns-ha-patch.json" "$PWD/infrastructure/opentofu/modules/talos/coredns.yaml.tftpl" <<'PY' && ok "scripts/ops/coredns-ha-patch.json equals the manifest's replicas, tolerations and spread (3 replicas)" || bad "the patch file drifted from coredns.yaml.tftpl"
+import json, sys, yaml
+patch = json.load(open(sys.argv[1]))
+txt = open(sys.argv[2]).read().replace("${replicas}", "3").replace("${min_domains}", "3").replace("${image_tag}", "v0")
+dep = next(d for d in yaml.safe_load_all(txt) if d and d["kind"] == "Deployment")
+want = {"spec": {"replicas": dep["spec"]["replicas"], "template": {"spec": {k: dep["spec"]["template"]["spec"][k] for k in ("tolerations", "topologySpreadConstraints")}}}}
+sys.exit(0 if patch == want else 1)
+PY
 
 echo
 echo "pins-verify: $PASS passed, $FAIL failed"

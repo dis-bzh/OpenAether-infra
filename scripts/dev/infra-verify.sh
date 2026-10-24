@@ -198,6 +198,31 @@ cfg_value() { # <key> — TF_VAR_<key>, else the env file, else empty
 }
 WANT_FLUX=false; [ "$(cfg_value deploy_flux)" = true ] && WANT_FLUX=true
 WANT_APP_LB=false; [ "$(cfg_value deploy_app_lb)" = true ] && WANT_APP_LB=true
+
+# The CoreDNS HA of 0.4.0 is an inline manifest, and Talos creates an inline manifest's objects only when they are absent (lab 26,
+# K2): on a cluster built by an older release the Talos-created Deployment stays at 2 replicas with no spread, while the budget (new)
+# does appear. So "CoreDNS answers" (above) is not "CoreDNS is what the config declares": compare the Deployment with the declared
+# shape, in both directions. The declared count is min(3, nodes), as modules/talos computes it.
+if [ "$PROVIDER" != local ] && [ "$(cfg_value coredns_ha)" != false ]; then
+  info "CoreDNS runs the declared replica count and spread"
+  dns_fix="kubectl -n kube-system patch deployment coredns --type merge --patch-file scripts/ops/coredns-ha-patch.json   (a rolling restart of the CoreDNS pods; docs/upgrade.md, From 0.3.x to 0.4.0)"
+  dns_want=$(( EXPECTED < 3 ? EXPECTED : 3 ))
+  if dns_json="$(K -n kube-system get deploy coredns -o json 2>/dev/null)" && [ -n "$dns_json" ] && [ "$dns_want" -ge 1 ]; then
+    dns_have="$(jq -r '.spec.replicas // empty' <<<"$dns_json" 2>/dev/null)"
+    dns_hard="$(jq -r '[.spec.template.spec.topologySpreadConstraints[]? | select(.topologyKey == "kubernetes.io/hostname" and .whenUnsatisfiable == "DoNotSchedule")] | length' <<<"$dns_json" 2>/dev/null)"
+    if ! [[ "$dns_have" =~ ^[0-9]+$ ]] || ! [[ "$dns_hard" =~ ^[0-9]+$ ]]; then
+      unk "could not read the replica count or the spread of Deployment kube-system/coredns"
+    elif [ "$dns_have" -ne "$dns_want" ]; then
+      bad "CoreDNS has ${dns_have} replica(s) (spec), the config declares ${dns_want} (coredns_ha: min(3, nodes)) — $([ "$dns_have" -lt "$dns_want" ] && echo BEHIND || echo AHEAD of) the declaration; an object Talos created earlier is never rewritten by an inline manifest. One-time: ${dns_fix}"
+    elif [ "$dns_hard" -eq 0 ]; then
+      bad "CoreDNS has ${dns_have} replica(s) but no hard spread over nodes: they can share one node, whose loss takes DNS down. One-time: ${dns_fix}"
+    else
+      ok "CoreDNS runs the declared ${dns_want} replica(s) with a hard spread over nodes"
+    fi
+  else
+    unk "could not read Deployment kube-system/coredns — the replica count and spread are UNCHECKED"
+  fi
+fi
 FLUX_NS="$(cfg_value flux_namespace)"; FLUX_NS="${FLUX_NS:-flux-system}"
 
 # Not cosmetic. deploy_flux defaults to false; if something re-enables it the cluster silently stops being the thing this

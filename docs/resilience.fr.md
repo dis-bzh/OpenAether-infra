@@ -134,10 +134,16 @@ vrai ensuite : tant que le Service n'a pas retiré le réplica d'un nœud perdu 
 réessaient après 5 s, un écrivain à 1 Hz avec un court délai de connexion peut encore échouer pendant ce temps.
 
 **Mises à jour de Talos.** Avec `coreDNS.disabled`, Talos ne crée ni ne met à jour `kube-system/coredns` : les mises à jour de Talos et de Kubernetes n'y touchent pas, un changement de version de CoreDNS est un
-changement de `coredns_image_tag` et un `tofu apply` (la configuration est renvoyée aux plans de contrôle, qui réappliquent leurs manifestes inline ; pas de redémarrage). L'activer sur un cluster qui
-tourne remplace le Deployment créé par Talos au prochain apply ; le désactiver laisse celui d'OpenAether en place jusqu'à ce que Talos réapplique le sien, donc supprimez d'abord `kube-system/coredns`.
-PAS VÉRIFIÉ : que la synchronisation des manifestes inline mette à jour un Deployment en place quand seule l'étiquette change, ce que dit `talosctl upgrade-k8s` de CoreDNS quand il est désactivé, et les
-secondes de DNS pendant la bascule.
+changement de `coredns_image_tag` et un `tofu apply` (la configuration est renvoyée aux plans de contrôle, qui réappliquent leurs manifestes inline ; pas de redémarrage). **L'activer sur un cluster qui
+tourne ne l'y fait PAS arriver** (lab 26, K2, PROUVÉ sur un cluster 0.3.2 passé en 0.4.0) : Talos n'applique les objets d'un manifeste inline que s'ils sont absents, donc le Deployment `kube-system/coredns` créé par Talos reste tel quel
+(même uid, 2 réplicas, aucune répartition) et seul le nouveau budget apparaît. `cluster-verify` le dit maintenant (« CoreDNS runs the declared replica count and spread », BAD dans les deux sens, avec la commande). L'étape unique
+pour un cluster construit par une version plus ancienne est un patch de ce Deployment : `kubectl -n kube-system patch deployment coredns --type merge --patch-file scripts/ops/coredns-ha-patch.json`
+(3 réplicas, la répartition stricte par nœud avec `minDomains` 3, la préférence de zone, les tolérances de 30 s : un test garde le fichier égal au manifeste ; pour moins de 3 nœuds, éditer `replicas` et `minDomains`).
+Il redémarre les pods CoreDNS un par un. Il n'apporte PAS le reste du manifeste : le Corefile, l'étiquette d'image, les requests/limits, la stratégie de mise à jour et la classe de priorité d'un cluster mis à niveau restent ceux de Talos,
+et un changement ultérieur de `coredns_image_tag` n'y arrive pas non plus (`kubectl set image`, plus bas). Reconstruire le Deployment depuis le manifeste (le supprimer et laisser Talos réappliquer le manifeste inline) n'est pas documenté,
+car on n'a pas observé si ni quand Talos réapplique un objet absent après un changement de configuration. Le désactiver laisse celui d'OpenAether en place jusqu'à ce que Talos réapplique le sien, donc supprimez d'abord
+`kube-system/coredns`. PAS VÉRIFIÉ : le patch sur un cluster réel (les secondes de DNS pendant le déploiement), que la synchronisation des manifestes inline mette à jour un Deployment en place quand seule l'étiquette change
+(observé : non, plus bas), et ce que dit `talosctl upgrade-k8s` de CoreDNS quand il est désactivé.
 
 **Bascule de la base (#154, OpenAether-apps `docs/resilience.md`).** Le primaire CNPG d'un nœud perdu bascule quand son pod est évincé ; les Clusters tolèrent maintenant `unreachable` et `not-ready`
 30 s au lieu de 300 s. Trou d'écriture attendu pour une coupure de courant d'un nœud : environ 60 s (deux mesures de 328 et 333 s moins les 300 s), pas 30 s : détection et promotion font déjà 28-33 s.
@@ -161,6 +167,7 @@ le remplacement d'un worker. Si le disque n'a PAS été remplacé, ces pods ont 
 | Exercice | Réussite |
 |---|---|
 | Installation neuve, `coredns_ha` actif | trois pods `k8s-app=kube-dns` sur trois nœuds différents (`-o wide`), aucun Pending durable ; `kubectl get pdb -n kube-system coredns` admet 1 ; `cluster-verify` vert |
+| Cluster mis à niveau depuis la 0.3.x, avant le patch unique | `cluster-verify` BAD « CoreDNS has 2 replica(s) ... declares 3 » ; après le patch trois pods sur trois nœuds, la ligne verte, recherches à 1 Hz depuis un troisième nœud pendant le déploiement : aucune n'échoue plus de 5 s |
 | Worker (ou plan de contrôle) portant un réplica CoreDNS éteint 5 min, résolution à 1 Hz d'un nom de Service depuis un pod d'un troisième nœud plus l'écrivain de base | aucune résolution n'échoue pour de bon, et le plus long trou d'écriture qui n'est pas une bascule est d'au plus 30 s (287 s / 46 s avant) ; trois réplicas de retour dans les 15 minutes suivant le rallumage |
 | Worker portant le primaire zitadel-db éteint et laissé éteint | le plus long trou d'écriture est d'au plus 75 s (environ 60 s attendu), un réplica promu dans les 45 s après le passage du nœud en Unknown, données identiques ; 30 s n'est pas revendiqué |
 | Écrivain « zéro perte » (OpenAether-apps `docs/resilience.md`, « Zero-loss proof ») : 100 commits par seconde, une connexion neuve chacun, journal côté client des identifiants acquittés ; pod primaire tué, son worker éteint, son worker redémarré de force (`talosctl reboot --mode force`), sa zone éteinte ; puis une fois avec la réplication synchrone suspendue en témoin | après chaque passe avec réplication synchrone, **zéro identifiant acquitté absent** des lignes survivantes ; le trou d'écriture est relevé ; le témoin montre ce que la réplication asynchrone perd (ou qu'elle n'a pas reproduit de perte) |

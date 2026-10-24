@@ -134,9 +134,16 @@ using the replica of a lost node (about 40 s after the node turns NotReady, 80 s
 timeout can still fail for that time.
 
 **Talos upgrades.** With `coreDNS.disabled` Talos neither creates nor upgrades `kube-system/coredns`: Talos and Kubernetes upgrades leave it alone, a CoreDNS version change is a
-`coredns_image_tag` change and a `tofu apply` (the config is re-sent to the control planes, which re-apply their inline manifests; no reboot). Turning it on for a running cluster replaces the
-Talos-created Deployment at the next apply; turning it off again leaves OpenAether's in place until Talos re-applies its own, so delete `kube-system/coredns` first. UNVERIFIED: that the
-inline-manifest sync updates a Deployment in place when only the tag changes, what `talosctl upgrade-k8s` says about CoreDNS when it is disabled, and the seconds of DNS during the switch.
+`coredns_image_tag` change and a `tofu apply` (the config is re-sent to the control planes, which re-apply their inline manifests; no reboot). **Turning it on for a running cluster does NOT
+reach it** (lab 26, K2, PROVEN on a 0.3.2 cluster moved to 0.4.0): Talos applies an inline manifest's objects only when they are absent, so the Talos-created `kube-system/coredns` Deployment stays exactly as it was
+(same uid, 2 replicas, no spread) and only the new budget appears. `cluster-verify` now says so ("CoreDNS runs the declared replica count and spread", BAD in both directions, with the command). The one-time step
+for a cluster built by an older release is a patch of that Deployment: `kubectl -n kube-system patch deployment coredns --type merge --patch-file scripts/ops/coredns-ha-patch.json`
+(replicas 3, the hard hostname spread with `minDomains` 3, the zone preference, the 30 s tolerations: a test keeps the file equal to the manifest; for a cluster of fewer than 3 nodes edit `replicas` and `minDomains`).
+It rolls the CoreDNS pods one at a time. It does NOT bring the rest of the manifest: the Corefile, the image tag, the requests/limits, the update strategy and the priority class of an upgraded cluster stay Talos's,
+and a later `coredns_image_tag` change does not reach it either (`kubectl set image`, below). Rebuilding the Deployment from the manifest instead (delete it, let Talos re-apply the inline manifest) is not documented
+because whether and when Talos re-applies an absent object after a config change was not observed. Turning it off again leaves OpenAether's in place until Talos re-applies its own, so delete
+`kube-system/coredns` first. UNVERIFIED: the patch on a live cluster (the seconds of DNS during the rollout), that the inline-manifest sync updates a Deployment in place when only the tag changes (observed: it does
+not, below), and what `talosctl upgrade-k8s` says about CoreDNS when it is disabled.
 
 **Database failover (#154, OpenAether-apps `docs/resilience.md`).** The CNPG primary of a lost node is failed over when its pod is evicted; the Clusters now tolerate `unreachable` and `not-ready`
 for 30 s instead of 300 s. Expected write gap of a node power loss: about 60 s (two measurements of 328 and 333 s minus the 300 s), not 30 s: detection and promotion alone are 28-33 s. A
@@ -160,6 +167,7 @@ was NOT replaced, those pods have another cause: do not delete their volumes. St
 | Drill | Pass |
 |---|---|
 | Fresh install, `coredns_ha` on | three `k8s-app=kube-dns` pods on three different nodes (`-o wide`), none Pending for good; `kubectl get pdb -n kube-system coredns` allows 1; `cluster-verify` green |
+| Cluster upgraded from 0.3.x, before the one-time patch | `cluster-verify` BAD "CoreDNS has 2 replica(s) ... declares 3"; after the patch three pods on three nodes, the line green, 1 Hz lookups from a third node during the rollout: none fails for more than 5 s |
 | Worker (or control plane) holding a CoreDNS replica powered off 5 min, 1 Hz lookup of a Service name from a pod on a third node plus the database writer | no lookup fails for good, and the longest database write gap that is not a failover is at most 30 s (was 287 s / 46 s); replicas back to three within 15 minutes of the power-on |
 | Worker holding the zitadel-db primary powered off and left off | the longest write gap is at most 75 s (expected about 60 s), a replica is promoted within 45 s of the node turning Unknown, data identical; 30 s is not claimed |
 | Zero-loss writer (OpenAether-apps `docs/resilience.md`, "Zero-loss proof"): 100 commits per second, fresh connection each, client-side log of acknowledged ids; primary pod killed, its worker powered off, its worker force-rebooted (`talosctl reboot --mode force`), its zone powered off; then once with synchronous replication suspended as a control | after each run with synchronous replication, **zero acknowledged ids missing** from the surviving rows; the write gap is recorded; the control shows what asynchronous replication loses (or that it did not reproduce a loss) |

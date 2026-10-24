@@ -970,7 +970,7 @@ tasks:
       # FAILS with the command that writes it: it never ends green over a ConfigMap that is not what the config
       # renders.
       # Both steps go through the TASKS (cluster-identity-sync, cluster-apps-ref), never the scripts: the tasks carry
-      # `env: *provider-env` (TF_DATA_DIR and the S3 credentials, without which `tofu output` stops at "Backend
+      # the provider env anchor (TF_DATA_DIR and the S3 credentials, without which `tofu output` stops at "Backend
       # initialization required") and fetch the kubeconfig first. Calling the script from here failed lab 26 twice,
       # after a 41-minute roll (F1). `task -x` hands back the script's own exit code: without it the script's 3
       # ("differs") and 4 ("not there yet") both reach this shell as 201 ("task: Failed to run task ... exit status 3").

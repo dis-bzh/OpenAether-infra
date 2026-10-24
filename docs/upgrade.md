@@ -123,6 +123,12 @@ Steps, in order (take a CNPG Backup, a Longhorn backup and `task etcd-snapshot` 
 2. **Talos first** (patch inside the 1.14 minor: 1.14.2 to 1.14.4): edit `talos_version` in the tfvars, `task cluster-upgrade` or `task cluster-roll` as in the sections below. Lab 25 did this first.
 3. **Move the tools and the config.** Check out the 0.4.0 tag of this repository, then `task cluster-up PROVIDER=… ROLE=…` with the plan read. Expect the control-plane machine configs "to change"
    (the manifest text and the 1.14.4 pin) and the new variables at their defaults (`CHANGELOG.md`, `variables.tf`). `cluster-up` now looks at the identity ConfigMap itself (step 5).
+   **CoreDNS (lab 26, K2).** The 0.4.0 CoreDNS HA is an inline manifest and does NOT reach a cluster built by an older release: Talos leaves the existing `kube-system/coredns` Deployment (2 replicas, no spread) alone;
+   only the new budget and the zone node labels appear. `cluster-verify` reports it ("CoreDNS runs the declared replica count and spread", BAD). One-time step, after `cluster-up`:
+   `kubectl -n kube-system patch deployment coredns --type merge --patch-file scripts/ops/coredns-ha-patch.json` (replicas 3, hard spread over nodes, zone preference, 30 s tolerations; a rolling restart of the DNS
+   pods; for fewer than 3 nodes edit `replicas` and `minDomains` in the file first), then `task cluster-verify`. The Corefile, the image tag and the requests of that Deployment stay Talos's (`docs/resilience.md`).
+   Everything else the 0.4.0 inline manifests newly define is created or covered: the CoreDNS budget and the `topology.kubernetes.io/zone` node labels (both appeared, lab 26), the Talos ServiceAccount CRD
+   (Talos-built-in, appeared), the new `cluster-identity` keys (step 5) and the apps ref (step 4). The Cilium and Flux manifests did not change between 0.3.2 and 0.4.0.
 4. **Point Flux at the new apps ref, on the cluster.** Changing `git_ref` in the tfvars sets the new inline manifest, which Talos does not apply over the existing objects (above), so the
    live objects need the ref. `task cluster-apps-ref PROVIDER=… ROLE=…` (dry run) shows the tfvars value, the ref the GitRepository `openaether` follows and the `GIT_REF` of the Kustomization
    `openaether-platform`, and exits 3 on a difference. `task cluster-apps-ref PROVIDER=… ROLE=… REF=refs/tags/<apps tag> APPLY=1` rewrites `git_ref` in the tfvars (the diff is shown, the
