@@ -147,7 +147,13 @@ created BEFORE its new Node object (the data lived on the old disk), finds the p
 only for: a CNPG replica whose Cluster has a Ready primary elsewhere (never the primary of record), an OpenBao member while a raft majority of the others is Ready (Ready means unsealed), Loki,
 vmstorage and vmselect while another replica is Ready; the retained PV is deleted with the claim. One member per workload per run, a Ready pod is left alone, anything else is refused and
 the command exits 1. Longhorn replicas are reported (a faulted volume is named), never deleted: Longhorn rebuilds them. `task cluster-replaced-node-cleanup NODE=<node> [-- --clean]` runs it alone
-(for a deferred member, or later). UNVERIFIED: the matching of a PV to the new Node by creation time on a live cluster, and CNPG re-cloning in every case the script lets through.
+(for a deferred member, or later). The matching of a PV to the new Node by creation time was met on a live cluster in lab 25 (dead node: 7 volumes cleaned in 6 s). UNVERIFIED: CNPG re-cloning in every case the script lets through.
+
+**A drained replace keeps the Node object (lab 26, C1).** `task cluster-roll -- --node=<node>` drains, then replaces the VM and its disk, but the Node object stays: no volume is "older than the Node", so the tool above
+used to answer "nothing to clean" while a CNPG replica, Loki and vmselect crash-looped (`mkdir ... permission denied` on the empty, root-owned retained directory). The tool cannot see the disk. It now lists the not-Ready pods
+that sit on volumes pinned to the node that the default rule skipped, refuses to say "nothing to clean", exits 1 and prints `task cluster-replaced-node-cleanup NODE=<node> -- --disk-replaced` (add `--clean` to run it). `--disk-replaced` is
+the person saying the disk was replaced: every volume pinned to the node counts as the old disk's, a Ready pod is still left alone and every rule above still applies. `cluster-roll` prints that command after a worker replace. If the disk
+was NOT replaced, those pods have another cause: do not delete their volumes. Stub tests only; the recipe it prints is the one used by hand in lab 26 (all healthy about a minute later).
 
 **Lab pass criteria for these changes.**
 

@@ -148,7 +148,13 @@ AVANT son nouvel objet Node (les données étaient sur l'ancien disque), trouve 
 seulement pour : un réplica CNPG dont le Cluster a un primaire Ready ailleurs (jamais le primaire d'enregistrement), un membre OpenBao tant qu'une majorité raft des autres est Ready (Ready veut dire descellé),
 Loki, vmstorage et vmselect tant qu'un autre réplica est Ready ; le PV conservé est supprimé avec la claim. Un membre par charge de travail et par exécution, un pod Ready est laissé, tout le reste est refusé
 et la commande sort en 1. Les réplicas Longhorn sont signalés (un volume en défaut est nommé), jamais supprimés : Longhorn les reconstruit. `task cluster-replaced-node-cleanup NODE=<nœud> [-- --clean]` la
-lance seule (pour un membre différé, ou plus tard). PAS VÉRIFIÉ : l'association d'un PV au nouveau Node par date de création sur un cluster réel, et le re-clonage par CNPG dans tous les cas que le script laisse passer.
+lance seule (pour un membre différé, ou plus tard). L'association d'un PV au nouveau Node par date de création a été vue sur un cluster réel au lab 25 (nœud mort : 7 volumes nettoyés en 6 s). PAS VÉRIFIÉ : le re-clonage par CNPG dans tous les cas que le script laisse passer.
+
+**Un remplacement avec drain garde l'objet Node (lab 26, C1).** `task cluster-roll -- --node=<nœud>` draine, puis remplace la VM et son disque, mais l'objet Node reste : aucun volume n'est « plus ancien que le Node », si bien que l'outil
+ci-dessus répondait « nothing to clean » pendant qu'un réplica CNPG, Loki et vmselect bouclaient (`mkdir ... permission denied` sur le répertoire conservé, vide et propriété de root). L'outil ne voit pas le disque. Il liste maintenant les
+pods non Ready posés sur des volumes rattachés au nœud que la règle par défaut a écartés, refuse de dire « nothing to clean », sort en 1 et affiche `task cluster-replaced-node-cleanup NODE=<nœud> -- --disk-replaced` (ajouter `--clean` pour l'exécuter).
+`--disk-replaced` est la personne qui dit que le disque a été remplacé : tout volume rattaché au nœud compte comme celui de l'ancien disque, un pod Ready reste laissé et toutes les règles ci-dessus s'appliquent. `cluster-roll` affiche cette commande après
+le remplacement d'un worker. Si le disque n'a PAS été remplacé, ces pods ont une autre cause : ne pas supprimer leurs volumes. Tests avec doublures seulement ; la recette affichée est celle faite à la main au lab 26 (tout sain environ une minute après).
 
 **Critères de réussite en labo de ces changements.**
 

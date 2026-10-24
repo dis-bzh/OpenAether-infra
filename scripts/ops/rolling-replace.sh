@@ -525,6 +525,12 @@ replace_node() { # <type: cp|worker> <index>
   # 8. Longhorn rebuild complete (no degraded/faulted) before the next node is touched
   wait_longhorn_healthy || die "Longhorn not healthy after replacing ${node_name} — STOP"
   ok "Node ${node_name} $([[ $UPGRADE -eq 1 ]] && echo upgraded || echo replaced) and back in rotation"
+  # A drained replace KEEPS the Node object, so the volumes of the old disk are not "older than the Node" and
+  # `cluster-replaced-node-cleanup` finds none by itself (lab 26, C1): name the exact command while it matters.
+  if [[ $UPGRADE -eq 0 && $DEAD -eq 0 && "$t" == worker ]]; then
+    info "Pods of ${node_name} that crash-loop on 'mkdir ... permission denied' (a CNPG replica, loki, vmselect: local-path volumes of the old disk) are dropped with:"
+    info "  task cluster-replaced-node-cleanup NODE=${node_name} -- --disk-replaced   (prints the commands; add --clean to run the safe ones)"
+  fi
 }
 
 # ==============================================================================

@@ -53,7 +53,10 @@ def pod(ns, name, claim, ok=False, labels=None, sts=None, state="CrashLoopBackOf
     if sts: p["metadata"]["ownerReferences"] = [{"kind": "StatefulSet", "name": sts}]
     return p
 def cn(ns, cl, i, ok=True): return pod(ns, f"{cl}-{i}", f"{cl}-{i}", ok, {"cnpg.io/cluster": cl, "cnpg.io/instanceName": f"{cl}-{i}"})
-nodes = [{"metadata": {"name": NODE, "creationTimestamp": NEW}, "status": {"conditions": ready(v != "notready")}}]
+# "kept-": a drained `cluster-roll --node=` replaced the disk but kept the Node object (lab 26, C1): the Node is OLDER than every volume
+kept = v.startswith("kept-")
+if kept: v = v[5:]
+nodes = [{"metadata": {"name": NODE, "creationTimestamp": "2026-10-01T08:00:00Z" if kept else NEW}, "status": {"conditions": ready(v != "notready")}}]
 pvs = [pv("pv-g1", NODE, "grafana-db-1", "foundation-databases"), pv("pv-z2", NODE, "zitadel-db-2", "foundation-databases"),
        pv("pv-other", "worker-1", "zitadel-db-1", "foundation-databases"),                       # another node
        pv("pv-fresh", NODE, "fresh-0", "apps", created="2026-10-21T17:00:00Z")]                    # created after the replacement
@@ -155,5 +158,24 @@ mk base; run --node worker-9
 mk longhorn-faulted; run --node worker-3
 has "FAULTED" && ok_ "a faulted Longhorn volume is reported, never touched" || bad "longhorn faulted"
 python3 -I "$SUT" >/dev/null 2>&1; [ $? = 2 ] && ok_ "no --node: usage, rc 2" || bad "usage"
+# --- C1 (lab 26): the Node object was kept, the disk was replaced ---
+mk kept-base; run --node worker-3 --clean
+{ [ "$(rc)" = 1 ] && [ "$(deleted)" = 0 ] && ! has "nothing to clean" && has "task cluster-replaced-node-cleanup NODE=worker-3 -- --disk-replaced" \
+  && has "grafana-db-1" && has "zitadel-db-2"; } \
+  && ok_ "kept Node object: no false 'nothing to clean', the pods are named, the exact command is printed (rc 1), nothing deleted by guesswork" \
+  || bad "kept-base default ($(rc), $(deleted) deletes): $(cat "$W/out.txt")"
+mk kept-base; run --node worker-3 --disk-replaced --clean
+{ [ "$(rc)" = 0 ] && called "-n foundation-databases delete pod/grafana-db-1 pvc/grafana-db-1" && called "delete pv pv-g1" \
+  && called "delete pod/zitadel-db-2 pvc/zitadel-db-2" && called "delete pv pv-z2"; } \
+  && ok_ "--disk-replaced --clean drops the two crash-looping CNPG replicas of the kept node" || bad "kept-base --disk-replaced ($(rc)): $(cat "$CALLS")"
+{ ! called "pv-other" && ! called "zitadel-db-1" && ! called "grafana-db-2"; } && ok_ "...and nothing of another node or a healthy instance" || bad "too much: $(cat "$CALLS")"
+mk kept-primary-on-old-disk; run --node worker-3 --disk-replaced --clean
+{ [ "$(rc)" = 1 ] && has "primary of record" && ! called "delete pod/grafana-db-1"; } && ok_ "--disk-replaced keeps every safety rule: the primary of record is refused" || bad "kept primary ($(rc))"
+mk kept-ready-pod; run --node worker-3 --disk-replaced --clean
+! called "delete pod/grafana-db-1" && ok_ "--disk-replaced leaves a Ready pod alone" || bad "kept ready pod touched"
+mk kept-loki-ok; run --node worker-3
+{ has "loki-0" && has "--disk-replaced" && [ "$(rc)" = 1 ]; } && ok_ "kept Node: a Pending Loki pod on a local-path volume is flagged too" || bad "kept loki: $(cat "$W/out.txt")"
+mk kept-none; run --node worker-3
+{ [ "$(rc)" = 0 ] && has "nothing to clean"; } && ok_ "kept Node and nothing pinned to it: still 'nothing to clean', rc 0" || bad "kept none"
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

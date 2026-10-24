@@ -10,11 +10,19 @@ Default: print what is stale and the exact commands. --clean runs them, for the 
   * a CNPG instance whose Cluster has a healthy primary elsewhere (never the primary of record);
   * an OpenBao member while the others still hold a raft quorum (they must be Ready, which means unsealed);
   * Loki, vmstorage, vmselect while at least one other replica is Ready;
-and only for volumes created before the replacement Node. Everything else is listed and refused. One deletion per workload per run
+and only for volumes created before the replacement Node (or, with --disk-replaced, for every volume pinned to the node: see below).
+Everything else is listed and refused. One deletion per workload per run
 (the next waits for the first to be Ready: rerun). Longhorn replicas are reported, never deleted (Longhorn rebuilds them).
 
-Usage: replaced-node-cleanup.py --node NAME [--clean]    (KUBECTL overrides the kubectl command line; the tests use it)
-Exit: 0 nothing to do, or printed, or cleaned; 1 something refused or deferred or failed under --clean; 2 usage.
+A drained `task cluster-roll -- --node=NAME` replaces the VM and its disk but KEEPS the Node object (lab 26, C1): the old volumes are
+then OLDER than nothing, "created before the Node" finds none, and the pods crash-loop on the empty root-owned directories. The tool
+cannot see the disk, so it cannot know; it says so when it finds not-Ready pods on volumes pinned to the node that the default rule
+skipped, and prints the command. --disk-replaced is the person (or the roll) saying "the disk of this node was replaced": every volume
+pinned to the node is then treated as the old disk's. Ready pods are still left alone and every safety rule above still applies.
+
+Usage: replaced-node-cleanup.py --node NAME [--clean] [--disk-replaced]    (KUBECTL overrides the kubectl command line; the tests use it)
+Exit: 0 nothing to do, or printed, or cleaned; 1 something refused or deferred or failed under --clean, or volumes the default rule
+skipped look stale (the command is printed); 2 usage.
 """
 import json
 import os
@@ -66,7 +74,7 @@ def pod_state(pod):
     return pod.get("status", {}).get("phase", "Unknown")
 
 
-def plan(node, nodes, pvs, pvcs, pods, clusters, stss, longhorn):
+def plan(node, nodes, pvs, pvcs, pods, clusters, stss, longhorn, disk_replaced=False):
     """Returns (items, notes). An item: dict(kind, ns, pod, pvc, pv, state, verdict, why, group, cmds)."""
     n = next((x for x in nodes if x["metadata"]["name"] == node), None)
     if n is None:
@@ -74,7 +82,7 @@ def plan(node, nodes, pvs, pvcs, pods, clusters, stss, longhorn):
     if not any(c.get("type") == "Ready" and c.get("status") == "True" for c in n["status"].get("conditions", [])):
         return None, ["the Node %s is not Ready: wait for the replacement, then run this again" % node]
     born = n["metadata"]["creationTimestamp"]
-    stale = [p for p in pvs if pinned_to(p, node) and p["metadata"]["creationTimestamp"] < born]
+    stale = [p for p in pvs if pinned_to(p, node) and (disk_replaced or p["metadata"]["creationTimestamp"] < born)]
     claims = {(c["metadata"]["namespace"], c["metadata"]["name"]): c for c in pvcs}
     items, notes = [], []
     for pv in sorted(stale, key=lambda p: p["metadata"]["name"]):
@@ -165,31 +173,53 @@ def main():
     ap = argparse.ArgumentParser(add_help=False)
     ap.add_argument("--node")
     ap.add_argument("--clean", action="store_true")
+    ap.add_argument("--disk-replaced", action="store_true")
     try:
         args, extra = ap.parse_known_args()
     except SystemExit:
         return 2
     if not args.node or extra:
-        print("usage: replaced-node-cleanup.py --node NAME [--clean]", file=sys.stderr)
+        print("usage: replaced-node-cleanup.py --node NAME [--clean] [--disk-replaced]", file=sys.stderr)
         return 2
     node, clean = args.node, args.clean
     lh = None
     if subprocess.run(kubectl_cmd() + ["get", "crd", "volumes.longhorn.io"], capture_output=True).returncode == 0:
         lh = {"volumes": (kget("volumes.longhorn.io", "-n", "longhorn-system", required=False) or {}).get("items", []),
               "replicas": (kget("replicas.longhorn.io", "-n", "longhorn-system", required=False) or {}).get("items", [])}
-    items, notes = plan(
-        node, kget("nodes")["items"], kget("pv")["items"], kget("pvc", "-A")["items"], kget("pods", "-A")["items"],
-        (kget("clusters.postgresql.cnpg.io", "-A", required=False) or {}).get("items", []), kget("statefulsets", "-A")["items"], lh)
+    world = (kget("nodes")["items"], kget("pv")["items"], kget("pvc", "-A")["items"], kget("pods", "-A")["items"],
+             (kget("clusters.postgresql.cnpg.io", "-A", required=False) or {}).get("items", []), kget("statefulsets", "-A")["items"], lh)
+    items, notes = plan(node, *world, disk_replaced=args.disk_replaced)
     if items is None:
         print("✗ " + notes[0], file=sys.stderr)
         return 1
     for n in notes:
         print("⚠ " + n)
+    # Volumes the default rule skipped that a not-Ready pod still sits on: the signature of a drained roll that kept the Node object.
+    unseen = []
+    if not args.disk_replaced:
+        seen_pv = {i["pv"] for i in items}
+        wide, _ = plan(node, *world, disk_replaced=True)
+        unseen = [i for i in wide or [] if i["pv"] not in seen_pv and i["kind"] not in ("running", "claim", "orphan-pv")]
     todo = [i for i in items if i["verdict"] in ("clean", "refuse", "defer")]
-    if not items:
+    if not items and not unseen:
         print("✓ no volume of %s was left on the old disk: nothing to clean" % node)
         return 0
-    print("Volumes pinned to the old disk of %s (created before the replacement Node):" % node)
+    if unseen:
+        print("⚠ %d pod(s) are not Ready on volumes pinned to %s that the default rule does not count as old (they are not older than the Node object):"
+              % (len(unseen), node))
+        for i in unseen:
+            print("    %s/%s (%s) on pvc %s" % (i["ns"], i["pod"], i["state"], i["pvc"]))
+        print("  If the disk of %s was replaced while the Node object was KEPT (a drained `task cluster-roll -- --node=%s`), these are the old disk's"
+              % (node, node))
+        print("  empty, root-owned directories and the pods will not recover alone. Look at what is safe, then drop it:")
+        print("    task cluster-replaced-node-cleanup NODE=%s -- --disk-replaced            (prints the commands)" % node)
+        print("    task cluster-replaced-node-cleanup NODE=%s -- --disk-replaced --clean    (runs the safe ones)" % node)
+        print("  If the disk was NOT replaced, these pods have another cause: do not delete their volumes.")
+        if not items:
+            print("STALE=0 SUSPECT=%d" % len(unseen))
+            return 1
+    print("Volumes pinned to the old disk of %s (%s):" % (node, "every volume pinned to it: --disk-replaced" if args.disk_replaced
+                                                           else "created before the replacement Node"))
     for i in items:
         print("  %-7s %-26s pod %-28s pvc %-28s %s: %s" % (i["verdict"].upper(), i["ns"], i["pod"], i["pvc"], i["state"], i["why"]))
     cmds = [(i, c) for i in items if i["verdict"] == "clean" for c in i["cmds"]]
@@ -209,7 +239,7 @@ def main():
             print("Then wait for the pods to be Ready (kubectl get pods -A) and run this again: a deferred member, if any, goes next.")
     print("STALE=%d CLEAN=%d REFUSED=%d DEFERRED=%d" % (len(items), sum(i["verdict"] == "clean" for i in items),
                                                        sum(i["verdict"] == "refuse" for i in items), sum(i["verdict"] == "defer" for i in items)))
-    return 1 if (clean and bad) else 0
+    return 1 if ((clean and bad) or unseen) else 0
 
 
 if __name__ == "__main__":
