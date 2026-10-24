@@ -505,6 +505,12 @@ tasks:
       # The live cluster-identity ConfigMap against the rendered map (lab 25, D9): a dry run writes nothing,
       # --apply patches only the rendered keys.
       - ./scripts/dev/test-cluster-identity-sync.sh
+      # The apps ref (git_ref) of a live cluster against the tfvars and the two Flux objects, and the Cilium / Flux
+      # controller
+      # versions against the pinned artifacts (infra #408): dry runs write nothing, refusals come before any write.
+      - ./scripts/dev/test-cluster-apps-ref.sh
+      - ./scripts/dev/test-cluster-bootstrap-sync.sh
+      - ./scripts/dev/test-pins-verify.sh
       # `nc -z` calls a dead ssh -L tunnel healthy. Two local listeners measure
       # the difference the whole tunnel guard rests on.
       - ./scripts/dev/test-endpoint-probe.sh
@@ -984,6 +990,35 @@ tasks:
             fi ;;
           *) exit "$rc" ;;
         esac
+      # The apps ref is an inline-manifest object too: git_ref in the tfvars does not move a running cluster (infra
+      # #408).
+      # Same rule as above: written (APPROVE=auto, or "yes" at a terminal) or the run FAILS naming the command.
+      - |
+        AR=./scripts/ops/cluster-apps-ref.sh
+        TFV="infrastructure/opentofu/cluster/envs/{{.ROLE}}-{{.PROVIDER}}.tfvars"
+        rc=0; $AR --tfvars "$TFV" || rc=$?
+        case "$rc" in
+          0) ;;
+          4) echo "~ apps ref: no GitRepository yet (Flux bootstrap not applied): nothing to move." >&2 ;;
+          3)
+            if [ "{{.APPROVE}}" = auto ]; then
+              $AR --tfvars "$TFV" --apply || exit 1
+            elif [ -t 0 ]; then
+              printf '\nPoint the live GitRepository and GIT_REF at the git_ref of the tfvars? Only "yes" is accepted: '
+              read -r reply
+              [ "$reply" = yes ] || {
+                echo "✗ not moved: Flux keeps following the old ref. Move it:" >&2
+                echo "    task cluster-apps-ref PROVIDER={{.PROVIDER}} ROLE={{.ROLE}} APPLY=1" >&2
+                exit 1
+              }
+              $AR --tfvars "$TFV" --apply || exit 1
+            else
+              echo "✗ the apps ref Flux follows differs from git_ref and nobody can be asked. Move it:" >&2
+              echo "    task cluster-apps-ref PROVIDER={{.PROVIDER}} ROLE={{.ROLE}} APPLY=1" >&2
+              exit 1
+            fi ;;
+          *) exit "$rc" ;;
+        esac
       # The verdict, asked of the cluster rather than assumed from the steps
       # above: a failing verify fails cluster-up before the line below.
       # scripts/dev/test-cluster-up.sh runs it.
@@ -1011,6 +1046,11 @@ tasks:
       - |
         echo "✓ cluster-up complete: cluster-verify passed."
         echo "  Run this exact command again to converge again."
+        echo "  cluster-up did NOT change, and cluster-verify only compares: the Cilium and Flux controllers"
+        echo "  of a running cluster (task cluster-bootstrap-sync moves Flux; Cilium is a rebuild aside),"
+        echo "  the apps content beyond the ref above, the versions of CAPI child clusters, and any object"
+        echo "  Talos created earlier from an inline manifest (the cluster-identity keys and the apps ref"
+        echo "  are the two this run looked at)."
 
   # ===========================================================================
   # Cluster Lifecycle
@@ -2158,7 +2198,8 @@ tasks:
       requested number of control planes (not all in one zone or host), Cilium on
       each, CoreDNS serving, no Flux and no app load balancer unless deploy_flux / deploy_app_lb
       ask for them (then Flux Available and the balancer present), the Talos and Kubernetes versions the
-      config pins, the schematic it pins, and a tfstate replica in the backup store.
+      config pins, the schematic it pins, the Cilium and Flux controller versions the artifacts pin, the apps ref Flux
+      follows against git_ref, and a tfstate replica in the backup store.
       Usage: task verify PROVIDER=scaleway [ROLE=management]
     # See backup-state above: the *provider-env anchor needs this dir, and the
     # first version of this target shipped without it and exited 127 everywhere.
@@ -2206,6 +2247,59 @@ tasks:
       - task: kubeconfig
         vars: {ROLE: '{{.ROLE}}', PROVIDER: '{{.PROVIDER}}'}
       - ../../../scripts/ops/cluster-identity-sync.sh{{if .APPLY}} --apply{{end}}
+
+  cluster-apps-ref:
+    desc: >-
+      Make the apps ref of a RUNNING cluster match git_ref (infra #408): the ref the GitRepository `openaether`
+      follows and the GIT_REF of the Kustomization `openaether-platform` (Talos never updates an inline manifest's
+      object that exists, so editing git_ref and running cluster-up does not move them). Dry run by default: shows
+      tfvars / GitRepository / GIT_REF and writes nothing (exit 3 on a difference). APPLY=1 patches BOTH live
+      objects, rewrites git_ref in the tfvars (backup kept, diff shown) when REF=refs/tags/X differs from it, asks
+      Flux to reconcile and waits for the revision of that ref. A branch is a moving ref: warned about, and
+      refused as REF unless ALLOW_BRANCH=1. Signature settings are never touched. Usage: task cluster-apps-ref
+      PROVIDER=… [ROLE=management] [REF=refs/tags/X] [APPLY=1] [ALLOW_BRANCH=1]. See
+      scripts/ops/cluster-apps-ref.sh and docs/upgrade.md.
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+      APPLY: '{{.APPLY | default ""}}'
+      REF: '{{.REF | default ""}}'
+      ALLOW_BRANCH: '{{.ALLOW_BRANCH | default ""}}'
+    env: *provider-env
+    cmds:
+      - task: kubeconfig
+        vars: {ROLE: '{{.ROLE}}', PROVIDER: '{{.PROVIDER}}'}
+      - >-
+        ../../../scripts/ops/cluster-apps-ref.sh --tfvars "envs/{{.ROLE}}-{{.PROVIDER}}.tfvars"
+        {{if .REF}}--ref "{{.REF}}"{{end}} {{if .ALLOW_BRANCH}}--allow-branch{{end}} {{if .APPLY}}--apply{{end}}
+
+  cluster-bootstrap-sync:
+    desc: >-
+      Compare the Cilium and Flux controllers a RUNNING cluster runs with the pinned bootstrap artifacts
+      (cilium.yaml, flux-install.yaml, checked against upstream-artifacts.lock), and move the FLUX controllers
+      (infra #408). Dry run by default (exit 3 on a difference). APPLY=1: server-side apply of flux-install.yaml,
+      refused on a downgrade, on more than one minor at a time, and while a Talos or Kubernetes roll may be under
+      way; waits for every rollout, then re-reads. Cilium is NEVER applied here (exit 5): rebuild aside,
+      docs/upgrade.md. COMPONENT=flux|cilium|all (default all). Usage: task cluster-bootstrap-sync PROVIDER=…
+      [ROLE=management] [COMPONENT=…] [APPLY=1]. See scripts/ops/cluster-bootstrap-sync.sh.
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+      APPLY: '{{.APPLY | default ""}}'
+      COMPONENT: '{{.COMPONENT | default "all"}}'
+    env: *provider-env
+    cmds:
+      - task: kubeconfig
+        vars: {ROLE: '{{.ROLE}}', PROVIDER: '{{.PROVIDER}}'}
+      - >-
+        ../../../scripts/ops/cluster-bootstrap-sync.sh --tfvars "envs/{{.ROLE}}-{{.PROVIDER}}.tfvars"
+        --component "{{.COMPONENT}}" {{if .APPLY}}--apply{{end}}
 
   cluster-exposure:
     desc: >-

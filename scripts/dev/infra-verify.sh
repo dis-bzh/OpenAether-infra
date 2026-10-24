@@ -311,6 +311,82 @@ version_check() { # <label> <field> <key>
 version_check "Talos"      '.status.nodeInfo.osImage'        talos_version
 version_check "Kubernetes" '.status.nodeInfo.kubeletVersion' kubernetes_version
 
+# --- Cilium and the Flux controllers run the version the artifacts pin (infra #408) ---------------------------------------
+#
+# Talos creates an inline-manifest object when it is missing and does not update one that exists, so a bumped Cilium or Flux
+# pin (render-bootstrap-manifests.sh) never reaches a running cluster by itself. Compared in BOTH directions, per workload:
+# behind and ahead are both a difference. The pin is what the committed artifact installs (scripts/lib/pins.sh), the running
+# version is the image tag of the workload spec. The local Docker cluster is rebuilt, not upgraded, and renders its own Cilium.
+# shellcheck source=../lib/pins.sh
+source "$ROOT/scripts/lib/pins.sh"
+pins_check() { # <label> <artifact file> <kind> <fix-when-behind> <fix-when-ahead> [ns]
+  local label="$1" file="$2" kind="$3" behind="$4" ahead="$5" want have diff line
+  if [ ! -f "$file" ]; then unk "${label}: the pinned artifact ${file##*/} is not readable here — the running version is UNCHECKED"; return; fi
+  want="$(oa_artifact_pins "$kind" "$file")"
+  have="$(oa_live_pins "$kind" "${6:-}")" || have=""
+  if [ -z "$want" ]; then unk "${label}: no image found in ${file##*/} — nothing to compare against"; return; fi
+  if [ -z "$have" ]; then unk "${label}: could not read the running workloads (API error or none found) — their versions are UNCHECKED"; return; fi
+  diff="$(oa_pin_diff "$want" "$have")"
+  if [ -z "$diff" ]; then
+    ok "${label} run the pinned version ($(awk '{print $3}' <<<"$want" | sort -u | paste -sd, -))"
+    return
+  fi
+  while read -r line; do
+    pv="$(awk '{print $4}' <<<"$line")"; rv="$(awk '{print $6}' <<<"$line")"; line="${line#* }"   # drop the kind: the label says it
+    case "$line" in
+      *"not running"*) bad "${label}: ${line}. ${behind}" ;;
+      *"not pinned"*) bad "${label}: ${line} — the artifact no longer has it. ${ahead}" ;;
+      *) # "<kind> <name> pinned A running B": which side is ahead decides the advice
+         if oa_semver_lt "$pv" "$rv"; then bad "${label}: ${line} — the cluster is AHEAD of the pin. ${ahead}"
+         else bad "${label}: ${line} — the cluster is BEHIND the pin. ${behind}"; fi ;;
+    esac
+  done <<<"$diff"
+}
+if [ "$PROVIDER" != local ]; then
+info "Cilium and Flux run the version the artifacts pin"
+if [ -f "$VER_TFVARS" ] && grep -qE '^[[:space:]]*(cilium_manifest|flux_manifest)[[:space:]]*=' "$VER_TFVARS" \
+   && ! grep -qE '^[[:space:]]*(cilium_manifest|flux_manifest)[[:space:]]*=[[:space:]]*null' "$VER_TFVARS"; then
+  unk "cilium_manifest or flux_manifest is overridden in ${VER_TFVARS##*/}: the manifest the cluster was built from is not the committed one — the versions are UNCHECKED"
+else
+  CIL_FILE="$CLUSTER_DIR/bootstrap-manifests/cilium.yaml"
+  [ "$(cfg_value cilium_hubble_drop_log)" = true ] && CIL_FILE="$CLUSTER_DIR/bootstrap-manifests/cilium-hubble-drops.yaml"
+  pins_check "Cilium" "$CIL_FILE" cilium \
+    "Cilium is never upgraded in place by this repository: rebuild aside (docs/upgrade.md, 'Cilium and Flux on a running cluster')." \
+    "Set the pin back (render-bootstrap-manifests.sh) or rebuild aside; a downgrade is not done in place (docs/upgrade.md)."
+  if [ "$WANT_FLUX" = true ]; then
+    pins_check "Flux controllers" "$CLUSTER_DIR/bootstrap-manifests/flux-install.yaml" flux \
+      "Move them: task cluster-bootstrap-sync PROVIDER=${PROVIDER} ROLE=${ROLE} APPLY=1" \
+      "Set the pin back (render-bootstrap-manifests.sh) or rebuild aside; a downgrade is not done in place (docs/upgrade.md)." "$FLUX_NS"
+  fi
+fi
+fi
+
+# The apps ref (git_ref): what Flux follows against what the config declares, in both directions (infra #408). Three values: the
+# tfvars, the GitRepository's spec.ref.name, the Kustomization's GIT_REF. Only when the config asks for Flux.
+if [ "$PROVIDER" != local ] && [ "$WANT_FLUX" = true ]; then
+info "The apps ref Flux follows is the git_ref the config declares"
+DECL_REF="$(oa_declared_git_ref "$CLUSTER_DIR" "$VER_TFVARS")"
+if GR_REF="$(K -n "$FLUX_NS" get gitrepositories.source.toolkit.fluxcd.io openaether -o json 2>/dev/null)" \
+   && KS_REF="$(K -n "$FLUX_NS" get kustomizations.kustomize.toolkit.fluxcd.io openaether-platform -o json 2>/dev/null)"; then
+  LIVE_GR_REF="$(jq -r '.spec.ref.name // ""' <<<"$GR_REF" 2>/dev/null)"
+  LIVE_KS_REF="$(jq -r '.spec.postBuild.substitute.GIT_REF // ""' <<<"$KS_REF" 2>/dev/null)"
+  FIXREF="task cluster-apps-ref PROVIDER=${PROVIDER} ROLE=${ROLE} APPLY=1"
+  if [ -z "$DECL_REF" ]; then
+    unk "no git_ref is declared (TF_VAR_git_ref, ${VER_TFVARS##*/}, variables.tf) — the apps ref is UNCHECKED"
+  elif [ -z "$LIVE_GR_REF" ]; then
+    unk "the GitRepository openaether has no spec.ref.name (another ref form, or unreadable) — the apps ref is UNCHECKED"
+  elif [ "$LIVE_GR_REF" = "$DECL_REF" ] && [ "$LIVE_KS_REF" = "$DECL_REF" ]; then
+    ok "the GitRepository and GIT_REF both follow the declared git_ref (${DECL_REF})"
+  else
+    [ "$LIVE_GR_REF" = "$DECL_REF" ] || bad "the GitRepository openaether follows ${LIVE_GR_REF}, git_ref declares ${DECL_REF}. Move the cluster: ${FIXREF}  (or keep the cluster's ref: ... REF=${LIVE_GR_REF} APPLY=1 writes it into the tfvars)"
+    [ "$LIVE_KS_REF" = "$DECL_REF" ] || bad "GIT_REF of the Kustomization openaether-platform is '${LIVE_KS_REF:-empty}', git_ref declares ${DECL_REF}. Move the cluster: ${FIXREF}"
+  fi
+  case "$DECL_REF" in refs/heads/*) warn "git_ref ${DECL_REF} is a branch, a moving ref: Flux applies whatever lands on it. Pin a tag outside a throwaway lab" ;; esac
+else
+  unk "could not read the GitRepository openaether or the Kustomization openaether-platform — the apps ref is UNCHECKED"
+fi
+fi
+
 # --- The fleet runs the image the config names ----------------------------------
 #
 # The version tag is not the image. The schematic carries the system extensions,

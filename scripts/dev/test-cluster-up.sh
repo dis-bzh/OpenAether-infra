@@ -40,6 +40,8 @@ case "\$(basename "\$0") \$*" in
   ssh-keygen*) exit 1 ;;
   infra-verify.sh*) echo "fixture verifier \$*: exit \${VERIFY_RC:?}"; exit "\$VERIFY_RC" ;;
   adopt-bootstrap.sh*) exit "\${ADOPT_RC:-0}" ;;
+  cluster-apps-ref.sh*--apply*) exit "\${REFAPPLY_RC:-0}" ;;
+  cluster-apps-ref.sh*) exit "\${REF_RC:-0}" ;;
   cluster-identity-sync.sh*--apply*) exit "\${APPLY_RC:-0}" ;;
   cluster-identity-sync.sh*) exit "\${IDENTITY_RC:-0}" ;;
   talos-image.sh*--retain*) echo "fixture retention \$*"; exit "\${RETAIN_RC:-0}" ;;
@@ -50,7 +52,7 @@ chmod +x "$W/stub"
 for s in internal/talos-version.sh internal/ensure-buckets.sh internal/check-openbao-keys.sh internal/converge-versions.sh \
          internal/tf-backend.sh internal/bootstrap-in-state.sh internal/explain-failure.sh bootstrap/talos-image.sh \
          bootstrap/render-bootstrap-manifests.sh bootstrap/talos-tunnels.sh bootstrap/adopt-bootstrap.sh bootstrap/grow-nodes.sh internal/refuse-node-deletes.sh \
-         ops/backup-state.sh ops/cluster-identity-sync.sh dev/infra-verify.sh; do
+         ops/backup-state.sh ops/cluster-identity-sync.sh ops/cluster-apps-ref.sh dev/infra-verify.sh; do
   ln -s "$W/stub" "$W/scripts/$s"
 done
 ln -s "$W/stub" "$W/bin/tofu"; ln -s "$W/stub" "$W/bin/ssh-keygen"
@@ -287,6 +289,27 @@ EXTRA=IDENTITY_RC=4 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
 [ "$rc" = 0 ] && [ "$(calls "$ID --apply")" = 0 ] && ok "ConfigMap not there yet (exit 4): a warning, not a failure" || bad "exit $rc"
 TTY=1 EXTRA=IDENTITY_RC=3 run 0 cluster-up KEY="$W/key" PROVIDER=scaleway; rc=$?
 [ "$(calls "$ID --apply")" = 1 ] && grep -q 'Write these cluster-identity keys' "$O" && ok "at a terminal it asks, and writes on yes" || bad "exit $rc, applies $(calls "$ID --apply"): $(tail_of)"
+
+
+echo "--- apps ref: a live ref that differs from git_ref is moved or the run fails, never green over it (infra #408) ---"
+AR='^cluster-apps-ref.sh'
+run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+c="$(line_of "$W/calls.log" '^converge-versions.sh ')"; d="$(line_of "$W/calls.log" "$AR")"; i="$(line_of "$W/calls.log" '^infra-verify.sh')"
+[ "$rc" = 0 ] && [ "$(calls "$AR")" = 1 ] && [ "$(calls "$AR --tfvars [^ ]* --apply")" = 0 ] && [ -n "$d" ] && [ "$c" -lt "$d" ] && [ "$d" -lt "$i" ] \
+  && ok "in sync: one dry run, after the roll and before the verifier, nothing written" || bad "exit $rc, sync ${d:-none}"
+EXTRA=REF_RC=3 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" = 0 ] && [ "$(calls "$AR --tfvars [^ ]* --apply")" = 1 ] && ok "APPROVE=auto and a difference: the ref is moved, the run goes on" || bad "exit $rc: $(tail_of)"
+EXTRA=REF_RC=1 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" != 0 ] && ! grep -q 'cluster-up complete' "$O" && ok "a failure of the ref sync fails cluster-up" || bad "exit $rc"
+EXTRA=REF_RC=2 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" != 0 ] && ok "a refusal (exit 2) fails cluster-up" || bad "exit $rc"
+EXTRA=REF_RC=4 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" = 0 ] && [ "$(calls "$AR --tfvars [^ ]* --apply")" = 0 ] && ok "no GitRepository (exit 4): a note, not a failure" || bad "exit $rc"
+TTY=1 EXTRA=REF_RC=3 run 0 cluster-up KEY="$W/key" PROVIDER=scaleway; rc=$?
+[ "$(calls "$AR --tfvars [^ ]* --apply")" = 1 ] && grep -q 'Point the live GitRepository' "$O" && ok "at a terminal it asks, and moves on yes" || bad "exit $rc: $(tail_of)"
+run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+grep -q 'cluster-up did NOT change' "$O" && grep -q 'cluster-bootstrap-sync' "$O" && grep -q 'CAPI child' "$O" \
+  && ok "the end of cluster-up says what it did NOT change" || bad "no 'did NOT change' statement: $(tail_of)"
 
 
 echo
