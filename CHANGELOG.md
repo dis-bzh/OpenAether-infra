@@ -21,6 +21,16 @@ infra issues the series set out to look at: #42 (the API unreachable for seconds
 Not a compliance claim. The apps-side results (#134 partial, #143, #144) are in the OpenAether-apps CHANGELOG.
 
 
+### Fixed (0.4.0, lab 26 findings F1, K1, K2, K3, C1; rung: mocked, offline, UNVERIFIED on a cluster; lab 26 reproduced each defect on Scaleway)
+- **F1** `task cluster-up` ran `cluster-identity-sync.sh` and `cluster-apps-ref.sh` directly, outside the task environment, so `tofu output` stopped with "Backend initialization required" after the 41-minute roll (seen twice). It now runs the tasks (`task -x`), which carry the backend, the S3 credentials and the kubeconfig step. `test-cluster-up.sh` runs the step with no `TF_DATA_DIR` and no S3 variable against a tofu stub that refuses as the real one does (33 assertions fail without the change).
+- **K1** A bare `task` reports the scripts' exit 3 ("differs") as 201. The `cluster-up` messages say so and name the exact command with `PROVIDER` and `ROLE` filled in; `docs/upgrade.md` lists the codes.
+- **K2** The 0.4.0 CoreDNS HA does not reach a cluster built by an older release (Talos creates inline-manifest objects only when absent). `cluster-verify` gains "CoreDNS runs the declared replica count and spread" (BAD both ways, with the command); `scripts/ops/coredns-ha-patch.json` is the documented one-time patch; `docs/resilience.md` and `docs/upgrade.md` are corrected.
+- **K3** `cluster-security` and `cluster-netcheck` export the cluster's `KUBECONFIG` to their scripts.
+- **C1** After a drained `cluster-roll -- --node=` the Node object is kept, so `cluster-replaced-node-cleanup` found nothing while local-path pods crash-looped. It now names those pods, exits 1 and prints `... -- --disk-replaced`, which treats every volume pinned to the node as the old disk's with every safety rule kept; `cluster-roll` prints the command after a worker replace.
+
+### Added (0.4.0, lab 26 findings D2 and H1; rung: mocked, default unchanged, UNVERIFIED on a cluster)
+- `node_monitor_grace_period_seconds` (default 0 = Kubernetes' 50 s): the kube-controller-manager's grace period and the matching kubelet heartbeat, 20 to 300 s. Nothing changes unless it is set, and it is not to be set until a lab proves a value: `docs/resilience.md` ("Failure detection time") gives the numbers, the CNPG `primaryLease` lever on the apps side and the experiment to run.
+
 ### Fixed (0.4.0, lab 25 finding D9: new `cluster-identity` values never reached a running cluster; rung: mocked, offline, UNVERIFIED on a cluster)
 - **Cause, from the code and Talos's source.** The `cluster-identity` ConfigMap (and the GitRepository and Kustomization `openaether-platform`, hence `git_ref`) are objects of the Talos inline manifest `flux-bootstrap`.
   Talos's manifest-apply controller (`release-1.14`, read through a summarising fetch, not cloned) checks each object with a `Get` and applies it only when it is not found: an object that exists is never updated. The plan's
