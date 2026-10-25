@@ -1,0 +1,13 @@
+{
+  "dep": "local-cluster",
+  "version": "v1.14.4",
+  "green": true,
+  "branch": "clea/probe/local-cluster",
+  "run": "https://github.com/dis-bzh/OpenAether-infra/actions/runs/40177708152",
+  "cluster_lane": {
+    "verdict": "deployed and verified",
+    "at": "2026-10-25T08:46:06+00:00",
+    "talos": "v1.14.4",
+    "k8s": "v1.37.1"
+  }
+}
