@@ -58,6 +58,7 @@ EXCLUDED = {
     "cluster-node-state": "read-only: asks the provider and the cluster about one node, changes nothing and proves no change",
     "cluster-identity-sync": "dry run by default; with APPLY=1 it writes one ConfigMap on whatever the cluster directory's kubeconfig names: a repair, not a rung",
     "cluster-apps-ref": "dry run by default; with APPLY=1 it patches two Flux objects and the tfvars on whatever the cluster directory's kubeconfig names: a repair, not a rung",
+    "cluster-coredns-ha": "dry run by default; with APPLY=1 it patches the CoreDNS Deployment on whatever the cluster directory's kubeconfig names: a repair, not a rung",
     "cluster-bootstrap-sync": "dry run by default; with APPLY=1 it applies the Flux install manifest on whatever the cluster directory's kubeconfig names: a repair, not a rung",
     "cluster-netcheck": "sends traffic that must be denied, on whatever KUBECONFIG names: a check, not a rung",
     "feint-test": "its feint-plan and feint-apply children record for it",
