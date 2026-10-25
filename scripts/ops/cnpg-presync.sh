@@ -19,7 +19,7 @@
 #
 # WHAT IT DOES. The target is the 0.4.0 block spec.postgresql.synchronous = {method any, number 1, dataDurability required,
 # failoverQuorum true}. Dry run (default): reads each Cluster's live block and prints the difference; writes nothing.
-# --apply: merge-patches ONLY spec.postgresql.synchronous of the differing Clusters, then waits per Cluster for: phase healthy,
+# --apply: merge-patches ONLY spec.postgresql.synchronous and spec.smartShutdownTimeout (and instances with --scale) of the differing Clusters, then waits per Cluster for: phase healthy,
 # readyInstances = spec.instances, `show synchronous_standby_names` not empty on the primary, every replica `quorum`/`sync` in
 # pg_stat_replication. Not converged after OA_PRESYNC_KICK_AFTER (120 s): `select pg_reload_conf()` on every instance (break-glass
 # R1, cloudnative-pg#11627), then waits again. Not converged at OA_PRESYNC_TIMEOUT (300 s): fails and PRINTS the break-glass R2 steps.
@@ -27,9 +27,17 @@
 # `show synchronous_standby_names`, `select application_name, sync_state from pg_stat_replication`, `select pg_reload_conf()`).
 #
 # INSTANCES. With dataDurability required and ANY 1, a Cluster of fewer than 3 instances blocks every write when its only replica is
-# lost, so the 0.4.0 content declares 3 (grafana-db-cluster.yaml: instances 3; a 0.3.x grafana-db has 2). The script does NOT scale by
-# itself: it refuses (exit 2) and names the command. --scale patches `instances: 3` in the SAME patch as the study did (measured that
-# way; "scale first, wait, then synchronous" is safer but was not measured).
+# lost, so the 0.4.0 content declares 3 (grafana-db-cluster.yaml: instances 3; a 0.3.x grafana-db has 2). Without --scale the script
+# refuses (exit 2) and names the command. --scale patches `instances: 3` in the SAME patch as the study and lab 27 measured (lab 27:
+# 2 min 22 s, healthy, sync names set; the order "scale, wait, then synchronous" was never measured). `cluster-up` passes --scale
+# under APPROVE=auto (and after the typed yes): the head declares 3, and the stop it replaced was worse than the scale (lab 27, FA:
+# Flux reverted the presync while the run was stopped). --scale touches only Clusters below 3; every other refusal stays.
+#
+# SMART SHUTDOWN (lab 27, FI). The same patch sets spec.smartShutdownTimeout (OA_PRESYNC_SMART_SHUTDOWN, default 5 s) BEFORE the move.
+# The in-place restart of the primary that the plugin sidecar forces waited out the 180 s default with the Zitadel pool connected
+# (206 s write gap). The instance manager reads the value from its cached Cluster object at shutdown (CNPG pkg/management/postgres/
+# instance.go, TryShuttingDownSmartFast), so no restart is needed to apply it: the patch reaches the instance manager at its next
+# Cluster reconcile, seconds before the ref moves. UNVERIFIED on a cluster until the next lab.
 #
 # PRECONDITIONS (checked on --apply, reported on the dry run; any one refuses with exit 2):
 #   - every selected Cluster is healthy with readyInstances = instances;
@@ -58,6 +66,9 @@ TIMEOUT="${OA_PRESYNC_TIMEOUT:-300}"
 POLL="${OA_PRESYNC_POLL:-5}"
 NOW="${OA_NOW:-$(date +%s)}"
 MIN_INSTANCES=3
+# The planned-shutdown bound (lab 27, FI): PostgreSQL gets this many seconds of smart shutdown, then a fast one. The 0.4.0 Cluster
+# specs declare the same number (apps/components/cnpg-bounded-shutdown); keep the two equal.
+SHUTDOWN="${OA_PRESYNC_SMART_SHUTDOWN:-5}"
 # shellcheck source=../lib/common.sh
 source "$ROOT/scripts/lib/common.sh"
 # shellcheck source=../lib/pins.sh
@@ -77,7 +88,7 @@ done
 fail() { echo "✗ $*" >&2; exit 1; }
 command -v jq >/dev/null 2>&1 || fail "jq is required"
 [ -n "$TFVARS" ] || fail "--tfvars FILE is required"
-for v in BACKUP_MAX_AGE KICK_AFTER TIMEOUT NOW; do
+for v in BACKUP_MAX_AGE KICK_AFTER TIMEOUT NOW SHUTDOWN; do
   case "${!v}" in *[!0-9]*|"") fail "$v must be whole seconds" ;; esac
 done
 export KUBECONFIG="$CLUSTER_DIR/kubeconfig"
@@ -101,8 +112,8 @@ for ns in $NAMESPACES; do
 done
 [ "${#C_NAME[@]}" -gt 0 ] || exit 0
 
-has_block() { # <cluster json> — does the live block hold the four 0.4.0 values
-  jq -e --argjson w "$WANT" '(.spec.postgresql.synchronous // {}) as $s | all($w | to_entries[]; $s[.key] == .value)' <<<"$1" >/dev/null
+has_block() { # <cluster json> — does the live Cluster hold the four 0.4.0 values AND the bounded smart shutdown
+  jq -e --argjson w "$WANT" --argjson t "$SHUTDOWN" '(.spec.postgresql.synchronous // {}) as $s | all($w | to_entries[]; $s[.key] == .value) and (.spec.smartShutdownTimeout == $t)' <<<"$1" >/dev/null
 }
 healthy() { # <cluster json>
   jq -e '.status.phase == "Cluster in healthy state" and (.status.readyInstances // 0) == (.spec.instances // 1)' <<<"$1" >/dev/null
@@ -117,7 +128,8 @@ for i in "${!C_NAME[@]}"; do
     printf '  = %s: synchronous block present, %s instance(s)\n' "$n" "$inst"
   else
     live="$(jq -c '.spec.postgresql.synchronous // "(none)"' <<<"${C_JSON[$i]}")"
-    printf '  ~ %s: synchronous is %s, want %s; %s instance(s)\n' "$n" "$live" "$WANT" "$inst"
+    printf '  ~ %s: synchronous is %s, want %s; smartShutdownTimeout is %s, want %s; %s instance(s)\n' "$n" "$live" "$WANT" \
+      "$(jq -r '.spec.smartShutdownTimeout // "(default 180)"' <<<"${C_JSON[$i]}")" "$SHUTDOWN" "$inst"
     DIFFERS+=("$i")
   fi
 done
@@ -174,16 +186,16 @@ fi
 # --- apply ---------------------------------------------------------------------------------------------------------------------
 patch_for() { # <cluster json>
   if [ "$(jq -r '.spec.instances // 1' <<<"$1")" -lt "$MIN_INSTANCES" ]; then
-    jq -nc --argjson w "$WANT" --argjson n "$MIN_INSTANCES" '{spec: {instances: $n, postgresql: {synchronous: $w}}}'
+    jq -nc --argjson w "$WANT" --argjson n "$MIN_INSTANCES" --argjson t "$SHUTDOWN" '{spec: {instances: $n, smartShutdownTimeout: $t, postgresql: {synchronous: $w}}}'
   else
-    jq -nc --argjson w "$WANT" '{spec: {postgresql: {synchronous: $w}}}'
+    jq -nc --argjson w "$WANT" --argjson t "$SHUTDOWN" '{spec: {smartShutdownTimeout: $t, postgresql: {synchronous: $w}}}'
   fi
 }
 for i in "${DIFFERS[@]}"; do
   ns="${C_NS[$i]}"; name="${C_NAME[$i]}"
   kubectl -n "$ns" patch clusters.postgresql.cnpg.io "$name" --type merge -p "$(patch_for "${C_JSON[$i]}")" >/dev/null 2>"$ERR" \
     || fail "patch of $ns/$name refused: $(head -c 300 "$ERR")"
-  echo "▶ $ns/$name: spec.postgresql.synchronous patched (only that block$([ "$(jq -r '.spec.instances // 1' <<<"${C_JSON[$i]}")" -lt "$MIN_INSTANCES" ] && echo ", and instances $MIN_INSTANCES (--scale)"))"
+  echo "▶ $ns/$name: spec.postgresql.synchronous and spec.smartShutdownTimeout=$SHUTDOWN patched (only those$([ "$(jq -r '.spec.instances // 1' <<<"${C_JSON[$i]}")" -lt "$MIN_INSTANCES" ] && echo " and instances $MIN_INSTANCES (--scale)"))"
 done
 
 psql_on() { # <ns> <pod> <sql>

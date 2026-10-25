@@ -73,7 +73,7 @@ SYNC='{"method":"any","number":1,"dataDurability":"required","failoverQuorum":tr
 mk() { # <name> <instances> <sync json or null> [labels json] [plugins json]
   jq -nc --arg n "$1" --argjson i "$2" --argjson s "$3" --argjson l "${4:-{\}}" --argjson pl "${5:-[]}" '
     {metadata:{name:$n, namespace:"foundation-databases", labels:({"openaether.io/managed":"true"} + $l)},
-     spec:({instances:$i, postgresql:(if $s == null then {} else {synchronous:$s} end)} + (if ($pl|length) > 0 then {plugins:$pl} else {} end)),
+     spec:({instances:$i, postgresql:(if $s == null then {} else {synchronous:$s} end)} + (if $s == null then {} else {smartShutdownTimeout:5} end) + (if ($pl|length) > 0 then {plugins:$pl} else {} end)),
      status:{phase:"Cluster in healthy state", readyInstances:$i, currentPrimary:"\($n)-1", instanceNames:[range($i) | "\($n)-\(. + 1)"]}}'
 }
 setclusters() { jq -sc '{items: .}' >"$FX/clusters.json"; }
@@ -109,6 +109,13 @@ reset; { mk zitadel-db 3 "$(jq -c '.failoverQuorum = false' <<<"$SYNC")"; } | se
 reset; { mk zitadel-db 3 "$(jq -c '.dataDurability = "preferred"' <<<"$SYNC")"; } | setclusters; run; rc=$?
 [ "$rc" = 3 ] && ok "dataDurability preferred is a difference" || bad "rc $rc"
 
+# FI (lab 27): a planned restart of the primary waited out the 180 s default smart shutdown with the client pool connected (206 s).
+reset; { mk zitadel-db 3 "$SYNC" | jq -c 'del(.spec.smartShutdownTimeout)'; } | setclusters; run; rc=$?
+[ "$rc" = 3 ] && said "smartShutdownTimeout is (default 180), want 5" && ok "the block without the bounded smart shutdown is a difference (the in-place restart would wait 180 s)" || bad "rc $rc: $(cat "$W/out")"
+reset; { mk zitadel-db 3 "$SYNC" | jq -c '.spec.smartShutdownTimeout = 180'; } | setclusters; run --apply; rc=$?
+[ "$rc" = 0 ] && [ "$(live zitadel-db .spec.smartShutdownTimeout)" = 5 ] && [ "$(jq -c . <<<"$(grep ' patch ' "$W/calls.log" | sed 's/.* -p //')")" = "$(jq -nc --argjson w "$SYNC" '{spec:{smartShutdownTimeout:5,postgresql:{synchronous:$w}}}')" ] \
+  && ok "a Cluster that already has the block gets smartShutdownTimeout 5 patched, set BEFORE the move" || bad "rc $rc, live: $(live zitadel-db .spec.smartShutdownTimeout)"
+
 echo "--- dry run on 0.3.x Clusters: lists them, selects by label and excludes profile and restore-test Clusters, writes nothing ---"
 reset; { mk zitadel-db 3 null; mk grafana-db 3 null; mk app-ha 3 null '{"openaether.io/db-profile":"ha"}'; mk rt-abc 1 null; } | setclusters; run; rc=$?
 [ "$rc" = 3 ] && said "~ foundation-databases/zitadel-db" && said "~ foundation-databases/grafana-db" && ok "exit 3, both differing Clusters listed" || bad "rc $rc: $(cat "$W/out" "$W/err")"
@@ -124,7 +131,7 @@ reset; { mk zitadel-db 3 null; mk grafana-db 3 "$SYNC"; } | setclusters; run --a
 [ "$rc" = 0 ] && ok "exit 0" || bad "rc $rc: $(cat "$W/out" "$W/err")"
 [ "$(patches)" = 1 ] && grep -q 'patch clusters.postgresql.cnpg.io zitadel-db --type merge' "$W/calls.log" && ok "one merge patch, on the differing Cluster only" || bad "calls: $(grep patch "$W/calls.log")"
 body="$(grep ' patch ' "$W/calls.log" | sed 's/.* -p //')"
-[ "$(jq -c . <<<"$body")" = "$(jq -nc --argjson w "$SYNC" '{spec:{postgresql:{synchronous:$w}}}')" ] && ok "the body is exactly spec.postgresql.synchronous = any / 1 / required / failoverQuorum" || bad "body: $body"
+[ "$(jq -c . <<<"$body")" = "$(jq -nc --argjson w "$SYNC" '{spec:{smartShutdownTimeout:5,postgresql:{synchronous:$w}}}')" ] && ok "the body is exactly spec.postgresql.synchronous = any / 1 / required / failoverQuorum plus spec.smartShutdownTimeout = 5 (lab 27, FI)" || bad "body: $body"
 [ "$(live zitadel-db .spec.postgresql.synchronous)" = "$SYNC" ] && ok "the live Cluster holds the block" || bad "live: $(live zitadel-db .spec)"
 grep -q 'exec zitadel-db-1 show synchronous_standby_names' "$W/exec.log" && grep -q 'exec zitadel-db-1 select application_name, sync_state from pg_stat_replication' "$W/exec.log" \
   && ok "it asked the primary for synchronous_standby_names and pg_stat_replication" || bad "exec: $(cat "$W/exec.log")"
@@ -141,7 +148,7 @@ reset; { mk zitadel-db 3 "$SYNC"; mk grafana-db 2 null; } | setclusters; run; rc
 [ "$rc" = 3 ] && said "has 2 instance(s)" && ok "the dry run says it as well" || bad "rc $rc"
 reset; { mk zitadel-db 3 "$SYNC"; mk grafana-db 2 null; } | setclusters; run --apply --scale; rc=$?
 body="$(grep ' patch ' "$W/calls.log" | sed 's/.* -p //')"
-[ "$rc" = 0 ] && [ "$(jq -c . <<<"$body")" = "$(jq -nc --argjson w "$SYNC" '{spec:{instances:3,postgresql:{synchronous:$w}}}')" ] \
+[ "$rc" = 0 ] && [ "$(jq -c . <<<"$body")" = "$(jq -nc --argjson w "$SYNC" '{spec:{instances:3,smartShutdownTimeout:5,postgresql:{synchronous:$w}}}')" ] \
   && ok "--scale: instances 3 and the block in ONE patch (the shape the study measured), converged" || bad "rc $rc body $body: $(cat "$W/err")"
 [ "$(live grafana-db .spec.instances)" = 3 ] && ok "the Cluster has 3 instances" || bad "instances: $(live grafana-db .spec.instances)"
 reset; { mk zitadel-db 3 null; mk grafana-db 3 null; } | setclusters; run --apply --scale; rc=$?
