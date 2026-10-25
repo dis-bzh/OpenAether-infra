@@ -512,6 +512,7 @@ tasks:
       # The 0.4.0 synchronous block on the live CNPG Clusters, before the apps ref moves (study LAB-B2): dry run writes
       # nothing, one patch of spec.postgresql.synchronous only, refusals before any write, no delete and no force.
       - ./scripts/dev/test-cnpg-presync.sh
+      - ./scripts/dev/test-cluster-coredns-ha.sh
       - ./scripts/dev/test-cluster-bootstrap-sync.sh
       - ./scripts/dev/test-pins-verify.sh
       # `nc -z` calls a dead ssh -L tunnel healthy. Two local listeners measure
@@ -794,7 +795,8 @@ tasks:
       APPROVE=auto, and it only warns. Usage: task cluster-up
       ROLE=management|workload PROVIDER=… [KEY=~/.ssh/yourkey] [FORCE=1] [APPROVE=auto].
       It asks on the phase-1 and phase-2 infrastructure plans, showing each, then tofu's own yes for each old
-      image the retention destroys. APPROVE=auto answers the plans for you, for CI and for a shell that cannot
+      image the retention destroys. On a 0.3.x cluster the CNPG presync and the apps ref move are ONE step and
+      CoreDNS is converged before the verify. APPROVE=auto answers the plans for you, for CI and for a shell that cannot
       be asked, and skips the retention.
     # PROVIDER is REQUIRED, not defaulted. Twenty targets used to fall back to
     # scaleway in silence — including destroy and down — so a command typed
@@ -966,37 +968,88 @@ tasks:
       # has to reach it. APPROVE=auto inside is not a bypass: the first checkpoint
       # above already asked, and --check had told it what this would roll.
       - ./scripts/internal/converge-versions.sh {{.PROVIDER}} {{.ROLE}} {{.KEY}}
-      # CNPG presync (study LAB-B2), BEFORE the identity and apps-ref steps: the 0.4.0 apps content changes
-      # the pod spec (Barman plugin sidecar) and the PostgreSQL `synchronous` settings in one Flux apply,
-      # which stuck a Cluster on a reduced lab. Enabling `synchronous` first, as its own step, did not. On a
-      # plain bring-up of a NEW cluster no CNPG Cluster exists yet: the script exits 0 and says nothing.
-      # Same shape as the steps below: the TASK (backend env, kubeconfig), `task -x` for the script's own
-      # exit code, written at APPROVE=auto or a typed "yes", else the run FAILS naming the command. A
-      # refusal (exit 2: unhealthy Cluster, no recent Backup, a roll, fewer than 3 instances...) is a
-      # failure here too: never worked around.
+      # CNPG presync (study LAB-B2) and the apps ref, ONE step when the presync has work to do. The 0.4.0 apps
+      # content changes
+      # the pod spec (Barman plugin sidecar) and the PostgreSQL `synchronous` settings in one Flux apply, which
+      # stuck a Cluster
+      # on a reduced lab. Enabling `synchronous` first, as its own step, did not. But the presync only lives on
+      # the cluster
+      # once the apps ref has moved: Flux, still on the OLD ref, re-applies the 0.3.x content at its 10 minute
+      # reconcile and
+      # reverts it (instances 3 -> 2, `synchronous` gone; lab 27, FA), so a stop between the two loops for ever.
+      # The presync
+      # and the ref move therefore run back to back in this pass, with no stop in between. Between the two, the
+      # presync is read
+      # again: if Flux undid it meanwhile it is applied again (at most twice), so the ref never moves over
+      # Clusters without it.
+      # Not a Flux suspend: Flux re-resumes a suspended child Kustomization within about a minute (lab 27, FD,
+      # the parent applies
+      # it), and suspending the root would freeze the very reconcile the ref move needs, with a resume to
+      # guarantee on every exit.
+      # Under APPROVE=auto the presync scales a Cluster of fewer than 3 instances to 3 (SCALE=1) in the same
+      # patch: the 0.4.0 head
+      # declares 3, and labs 26 and 27 showed that stopping is worse than scaling. Other refusals (unhealthy
+      # Cluster, no recent
+      # Backup, a roll under way, a pod without the plugin sidecar) still fail the run, never worked around. Without
+      # APPROVE=auto the same combined step is asked once, "yes" typed. On a plain bring-up of a NEW cluster no
+      # CNPG Cluster
+      # exists yet: the script exits 0 and says nothing. Same shape as the steps below: the TASK (backend env,
+      # kubeconfig),
+      # `task -x` for the script's own exit code.
       - |
         PS="task -x cnpg-presync PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}"
-        PSW="task cnpg-presync PROVIDER={{.PROVIDER}} ROLE={{.ROLE}} APPLY=1"
+        PSW="task cnpg-presync PROVIDER={{.PROVIDER}} ROLE={{.ROLE}} APPLY=1 SCALE=1"
+        AR="task -x cluster-apps-ref PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}"
+        MOVE="task cluster-apps-ref PROVIDER={{.PROVIDER}} ROLE={{.ROLE}} APPLY=1"
+        window() {
+          $PS APPLY=1 SCALE=1 || return 1
+          n=0
+          while :; do
+            rc=0; $PS || rc=$?
+            [ "$rc" = 0 ] && break
+            n=$((n + 1))
+            if [ "$rc" != 3 ] || [ "$n" -gt 2 ]; then
+              echo "✗ the CNPG Clusters do not keep the synchronous block (exit $rc after $n re-apply):" >&2
+              echo "  the apps ref was NOT moved." >&2
+              return 1
+            fi
+            echo "~ the presync was undone before the ref moved (Flux, still on the old ref): applying it again."
+            $PS APPLY=1 SCALE=1 || return 1
+          done
+          rc=0; $AR APPLY=1 || rc=$?
+          case "$rc" in
+            0) ;;
+            4) echo "~ apps ref: no GitRepository yet (Flux bootstrap not applied): nothing to move." >&2 ;;
+            *) return 1 ;;
+          esac
+        }
+        both() {
+          echo "  Run them back to back, nothing in between (Flux, still on the old ref, undoes the presync" >&2
+          echo "  at its next reconcile):" >&2
+          echo "    $PSW" >&2
+          echo "    $MOVE" >&2
+          echo "  (a dry run ends with exit status 3; a bare 'task' shows it as 201.)" >&2
+        }
         rc=0; $PS || rc=$?
         case "$rc" in
           0) ;;
           3)
             if [ "{{.APPROVE}}" = auto ]; then
-              $PS APPLY=1 || exit 1
+              window || { echo "✗ the presync + apps ref step failed." >&2; both; exit 1; }
             elif [ -t 0 ]; then
-              printf '\nEnable synchronous replication on these CNPG Clusters now? Only "yes" is accepted: '
+              printf '\nEnable synchronous replication on these CNPG Clusters now (a Cluster of fewer than 3 instances'
+              printf ' is scaled to 3), then move the apps ref at once, in this one step? Only "yes" is accepted: '
               read -r reply
               [ "$reply" = yes ] || {
-                echo "✗ not enabled: moving the apps ref over Clusters without it can leave them stuck. Enable it:" >&2
-                echo "    $PSW" >&2
-                echo "  (a dry run ends with exit status 3; a bare 'task' shows it as 201.)" >&2
+                echo "✗ not done: moving the apps ref over Clusters without synchronous replication can leave them" >&2
+                echo "  stuck, and the presync alone is undone by Flux on the old ref." >&2
+                both
                 exit 1
               }
-              $PS APPLY=1 || exit 1
+              window || { echo "✗ the presync + apps ref step failed." >&2; both; exit 1; }
             else
-              echo "✗ CNPG Clusters lack the 0.4.0 synchronous settings and nobody can be asked. Enable them:" >&2
-              echo "    $PSW" >&2
-              echo "  (a dry run ends with exit status 3; a bare 'task' shows it as 201.)" >&2
+              echo "✗ CNPG Clusters lack the 0.4.0 synchronous settings and nobody can be asked." >&2
+              both
               exit 1
             fi ;;
           *)
@@ -1078,6 +1131,46 @@ tasks:
           *)
             echo "✗ cluster-apps-ref failed (exit $rc). Run it alone to see why (no APPLY=1: writes nothing):" >&2
             echo "    task cluster-apps-ref PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}" >&2
+            exit "$rc" ;;
+        esac
+      # The CoreDNS HA of 0.4.0 is an inline manifest too, and Talos never rewrites the Deployment a cluster
+      # built by an older
+      # release already has (lab 26, K2). The verify below fails on it (lab 27, FB: the one-time patch used to
+      # be documented AFTER
+      # cluster-up, so an upgraded cluster could never end rc 0). Converged here, before the verdict: dry run,
+      # then the patch at
+      # APPROVE=auto or a typed "yes" (a rolling restart of the DNS pods, 6 s in lab 27), else the run FAILS
+      # naming the command.
+      # Idempotent: a Deployment already in the declared shape is left alone and nothing is asked.
+      - |
+        CD="task -x cluster-coredns-ha PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}"
+        CDW="task cluster-coredns-ha PROVIDER={{.PROVIDER}} ROLE={{.ROLE}} APPLY=1"
+        rc=0; $CD || rc=$?
+        case "$rc" in
+          0) ;;
+          3)
+            if [ "{{.APPROVE}}" = auto ]; then
+              $CD APPLY=1 || exit 1
+            elif [ -t 0 ]; then
+              printf '\nPatch the CoreDNS Deployment to the declared replicas and spread'
+              printf ' (a rolling restart of the DNS pods)? Only "yes" is accepted: '
+              read -r reply
+              [ "$reply" = yes ] || {
+                echo "✗ not patched: cluster-verify fails on CoreDNS. Patch it:" >&2
+                echo "    $CDW" >&2
+                echo "  (a dry run ends with exit status 3; a bare 'task' shows it as 201.)" >&2
+                exit 1
+              }
+              $CD APPLY=1 || exit 1
+            else
+              echo "✗ CoreDNS is not the declared shape and nobody can be asked. Patch it:" >&2
+              echo "    $CDW" >&2
+              echo "  (a dry run ends with exit status 3; a bare 'task' shows it as 201.)" >&2
+              exit 1
+            fi ;;
+          *)
+            echo "✗ cluster-coredns-ha failed (exit $rc). Run it alone to see why (no APPLY=1: writes nothing):" >&2
+            echo "    task cluster-coredns-ha PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}" >&2
             exit "$rc" ;;
         esac
       # The verdict, asked of the cluster rather than assumed from the steps
@@ -2321,7 +2414,9 @@ tasks:
       after 120 s it reloads the configuration on every instance (R1); at the timeout it prints the break-glass
       steps (R2) and fails: it never deletes a pod. Refuses (exit 2) on an unhealthy Cluster, no recent Backup, a
       roll under way, a pod that predates the plugin sidecar, or a Cluster with fewer than 3 instances unless
-      SCALE=1 (instances 3 in the same patch). Mocked offline; a full platform has not re-proven it. No secret is
+      SCALE=1 (instances 3 in the same patch; cluster-up passes it under APPROVE=auto). Also sets
+      spec.smartShutdownTimeout 5 (a planned primary restart is bounded, lab 27 FI). Proven on Scaleway in lab
+      27 (the Flux revert on the old ref is why cluster-up moves the apps ref right after). No secret is
       read or printed. Usage: task cnpg-presync PROVIDER=… [ROLE=management] [APPLY=1] [SCALE=1].
     dir: infrastructure/opentofu/cluster
     requires:
@@ -2366,6 +2461,34 @@ tasks:
       - >-
         ../../../scripts/ops/cluster-apps-ref.sh --tfvars "envs/{{.ROLE}}-{{.PROVIDER}}.tfvars"
         {{if .REF}}--ref "{{.REF}}"{{end}} {{if .ALLOW_BRANCH}}--allow-branch{{end}} {{if .APPLY}}--apply{{end}}
+
+  cluster-coredns-ha:
+    desc: >-
+      Make the CoreDNS Deployment of a RUNNING cluster the declared shape: min(3, nodes) replicas and a hard
+      spread over nodes
+      (lab 26 K2, lab 27 FB: Talos never rewrites a Deployment that exists, so a cluster built by an older
+      release keeps 2
+      replicas without spread). Dry run by default: shows replicas and spread and writes nothing (exit 3 on a
+      difference).
+      APPLY=1 patches the Deployment with scripts/ops/coredns-ha-patch.json (a rolling restart of the DNS pods),
+      waits for the
+      rollout and reads it back. Idempotent. `cluster-up` runs it before its verify. Usage: task cluster-
+      coredns-ha PROVIDER=…
+      [ROLE=management] [APPLY=1]. See scripts/ops/cluster-coredns-ha.sh and docs/upgrade.md.
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+      APPLY: '{{.APPLY | default ""}}'
+    env: *provider-env
+    cmds:
+      - task: kubeconfig
+        vars: {ROLE: '{{.ROLE}}', PROVIDER: '{{.PROVIDER}}'}
+      - >-
+        ../../../scripts/ops/cluster-coredns-ha.sh --tfvars "envs/{{.ROLE}}-{{.PROVIDER}}.tfvars"
+        {{if .APPLY}}--apply{{end}}
 
   cluster-bootstrap-sync:
     desc: >-
