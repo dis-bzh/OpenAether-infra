@@ -111,7 +111,7 @@ while IFS= read -r Z; do
     lost="$(jq --arg z "$Z" --argjson m "$NODEMAP" '[.items[] | select($m[.spec.nodeName] == $z)] | length' <<<"$PODS_VAULT")"
     q=$((tot / 2 + 1))
     (( tot - lost >= q )) && okl "OpenBao: ${lost} of ${tot} raft members there, $((tot - lost)) stay, quorum ${q}" \
-                          || badl "OpenBao: ${lost} of ${tot} raft members there, quorum ${q} is lost (no secret reads, no certificate issued)"
+                          || badl "OpenBao: ${lost} of ${tot} raft members there, quorum ${q} is lost (no secret reads, no certificate issued); their zone spread is a preference, not enforced (docs/resilience.md, OpenBao placement across zones)"
   else unkl "OpenBao pods could not be listed"; fi
   # databases
   if [[ -n "$PODS_DB" ]]; then

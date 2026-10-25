@@ -69,6 +69,7 @@ printf 'Name:  w0\n  cpu  3600m (90%%)\nName:  w1\n  cpu  3600m (90%%)\nName:  w
 { [ "$RC" = 1 ] && grep -q 'pods stay Pending' <<<"$OUT"; } && ok_ "255% requested cannot fit in 200%: refused, naming docs/capacity.md" || bad "over-capacity passed: $OUT"
 healthy; echo "{\"items\":[$(vpod w0),$(vpod w0),$(vpod w1)]}" >"$W/vault.json"; run
 { [ "$RC" = 1 ] && grep -q 'OpenBao: 2 of 3 raft members there' <<<"$OUT"; } && ok_ "two OpenBao members in one domain lose the raft quorum with it" || bad "openbao not caught: $OUT"
+grep -q 'zone spread is a preference, not enforced' <<<"$OUT" && ok_ "and the line says the zone spread of the members is only a preference (lab 27, FJ)" || bad "no hint about the soft zone spread: $OUT"
 healthy; echo "{\"items\":[$(pod db w0),$(pod db w0)]}" >"$W/db.json"; run
 { [ "$RC" = 1 ] && grep -q 'database db: no instance outside a' <<<"$OUT"; } && ok_ "a database whose instances share a domain is named" || bad "cnpg not caught: $OUT"
 healthy; echo "{\"items\":[$(rep v1 w0),$(rep v1 w0),$(rep v2 w1),$(rep v2 w2)]}" >"$W/replicas.json"; run
