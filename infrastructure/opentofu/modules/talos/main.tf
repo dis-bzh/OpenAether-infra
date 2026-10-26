@@ -340,7 +340,12 @@ locals {
   worker_zone_labels = [for i in range(var.worker_count) :
     try(var.node_zones.worker[i], "") == "" ? {} : { nodeLabels = { "topology.kubernetes.io/zone" = var.node_zones.worker[i] } }
   ]
-  node_zones_signature = length(compact(concat(try(var.node_zones.control_plane, []), try(var.node_zones.worker, [])))) == 0 ? "" : sha256(jsonencode([local.cp_zone_labels, local.worker_zone_labels]))
+  # The signature must NOT depend on how many workers there are: `task cluster-shrink-plan` lowers `workers` and refuses
+  # any plan that also replaces the machine config of the nodes that stay (lab 27, F-SHRINK: a hash over the worker label
+  # list changed with its length). A node's zone never changes in place (the provider puts node i in a fixed zone), so what
+  # has to reach an existing cluster is "worker labels are now rendered": the control-plane labels (their count is fixed)
+  # plus whether any worker is labelled. A worker added later is a create, which applies its own config.
+  node_zones_signature = length(compact(concat(try(var.node_zones.control_plane, []), try(var.node_zones.worker, [])))) == 0 ? "" : sha256(jsonencode([local.cp_zone_labels, length(compact(try(var.node_zones.worker, []))) > 0]))
 
   # Folded into machine_config_version so an existing cluster actually gets a change.
   node_baseline_signature = length(local.baseline_machine_common) + length(local.baseline_kubelet_cp) + length(local.baseline_machine_worker) == 0 ? "" : sha256(jsonencode([local.baseline_machine_common, local.baseline_kubelet_cp, local.baseline_machine_worker]))

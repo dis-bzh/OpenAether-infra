@@ -81,3 +81,36 @@ run "a_shorter_list_labels_only_the_nodes_it_names" {
     error_message = "a list shorter than the node count must label the nodes it covers and leave the others alone, not fail"
   }
 }
+
+# F-SHRINK (lab 27): `task cluster-shrink-plan` lowers `workers` and refuses a plan that also replaces the machine config
+# of the nodes that stay. The trigger above hashed the worker label list, so lowering the count changed it for every node.
+# Two renders that differ only in the worker count must carry the same trigger, and each surviving worker the same labels.
+run "three_workers_with_zones" {
+  command = apply
+  variables {
+    worker_count = 3
+    worker_ips   = ["10.0.0.20", "10.0.0.21", "10.0.0.22"]
+    node_zones   = { control_plane = ["z-a", "z-b", "z-c"], worker = ["z-a", "z-b", "z-c"] }
+  }
+  assert {
+    condition     = terraform_data.machine_config_version[0].input == "v1.14.2/v1.37.1/017c76fc9248b6de019fff443ab5688724682d453bf8d83dafe22a34949dc842"
+    error_message = "the zone trigger of three labelled workers changed (update the pin only on purpose: every cluster re-applies its configs)"
+  }
+}
+
+run "one_worker_fewer_changes_nothing_for_the_others" {
+  command = apply
+  variables {
+    worker_count = 2
+    worker_ips   = ["10.0.0.20", "10.0.0.21"]
+    node_zones   = { control_plane = ["z-a", "z-b", "z-c"], worker = ["z-a", "z-b"] }
+  }
+  assert {
+    condition     = terraform_data.machine_config_version[0].input == "v1.14.2/v1.37.1/017c76fc9248b6de019fff443ab5688724682d453bf8d83dafe22a34949dc842"
+    error_message = "lowering the worker count must not change machine_config_version (every node's config apply would be replaced)"
+  }
+  assert {
+    condition     = yamldecode(data.talos_machine_configuration.worker[1].config_patches[0]).machine.nodeLabels["topology.kubernetes.io/zone"] == "z-b" && yamldecode(data.talos_machine_configuration.worker[0].config_patches[0]).machine.nodeLabels["topology.kubernetes.io/zone"] == "z-a"
+    error_message = "a surviving worker keeps its own zone label"
+  }
+}
