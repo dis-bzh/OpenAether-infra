@@ -202,7 +202,7 @@ nr replace ovh --node=oa-lab-worker-0 --yes >/dev/null; rc=$?
 reset; echo oa-lab-worker-0 >"$ST/target"; echo False >"$ST/ready.oa-lab-worker-0"; echo stopped >"$ST/pstate"; : >"$ST/roll.heals"
 OUT="$(nr replace ovh --node=oa-lab-worker-0 --yes)"; rc=$?
 { [ "$rc" -eq 0 ] && grep -q '^cleanup --node oa-lab-worker-0 kubectl=kubectl --kubeconfig' "$CALLS" && ! grep -q '^cleanup .*--clean' "$CALLS" \
-  && grep -q -- '-- --clean' <<<"$OUT"; } \
+  && grep -q 'task cluster-replaced-node-cleanup NODE=oa-lab-worker-0 -- --clean' <<<"$OUT" && ! grep -q 'task cluster-replace-node .*-- --clean' <<<"$OUT"; } \
   && ok_ "after the checks the cleanup runs in PRINT mode (no --clean), and the output says how to run it" || bad "default cleanup (rc=$rc): $(grep '^cleanup' "$CALLS") / $OUT"
 
 reset; echo oa-lab-worker-0 >"$ST/target"; echo False >"$ST/ready.oa-lab-worker-0"; echo stopped >"$ST/pstate"; : >"$ST/roll.heals"

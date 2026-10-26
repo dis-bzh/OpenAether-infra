@@ -228,7 +228,7 @@ case "$CMD" in
     cleanup_rc=0
     KUBECTL="kubectl --kubeconfig $KUBECONFIG_FILE --request-timeout=30s" $CLEANUP_CMD --node "$NAME_FOR_K8S" "${clean_flag[@]}" || cleanup_rc=$?
     if [[ $cleanup_rc -ne 0 ]]; then warn "volumes of the old disk remain that were not cleaned (see above): look at them before anything else."; fail=1; fi
-    [[ $CLEAN -eq 1 ]] || echo "  To drop the safe ones: task cluster-replace-node ${TASKARGS} -- --clean   (it refuses a primary of record and any workload that would be left without a healthy replica)"
+    [[ $CLEAN -eq 1 ]] || echo "  To drop the safe ones: task cluster-replaced-node-cleanup NODE=${NAME_FOR_K8S} -- --clean   (it refuses a primary of record and any workload that would be left without a healthy replica)"
     (( fail == 0 )) || exit 1
     ok "Replacement of ${NAME_FOR_K8S} done. Verify: task cluster-verify PROVIDER=${PROVIDER}${ROLE_ARG}" ;;
 esac
