@@ -518,14 +518,18 @@ variable "coredns_ha" {
 
 variable "node_monitor_grace_period_seconds" {
   description = <<-EOT
-    Seconds the kube-controller-manager waits for a node's heartbeat before marking it NotReady (Kubernetes default 50). 0
-    (default) changes nothing. 20 to 300 sets the controller manager and, below 40, the kubelet heartbeat to match (lease
-    and status frequency, 4 chances to be heard). A node-loss failover is shorter by the difference (lab 26: 32-35 s of 76-79 s),
-    at the price of false NotReady on a flaky link. UNVERIFIED on a cluster: leave it at 0 until docs/resilience.md ("Failure
-    detection time") says a lab proved a value. Details on the variable of the same name in modules/talos/variables.tf.
+    Seconds the kube-controller-manager waits for a node's heartbeat before marking it NotReady (Kubernetes default 50).
+    Default 30 (owner decision 2026-10-26): it sets the controller manager and, below 40, the kubelet heartbeat to match
+    (lease duration = this value, status every this value / 4, 4 chances to be heard). 0 changes nothing: the Kubernetes
+    default 50 s applies (the opt-out). 20 to 300 otherwise. Why 30: the node power-off write-gap target (75 s) is met only
+    at 30 s (lab 27, Scaleway: 82-86 s at the default, 62-70 s at 30 s, 49-62 s at 20 s), with no NotReady, eviction or
+    failover in a 30 minute nominal soak at 30 s. EVIDENCE FROM ONE PROVIDER: the OVH and Outscale labs are the next
+    proof, and the default goes back to 0 if they flap. Not measured: a soak during a roll. On an existing cluster the
+    next `cluster-up` re-applies the machine config of every node (about 7.5 min per apply in lab 27, no reboot).
+    Details on the variable of the same name in modules/talos/variables.tf.
   EOT
   type        = number
-  default     = 0
+  default     = 30
 
   validation {
     condition     = var.node_monitor_grace_period_seconds == 0 || (var.node_monitor_grace_period_seconds >= 20 && var.node_monitor_grace_period_seconds <= 300 && var.node_monitor_grace_period_seconds == floor(var.node_monitor_grace_period_seconds))

@@ -1,5 +1,5 @@
 # node_monitor_grace_period_seconds (lab 26, D2/H1): the kube-controller-manager's --node-monitor-grace-period and the matching kubelet
-# heartbeat. Unset it renders nothing. Mocked: this proves the rendered machine config and the replace trigger, NOT that a shorter
+# heartbeat. At 0 (this module's own default; the shipped default 30 is the root's, cluster/tests/node-failure-detection.tftest.hcl) it renders nothing. Mocked: this proves the rendered machine config and the replace trigger, NOT that a shorter
 # grace period shortens a failover or stays free of false NotReady (docs/resilience.md: the next lab's experiment).
 
 mock_provider "talos" {}
@@ -28,19 +28,22 @@ override_data {
   values = { machine_configuration = "version: v1alpha1\nmachine:\n  type: controlplane\n" }
 }
 
-run "default_changes_nothing" {
+run "zero_changes_nothing" {
   command = apply
+  variables {
+    node_monitor_grace_period_seconds = 0
+  }
   assert {
     condition     = !can(yamldecode(data.talos_machine_configuration.control_plane[0].config_patches[0]).cluster.controllerManager)
-    error_message = "unset, the control plane config must carry no controllerManager block"
+    error_message = "at 0, the control plane config must carry no controllerManager block"
   }
   assert {
     condition     = !can(yamldecode(data.talos_machine_configuration.control_plane[0].config_patches[0]).machine.kubelet.extraConfig) && !can(yamldecode(data.talos_machine_configuration.worker[0].config_patches[0]).machine.kubelet)
-    error_message = "unset, no kubelet heartbeat setting on either role"
+    error_message = "at 0, no kubelet heartbeat setting on either role"
   }
   assert {
     condition     = terraform_data.machine_config_version[0].input == "v1.14.2/v1.37.1"
-    error_message = "unset, the replace trigger must not move"
+    error_message = "at 0, the replace trigger must not move"
   }
 }
 
