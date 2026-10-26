@@ -215,7 +215,7 @@ run() { # <mode args…> — from the cluster dir; sets OUT, RC
   : >"$CALLS"
   # A run that does not end is a failure, not a hung harness.
   OUT="$( cd "$C" && timeout 60 env PATH="$W/bin:$PATH" POLL=0 POWEROFF_TIMEOUT=5 ETCD_TIMEOUT=5 LONGHORN_TIMEOUT=5 EVICT_TIMEOUT=5 \
-          RESTORE_TIMEOUT=3 RESTORE_POLL=0 PLACED_TIMEOUT=3 "${ENVV[@]}" "$W/scripts/ops/shrink-nodes.sh" "$@" 2>&1 )"; RC=$?
+          RESTORE_TIMEOUT=3 RESTORE_POLL=0 RESTORE_RETRY_WAIT=0 PLACED_TIMEOUT=3 "${ENVV[@]}" "$W/scripts/ops/shrink-nodes.sh" "$@" 2>&1 )"; RC=$?
 }
 calls() { cat "$CALLS"; }
 line_of() { grep -n -- "$1" "$CALLS" | head -1 | cut -d: -f1; }

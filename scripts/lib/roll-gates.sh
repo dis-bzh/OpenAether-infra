@@ -365,7 +365,21 @@ finish_roll() {
   local rc=$? stopped=$STOP_REQUESTED
   KCTL+=(--request-timeout="${RESTORE_REQUEST_TIMEOUT:-10s}")
   trap '' INT TERM
-  ( cnpg_maintenance false ) || warn "the CNPG/Flux restore did not complete"
+  # RETRIED until the apiserver reads it back as restored. After a node is destroyed the API load balancer still sends a share
+  # of the calls to it, so the one attempt this used to make timed out (lab 27, F-STOCK: "context deadline exceeded") and left
+  # Flux suspended and every budget gone, for an operator to find. Every attempt is idempotent; the count and the wait are bounded.
+  local try=1 tries="${RESTORE_TRIES:-6}"
+  while :; do
+    ( cnpg_maintenance false ) || warn "the CNPG/Flux restore did not complete (attempt ${try} of ${tries})"
+    # A subshell: cnpg_installed dies on an unanswered CRD lookup, and that must read as "not restored yet", not end the trap.
+    ( cnpg_unrestored ) >/dev/null 2>&1 && break
+    [[ $? -ne 2 ]] || break
+    (( try < tries )) || break
+    try=$((try + 1))
+    trap 'warn "interrupted: the restore is NOT verified; check the Flux Kustomizations and the CNPG budgets by hand"; exit 130' INT TERM
+    sleep "${RESTORE_RETRY_WAIT:-15}"
+    trap '' INT TERM
+  done
   trap 'warn "interrupted: the restore is NOT verified; check the Flux Kustomizations and the CNPG budgets by hand"; exit 130' INT TERM
   if assert_restored; then
     if [[ $rc -ne 0 ]]; then :
@@ -1207,6 +1221,18 @@ node_targets() { # <tf_t> <index>
     t == "worker" && $0 ~ ("\\.worker_data\\[\"w" i "-d[0-9]+\"\\]$") \
       && $0 !~ /(scaleway_block_volume|openstack_blockstorage_volume_v3|outscale_volume)\./ { print }
   '
+}
+
+# How many of these state addresses tofu holds as TAINTED: a create that failed halfway, e.g. a provider out of stock for the
+# instance type after the old VM was destroyed (lab 27, F-STOCK). `tofu state show` opens with "# <address>: (tainted)".
+# The next plan then deletes that leftover as well as the resource it was asked to replace, which the destroy guard counts.
+tainted_count() { # <state address>...
+  local a first n=0
+  for a in "$@"; do
+    first="$(tofu state show -no-color "$a" 2>/dev/null | sed -n 1p)" || first=""
+    [[ "$first" == *"(tainted)"* ]] && n=$((n + 1))
+  done
+  echo "$n"
 }
 
 # Node-scoped resources (cp/worker, by name) of any node but <t> <i> that a plan

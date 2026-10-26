@@ -697,6 +697,7 @@ from() { [ -n "${1:-}" ] && [ "$n" -ge "$1" ]; }                    # knob set a
 clusters() { for c in ${FK_CLUSTERS-foundation-databases/zitadel-db}; do echo "${c%/*} ${c#*/}"; done; }
 case "$*" in
   "get crd clusters.postgresql.cnpg.io")
+    count crds; [ "$n" -gt "${FK_CRD_FAIL_FIRST:-0}" ] || refuse 'Unable to connect to the server: context deadline exceeded'
     [ "${FK_CNPG:-1}" = 1 ] || refuse 'Error from server (NotFound)' ;;
   "get clusters.postgresql.cnpg.io -A -o jsonpath="*fluxcd*)   # owner labels
     count owners; from "${FK_OWNERS_FAIL_FROM:-}" && refuse 'connection refused'
@@ -746,7 +747,7 @@ fk_reset() {
   FK_STATE="$FK/state"; export FK_STATE; rm -rf "$FK_STATE"; mkdir -p "$FK_STATE"
   echo true >"$FK_STATE/susp.cnpg"; echo true >"$FK_STATE/susp.platform"
   echo false >"$FK_STATE/pdb"; : >"$FK_STATE/calls"; : >"$FK_STATE/bounded"
-  for c in lists owners parents; do echo 0 >"$FK_STATE/$c"; done
+  for c in lists owners parents crds; do echo 0 >"$FK_STATE/$c"; done
   echo "${FK_OPERATOR_DELAY:-0}" >"$FK_STATE/delay"
 }
 # Run in a subshell by the caller: the harness's own ok/die/sleep must not be the
@@ -758,7 +759,7 @@ fk_body() { # <the roll's own exit status>
   info() { :; }; die() { printf '✗ %s\n' "$*" >&2; exit 1; }
   [ -n "${FK_REALSLEEP:-}" ] || sleep() { SECONDS=$((SECONDS + $1)); }   # a clock the roll's own waits move
   STOP_REQUESTED=0
-  RESTORE_TIMEOUT="${FK_TIMEOUT:-10}" RESTORE_POLL="${FK_POLL:-5}"
+  RESTORE_TIMEOUT="${FK_TIMEOUT:-10}" RESTORE_POLL="${FK_POLL:-5}" RESTORE_RETRY_WAIT="${FK_RETRY_WAIT:-15}" RESTORE_TRIES="${FK_TRIES:-6}"
   trap "${FK_TRAP:-finish_roll}" EXIT; eval "${FK_CMD:-:}"; exit "$1"
 }
 fk_run() { fk_reset; OUT="$( ( fk_body "$1" ) 2>&1 )"; RC=$?; }
@@ -811,11 +812,25 @@ FK_PATCH_FAIL=flux-system/platform FK_TRAP='cnpg_maintenance false' fk_run 0
   && ok "control: the old exit path leaves the root suspended and exits 0" \
   || bad "control: the fake does not reproduce the old defect (rc ${RC})"
 
-FK_LIST_FAIL_ONCE=1 fk_run 0
-[ "$RC" = 1 ] && saw "flux-system/cnpg is still suspended" && saw "flux-system/platform is still suspended" \
-  && saw "foundation-databases/zitadel-db-primary is missing" \
-  && ok "an apiserver blip at exit: the restore dies, and the check still names all three leftovers" \
-  || bad "a blip at exit hid what was left (rc ${RC}): ${OUT}"
+# Lab 27 (F-STOCK): the roll died after the VM was destroyed, with two control planes left and the API load balancer still
+# sending a share of the calls to the dead one; the one restore attempt hit "context deadline exceeded" and Flux stayed
+# suspended and every budget stayed gone for the 71 minutes the operator needed. The restore is retried until it is read back.
+FK_LIST_FAIL_ONCE=1 fk_run 1
+[ "$RC" = 1 ] && saw "restored" && [ "$(fk susp.cnpg)" = false ] && [ "$(fk susp.platform)" = false ] && [ "$(fk pdb)" = true ] && [ -e "$FK_STATE/budget" ] \
+  && ok "an apiserver blip at exit: the restore is retried, the roll's own failure status is kept (rc 1)" \
+  || bad "a blip at exit left the maintenance state in place (rc ${RC}): ${OUT}"
+FK_CRD_FAIL_FIRST=2 fk_run 1
+[ "$RC" = 1 ] && saw "restored" && [ "$(fk susp.cnpg)" = false ] && [ "$(fk susp.platform)" = false ] && [ -e "$FK_STATE/budget" ] \
+  && ok "an apiserver that does not answer the first two calls (the CRD lookup): still restored, on a later attempt" \
+  || bad "a CRD lookup that timed out twice left Flux suspended (rc ${RC}): ${OUT}"
+FK_CRD_FAIL_FIRST=2 fk_run 0
+[ "$RC" = 0 ] && saw "Rolling replacement complete" \
+  && ok "…and a roll that succeeded but needed a retry at exit still ends complete" \
+  || bad "a retried restore changed a clean roll's verdict (rc ${RC}): ${OUT}"
+FK_DOWN=1 fk_run 0
+[ "$RC" = 1 ] && saw "cannot tell whether the CNPG CRD exists" && ! saw "Rolling replacement complete" && [ "$(grep -c 'restore did not complete' <<<"$OUT")" = 6 ] \
+  && ok "an apiserver that never comes back: six bounded attempts, then exit 1 with the check's own words, never complete" \
+  || bad "a dead apiserver at exit was retried the wrong number of times or read as restored (rc ${RC}): ${OUT}"
 
 FK_OPERATOR=0 fk_run 0
 [ "$RC" = 1 ] && saw "foundation-databases/zitadel-db-primary is missing" && ! saw "still suspended" \
@@ -886,12 +901,12 @@ FK_CLUSTERS= fk_run 0
   && ok "the CRD installed and no cluster yet: nothing to check, exit 0" \
   || bad "an operator with no database was refused (rc ${RC}): ${OUT}"
 
-# The bound is the clock's, not a count of sleeps, and a problem is said once.
-FK_DOWN=1 FK_SLOW=2 FK_TIMEOUT=2 FK_POLL=1 fk_run 0; N="$(wc -l <"$FK_STATE/calls")"
-[ "$RC" = 1 ] && [ "$N" -le 2 ] \
+# The bound is the clock's, not a count of sleeps, and a problem is said once. (3 reads: the restore, the retry loop's check, the wait.)
+FK_TRIES=1 FK_DOWN=1 FK_SLOW=2 FK_TIMEOUT=2 FK_POLL=1 fk_run 0; N="$(wc -l <"$FK_STATE/calls")"
+[ "$RC" = 1 ] && [ "$N" -le 3 ] \
   && ok "an apiserver that hangs: the wait ends on the clock (${N} reads, not one per sleep)" \
   || bad "the wait counted sleeps, not seconds (rc ${RC}, ${N} reads): ${OUT}"
-FK_DOWN=1 fk_run 0
+FK_TRIES=1 FK_DOWN=1 fk_run 0
 # Twice: the restore's own die, then the final warning. Fewer drops the reason
 # from the warning, more repeats it per poll.
 [ "$RC" = 1 ] && [ "$(grep -c 'cannot tell whether' <<<"$OUT")" = 2 ] \
@@ -953,7 +968,7 @@ L_TRAP="$(lineno '^  trap finish_roll EXIT$')"
 # Every scenario above overrides the timeout and poll, and the request timeout is
 # only checked for being there: pin the defaults the CHANGELOG and docs quote.
 RR_EXIT="$(extract 'assert_restored,finish_roll' | grep -vE '^[[:space:]]*#')"
-for d in 'RESTORE_TIMEOUT:-120}' 'RESTORE_POLL:-5}' 'RESTORE_REQUEST_TIMEOUT:-10s}'; do
+for d in 'RESTORE_TIMEOUT:-120}' 'RESTORE_POLL:-5}' 'RESTORE_REQUEST_TIMEOUT:-10s}' 'RESTORE_TRIES:-6}' 'RESTORE_RETRY_WAIT:-15}'; do
   grep -qF -- "$d" <<<"$RR_EXIT" && ok "the default is pinned: \${$d" || bad "the default \${$d is not in the exit path"
 done
 
@@ -1008,6 +1023,24 @@ for c in 'ovh|openstack_compute_volume_attach_v2|openstack_blockstorage_volume_v
     && ok "$m: worker 0's server and BOTH its attach/link resources are targeted, not worker 1's, 10's or the volumes" \
     || bad "$m: node_targets worker 0 returned '${got//$'\n'/ }'"
 done
+
+echo
+echo "=== a replacement that stopped after the destroy leaves a tainted server (lab 27, F-STOCK) ==="
+tc() { # <tainted address, or none> <address>... — tainted_count against a fake `tofu state show`
+  (
+    T="$1"; shift
+    tofu() { [ "$1 $2" = "state show" ] || return 99; local a="${*: -1}"; if [ "$a" = "$T" ]; then printf '# %s: (tainted)\nresource "x" "y" {}\n' "$a"; else printf '# %s:\nresource "x" "y" {}\n' "$a"; fi; }
+    eval "$(extract tainted_count)"
+    tainted_count "$@"
+  )
+}
+SRV='module.scw[0].scaleway_instance_server.control_plane[2]'; NIC='module.scw[0].scaleway_instance_private_nic.control_plane[2]'
+[ "$(tc "$SRV" "$NIC" "$SRV")" = 1 ] && [ "$(tc none "$NIC" "$SRV")" = 0 ] \
+  && ok "tainted_count reads the '(tainted)' header of tofu state show: one tainted server, none when clean" \
+  || bad "tainted_count: '$(tc "$SRV" "$NIC" "$SRV")' / '$(tc none "$NIC" "$SRV")'"
+extract replace_node | grep -q 'saved_plan_apply "${node_name}-config" "$t" "$i" "$(( cfg_max + tainted ))" "" check' \
+  && ok "the pre-flight config plan allows the tainted leftovers it will replace, so the re-run is not refused" \
+  || bad "the pre-flight config plan still counts a tainted server as 'more than one resource'"
 
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 # A floor, not just a verdict: `FAIL -eq 0` is also true when the harness died

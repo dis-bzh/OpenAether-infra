@@ -293,7 +293,7 @@ replace_node() { # <type: cp|worker> <index>
 
   # Split for the two applies below: the instance alone, then the config.
   local -a infra_targets=() cfg_targets=(-target="$cfg_addr" -replace="$cfg_addr")
-  local cfg_max=1 tgt
+  local cfg_max=1 tgt tainted
   for tgt in "${targets[@]}"; do
     [[ "$tgt" == "-target=${cfg_addr}" || "$tgt" == "-target=${guard_addr}" ]] || infra_targets+=("$tgt")
   done
@@ -439,7 +439,14 @@ replace_node() { # <type: cp|worker> <index>
   # fresh VM with no config.
   saved_plan_apply "${node_name}-instance" "$t" "$i" "${#infra_targets[@]}" "" check \
     "${infra_targets[@]}" -replace="$inst_addr"
-  saved_plan_apply "${node_name}-config" "$t" "$i" "$cfg_max" "" check "${cfg_targets[@]}"
+  # A node whose earlier replacement stopped after the destroy (the provider was out of stock) has a TAINTED server in the
+  # state. The config plan then also deletes that server, which counted as "more than one resource" and refused the re-run until
+  # an operator ran `tofu untaint` by hand (lab 27, F-STOCK: 71 min). The instance apply below replaces it anyway: allow for it.
+  tainted="$(tainted_count "${infra_targets[@]#-target=}")"
+  if (( tainted > 0 )); then
+    warn "${tainted} resource(s) of ${node_name} are tainted: an earlier replacement stopped after the destroy. This run replaces them; nothing to untaint by hand."
+  fi
+  saved_plan_apply "${node_name}-config" "$t" "$i" "$(( cfg_max + tainted ))" "" check "${cfg_targets[@]}"
 
   # 1. cordon + drain (evacuate workloads, trigger Longhorn rebuild / app failover). A dead node cannot be drained:
   # it is cordoned, and its Node object is deleted once its etcd member (control plane) is gone.
