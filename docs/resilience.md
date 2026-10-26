@@ -25,6 +25,8 @@ stays Cluster API's (optional modules for the child clusters), what OpenTofu man
 
 The write gap is **bounded, not zero**: PostgreSQL has one writer, so writes stop while a replica is promoted (a client that retries masks it, the OpenAether-apps guide "Surviving a database failover from your own application"). What is zero is the loss of acknowledged commits. A true 0 s write path needs a distributed database and is not planned. Writes **block** (nothing is lost) when no replica is available: the alert `CnpgSyncReplicaMissing` says so.
 
+**A planned in-place restart of a primary is not a switchover.** When the Barman plugin sidecar has to be added, the operator restarts the primary where it is (no promotion), and with a client pool connected and `smartShutdownTimeout: 5` the write gap measured **33.6 s** in lab 27 sitting 2 (2026-10-26, one run; 206 s before the bound; the figure of 12-25 s that an earlier text gave was an expectation, not a measurement). 6 s of it was a first pull of the sidecar image on that node. That is 3.6 s over the 30 s target: the 30 s class describes a switchover or a failover (12-24 s measured), not this restart, which happens once, during the 0.3.x to 0.4.0 move ([`upgrade.md`](upgrade.md), "The primary restart").
+
 ## Why a pod on a dead node is not rescheduled at once
 
 Kubernetes evicts the pods of a node that stopped answering only after the 5 minute not-ready / unreachable toleration it adds to every pod. A workload with

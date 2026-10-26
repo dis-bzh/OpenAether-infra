@@ -26,6 +26,8 @@ API gère reste à Cluster API (modules optionnels pour les clusters enfants), c
 
 L'interruption d'écriture est **bornée, pas nulle** : PostgreSQL n'a qu'un écrivain, les écritures s'arrêtent le temps de promouvoir un réplica (un client qui réessaie la masque, le guide OpenAether-apps « Surviving a database failover from your own application »). Ce qui est nul, c'est la perte de commits acquittés. Un chemin d'écriture réellement à 0 s demande une base distribuée et n'est pas prévu. Les écritures **se bloquent** (rien n'est perdu) quand aucun réplica n'est disponible : l'alerte `CnpgSyncReplicaMissing` le dit.
 
+**Un redémarrage planifié du primaire sur place n'est pas une bascule.** Quand le sidecar du plugin Barman doit être ajouté, l'opérateur redémarre le primaire sur place (sans promotion) ; avec un pool de clients connecté et `smartShutdownTimeout: 5`, l'interruption d'écriture mesurée est de **33,6 s** au lab 27 séance 2 (2026-10-26, une exécution ; 206 s avant la borne ; les 12-25 s d'un texte antérieur étaient une attente, pas une mesure). 6 s tenaient au premier tirage de l'image du sidecar sur ce nœud. C'est 3,6 s au-dessus de la cible de 30 s : la classe des 30 s décrit une bascule ou un basculement (12-24 s mesurés), pas ce redémarrage, qui n'a lieu qu'une fois, pendant le passage de la 0.3.x à la 0.4.0 ([`upgrade.fr.md`](upgrade.fr.md), « Le redémarrage du primaire »).
+
 ## Pourquoi un pod d'un nœud mort n'est pas replanifié tout de suite
 
 Kubernetes n'évince les pods d'un nœud qui ne répond plus qu'après la tolérance de 5 minutes (non prêt / injoignable) qu'il ajoute à chaque pod. Une charge à deux
