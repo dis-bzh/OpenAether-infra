@@ -552,6 +552,28 @@ pire, puisque tous les nœuds seraient détruits en même temps.
 [`tests/node-size-change.tftest.hcl`](../infrastructure/opentofu/cluster/tests/node-size-change.tftest.hcl)
 vérifie que le drapeau de Scaleway reste désactivé.
 
+## Un remplacement qui s'arrête après la destruction de l'ancienne VM (rupture de stock du fournisseur)
+
+`task cluster-roll -- --node=<n>` et `task cluster-replace-node` détruisent l'ancienne VM puis créent la nouvelle. Si la création échoue, le cluster reste avec un nœud en moins. Observé au lab 27 (Scaleway, 2026-10-26, trois fois dans la journée, 5 à 10 minutes chaque fois) : `resource POP2-4C-16G is out of stock` pour le type d'instance du plan de contrôle dans une zone, après la destruction. État laissé : 2 plans de contrôle sur 3 (quorum etcd 2), le nœud cordonné, son objet Node et son membre etcd disparus, le serveur **tainted** dans l'état OpenTofu et, la restauration n'ayant pas pu joindre l'API à temps, les Kustomizations Flux `cnpg`, `forgejo-db` et `openaether-platform` encore suspendues et tous les PodDisruptionBudgets CNPG supprimés. La reprise a pris 71 minutes, surtout en détours.
+
+**Ce qui a changé après le lab (UNVERIFIED sur un cloud, couvert par des tests hors ligne seulement) :** la restauration à la sortie du roll est désormais répétée (`RESTORE_TRIES`, 6 par défaut, toutes les `RESTORE_RETRY_WAIT`, 15 s par défaut) jusqu'à ce que l'API la confirme : un roll qui meurt sur une API brièvement injoignable ne laisse plus Flux suspendu et les budgets supprimés ; et une relance n'est plus refusée à cause du serveur tainted. Lisez quand même la fin de la sortie du roll : elle nomme ce qui reste suspendu ou manquant.
+
+**La séquence qui a marché au lab** (observée ; l'ordre compte) :
+
+1. Constater les dégâts, en lecture seule : `kubectl get nodes` (le plan de contrôle est absent), `kubectl get kustomizations -A` (les suspendues), `kubectl get pdb -A -l cnpg.io/cluster` (aucun), etcd sur un plan de contrôle survivant (`talosctl etcd members` : 2 membres, sains).
+2. Attendre que le fournisseur ait de nouveau du stock. Réessayer ne coûte rien : l'étape suivante le fait. Au lab, le fournisseur a répondu de nouveau après environ 10 minutes la première fois, après environ 70 la dernière. Rien ne se dégrade tant que deux plans de contrôle et tous les workers tournent, mais ne lancez pas une autre opération sur un nœud avant le retour de celui-ci.
+3. Lancer **`task cluster-replace-node PROVIDER=<p> NODE=<nom du nœud> APPROVE=auto -- --even-if-running --ip=<adresse privée de ce nœud>`**. `--ip` est nécessaire car l'objet Node a disparu (`tofu output control_plane_private_ips` donne les adresses) ; `--even-if-running` car le fournisseur peut encore lister le serveur à moitié créé comme démarré ou arrêté. Elle détruit le serveur tainted et en crée un nouveau. Si le fournisseur est encore en rupture, elle échoue de la même façon et restaure Flux et les budgets à la sortie ; attendre et la relancer. Au lab, la même commande a restauré les budgets et les suspensions à chaque exécution. Aux têtes du lab (avant le changement ci-dessus) elle demandait d'abord `tofu untaint '<adresse du serveur>'` (le plan détruisait 2 ressources, 1 au plus attendue) ; ce n'est plus demandé, et si vous rencontrez encore ce refus, `tofu untaint` du serveur nommé est la sortie manuelle.
+4. S'attendre à un nœud Ready et à etcd 3/3 quelques minutes après la création (11:37:33 au lab, une création après la dernière rupture). Puis vérifier que `kubectl get kustomizations -A` et les budgets CNPG sont revenus (`task cluster-verify PROVIDER=<p>`).
+
+**Ce qui n'a pas marché au lab, donc n'y commencez pas :**
+
+- `task cluster-node-state` dit `recover`, et `task cluster-node-recover` est un redémarrage brutal qui refuse sans un « yes » tapé et ne fait rien pour une VM jamais configurée.
+- Un simple `task cluster-up` : son plan attend 15 minutes la source de données `talos_cluster_health` pour un nœud qui n'a pas encore de configuration Talos, puis échoue.
+- Allumer la VM à la main : une VM dont la carte réseau privée n'était pas encore attachée n'est jamais devenue joignable. Laissez le remplacement la recréer.
+- Un `tofu apply` ciblé de la configuration machine : il a attendu 15 minutes la garde de port ; le tuer a laissé un verrou d'état (`tofu force-unlock <id>`, seulement après avoir vérifié qu'aucun processus `tofu` à vous ne tourne encore).
+
+**Pourquoi le remplacement ne peut pas créer d'abord (conception, non implémentée).** Le nouveau nœud doit porter l'ancien nom, l'ancienne adresse privée (IPAM) et, pour un plan de contrôle, un nouveau membre etcd après le retrait de l'ancien : les deux VM ne peuvent pas coexister sans une autre identité ; créer avant de détruire reviendrait à un nouveau nœud (autre nom et adresse) puis un retrait, c'est-à-dire l'ajout suivi du retrait, pas ce chemin. Un contrôle préalable est possible là où le fournisseur expose la disponibilité : l'API Instance de Scaleway liste, par zone, l'état de stock de chaque type commercial (available, scarce, shortage) sous son point d'accès products/servers/availability ; un contrôle avant la destruction refuserait de démarrer quand le type est en shortage dans la zone. Il est propre au fournisseur (OVH, Outscale et Proxmox n'ont pas d'équivalent listé ici), sujet à une course (le stock peut partir entre le contrôle et la création) et n'a pas été vérifié sur l'API réelle : il reste une issue, pas du code.
+
 ## Un nœud déjà mort
 
 `task cluster-roll` exige que tous les nœuds soient Ready et vide chacun avant de le toucher ; un nœud mort ne peut ni l'un ni l'autre. Utilisez `task cluster-node-state PROVIDER=… NODE=…`

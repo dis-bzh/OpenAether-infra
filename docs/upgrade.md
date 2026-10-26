@@ -613,6 +613,28 @@ worse, since every node would be destroyed at once.
 [`tests/node-size-change.tftest.hcl`](../infrastructure/opentofu/cluster/tests/node-size-change.tftest.hcl)
 checks that Scaleway's flag stays unset.
 
+## A replacement that stops after the old VM was destroyed (provider out of stock)
+
+`task cluster-roll -- --node=<n>` and `task cluster-replace-node` destroy the old VM and then create the new one. If the create fails, the cluster is left one node short. Observed in lab 27 (Scaleway, 2026-10-26, three times in one day, each 5-10 minutes): `resource POP2-4C-16G is out of stock` for the control-plane instance type in one zone, after the destroy. State it left: 2 of 3 control planes (etcd quorum 2), the node cordoned, its Node object and etcd member gone, the server in the OpenTofu state **tainted**, and, because the restore could not reach the API in time, the Flux Kustomizations `cnpg`, `forgejo-db` and `openaether-platform` still suspended and every CNPG PodDisruptionBudget removed. The recovery took 71 minutes, most of it detours.
+
+**What changed after the lab (UNVERIFIED on a cloud, covered by offline tests only):** the exit restore of the roll is now repeated (`RESTORE_TRIES`, default 6, every `RESTORE_RETRY_WAIT`, default 15 s) until the API reads it back, so a roll that dies on a briefly unreachable API no longer leaves Flux suspended and the budgets gone; and a re-run is no longer refused because of the tainted server. Read the end of the roll's output anyway: it names what is still suspended or missing.
+
+**The sequence that worked in the lab** (observed; the order matters):
+
+1. Check the damage, read-only: `kubectl get nodes` (the control plane is absent), `kubectl get kustomizations -A` (suspended ones), `kubectl get pdb -A -l cnpg.io/cluster` (none), etcd on a surviving control plane (`talosctl etcd members`: 2 members, healthy).
+2. Wait for the provider to have stock again. Retrying is cheap: the next step does it. In the lab the provider answered again after about 10 minutes the first time, after about 70 the last time. Nothing in the cluster gets worse while two control planes and every worker run, but do not start another node operation until the node is back.
+3. Run **`task cluster-replace-node PROVIDER=<p> NODE=<node name> APPROVE=auto -- --even-if-running --ip=<private address of that node>`**. `--ip` is needed because the Node object is gone (`tofu output control_plane_private_ips` lists the addresses); `--even-if-running` because the provider may still list the half-created server as running or stopped. It destroys the tainted server and creates a new one. If the provider is still out of stock it fails the same way and restores Flux and the budgets again on exit; wait and run it again. In the lab the same command restored the budgets and the suspends every time it ran. At the lab heads (before the change above) it first needed `tofu untaint '<server address>'` (the plan destroyed 2 resources, at most 1 expected); that is no longer asked for, and if you still meet that refusal, `tofu untaint` of the named server is the manual way out.
+4. Expect the node Ready and etcd 3/3 within minutes of the create (11:37:33 in the lab, one create after the last stock-out). Then check `kubectl get kustomizations -A` and the CNPG budgets are back (`task cluster-verify PROVIDER=<p>`).
+
+**What did not work in the lab, so do not start there:**
+
+- `task cluster-node-state` says `recover`, and `task cluster-node-recover` is a hard reboot that refuses without a typed yes and does nothing for a VM that was never configured.
+- A plain `task cluster-up`: its plan waits 15 minutes on the `talos_cluster_health` data source for a node that has no Talos configuration yet, then fails.
+- Powering the VM on by hand: a VM whose private NIC was not yet attached never became reachable. Let the replace recreate it.
+- A targeted `tofu apply` of the machine configuration: it waited 15 minutes on the port guard; killing it left a state lock (`tofu force-unlock <id>`, only after checking that no `tofu` process of yours still runs).
+
+**Why the replacement cannot create first (design, not implemented).** The new node must carry the old name, private address (IPAM) and, for a control plane, a fresh etcd member after the old one is removed, so the two VMs cannot coexist without a different identity; create-before-destroy would be a new node (new name and address) and a removal, which is the grow-then-shrink path, not this one. A pre-check is possible where the provider exposes availability: the Scaleway Instance API lists, per zone, the stock state of each commercial type (available, scarce, shortage) under its products/servers/availability endpoint; a check before the destroy would refuse to start when the type is in shortage in the zone. It is provider specific (OVH, Outscale and Proxmox have no equivalent listed here), racy (stock can go between the check and the create) and has not been verified against the live API, so it is left as an issue, not code.
+
 ## A node that is already dead
 
 `task cluster-roll` needs every node Ready and drains each one before it is touched; a dead node can do neither. Use `task cluster-node-state PROVIDER=… NODE=…`
