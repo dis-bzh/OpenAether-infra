@@ -44,6 +44,8 @@ control planes / workers, D = entrées de `worker_storage.disks`.
 `k8s_lb_mode = "vip"` (OVH ; expérimental sur Scaleway) remplace le LB de l'API
 et son IP par une adresse privée.
 
+**Limite connue (Scaleway) : deux clusters ne peuvent pas coexister dans un même projet.** Le sous-réseau du cluster est fixé dans le module (`scw_cluster_subnet = "172.16.0.0/22"`, `modules/providers/scw/network.tf`, pour que la règle de maillage de `security.tf` ne puisse pas s'en écarter, #79) et n'est pas une variable. Les deux réseaux privés tombent dans le VPC par défaut du projet, et un second cluster échoue à son réseau avec `subnet_overlaps_in_vpc` (labo 27 séance 3, en construisant un cluster jetable pour la restauration etcd à côté du principal ; le cluster jetable a dû être construit après la destruction du principal). Utiliser un projet Scaleway par cluster, ou détruire le premier ; l'adressage n'a pas été modifié. Faire du CIDR une variable oblige aussi le pare-feu des nœuds, les plages des ACL et les tests qui portent `172.16.0.0/22` à le suivre : c'est un changement à part, pas fait ici. OVH (`10.0.0.0/24`) et Outscale fixent leurs adresses de la même façon ; la coexistence de deux clusters chez eux dépend du réseau que chacun crée et n'a pas été testée.
+
 ## Les exemples livrés
 
 Totaux bastion compris. `preflight-quotas` vérifie instances, vCPU et RAM, sur
