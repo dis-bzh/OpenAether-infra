@@ -992,6 +992,81 @@ etcd_remove_member() { # <node_name> <node_ip> <exclude_index>
     || die "etcd remove-member ${mid} failed — STOP (manual: talosctl -n <healthy-cp> etcd remove-member ${mid})"
 }
 
+# --- stop a control plane gracefully BEFORE it is rolled or replaced -------------------------------------------------
+#
+# Lab 27 sitting 3 (Scaleway, 3 CP + 5 W, ONE lab): at every control-plane replacement of the shipped path 4 or 5 of the
+# 5 workers stopped renewing their Lease for 46-91 s, and healthy workers went NotReady. A cordon + drain, then a graceful
+# `talosctl shutdown`, then the same replacement gave stalls of 8-9 s and 0 flaps in 2 of 2 replacements, at the price of
+# about 4 more minutes per control plane (676-699 s against 434-491 s). docs/resilience.md, "Control-plane flap".
+#
+# Gates, all of which must hold or the stop is SKIPPED (a warning, and the replacement goes on by its current path, which
+# has its own etcd-peer check): at least 3 control planes in the state, EVERY one of them with a healthy etcd, the node
+# itself answering, a healthy peer to drive etcd afterwards. A stop never makes a cluster that is not whole smaller.
+#
+# A failure of the stop never ends the run and never leaves anything behind that the replacement does not already
+# handle: the node was cordoned and drained by cordon_drain before this is called, it stays so exactly as in a replacement
+# without the stop, and the caller's later steps (etcd member removal, the two applies, uncordon) are unchanged. If the
+# shutdown is refused the node is untouched; if it does not stop in time it is on its way to be destroyed anyway.
+GRACEFUL_STOP_TIMEOUT="${GRACEFUL_STOP_TIMEOUT:-300}"   # seconds to wait for the node to stop answering
+GRACEFUL_STOP_POLL="${GRACEFUL_STOP_POLL:-5}"
+
+# Prints why the stop must not happen and returns 1; returns 0 when every gate holds.
+cp_graceful_stop_refusal() { # <index>
+  local idx="$1" total="${#CP_IPS[@]}" k ep ip healthy=0
+  if (( total < 3 )); then
+    echo "only ${total} control plane(s) in the state: with fewer than 3 there is no quorum to protect and nothing for the workers to fall back on"
+    return 1
+  fi
+  for k in "${!CP_IPS[@]}"; do
+    ep="$(talos_ep cp "$k")"; ip="${CP_IPS[$k]}"
+    if talosctl -e "$ep" -n "$ip" service etcd 2>/dev/null | grep -qE 'HEALTH[[:space:]]+OK'; then
+      healthy=$((healthy + 1))
+    elif [[ "$k" == "$idx" ]]; then
+      echo "the node itself does not report a healthy etcd, so it is not the live control plane this stop is for"
+      return 1
+    fi
+  done
+  if (( healthy < total )); then
+    echo "only ${healthy} of ${total} control planes report a healthy etcd: stopping one more would leave no margin on etcd quorum"
+    return 1
+  fi
+  return 0
+}
+
+# Shut the (already cordoned and drained) control plane down with Talos' own graceful shutdown and wait until it stops
+# answering. Always returns 0: see above.
+stop_cp_gracefully() { # <node_name> <node_ip> <index>
+  local node="$1" node_ip="$2" idx="$3" ep reason deadline gone=0 peer pep
+  ep="$(talos_ep cp "$idx")"
+  if ! reason="$(cp_graceful_stop_refusal "$idx")"; then
+    warn "graceful stop of ${node} SKIPPED: ${reason}. The replacement goes on by its current path (workers may flap while it runs)."
+    return 0
+  fi
+  peer="$(healthy_peer_cp "$idx")" || { warn "graceful stop of ${node} SKIPPED: no healthy peer control plane answers. Continuing by the current path."; return 0; }
+  info "Stopping ${node} gracefully (talosctl shutdown): its apiserver closes its connections, so the workers re-dial at once instead of after 46 s…"
+  # --force: the node was drained above; Talos's own drain is all-or-nothing and would refuse on a PDB we already judged.
+  # --wait=false: the client cannot watch a node that goes away through an SSH tunnel; the wait below asks the endpoint.
+  if ! talosctl shutdown -e "$ep" -n "$node_ip" --force --wait=false >/dev/null 2>&1; then
+    warn "talosctl shutdown was refused for ${node}: the node is untouched. Continuing by the current path (it stays cordoned until the replacement ends)."
+    return 0
+  fi
+  deadline=$(( SECONDS + GRACEFUL_STOP_TIMEOUT ))
+  while (( SECONDS < deadline )); do
+    # Stopped = the TLS handshake fails on the node's endpoint while a peer's still answers (tunnels are up).
+    if ! oa_talos_endpoint_ok "${ep%%:*}" "${ep##*:}" && [[ -n "$peer" ]]; then
+      read -r pep _ <<<"$peer"
+      if oa_talos_endpoint_ok "${pep%%:*}" "${pep##*:}"; then gone=1; break; fi
+    fi
+    sleep "$GRACEFUL_STOP_POLL"
+  done
+  if (( gone == 1 )); then
+    ok "${node} stopped"
+  else
+    warn "${node} still answers ${GRACEFUL_STOP_TIMEOUT}s after the shutdown order (or no peer answers to prove the tunnels are up). Continuing: the next steps destroy it anyway; it stays cordoned until the replacement ends."
+  fi
+  return 0
+}
+
 # etcd must report all CP members present AND healthy before we touch the next CP.
 # Queries each CP in turn until one answers — robust to the CP currently rebooting
 # (talosctl -e <tunnel> connects, -n <real-ip> is the node identity apid validates).

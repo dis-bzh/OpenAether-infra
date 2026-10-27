@@ -326,6 +326,10 @@ replace_node() { # <type: cp|worker> <index>
     else
       echo "  would: kubectl drain ${node_name} --ignore-daemonsets --delete-emptydir-data --timeout=${DRAIN_TIMEOUT}"
     fi
+    if [[ $t == cp && $DEAD -eq 0 ]]; then
+      echo "  would: talosctl shutdown -e ${ep} -n ${node_ip} --force --wait=false, then wait up to ${GRACEFUL_STOP_TIMEOUT}s until the node stops answering"
+      echo "         (only if all ${#CP_IPS[@]} control planes report a healthy etcd and there are at least 3; otherwise skipped with a warning)"
+    fi
     [[ $t == cp ]] && echo "  would: talosctl etcd remove-member ${node_name} (via a healthy peer CP)"
     [[ $DEAD -eq 1 ]] && echo "  would: kubectl delete node ${node_name} (frees its pods at once)"
     echo "  would: tofu plan -out=<instance.tfplan> ${infra_targets[*]} -replace='${inst_addr}' \\"
@@ -463,6 +467,12 @@ replace_node() { # <type: cp|worker> <index>
     cordon_dead "$node_name"
   else
     cordon_drain "$node_name"
+  fi
+
+  # 1a. control plane, alive: stop it gracefully now that it is drained (lab 27 sitting 3: the workers' Lease stalls of 46-97 s
+  # at every replacement went to 8-9 s). Not for a dead node, which cannot answer; skips itself when a gate does not hold.
+  if [[ "$t" == "cp" && $DEAD -eq 0 ]]; then
+    stop_cp_gracefully "$node_name" "$node_ip" "$i"
   fi
 
   # 1b. control plane: evict the stale etcd member BEFORE destroying the VM, while

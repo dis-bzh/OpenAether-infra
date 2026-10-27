@@ -460,6 +460,8 @@ tasks:
       # The volumes a replaced disk leaves behind: which are dropped, which are refused, against a fake kubectl.
       - ./scripts/dev/test-replaced-node-cleanup.sh
       - ./scripts/dev/test-dead-node-roll.sh
+      # The graceful stop of a live control plane before its replacement (F-CPFLAP): gates, order, failures.
+      - ./scripts/dev/test-cp-graceful-stop.sh
       - ./scripts/dev/test-failure-domain-check.sh
       # The CoreDNS manifest modules/talos injects (infra #388): selectors, host spread, tolerations, budget.
       - ./scripts/dev/test-coredns-manifest.sh
