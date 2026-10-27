@@ -304,6 +304,12 @@ run "ovh_pools_have_a_tcp_health_monitor" {
     condition     = alltrue([for k in ["http", "https"] : try(module.ovh[0].app_lb_monitors[k].timeout <= module.ovh[0].app_lb_monitors[k].delay && module.ovh[0].app_lb_monitors[k].delay <= 10 && module.ovh[0].app_lb_monitors[k].max_retries <= 3, false)])
     error_message = "OVH: monitor timing must take a dead member out within about 15 s (timeout <= delay <= 10 s, at most 3 retries) and Octavia requires timeout <= delay."
   }
+
+  # Octavia's max_retries_down defaults to 3 failed checks before ERROR: set explicitly to 2 (lab 27 sitting 3, owner decision 2026-10-27).
+  assert {
+    condition     = alltrue([for k in ["http", "https"] : try(module.ovh[0].app_lb_monitors[k].max_retries_down == 2, false)])
+    error_message = "OVH: the http and https monitors must carry max_retries_down = 2 explicitly (Octavia's default is 3)."
+  }
 }
 
 run "ovh_no_app_lb_no_monitor" {

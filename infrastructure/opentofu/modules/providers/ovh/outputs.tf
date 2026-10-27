@@ -69,7 +69,7 @@ output "app_lb_monitors" {
   description = "health monitors of the app LB http and https pools, for tests"
   value = {
     for k, m in { http = openstack_lb_monitor_v2.http, https = openstack_lb_monitor_v2.https } :
-    k => one([for x in m : { type = x.type, delay = x.delay, timeout = x.timeout, max_retries = x.max_retries }])
+    k => one([for x in m : { type = x.type, delay = x.delay, timeout = x.timeout, max_retries = x.max_retries, max_retries_down = x.max_retries_down }])
   }
 }
 
