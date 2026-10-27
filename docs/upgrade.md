@@ -577,6 +577,10 @@ no supported path. The roll now reads the schematic off the node
 (`talosctl get extensions` publishes it) and rolls a node whose version matches
 but whose image does not.
 
+### A live control plane is stopped gracefully first (0.4.0)
+
+When the replacement path (no `--upgrade`) replaces a control plane that is alive, the roll drains it, then stops it with `talosctl shutdown` and waits (up to 300 s) until it stops answering, and only then removes its etcd member and destroys the VM. Why: at every control-plane replacement of the earlier path, 4 or 5 of the 5 workers stopped renewing their Lease for 46-97 s and healthy workers went NotReady; with the graceful stop first the stalls were 8-9 s and no healthy worker flapped, in 2 replacements of ONE lab on ONE provider (the figures, the arms and what is not proven: [`resilience.md`](resilience.md), "Healthy workers go NotReady ... F-CPFLAP"). **Cost: about 4 minutes more per control plane** (the whole roll of 3 control planes: about 12 minutes more). `--dry-run` prints the step. It is skipped, with a warning and no other change, when the cluster has fewer than 3 control planes or any control plane does not report a healthy etcd; a refused shutdown or a node that does not stop in time does not end the run either (the node was cordoned by the drain and stays so until the roll's uncordon, as in a replacement without the stop). Not concerned: `cluster-replace-node` (a dead node cannot answer; its path is unchanged) and the in-place `--upgrade`. The shipped step has not been run on a cloud yet.
+
 ### A node size change is an in-place update, on every provider
 
 ⚠️ `instance_type` (Scaleway, Outscale), `flavor_name` (OVH) and

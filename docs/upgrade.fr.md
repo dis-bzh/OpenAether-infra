@@ -513,6 +513,10 @@ système n'était livrable par aucun chemin. Le roulement lit désormais le
 schematic sur le nœud (`talosctl get extensions` le publie) et fait rouler un
 nœud dont la version correspond mais pas l'image.
 
+### Un plan de contrôle vivant est d'abord arrêté proprement (0.4.0)
+
+Quand le chemin de remplacement (sans `--upgrade`) remplace un plan de contrôle vivant, le roll le draine, l'arrête avec `talosctl shutdown` et attend (jusqu'à 300 s) qu'il cesse de répondre, puis seulement retire son membre etcd et détruit la VM. Pourquoi : à chaque remplacement de plan de contrôle de l'ancien chemin, 4 ou 5 des 5 workers cessaient de renouveler leur Lease pendant 46-97 s et des workers sains passaient NotReady ; avec l'arrêt propre d'abord, les blocages étaient de 8-9 s et aucun worker sain n'a fait de va-et-vient, sur 2 remplacements d'UN lab chez UN fournisseur (les chiffres, les bras et ce qui n'est pas prouvé : [`resilience.fr.md`](resilience.fr.md), « Des workers sains passent NotReady ... F-CPFLAP »). **Coût : environ 4 minutes de plus par plan de contrôle** (le roll complet de 3 plans de contrôle : environ 12 minutes de plus). `--dry-run` affiche l'étape. Elle est sautée, avec un avertissement et sans autre changement, quand le cluster a moins de 3 plans de contrôle ou qu'un plan de contrôle ne rapporte pas un etcd sain ; un arrêt refusé ou un nœud qui ne s'arrête pas à temps n'arrête pas non plus l'exécution (le nœud a été cordonné par le drain et le reste jusqu'au uncordon du roll, comme dans un remplacement sans l'arrêt). Non concernés : `cluster-replace-node` (un nœud mort ne peut pas répondre ; son chemin est inchangé) et le `--upgrade` sur place. L'étape livrée n'a pas encore tourné sur un cloud.
+
 ### Changer la taille d'un nœud est une mise à jour en place, chez tous les providers
 
 ⚠️ `instance_type` (Scaleway, Outscale), `flavor_name` (OVH) et
