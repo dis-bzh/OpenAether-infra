@@ -252,6 +252,8 @@ haut et ses volumes de données sans drain ni sortie d'etcd (`scripts/internal/r
 nœuds a ses deux commandes, `task cluster-shrink-plan` puis `task cluster-shrink`, mesurées sur les trois
 clouds : [`upgrade.fr.md`](upgrade.fr.md#retirer-des-nœuds).
 
+À savoir : la machine est créée avant toute question : sans `APPROVE=auto`, `cluster-up` construit et configure d'abord le nouveau nœud et ne montre le plan qu'ensuite (conception 0.3.x, voir [`upgrade.fr.md`](upgrade.fr.md#ajouter-des-nœuds--cluster-up-crée-la-machine-avant-de-poser-la-question-conception-03x-inchangée)).
+
 ### Risque résiduel : l'application en mode maintenance
 
 Un nouveau nœud démarre en mode maintenance de Talos, où son API répond avec un **certificat éphémère que rien de ce que vous détenez ne peut vérifier**, et le provider Talos

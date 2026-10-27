@@ -246,6 +246,8 @@ data volumes with no drain and no etcd leave (`scripts/internal/refuse-node-dele
 commands of its own, `task cluster-shrink-plan` then `task cluster-shrink`, measured on all three
 clouds: [`upgrade.md`](upgrade.md#removing-nodes).
 
+Be aware that the machine is created before any question is asked: without `APPROVE=auto`, `cluster-up` still builds and configures the new node first and only then shows the plan (a 0.3.x design, see [`upgrade.md`](upgrade.md#adding-nodes-cluster-up-creates-the-machine-before-it-asks-a-03x-design-unchanged)).
+
 ### Residual risk: the maintenance-mode apply
 
 A new node boots in Talos' maintenance mode, where its API answers with an **ephemeral certificate that nothing you hold can verify**, and the Talos provider
