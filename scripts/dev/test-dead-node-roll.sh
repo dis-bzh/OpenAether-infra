@@ -92,5 +92,26 @@ awk '/dead_node_survey "\$ONLY_T"/{s=1;next} s&&/^  else$/{e=1;next} s&&/preflig
 grep -q 'api_want=\$(( \${#CP_IPS\[@\]} - DEAD ))' "$RR" && ok_ "the other apiservers must serve (the dead one cannot)" || bad "the apiserver gate counts the dead control plane"
 
 echo
+echo "=== a node whose Node object is gone needs --ip, and the message says so (lab 27 sitting 3) ==="
+# The real script, in a throwaway tree: only tofu, talosctl and kubectl and the bootstrap check are stubs.
+T="$STUB/tree"; mkdir -p "$T/scripts/ops" "$T/scripts/internal" "$T/cluster/envs" "$STUB/bin"
+cp "$RR" "$T/scripts/ops/"; ln -s "$ROOT/scripts/lib" "$T/scripts/lib"
+printf '#!/usr/bin/env bash\necho true\n' >"$T/scripts/internal/bootstrap-in-state.sh"; chmod +x "$T/scripts/internal/bootstrap-in-state.sh"
+printf 'cluster_name = "lab"\nenvironment = "dev"\n' >"$T/cluster/envs/management-ovh.tfvars"; : >"$T/cluster/talosconfig"; : >"$T/cluster/kubeconfig"
+cat >"$STUB/bin/tofu" <<'S'
+#!/usr/bin/env bash
+[ "$1 $2" = "output -json" ] && echo '{"control_plane_private_ips":{"value":["10.0.0.10","10.0.0.11","10.0.0.12"]},"worker_private_ips":{"value":["10.0.0.20","10.0.0.21"]}}'
+exit 0
+S
+printf '#!/usr/bin/env bash\nexit 1\n' >"$STUB/bin/kubectl"; chmod +x "$STUB/bin/tofu" "$STUB/bin/kubectl"
+( cd "$T/cluster" && PATH="$STUB/bin:$PATH" bash "$T/scripts/ops/rolling-replace.sh" ovh --dead --node=lab-dev-worker-1 --dry-run --yes ) >"$STUB/out" 2>&1; rc=$?
+{ [ "$rc" -ne 0 ] && grep -q 'needed for a WORKER as well as for a control plane' "$STUB/out" \
+  && grep -q 'task cluster-replace-node PROVIDER=ovh NODE=lab-dev-worker-1 -- --even-if-running --ip=<private address>' "$STUB/out" \
+  && grep -q 'workers: 10.0.0.20 10.0.0.21' "$STUB/out"; } \
+  && ok_ "a worker without a Node object: the message names --ip, the whole command and the state's addresses" || bad "message: rc=$rc $(cat "$STUB/out")"
+( cd "$T/cluster" && PATH="$STUB/bin:$PATH" bash "$T/scripts/ops/rolling-replace.sh" ovh --dead --node=lab-dev-worker-1 --ip=10.0.0.21 --dry-run --yes ) >"$STUB/out" 2>&1
+grep -q 'Single node: worker 1 (10.0.0.21)' "$STUB/out" && ok_ "with --ip the same node is found by its address" || bad "--ip not accepted: $(head -c 600 "$STUB/out")"
+
+echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

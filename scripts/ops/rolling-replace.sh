@@ -203,7 +203,16 @@ if [[ -n "$ONLY_NODE$ONLY_IP" ]]; then
   if [[ -z "$only_ip" ]]; then
     only_ip="$("${KCTL[@]}" get node "$ONLY_NODE" -o jsonpath="{.status.addresses[?(@.type=='InternalIP')].address}" 2>/dev/null)" || only_ip=""
   fi
-  [[ -n "$only_ip" ]] || die "cannot tell the address of node ${ONLY_NODE}: no Node object answers. Pass --ip=<private address> (tofu output control_plane_private_ips / worker_private_ips)."
+  if [[ -z "$only_ip" ]]; then
+    # A worker needs it as much as a control plane (lab 27 sitting 3). Name the exact flag, the whole command, and the
+    # addresses the state holds: the number in the node name is the index into its list.
+    echo "✗ cannot tell the address of node ${ONLY_NODE}: no Node object answers (it is gone, or it never registered)." >&2
+    echo "  --ip=<private address> is needed for a WORKER as well as for a control plane. Run again with it:" >&2
+    echo "    task cluster-replace-node PROVIDER=${PROVIDER}$([[ $ROLE == management ]] || echo " ROLE=${ROLE}") NODE=${ONLY_NODE} -- --even-if-running --ip=<private address>" >&2
+    echo "  Addresses in the state (the number in the node name is the position): control planes: ${CP_IPS[*]:-none}; workers: ${WK_IPS[*]:-none}" >&2
+    echo "  (or: tofu output control_plane_private_ips / worker_private_ips)" >&2
+    exit 1
+  fi
   for k in "${!CP_IPS[@]}"; do if [[ "${CP_IPS[$k]}" == "$only_ip" ]]; then ONLY_T="cp"; ONLY_I="$k"; fi; done
   for k in "${!WK_IPS[@]}"; do if [[ "${WK_IPS[$k]}" == "$only_ip" ]]; then ONLY_T="worker"; ONLY_I="$k"; fi; done
   [[ -n "$ONLY_T" ]] || die "no node of this state has the address ${only_ip} - wrong PROVIDER or ROLE?"
