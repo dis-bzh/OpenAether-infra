@@ -78,7 +78,11 @@ for s in internal/talos-version.sh internal/ensure-buckets.sh internal/check-ope
 done
 ln -s "$W/stub" "$W/bin/tofu"; ln -s "$W/stub" "$W/bin/ssh-keygen"
 echo 'fixture: rendered' >"$C/bootstrap-manifests/cilium.yaml"
-for e in management-scaleway workload-ovh; do echo 'cluster_name = "fixture"' >"$C/envs/$e.tfvars"; done
+# Flux ON, like the clusters these cases model: the presync, identity and apps-ref steps only run where Flux is deployed.
+for e in management-scaleway workload-ovh; do printf 'cluster_name = "fixture"\ndeploy_flux = true\n' >"$C/envs/$e.tfvars"; done
+# Flux OFF (a pure-infra cluster: the DR chain's step 2) in the file, and unset (the variable's default is false).
+printf 'cluster_name = "fixture"\ndeploy_flux = false\n' >"$C/envs/noflux-scaleway.tfvars"
+printf 'cluster_name = "fixture"\n' >"$C/envs/unset-scaleway.tfvars"
 : >"$W/key"
 
 O="$W/out"
@@ -460,6 +464,32 @@ TTY=1 EXTRA=REF_RC=3 run 0 cluster-up KEY="$W/key" PROVIDER=scaleway; rc=$?
 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
 grep -q 'cluster-up did NOT change' "$O" && grep -q 'cluster-bootstrap-sync' "$O" && grep -q 'CAPI child' "$O" \
   && ok "the end of cluster-up says what it did NOT change" || bad "no 'did NOT change' statement: $(tail_of)"
+
+
+echo "--- deploy_flux = false: no Flux, so no presync, no cluster-identity sync and no apps-ref move (lab 27 sitting 3, DR step 2) ---"
+# Every one of those steps is made to FAIL by the stubs, so a step that still ran would end the run non-zero.
+BREAK="PRESYNC_RC=1 IDENTITY_RC=1 REF_RC=1"
+for how in "file:ROLE=noflux" "default:ROLE=unset" "env:TF_VAR_deploy_flux=false"; do
+  name="${how%%:*}"; arg="${how#*:}"
+  if [ "$name" = env ]; then EXTRA="$BREAK $arg" run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+  else EXTRA="$BREAK" run 0 "${UP[@]}" PROVIDER=scaleway "$arg"; rc=$?; fi
+  [ "$rc" = 0 ] && grep -q '^✓ cluster-up complete' "$O" \
+    && ok "deploy_flux false ($name): cluster-up ends rc 0 with its stubs failing the Flux steps" \
+    || bad "deploy_flux false ($name): exit $rc: $(tail_of)"
+  { [ "$(calls '^cnpg-presync.sh')" = 0 ] && [ "$(calls '^cluster-identity-sync.sh')" = 0 ] && [ "$(calls '^cluster-apps-ref.sh')" = 0 ]; } \
+    && ok "deploy_flux false ($name): the presync, identity and apps-ref scripts are never called" \
+    || bad "deploy_flux false ($name): a Flux step ran: $(grep -E '^(cnpg-presync|cluster-identity-sync|cluster-apps-ref)' "$W/calls.log" | tr '\n' '|')"
+  grep -c '^~ deploy_flux is not true' "$O" | grep -qx 1 \
+    && ok "deploy_flux false ($name): one line says why the steps are skipped" \
+    || bad "deploy_flux false ($name): the skip line is missing or repeated"
+  # What does not depend on Flux stays: the CoreDNS shape (an inline manifest of Talos) and the verifier.
+  { [ "$(calls '^cluster-coredns-ha.sh')" -ge 1 ] && [ "$(calls '^infra-verify.sh ')" = 1 ]; } \
+    && ok "deploy_flux false ($name): the CoreDNS converge and the verifier still run" \
+    || bad "deploy_flux false ($name): CoreDNS or the verifier did not run: $(grep -E '^(cluster-coredns|infra-verify)' "$W/calls.log" | tr '\n' '|')"
+done
+# Control: with Flux on, the same failing stubs DO fail the run (so the cases above prove the skip, not a stub that never fails).
+EXTRA="$BREAK" run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" != 0 ] && ok "control: deploy_flux true and the same failing stubs fail the run" || bad "control: exit $rc, the Flux steps did not run"
 
 
 echo

@@ -811,6 +811,17 @@ tasks:
       # ask | auto — the value names WHO answers the approval, never whether
       # there is one: every apply still plans, then applies that saved plan.
       APPROVE: '{{.APPROVE | default "ask"}}'
+      # 1 when the config deploys Flux (TF_VAR_deploy_flux, else the env file; anything but the word true is false, the
+      # variable's default). Without Flux there is no GitRepository, no Kustomization and no CNPG Cluster to move:
+      # the presync, identity and apps-ref steps below are skipped (a pure-infra cluster, e.g. the DR chain's step 2).
+      FLUX_ON:
+        sh: |
+          v="${TF_VAR_deploy_flux:-}"
+          E=infrastructure/opentofu/cluster/envs
+          F="$E/{{.ROLE}}-{{.PROVIDER}}.tfvars"
+          AWK='$1 ~ /^[ \t]*deploy_flux[ \t]*$/ { sub(/#.*/, "", $2); gsub(/[ "\t]/, "", $2); print $2; exit }'
+          [ -n "$v" ] || v="$(awk -F= "$AWK" "$F" 2>/dev/null)"
+          [ "$v" = true ] && echo 1 || echo 0
     cmds:
       - defer: *receipt
       # Everything a later phase needs, checked BEFORE anything bills. The SSH
@@ -997,6 +1008,11 @@ tasks:
       # kubeconfig),
       # `task -x` for the script's own exit code.
       - |
+        if [ "{{.FLUX_ON}}" != 1 ]; then
+          echo "~ deploy_flux is not true: no Flux, no CNPG Cluster and no GitRepository to move;"
+          echo "  the CNPG presync, the cluster-identity sync and the apps-ref steps are skipped."
+          exit 0
+        fi
         PS="task -x cnpg-presync PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}"
         PSW="task cnpg-presync PROVIDER={{.PROVIDER}} ROLE={{.ROLE}} APPLY=1 SCALE=1"
         AR="task -x cluster-apps-ref PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}"
@@ -1069,6 +1085,7 @@ tasks:
       # after a 41-minute roll (F1). `task -x` hands back the script's own exit code: without it the script's 3
       # ("differs") and 4 ("not there yet") both reach this shell as 201 ("task: Failed to run task ... exit status 3").
       - |
+        [ "{{.FLUX_ON}}" = 1 ] || exit 0
         ID="task -x cluster-identity-sync PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}"
         WRITE="task cluster-identity-sync PROVIDER={{.PROVIDER}} ROLE={{.ROLE}} APPLY=1"
         rc=0; $ID || rc=$?
@@ -1103,6 +1120,7 @@ tasks:
       # #408).
       # Same rule as above: written (APPROVE=auto, or "yes" at a terminal) or the run FAILS naming the command.
       - |
+        [ "{{.FLUX_ON}}" = 1 ] || exit 0
         AR="task -x cluster-apps-ref PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}"
         MOVE="task cluster-apps-ref PROVIDER={{.PROVIDER}} ROLE={{.ROLE}} APPLY=1"
         rc=0; $AR || rc=$?
