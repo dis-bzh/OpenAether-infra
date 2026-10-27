@@ -105,10 +105,10 @@ esac
 # is actually unproven, not about the whole script — the blanket warning
 # contradicted this file's own header and taught readers to ignore it.
 if [[ "$PROVIDER" == "ovh" && "$UPGRADE" -eq 0 ]]; then
-  # --cp-only was exercised live on OVH (2026-10-17, three control planes in 12 min); a worker replacement was not
-  # (the capacity gate refused on two workers).
-  echo "⚠ ovh: only the control-plane REPLACEMENT has been exercised on a live cluster, not the" >&2
-  echo "  worker replacement — run --dry-run first and review the targets." >&2
+  # --cp-only was exercised live on OVH (2026-10-17, three control planes in 12 min); a worker replacement stopped at its destroy
+  # guard in lab 27 part B (F-OVHREPL: the Octavia members follow the new address) and was finished by hand; the fix is offline.
+  echo "⚠ ovh: the control-plane REPLACEMENT has been exercised on a live cluster; the worker replacement stopped at" >&2
+  echo "  its destroy guard in lab 27 and has not run since the fix (docs/resilience.md) — run --dry-run first and review the targets." >&2
 elif [[ "$PROVIDER" != "scaleway" && "$UPGRADE" -eq 0 ]]; then
   echo "⚠ ${PROVIDER}: the node-REPLACEMENT path has never been exercised on a live" >&2
   echo "  cluster (only --upgrade has) — run --dry-run first and review the targets." >&2

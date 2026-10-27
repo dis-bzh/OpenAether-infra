@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Wait until the Talos API ANSWERS on the given endpoint.
 # Usage: ENDPOINT=<host[:port]> [NODE=<ip>] [MAX_WAIT_SECONDS=900] ./wait-talos-port.sh
+#   [RECOVER_PROVIDER=ovh RECOVER_NAME=<instance> RECOVER_AFTER=300 RECOVER_CMD=<path of node-provider.py>]
 #
 # Two ways to get this wrong, both met on 2026-08-12/13:
 #
@@ -34,7 +35,34 @@ NODE="${NODE:-$HOST}"
 # wrong security group...) must fail loudly within the apply's own 15m
 # timeout, not hang the whole `tofu apply`/CI job indefinitely.
 MAX_WAIT_SECONDS="${MAX_WAIT_SECONDS:-900}"
+POLL_SECONDS="${POLL_SECONDS:-5}"
 ELAPSED=0
+
+#  4. An instance the provider calls ACTIVE whose Talos never answers (OVH, infra #371, lab 27 part B: 2 of 12 creations, +5 to
+#     +11 minutes until `node-provider.py hard-reboot` released them in 28-30 s). With RECOVER_AFTER seconds set (OVH only, by the
+#     module), the guard asks the provider for that hard reboot itself, at most RECOVER_MAX times, RECOVER_AFTER seconds apart.
+#     The reboot of a node in maintenance mode loses nothing, and node-provider.py sends it only to a machine created less than
+#     RECOVER_YOUNGER seconds ago: this guard also runs when a tunnel is down on a cluster that has been serving for days, and
+#     it must never reboot those. A refusal or a failure is said and the wait goes on; it is never fatal on its own.
+RECOVER_AFTER="${RECOVER_AFTER:-0}"
+RECOVER_MAX="${RECOVER_MAX:-2}"
+RECOVER_YOUNGER="${RECOVER_YOUNGER:-3600}"
+RECOVER_PROVIDER="${RECOVER_PROVIDER:-}"
+RECOVER_NAME="${RECOVER_NAME:-}"
+RECOVER_CMD="${RECOVER_CMD:-}"
+recovered=0
+next_recover="$RECOVER_AFTER"
+
+recover() {
+  recovered=$((recovered + 1)); next_recover=$((ELAPSED + RECOVER_AFTER))
+  echo "  ${ELAPSED}s without an answer: asking ${RECOVER_PROVIDER} for a hard reboot of ${RECOVER_NAME} (${recovered}/${RECOVER_MAX}, infra #371)"
+  local out
+  if out="$("$RECOVER_CMD" hard-reboot "$RECOVER_PROVIDER" --name "$RECOVER_NAME" --ip "$NODE" --younger-than "$RECOVER_YOUNGER" 2>&1)"; then
+    echo "  hard reboot requested: ${out}"
+  else
+    echo "  hard reboot NOT done (the wait goes on): ${out}"
+  fi
+}
 
 #  3. `talosctl` WITHOUT A TALOSCONFIG. The local-exec passes ENDPOINT and NODE
 #     and nothing else, so talosctl fails with "failed to resolve configuration
@@ -75,8 +103,12 @@ until probe; do
     echo "✗ ${ENDPOINT} still not answering after ${MAX_WAIT_SECONDS}s — giving up." >&2
     exit 1
   fi
-  echo "  not ready, retrying in 5s... (${ELAPSED}/${MAX_WAIT_SECONDS}s)"
-  sleep 5
-  ELAPSED=$((ELAPSED + 5))
+  if [[ "$RECOVER_AFTER" -gt 0 && -n "$RECOVER_PROVIDER" && -n "$RECOVER_NAME" && -n "$RECOVER_CMD" \
+        && "$recovered" -lt "$RECOVER_MAX" && "$ELAPSED" -ge "$next_recover" ]]; then
+    recover
+  fi
+  echo "  not ready, retrying in ${POLL_SECONDS}s... (${ELAPSED}/${MAX_WAIT_SECONDS}s)"
+  sleep "$POLL_SECONDS"
+  ELAPSED=$((ELAPSED + POLL_SECONDS))
 done
 echo "Talos API answering on ${ENDPOINT}"

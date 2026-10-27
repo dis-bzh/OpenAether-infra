@@ -84,7 +84,7 @@ script ne vérifie IP, LB ni security groups.
 
 ## Le cluster peut-il perdre un worker, et être déroulé ? (infra #378)
 
-`cluster-roll` refuse de démarrer quand les requêtes CPU de tous les workers, chacune en pourcentage de son propre nœud, dépassent
+`cluster-roll` refuse de démarrer quand les requêtes CPU (et, depuis le labo 27 partie B, F-SHRINKMEM, les requêtes mémoire : `worker_memory_requests`, la même borne ; `cluster-shrink-plan` aussi) de tous les workers, chacune en pourcentage de son propre nœud, dépassent
 (workers - 1) x 100 % : la charge demandée d'un nœud doit tenir sur les autres (`worker_cpu_requests` / `preflight_roll`,
 `scripts/lib/roll-gates.sh`). **Mesuré** au lab 16, pile applicative complète, cluster de management, requêtes en % du CPU allouable d'un worker :
 

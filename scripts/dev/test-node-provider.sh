@@ -62,6 +62,26 @@ scn "$(ovh other ACTIVE)"
 scn "$(ovh c-worker-0 ACTIVE)"
 NP hard-reboot ovh --name c-worker-0 >/dev/null; rc=$?
 [ "$rc" -eq 0 ] && grep -q '/servers/s-1/action {"reboot": {"type": "HARD"}}' "$TMP/log" && ok_ "hard-reboot sends a HARD reboot to the right server" || bad "hard-reboot did not post a HARD reboot (rc=$rc: $(cat "$TMP/log"))"
+# --younger-than (infra #371, D6/D11 of lab 27 part B): the automatic reboot of a node that never answered at creation must not reach a
+# machine that has been serving: only a RUNNING machine created less than N seconds ago.
+fresh="$(date -u -d '2 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"; old="$(date -u -d '3 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
+ovhc() { printf '{"ovh":[{"id":"s-1","name":"c-cp-2","status":"%s","created":"%s","addresses":{}}]}' "$1" "$2"; }
+scn "$(ovhc ACTIVE "$fresh")"
+NP hard-reboot ovh --name c-cp-2 --younger-than 1800 >/dev/null; rc=$?
+[ "$rc" -eq 0 ] && grep -q '/servers/s-1/action {"reboot": {"type": "HARD"}}' "$TMP/log" \
+  && ok_ "--younger-than: a running machine created 2 minutes ago is rebooted" || bad "a fresh machine was not rebooted (rc=$rc: $(cat "$TMP/log"))"
+scn "$(ovhc ACTIVE "$old")"
+NP hard-reboot ovh --name c-cp-2 --younger-than 1800 >"$TMP/out" 2>/dev/null; rc=$?
+[ "$rc" -eq 3 ] && ! grep -q action "$TMP/log" && grep -q 'created less than 1800 s ago' "$TMP/out" \
+  && ok_ "--younger-than: a machine created 3 hours ago is NOT rebooted (rc 3, says why)" || bad "an old machine was rebooted or the refusal is silent (rc=$rc: $(cat "$TMP/log") $(cat "$TMP/out"))"
+scn "$(ovhc SHUTOFF "$fresh")"
+NP hard-reboot ovh --name c-cp-2 --younger-than 1800 >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 3 ] && ! grep -q action "$TMP/log" && ok_ "--younger-than: a machine that is not running is not rebooted" || bad "a stopped machine was rebooted (rc=$rc)"
+scn '{"ovh":[{"id":"s-1","name":"c-cp-2","status":"ACTIVE","addresses":{}}]}'
+NP hard-reboot ovh --name c-cp-2 --younger-than 1800 >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 3 ] && ! grep -q action "$TMP/log" && ok_ "--younger-than: a listing without a creation date refuses (an unknown age is not young)" || bad "an undated machine was rebooted (rc=$rc)"
+NP hard-reboot scaleway --name c-cp-2 --younger-than 1800 >/dev/null 2>&1; rc=$?
+[ "$rc" -ne 0 ] && ok_ "--younger-than is refused outside OVH, where it is not implemented" || bad "--younger-than was accepted for scaleway"
 scn '{"ovh":[]}'
 NP hard-reboot ovh --name c-worker-0 >/dev/null 2>&1; rc=$?
 [ "$rc" -eq 3 ] && ! grep -q action "$TMP/log" && ok_ "no hard reboot is sent for a machine that does not exist (rc 3)" || bad "hard-reboot on an absent machine: rc=$rc log=$(cat "$TMP/log")"

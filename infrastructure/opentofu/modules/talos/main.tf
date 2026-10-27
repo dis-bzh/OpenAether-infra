@@ -715,6 +715,11 @@ resource "terraform_data" "talos_port_ready_cp" {
     environment = {
       ENDPOINT = local.cp_endpoints[count.index]
       NODE     = var.control_plane_ips[count.index]
+      # An ACTIVE instance whose Talos never answers (OVH, infra #371): the guard asks for the hard reboot itself. Off unless set.
+      RECOVER_PROVIDER = var.port_ready_recovery.provider
+      RECOVER_AFTER    = tostring(var.port_ready_recovery.after_seconds)
+      RECOVER_NAME     = "${var.cluster_name}-cp-${count.index}"
+      RECOVER_CMD      = abspath("${path.module}/../../../../scripts/ops/node-provider.py")
     }
   }
 }
@@ -730,6 +735,11 @@ resource "terraform_data" "talos_port_ready_worker" {
     environment = {
       ENDPOINT = local.worker_endpoints[count.index]
       NODE     = var.worker_ips[count.index]
+      # An ACTIVE instance whose Talos never answers (OVH, infra #371): the guard asks for the hard reboot itself. Off unless set.
+      RECOVER_PROVIDER = var.port_ready_recovery.provider
+      RECOVER_AFTER    = tostring(var.port_ready_recovery.after_seconds)
+      RECOVER_NAME     = "${var.cluster_name}-worker-${count.index}"
+      RECOVER_CMD      = abspath("${path.module}/../../../../scripts/ops/node-provider.py")
     }
   }
 }

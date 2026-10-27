@@ -19,6 +19,8 @@ Prints one JSON object on stdout. Exit 0 when the provider answered, 2 for a mis
 The credentials are the ones `source .env.sh` already exports for the provider; this script never prints them.
 Scaleway and Outscale are written from their API documentation and have not been run against a real account (UNVERIFIED);
 OVH (OpenStack) follows purge-orphans/ovh.py.
+--younger-than (OVH only) sends the reboot only to a machine the provider created less than SECONDS ago and runs: the automatic use
+(the Talos port guard of `tofu apply`, infra #371) must never reboot a node of a running cluster because a tunnel is down.
 `OA_PROVIDER_TEST_BASE` points all three at a local fake for the offline tests and allows plain http there only.
 """
 import datetime
@@ -95,12 +97,30 @@ def ovh_find(ep, hdr, name, ip):
     return None
 
 
-def ovh(action, name, ip):
+def ovh_age(s):
+    """Seconds since the server was created, or None when the listing gives no readable date."""
+    try:
+        t = datetime.datetime.strptime(s["created"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+    except (KeyError, TypeError, ValueError):
+        return None
+    return (datetime.datetime.now(datetime.timezone.utc) - t).total_seconds()
+
+
+def ovh(action, name, ip, younger=None):
     ep, hdr = ovh_connect()
     s = ovh_find(ep, hdr, name, ip)
     if s is None:
         return {"provider": "ovh", "state": "absent", "raw": "no server named %s" % name}
     out = {"provider": "ovh", "id": s["id"], "raw": s["status"], "state": OVH_STATE.get(s["status"], "unknown")}
+    if action == "hard-reboot" and younger is not None:
+        # An unreadable date refuses too: the guard exists to keep this off a node that has been serving for a while.
+        age = ovh_age(s)
+        if out["state"] != "running" or age is None or age > younger:
+            out["requested"] = "HARD reboot"
+            out["accepted"] = False
+            out["refused"] = "only a running machine created less than %d s ago (state %s, age %s)" % (
+                younger, out["state"], "unknown" if age is None else "%d s" % age)
+            return out
     if action == "hard-reboot":
         st, _, _ = http("POST", "%s/servers/%s/action" % (ep, s["id"]), {"reboot": {"type": "HARD"}}, hdr)
         out["requested"] = "HARD reboot"
@@ -193,17 +213,22 @@ def main():
         sys.exit(__doc__)
     action, provider, args = sys.argv[1], sys.argv[2], sys.argv[3:]
     name = ip = ""
+    younger = None
     while args:
         a = args.pop(0)
         if a == "--name" and args:
             name = args.pop(0)
         elif a == "--ip" and args:
             ip = args.pop(0)
+        elif a == "--younger-than" and args and args[0].isdigit():
+            younger = int(args.pop(0))
         else:
             sys.exit("unknown argument: %s" % a)
     if not name and not ip:
         sys.exit("--name or --ip is required")
-    out = {"ovh": ovh, "scaleway": scw, "outscale": osc}[provider](action, name, ip)
+    if younger is not None and (action != "hard-reboot" or provider != "ovh"):
+        sys.exit("--younger-than is implemented for hard-reboot on ovh only")
+    out = ovh(action, name, ip, younger) if provider == "ovh" else {"scaleway": scw, "outscale": osc}[provider](action, name, ip)
     print(json.dumps(out))
     if action == "hard-reboot" and (out["state"] in ("absent", "unknown") or not out.get("accepted")):
         sys.exit(3)

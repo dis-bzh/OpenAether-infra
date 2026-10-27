@@ -456,6 +456,7 @@ tasks:
       - ./scripts/dev/test-rwx-drain-gate.sh
       - ./scripts/dev/test-roll-apiserver-gate.sh
       - ./scripts/dev/test-node-provider.sh
+      - ./scripts/dev/test-wait-talos-port.sh
       - ./scripts/dev/test-node-recovery.sh
       # The volumes a replaced disk leaves behind: which are dropped, which are refused, against a fake kubectl.
       - ./scripts/dev/test-replaced-node-cleanup.sh

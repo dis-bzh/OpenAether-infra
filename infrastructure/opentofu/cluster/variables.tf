@@ -226,6 +226,21 @@ variable "skip_port_ready_wait" {
   default     = false
 }
 
+variable "port_ready_hard_reboot_after_seconds" {
+  description = <<-EOT
+    OVH only. A new instance that the provider calls ACTIVE but whose Talos API never answers (infra #371; 2 of 12 creations in
+    lab 27 part B, +5 to +11 minutes each) is hard-rebooted through the provider API after this many seconds of waiting, at most
+    twice, and only while it is less than an hour old (scripts/ops/node-provider.py hard-reboot --younger-than). 0 turns it off.
+    120 to 600. A reboot of a node in maintenance mode loses nothing; the same call was the manual fix (28 to 30 s).
+  EOT
+  type        = number
+  default     = 300
+  validation {
+    condition     = var.port_ready_hard_reboot_after_seconds == 0 || (var.port_ready_hard_reboot_after_seconds >= 120 && var.port_ready_hard_reboot_after_seconds <= 600)
+    error_message = "port_ready_hard_reboot_after_seconds must be 0 (off) or 120 to 600."
+  }
+}
+
 variable "secrets_prevent_destroy" {
   description = <<-EOT
     Protect module.talos's talos_machine_secrets (the cluster's root-of-trust

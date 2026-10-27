@@ -689,6 +689,10 @@ module "talos" {
 
   skip_port_ready_wait    = var.skip_port_ready_wait
   secrets_prevent_destroy = var.secrets_prevent_destroy
+  port_ready_recovery = {
+    provider      = contains(local.active_providers, "ovh") ? "ovh" : ""
+    after_seconds = var.port_ready_hard_reboot_after_seconds
+  }
 
   # The health data source's Kubernetes-level checks connect to the cluster
   # endpoint directly. In managed mode that's a public LB (reachable, so keep

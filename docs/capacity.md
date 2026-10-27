@@ -82,7 +82,7 @@ Also against the examples:
 
 ## Can the cluster lose a worker, and be rolled? (infra #378)
 
-`cluster-roll` refuses to start when the CPU requests of all workers, each as a percentage of its own node, add up to more than
+`cluster-roll` refuses to start when the CPU requests (and, since lab 27 part B, F-SHRINKMEM, the memory requests: `worker_memory_requests`, the same bound; `cluster-shrink-plan` too) of all workers, each as a percentage of its own node, add up to more than
 (workers - 1) x 100%: one node's worth of requests must fit on the others (`worker_cpu_requests` / `preflight_roll`,
 `scripts/lib/roll-gates.sh`). **Measured** in lab 16 with the full application stack on a management cluster, requests as % of a
 worker's allocatable CPU:
