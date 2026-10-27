@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# modules/talos/scripts/wait-talos-port.sh, the guard that waits for a new node's Talos API, and its OVH recovery (lab 27 part B, D6/D11,
+# infrastructure/opentofu/modules/talos/scripts/wait-talos-port.sh, the guard that waits for a new node's Talos API, and its OVH recovery (lab 27 part B, D6/D11,
 # infra #371): after RECOVER_AFTER seconds without an answer it asks the provider for a hard reboot, at most RECOVER_MAX times, never when
 # it is off, never fatal on its own, and never when the node answers at once. A fake listener and a fake openssl stand for a live Talos,
 # a fake node-provider for the cloud: no network, no credential.
