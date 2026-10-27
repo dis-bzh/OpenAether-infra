@@ -102,3 +102,22 @@ resource "outscale_load_balancer_vms" "app" {
   load_balancer_name = outscale_load_balancer.app[0].load_balancer_name
   backend_vm_ids     = outscale_vm.worker[*].vm_id
 }
+
+# The app LB health check. Without this resource the LB keeps the provider default (check_interval 30 s, healthy_threshold
+# 10, see the k8s LB above): a dead worker stays in rotation for minutes. One check per LB, not per listener: it probes the
+# http NodePort, which the same Gateway Service answers on every node that is up, https included. Ranges (provider docs):
+# check_interval 5-600, timeout 2-60, thresholds 2-10. 5 s x 2 plus the 3 s timeout takes a dead member out in about 13 s.
+# UNVERIFIED on a real partition (docs/resilience.md). The k8s LB check above is another object and is not changed here.
+resource "outscale_load_balancer_attributes" "app" {
+  count              = var.deploy_app_lb ? 1 : 0
+  load_balancer_name = outscale_load_balancer.app[0].load_balancer_name
+
+  health_check {
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+    check_interval      = 5
+    timeout             = 3
+    port                = var.app_lb_node_ports.http
+    protocol            = "TCP"
+  }
+}

@@ -74,3 +74,19 @@ output "app_lb_acls" {
     ]
   }
 }
+
+# Test-only: the health check the app LB backends carry (a test cannot read a child module's resources); null = no app LB.
+output "app_lb_health_checks" {
+  description = "Health check of the app LB http and https backends, for tests (null = no app LB)"
+  value = {
+    for k, b in { http = scaleway_lb_backend.http, https = scaleway_lb_backend.https } : k => one([
+      for x in b : {
+        delay       = x.health_check_delay
+        timeout     = x.health_check_timeout
+        max_retries = x.health_check_max_retries
+        port        = x.health_check_port
+        tcp         = length(x.health_check_tcp) > 0
+      }
+    ])
+  }
+}

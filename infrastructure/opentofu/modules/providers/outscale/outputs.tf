@@ -102,3 +102,18 @@ output "inter_node_rules" {
     ])
   }
 }
+
+# Test-only: the health check of the app LB; null = no app LB.
+output "app_lb_health_check" {
+  description = "Health check of the app LB, for tests (null = no app LB)"
+  value = one([
+    for a in outscale_load_balancer_attributes.app : {
+      check_interval      = a.health_check[0].check_interval
+      timeout             = a.health_check[0].timeout
+      healthy_threshold   = a.health_check[0].healthy_threshold
+      unhealthy_threshold = a.health_check[0].unhealthy_threshold
+      port                = a.health_check[0].port
+      protocol            = a.health_check[0].protocol
+    }
+  ])
+}

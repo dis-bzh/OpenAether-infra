@@ -379,3 +379,101 @@ run "outscale_rules_admit_the_list_and_the_nat" {
     error_message = "Outscale: ports 80 and 443 must admit the caller list and the cluster's NAT address, nothing else."
   }
 }
+
+# --- App LB health checks (lab 27 sitting 3) ---
+# Scaleway's backend defaults (delay 60 s, timeout 30 s) kept a black-holed worker in rotation: 41 of 327 probes failed,
+# longest run 14 s. The check must be explicit and short on every provider. Mocked rung: this proves what is PLANNED.
+
+run "scw_app_backends_carry_an_explicit_short_tcp_check" {
+  command = plan
+
+  assert {
+    condition = alltrue([for k in ["http", "https"] :
+      module.scw[0].app_lb_health_checks[k].tcp
+      && module.scw[0].app_lb_health_checks[k].delay == "5s"
+      && module.scw[0].app_lb_health_checks[k].timeout == "3s"
+      && module.scw[0].app_lb_health_checks[k].max_retries == 2
+    ])
+    error_message = "Scaleway: both app LB backends need an explicit TCP check (5s / 3s / 2 retries), not the provider default (60s / 30s)."
+  }
+}
+
+run "scw_app_check_probes_the_forward_port" {
+  command = plan
+
+  variables {
+    app_lb_node_ports = { http = 30080, https = 30443 }
+  }
+
+  assert {
+    condition     = module.scw[0].app_lb_health_checks.http.port == 30080 && module.scw[0].app_lb_health_checks.https.port == 30443
+    error_message = "Scaleway: each backend's check must probe its own NodePort."
+  }
+}
+
+run "scw_no_app_lb_no_check" {
+  command = plan
+
+  variables {
+    deploy_app_lb = false
+  }
+
+  assert {
+    condition     = module.scw[0].app_lb_health_checks.http == null && module.scw[0].app_lb_health_checks.https == null
+    error_message = "Scaleway: without deploy_app_lb there is no backend, hence no check."
+  }
+}
+
+run "outscale_app_lb_has_a_short_tcp_check" {
+  command = plan
+
+  variables {
+    node_distribution = {
+      outscale = {
+        control_planes     = 3
+        workers            = 1
+        region             = "eu-west-2"
+        instance_type      = "tinav5.c2r4p1"
+        image_id           = "dummy-talos-osc-image"
+        availability_zones = ["eu-west-2a", "eu-west-2b", "eu-west-2c"]
+        bastion_image_id   = "ami-ubuntu-2204-mock"
+      }
+    }
+  }
+
+  assert {
+    condition = (
+      module.outscale[0].app_lb_health_check != null
+      && module.outscale[0].app_lb_health_check.protocol == "TCP"
+      && module.outscale[0].app_lb_health_check.check_interval == 5
+      && module.outscale[0].app_lb_health_check.timeout == 3
+      && module.outscale[0].app_lb_health_check.unhealthy_threshold == 2
+      && module.outscale[0].app_lb_health_check.healthy_threshold == 2
+    )
+    error_message = "Outscale: the app LB needs its own health check (5 s / 3 s / 2 / 2), the default (30 s interval, healthy threshold 10) leaves a dead worker in rotation for minutes."
+  }
+}
+
+run "outscale_no_app_lb_no_check" {
+  command = plan
+
+  variables {
+    deploy_app_lb = false
+    node_distribution = {
+      outscale = {
+        control_planes     = 3
+        workers            = 1
+        region             = "eu-west-2"
+        instance_type      = "tinav5.c2r4p1"
+        image_id           = "dummy-talos-osc-image"
+        availability_zones = ["eu-west-2a", "eu-west-2b", "eu-west-2c"]
+        bastion_image_id   = "ami-ubuntu-2204-mock"
+      }
+    }
+  }
+
+  assert {
+    condition     = module.outscale[0].app_lb_health_check == null
+    error_message = "Outscale: without deploy_app_lb there is no check."
+  }
+}
