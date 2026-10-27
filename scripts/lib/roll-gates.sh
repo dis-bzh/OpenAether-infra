@@ -664,17 +664,21 @@ wait_pdb_headroom() { # <node_name>
   read -rp "Drain ${node} anyway? [y/N] " a; [[ "$a" == [yY] ]] || die "aborted by operator"
 }
 
-# Every worker's CPU requests, "<node> <percent>" per line, out of the Allocated
+# Every worker's requests of one resource (cpu or memory), "<node> <percent>" per line, out of the Allocated
 # resources table `kubectl describe node` prints. The percentage is of that
 # node's OWN allocatable, so the sum below only means anything while the workers
 # share a flavour — which is how every provider module here builds them.
 # Non-zero return = the description failed; no worker is a different answer.
-worker_cpu_requests() {
+worker_requests() { # <cpu|memory>
   local out
   out="$("${KCTL[@]}" describe nodes -l '!node-role.kubernetes.io/control-plane' 2>/dev/null)" || return 1
-  awk '/^Name:/            { n = $2 }
-       /^  cpu +[0-9]/     { p = $3; gsub(/[()%]/, "", p); print n, p }' <<<"$out"
+  awk -v r="$1" '/^Name:/ { n = $2 }
+       $0 ~ ("^  " r " +[0-9]") { p = $3; gsub(/[()%]/, "", p); print n, p }' <<<"$out"
 }
+worker_cpu_requests() { worker_requests cpu; }
+# Memory is the second half of the question: three 8 GB workers took the CPU of a fourth and not its memory, and the evacuated
+# pods stayed Pending ("Insufficient memory") after a shrink the CPU check had passed (lab 27 part B, F-SHRINKMEM).
+worker_memory_requests() { worker_requests memory; }
 
 # ==============================================================================
 # Pre-roll survey — everything knowable before the first node is touched
@@ -690,7 +694,7 @@ worker_cpu_requests() {
 # surveying earlier would report `<cluster>-primary` at zero and refuse a roll
 # that is fine.
 preflight_roll() {
-  local fatal=0 cap nodes=0 total=0 room node pct short ns name state sel pending
+  local fatal=0 cap nodes=0 total=0 room node pct short ns name state sel pending mnodes mtotal
   hr
   info "Pre-roll survey: capacity, budgets, databases — all of it, once."
 
@@ -730,6 +734,28 @@ preflight_roll() {
       fi
     else
       ok "capacity: ${total}% requested, ${room}% available without one worker"
+    fi
+    # Memory, the same bound. Not asked of a lone worker (said above), and a table without memory lines is said, not fatal: a
+    # description that answered CPU answers memory too, and refusing a roll over a missing line would be a guess.
+    if [[ $nodes -gt 1 ]]; then
+      mnodes=0; mtotal=0
+      while read -r node pct; do
+        [[ -n "$node" && "$pct" =~ ^[0-9]+$ ]] || continue
+        info "  ${node}: ${pct}% of memory requested"
+        mnodes=$((mnodes + 1)); mtotal=$((mtotal + pct))
+      done < <(worker_memory_requests)
+      if [[ $mnodes -eq 0 ]]; then
+        warn "capacity: the workers report no memory requests - only the CPU was checked."
+      elif [[ $mtotal -gt $(( (mnodes - 1) * 100 )) ]]; then
+        warn "capacity: the ${mnodes} workers request ${mtotal}% of memory, and any ${mnodes} minus one of them hold $(( (mnodes - 1) * 100 ))%: the pods of the node drained stay Pending (Insufficient memory)."
+        if [[ "${SCOPE:-all}" == cp ]]; then
+          warn "capacity: not fatal for --cp-only, for the reason given for the CPU above."
+        else
+          fatal=1
+        fi
+      else
+        ok "capacity: ${mtotal}% of memory requested, $(( (mnodes - 1) * 100 ))% available without one worker"
+      fi
     fi
   fi
 
@@ -837,7 +863,7 @@ wait_rwx_clear() { # <node_name>
 # only printed: the CPU requests, because the pods of the dead node are already Pending somewhere or nowhere, and the
 # replacement is what gives them room back.
 dead_node_survey() { # <cp|worker> <index> <node_name>
-  local t="$1" idx="$2" node="$3" fatal=0 raw others k ep ip healthy=0 need cap name pct total=0 nodes=0
+  local t="$1" idx="$2" node="$3" fatal=0 raw others k ep ip healthy=0 need cap name pct total=0 nodes=0 mnodes mtotal
   hr
   info "Survey before replacing the dead node ${node}: the survivors, once."
   if ! raw="$("${KCTL[@]}" get nodes --no-headers 2>/dev/null)" || [[ -z "$raw" ]]; then
@@ -873,6 +899,14 @@ dead_node_survey() { # <cp|worker> <index> <node_name>
     if (( nodes > 1 && total > (nodes - 1) * 100 )); then
       warn "capacity: the ${nodes} workers request ${total}% and ${nodes} minus one hold $(( (nodes - 1) * 100 ))%: pods of the dead node stay Pending until its replacement is Ready (docs/capacity.md)."
     fi
+  fi
+  mnodes=0; mtotal=0
+  while read -r name pct; do
+    [[ "$pct" =~ ^[0-9]+$ ]] || continue
+    mnodes=$((mnodes + 1)); mtotal=$((mtotal + pct))
+  done < <(worker_memory_requests 2>/dev/null)
+  if (( mnodes > 1 && mtotal > (mnodes - 1) * 100 )); then
+    warn "capacity: the ${mnodes} workers request ${mtotal}% of memory and ${mnodes} minus one hold $(( (mnodes - 1) * 100 ))%: pods of the dead node stay Pending (Insufficient memory) until its replacement is Ready (docs/capacity.md)."
   fi
   (( fatal == 0 )) || die "the survey found blocking conditions, listed above. Nothing was changed."
   ok "Survey clean - ${node} is the only node down"
@@ -1296,6 +1330,37 @@ node_targets() { # <tf_t> <index>
     t == "worker" && $0 ~ ("\\.worker_data\\[\"w" i "-d[0-9]+\"\\]$") \
       && $0 !~ /(scaleway_block_volume|openstack_blockstorage_volume_v3|outscale_volume)\./ { print }
   '
+}
+
+# The load balancer members that carry a worker's ADDRESS, for the providers that build them from the instance (OVH: the
+# Octavia members http[i] and https[i], address = the instance's access_ip_v4). A replaced instance gets a new private address
+# there, and a member's address cannot change in place, so the members are replaced with the node: two more resources in the
+# config plan (lab 27 part B, F-OVHREPL: "destroys 4 resources (at most 2 expected)"). Other providers attach by instance id or
+# keep the address, and have none. A control plane's members hang on its port, which a replacement keeps.
+node_lb_members() { # <tf_t> <index>
+  [[ "$1" == worker ]] || return 0
+  tofu state list 2>/dev/null | grep -F "module.${MOD}[0]." | awk -v i="$2" '
+    $0 ~ ("\\.openstack_lb_member_v2\\.(http|https)\\[" i "\\]$") { print }
+  '
+}
+
+# The address the state holds for a node's instance after an apply of it; empty when that provider's instance resource has no
+# access_ip_v4 (every provider but OpenStack), which reads as "the address did not move".
+instance_address() { # <state address of the instance>
+  tofu state show -no-color "$1" 2>/dev/null \
+    | sed -nE 's/^[[:space:]]*access_ip_v4[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' | head -1
+}
+
+# A targeted apply leaves the ROOT outputs stale, and the tunnel script and the next plan's node address read them (the shrink does
+# the same, shrink-nodes.sh refresh_outputs). A refresh-only apply writes them from what the provider reports and changes nothing.
+refresh_state_outputs() { # needs TFVARS
+  local d pf rc=0
+  d="$(mktemp -d)"; pf="${d}/refresh.tfplan"
+  if tofu plan -refresh-only -out="$pf" -input=false -no-color -var-file="$TFVARS" -var talos_bootstrap=true \
+       -var skip_health_check=true >/dev/null 2>&1; then
+    tofu apply "$pf" >/dev/null 2>&1 || rc=1
+  else rc=1; fi
+  rm -rf "$d"; return "$rc"
 }
 
 # How many of these state addresses tofu holds as TAINTED: a create that failed halfway, e.g. a provider out of stock for the

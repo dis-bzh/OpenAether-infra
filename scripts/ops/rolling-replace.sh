@@ -309,6 +309,13 @@ replace_node() { # <type: cp|worker> <index>
   if [[ -n "$guard_addr" ]]; then
     cfg_targets+=(-target="$guard_addr" -replace="$guard_addr"); cfg_max=2
   fi
+  # OVH: the load balancer members of a worker follow its new address, so the config plan replaces them too (F-OVHREPL). Named in the
+  # targets so the apply does it deterministically, and counted in the destroy bound as exactly what they are.
+  local lb_member
+  while IFS= read -r lb_member; do
+    [[ -n "$lb_member" ]] || continue
+    cfg_targets+=(-target="$lb_member"); cfg_max=$((cfg_max + 1))
+  done < <(node_lb_members "$tf_t" "$i")
 
   hr
   info "Node ${node_name}  (ip ${node_ip}, talos ${ep})"
@@ -505,6 +512,20 @@ replace_node() { # <type: cp|worker> <index>
   saved_plan_apply "${node_name}-instance" "$t" "$i" "${#infra_targets[@]}" \
     "tofu apply (instance) failed for ${node_name} — cluster left with ${node_name} cordoned; investigate before retrying" \
     apply "${infra_targets[@]}" -replace="$inst_addr"
+
+  # The address of an OVH worker follows its instance, and the tunnel to its Talos API, the port check of the config apply and the
+  # identity every talosctl call below names were all made for the OLD one (lab 27, F-OVHREPL: 4 min 50 s on a tunnel to a
+  # machine that was gone). Read the new one from the state the apply just wrote, refresh the outputs, open the tunnels again.
+  local new_ip
+  new_ip="$(instance_address "$inst_addr")"
+  if [[ -n "$new_ip" && "$new_ip" != "$node_ip" ]]; then
+    info "${node_name} came back on ${new_ip}, not ${node_ip}: refreshing the outputs and the Talos tunnels before its config…"
+    refresh_state_outputs || die "could not refresh the outputs after the new address of ${node_name} — the VM exists but is unconfigured; re-run to resume"
+    "$(dirname "${BASH_SOURCE[0]}")/../bootstrap/talos-tunnels.sh" open . \
+      || die "could not reopen the Talos tunnels — the VM exists but is unconfigured; run task tunnels-up, then re-run to resume"
+    node_ip="$new_ip"
+    if [[ "$t" == worker ]]; then WK_IPS[i]="$new_ip"; fi
+  fi
 
   info "tofu 2/2 — wait for the new node, then apply its Talos config…"
   saved_plan_apply "${node_name}-config" "$t" "$i" "$cfg_max" \

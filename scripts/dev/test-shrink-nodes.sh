@@ -315,6 +315,13 @@ refuses "an apiserver error on the Longhorn CRD is not read as 'Longhorn is not 
 setup; printf 'Name: oa-lab-worker-0\n  cpu                1 (90%%)\nName: oa-lab-worker-1\n  cpu                1 (80%%)\n' >"$ST/describe.txt"
 printf '%s' "$WPLAN" >"$ST/plan.scope.json"; run scaleway --plan
 refuses "workers whose CPU requests the remaining ones cannot hold are refused" 'request 170%'
+# F-SHRINKMEM (lab 27 part B): the CPU fits, the memory does not - the evacuated pods would stay Pending.
+setup; printf 'Name: oa-lab-worker-0\n  cpu                1 (25%%)\n  memory             6Gi (80%%)\nName: oa-lab-worker-1\n  cpu                1 (20%%)\n  memory             6Gi (75%%)\n' >"$ST/describe.txt"
+printf '%s' "$WPLAN" >"$ST/plan.scope.json"; run scaleway --plan
+refuses "workers whose MEMORY requests the remaining ones cannot hold are refused, though the CPU fits" "request 155% of one worker's memory"
+setup; printf 'Name: oa-lab-worker-0\n  cpu                1 (25%%)\n  memory             6Gi (40%%)\nName: oa-lab-worker-1\n  cpu                1 (20%%)\n  memory             6Gi (35%%)\n' >"$ST/describe.txt"
+printf '%s' "$WPLAN" >"$ST/plan.scope.json"; run scaleway --plan
+{ [ "$RC" = 0 ] && [ -f "$SCOPE_F" ]; } && ok "…and memory that fits does not change the verdict" || bad "memory that fits was refused (rc ${RC}): ${OUT}"
 setup; nodes_json oa-lab-cp-0 10.0.0.10 oa-lab-cp-1 10.0.0.11 oa-lab-cp-2 10.0.0.12 oa-lab-worker-0 10.0.1.10 oa-lab-cp-9 10.0.1.11 >"$ST/nodes.json"
 printf '%s' "$WPLAN" >"$ST/plan.scope.json"; run scaleway --plan
 refuses "a node that carries the control-plane label (an EMPTY value, as Talos sets it) is not removed as a worker" 'not a worker node by its labels'

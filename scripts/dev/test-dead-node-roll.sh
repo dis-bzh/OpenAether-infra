@@ -45,7 +45,7 @@ info() { :; }; ok() { :; }; warn() { printf 'WARN:%s\n' "$*" >&2; }; hr() { :; }
 die() { printf '%s\n' "$*" >&2; exit 42; }
 # shellcheck disable=SC2034
 TUNNEL_OFFSET=0
-eval "$(extract 'talos_ep,worker_cpu_requests,dead_node_survey,cordon_dead,delete_dead_node_object')"
+eval "$(extract 'talos_ep,worker_requests,worker_cpu_requests,worker_memory_requests,dead_node_survey,cordon_dead,delete_dead_node_object')"
 
 survey() { (dead_node_survey "$@") >"$STUB/out" 2>&1; echo $?; }
 nodes() { printf '%b' "$1" >"$STUB_NODES"; }
@@ -57,6 +57,13 @@ nodes 'w0 NotReady <none>\nw1 NotReady <none>\nw2 Ready <none>\n'
 { [ "$(survey worker 0 w0)" = 42 ] && grep -q 'another node is not Ready: w1' "$STUB/out"; } && ok_ "a second node down is refused and named (one node at a time; a zone loss is another procedure)" || bad "second node down passed"
 nodes ''
 [ "$(survey worker 0 w0)" = 42 ] && ok_ "an unanswered API refuses to replace blind" || bad "empty node list passed"
+
+# Memory is only said: the pods of the dead node are Pending anyway, and the replacement gives them room (F-SHRINKMEM).
+printf 'Name: w1\n  cpu     1 (30%%)\n  memory  3Gi (90%%)\nName: w2\n  cpu     1 (30%%)\n  memory  3Gi (95%%)\n' >"$STUB/describe"
+nodes 'w0 NotReady <none>\nw1 Ready <none>\nw2 Ready <none>\n'
+{ [ "$(survey worker 0 w0)" = 0 ] && grep -q 'request 185% of memory' "$STUB/out"; } \
+  && ok_ "workers short of MEMORY (CPU fine) are warned about, and the replacement still goes ahead" || bad "memory not said, or refused: $(cat "$STUB/out")"
+: >"$STUB/describe"
 
 printf '%s\n' 50001 50002 >"$STUB/healthy"; nodes 'cp0 NotReady control-plane\ncp1 Ready control-plane\ncp2 Ready control-plane\n'
 [ "$(survey cp 0 cp0)" = 0 ] && ok_ "a control plane: two healthy etcd members of three is a quorum" || bad "refused with a quorum: $(cat "$STUB/out")"

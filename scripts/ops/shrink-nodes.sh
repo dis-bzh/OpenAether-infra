@@ -226,7 +226,7 @@ longhorn_room() { # <node>...
 
 SC_NODES=()
 survey_removal() { # read-only: refuse before any mutation. Tolerates a resumed run: a node already gone, an etcd already left.
-  local nj i ip node pvs lh cap pct w nodes=0 total=0 leaving=0 notready peer pep pip mt m want tip skip
+  local nj i ip node pvs lh cap mem pct w nodes=0 total=0 leaving=0 notready peer pep pip mt m want tip skip
   nj="$("${KCTL[@]}" get nodes -o json 2>"$D/k.err")" || die "kubectl cannot reach the API ($(tail -n 1 "$D/k.err"))"
   SC_NODES=()
   for i in "${SC_IDX[@]}"; do
@@ -278,6 +278,15 @@ $(sed 's/^/    /' <<<"$lh")
     done <<<"$cap"
     (( nodes - leaving >= 1 && total <= (nodes - leaving) * 100 )) \
       || die "the ${nodes} workers request ${total}% of one worker's CPU; the $((nodes - leaving)) that stay hold $(( (nodes - leaving) * 100 ))%. Add capacity or keep the node."
+    # And their memory: the CPU passed a shrink whose evacuated pods then stayed Pending for lack of it (lab 27 part B, F-SHRINKMEM).
+    mem="$(worker_memory_requests)" || die "the workers could not be described — refusing to remove blind."
+    nodes=0; total=0; leaving=0
+    while read -r w pct; do
+      [[ "$pct" =~ ^[0-9]+$ ]] || continue; nodes=$((nodes + 1)); total=$((total + pct))
+      printf '%s\n' "${SC_NODES[@]:-}" | grep -qxF "$w" && leaving=$((leaving + 1))
+    done <<<"$mem"
+    (( nodes == 0 || (nodes - leaving >= 1 && total <= (nodes - leaving) * 100) )) \
+      || die "the ${nodes} workers request ${total}% of one worker's memory; the $((nodes - leaving)) that stay hold $(( (nodes - leaving) * 100 ))%. Add capacity or keep the node."
   fi
   ok "the cluster can lose ${SC_CLASS} ${SC_IDX[*]}"
 }

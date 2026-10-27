@@ -1594,8 +1594,9 @@ tasks:
       - SSH_KEY="{{.KEY}}" ../../../scripts/bootstrap/talos-tunnels.sh open .
       # --role BEFORE CLI_ARGS: a role passed by the caller in `-- …` then wins,
       # which is the ordering every other flag here already has.
+      # SSH_KEY: a worker whose address follows its instance (OVH) needs the tunnels opened again mid-replacement.
       - >-
-        ../../../scripts/ops/rolling-replace.sh {{.PROVIDER}} --role={{.ROLE}}
+        SSH_KEY="{{.KEY}}" ../../../scripts/ops/rolling-replace.sh {{.PROVIDER}} --role={{.ROLE}}
         {{if eq .APPROVE "auto"}}--yes {{end}}{{.CLI_ARGS}}
       - task: _backup-state
         vars: {PROVIDER: "{{.PROVIDER}}"}
@@ -1672,7 +1673,7 @@ tasks:
       - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
       - SSH_KEY="{{.KEY}}" ../../../scripts/bootstrap/talos-tunnels.sh open .
       - >-
-        ../../../scripts/ops/node-recovery.sh replace {{.PROVIDER}} --node={{.NODE}} --role={{.ROLE}}
+        SSH_KEY="{{.KEY}}" ../../../scripts/ops/node-recovery.sh replace {{.PROVIDER}} --node={{.NODE}} --role={{.ROLE}}
         {{if eq .APPROVE "auto"}}--yes {{end}}{{.CLI_ARGS}}
       - task: _backup-state
         vars: {PROVIDER: "{{.PROVIDER}}"}
