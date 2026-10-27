@@ -196,6 +196,23 @@ pinned_pvs() { # <node>
     | "\(.metadata.name) (\(.spec.claimRef.namespace // "-")/\(.spec.claimRef.name // "-"))"'
 }
 
+# The commands that clear <node> of its node-local volumes, for the refusal below (docs/upgrade.md, "Evacuating a node before
+# a shrink"). One line per fact the guard reads: the claim (PVC) and the PersistentVolume, which a `Retain` class leaves behind
+# as `Released` and which keeps the node pinned until it is deleted too.
+evacuation_steps() { # <node> <pinned_pvs lines>
+  local node="$1" line pv claim ns pvc
+  echo "    kubectl cordon ${node}"
+  echo "    # a CNPG primary on it first: kubectl cnpg promote <cluster> <replica instance> -n <namespace>; a Raft member (OpenBao): bao operator raft remove-peer first"
+  echo "    # then, for the pod that uses each volume below: kubectl -n <namespace> delete pod <pod>   (CNPG and StatefulSets recreate it on another node)"
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    pv="${line%% (*}"; claim="${line#*(}"; claim="${claim%)}"; ns="${claim%%/*}"; pvc="${claim#*/}"
+    if [[ "$ns" != "-" && "$pvc" != "-" ]]; then echo "    kubectl -n ${ns} delete pvc ${pvc}     # skip it when the volume is already Released: its claim is gone"; fi
+    echo "    kubectl delete pv ${pv}     # a Retain volume stays pinned to the node as Released until it is deleted"
+  done <<<"$2"
+  echo "    task cluster-shrink-plan PROVIDER=${PROVIDER}$([[ $ROLE == management ]] || echo " ROLE=${ROLE}")     # again: it reads the volumes afresh"
+}
+
 # Longhorn rebuilds a replica elsewhere only if there is an elsewhere: the lines of volumes that want more
 # replicas than the schedulable nodes left once ALL of <node>... are gone.
 longhorn_room() { # <node>...
@@ -244,7 +261,8 @@ survey_removal() { # read-only: refuse before any mutation. Tolerates a resumed 
     pvs="$(pinned_pvs "$node")" || die "could not list the volumes"
     [[ -z "$pvs" ]] || die "${node} holds node-local volumes, which removal destroys:
 $(sed 's/^/    /' <<<"$pvs")
-  Move that data off the node first (CNPG: switch over, scale the instance elsewhere)."
+  Move that data off the node first (CNPG: switch over, scale the instance elsewhere). The guard stays; the steps:
+$(evacuation_steps "$node" "$pvs")"
   done
   if (( ${#SC_NODES[@]} > 0 )); then
     lh="$(longhorn_room "${SC_NODES[@]}")" || die "could not read Longhorn"
