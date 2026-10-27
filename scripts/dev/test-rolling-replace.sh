@@ -1069,7 +1069,10 @@ SRV='module.scw[0].scaleway_instance_server.control_plane[2]'; NIC='module.scw[0
 [ "$(tc "$SRV" "$NIC" "$SRV")" = 1 ] && [ "$(tc none "$NIC" "$SRV")" = 0 ] \
   && ok "tainted_count reads the '(tainted)' header of tofu state show: one tainted server, none when clean" \
   || bad "tainted_count: '$(tc "$SRV" "$NIC" "$SRV")' / '$(tc none "$NIC" "$SRV")'"
-extract replace_node | grep -q 'saved_plan_apply "${node_name}-config" "$t" "$i" "$(( cfg_max + tainted ))" "" check' \
+# A variable, not a pipe: with pipefail, `grep -q` ending the read early kills `extract` with SIGPIPE and the pipeline reads as a miss
+# (CI, once replace_node grew past the pipe buffer).
+RN_T="$(extract replace_node)"
+grep -q 'saved_plan_apply "${node_name}-config" "$t" "$i" "$(( cfg_max + tainted ))" "" check' <<<"$RN_T" \
   && ok "the pre-flight config plan allows the tainted leftovers it will replace, so the re-run is not refused" \
   || bad "the pre-flight config plan still counts a tainted server as 'more than one resource'"
 
