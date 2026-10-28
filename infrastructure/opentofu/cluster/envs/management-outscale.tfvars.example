@@ -166,6 +166,10 @@ s3_replica_region   = "eu-west-2"                           # prod: e.g. fr-par
 # gp2, whose IOPS grow with its size (150 IOPS measured at 50 GB, saturated by the full stack in lab 16, #376); a larger
 # size gives more IOPS, but that was NOT shown to prevent the cascade, and changing the type to io1 did not.
 outscale_root_volume_size_gb = 50
+# Root volume type (lab 27 part C, E3): io1 with 1500 IOPS by default, because the old gp2 at 50 GB gave 150 IOPS and starved containerd and
+# the kubelet. Uncomment to go back to gp2 (cheaper, slower) or to change the IOPS; new nodes only. docs/capacity.md.
+# outscale_root_volume_type = "io1"
+# outscale_root_volume_iops = 1500
 
 # Audit sink (infra #318, docs/audit-sink.md): a second copy of the Kubernetes audit log OUTSIDE the cluster, object lock, client-side
 # encryption. Off by default. Also needs the apps component audit-log-sink and a dedicated key pair

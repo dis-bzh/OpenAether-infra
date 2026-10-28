@@ -304,6 +304,39 @@ cat <<EOT
     Outscale keypair 'openaether-capi', pre-created OpenStack FIP (edge-2 certSANs).
   Local: kubeconfig, talosconfig, edge-*.kubeconfig, restic-escrow-*.txt
 EOT
+# ------------------------------------------------ 4. the provider says it is gone (lab 27 part C, E5)
+# "tofu destroy succeeded" is not "the provider has nothing left": a Net, a subnet, a route table, an internet service and two load
+# balancers outlived a `fleet-down complete` on Outscale (purge-orphans removed them). Ask the provider directly, a few times (its
+# deletions settle late), and FAIL on a leftover instead of printing the success line. A provider with no check (Proxmox, local) or
+# unreachable credentials is said loudly, not failed: nothing could be seen. OA_VERIFY_ATTEMPTS / OA_VERIFY_WAIT shorten the wait.
+if [ "$FAILED" -eq 0 ]; then
+  info "Step 4/4 — the provider side is empty"
+  case "$PROVIDER" in ovh) VERIFY_KIND=openstack ;; scaleway | outscale) VERIFY_KIND="$PROVIDER" ;; *) VERIFY_KIND="" ;; esac
+  VERIFY_CLUSTER="$(_tfv cluster_name)-$(_tfv environment)"
+  VERIFY="$ROOT/scripts/ops/verify-provider-clean.py"
+  if [ -z "$VERIFY_KIND" ] || [ ! -f "$VERIFY" ]; then
+    warn "no provider-side check for '$PROVIDER': what is left on the provider was NOT verified (list it in its console)"
+  elif [ "$VERIFY_CLUSTER" = "-" ]; then
+    warn "cluster_name/environment not readable in ${TFV##*/}: the provider side was NOT verified (python3 scripts/ops/verify-provider-clean.py <cluster> $VERIFY_KIND)"
+  else
+    for vtry in $(seq 1 "${OA_VERIFY_ATTEMPTS:-4}"); do
+      VERIFY_OUT="$(python3 "$VERIFY" "$VERIFY_CLUSTER" "$VERIFY_KIND" 2>&1)"; vrc=$?
+      [ "$vrc" -eq 1 ] || break
+      [ "$vtry" -lt "${OA_VERIFY_ATTEMPTS:-4}" ] && { warn "attempt ${vtry}: $PROVIDER still has resources of '$VERIFY_CLUSTER', waiting for the provider to settle"; sleep "${OA_VERIFY_WAIT:-30}"; }
+    done
+    case "$vrc" in
+      0) ok "$PROVIDER holds nothing named after '$VERIFY_CLUSTER'" ;;
+      1)
+        printf '%s\n' "$VERIFY_OUT" | sed 's/^/    /' >&2
+        printf '\n✗ fleet-down INCOMPLETE: the destroy reported success but %s still holds the resources above (billing may continue).\n' "$PROVIDER" >&2
+        printf '  Remove them: python3 scripts/ops/purge-orphans/%s.py            # dry run, WHOLE ACCOUNT\n' "$PROVIDER" >&2
+        printf '               python3 scripts/ops/purge-orphans/%s.py --apply     # when nothing else lives there\n' "$PROVIDER" >&2
+        printf '  A resource the provider itself cannot delete (infra #43) is skipped with OA_CLEAN_IGNORE=<id,id>.\n' >&2
+        exit 1 ;;
+      *) warn "the provider side could NOT be verified (exit ${vrc}): ${VERIFY_OUT}" ;;
+    esac
+  fi
+fi
 if [ "$FAILED" -ne 0 ]; then
   # Two very different endings, and telling them apart is the whole point.
   #

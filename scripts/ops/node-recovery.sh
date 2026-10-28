@@ -223,6 +223,11 @@ case "$CMD" in
     else
       ok "every pod is Running or finished"
     fi
+    # The pods the other nodes took while this one was gone stay there (lab 27 part C, E4): critical ones back, one per node.
+    REBALANCE_CMD="${REBALANCE_CMD:-python3 $HERE/cluster-rebalance.py}"
+    # shellcheck disable=SC2086  # the command line is meant to split (the tests replace it)
+    KUBECTL="kubectl --kubeconfig $KUBECONFIG_FILE --request-timeout=30s" $REBALANCE_CMD --apply \
+      || warn "critical pods still share a node: run  task cluster-rebalance PROVIDER=${PROVIDER} APPLY=1  (cluster-verify fails on it)"
     # The pods above wait for a volume of the old disk: list them, print the commands, run them only with --clean.
     clean_flag=(); [[ $CLEAN -eq 0 ]] || clean_flag=(--clean)
     cleanup_rc=0

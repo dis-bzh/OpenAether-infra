@@ -339,7 +339,9 @@ run "ovh_no_app_lb_no_monitor" {
 
 # --- Outscale ---
 
-run "outscale_default_has_no_lb_rule" {
+# Lab 27 part C, E1: deploy_app_lb = true with the default EMPTY list left the LB closed to everyone (a security group
+# admits nothing it does not list), against the variable's text "empty = no filter". Empty must mean 0.0.0.0/0 on 80 and 443.
+run "outscale_empty_list_with_lb_means_open" {
   command = plan
 
   variables {
@@ -357,8 +359,32 @@ run "outscale_default_has_no_lb_rule" {
   }
 
   assert {
+    condition     = alltrue([for k in ["http", "https"] : join(",", module.outscale[0].app_lb_sources[k]) == "open"])
+    error_message = "Outscale: deploy_app_lb = true with app_lb_allowed_cidrs empty must open 80 and 443 (one 0.0.0.0/0 rule each), as the variable says."
+  }
+}
+
+run "outscale_no_app_lb_no_rule" {
+  command = plan
+
+  variables {
+    deploy_app_lb = false
+    node_distribution = {
+      outscale = {
+        control_planes     = 3
+        workers            = 1
+        region             = "eu-west-2"
+        instance_type      = "tinav5.c2r4p1"
+        image_id           = "dummy-talos-osc-image"
+        availability_zones = ["eu-west-2a", "eu-west-2b", "eu-west-2c"]
+        bastion_image_id   = "ami-ubuntu-2204-mock"
+      }
+    }
+  }
+
+  assert {
     condition     = length(module.outscale[0].app_lb_sources.http) == 0 && length(module.outscale[0].app_lb_sources.https) == 0
-    error_message = "Outscale: no 80/443 rule while app_lb_allowed_cidrs is empty."
+    error_message = "Outscale: without deploy_app_lb there is no app LB, hence no 80/443 rule."
   }
 }
 

@@ -460,6 +460,14 @@ tasks:
       - ./scripts/dev/test-node-recovery.sh
       # The volumes a replaced disk leaves behind: which are dropped, which are refused, against a fake kubectl.
       - ./scripts/dev/test-replaced-node-cleanup.sh
+      # Critical pods sharing a node while another is empty: found, evicted one at a time, never wrongly
+      # (lab 27 part C, E4).
+      - ./scripts/dev/test-cluster-rebalance.sh
+      # The provider side is empty before fleet-down says complete (an Outscale Net, load balancers and a subnet
+      # outlived it in lab 27 part C, E5).
+      - ./scripts/dev/test-verify-provider-clean-outscale.sh
+      # The Talos image build refuses early when the disk cannot hold the raw image (about 12 GiB, lab 27 part C, E5).
+      - ./scripts/dev/test-image-disk-preflight.sh
       - ./scripts/dev/test-dead-node-roll.sh
       # The graceful stop of a live control plane before its replacement (F-CPFLAP): gates, order, failures.
       - ./scripts/dev/test-cp-graceful-stop.sh
@@ -1194,6 +1202,13 @@ tasks:
             echo "    task cluster-coredns-ha PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}" >&2
             exit "$rc" ;;
         esac
+      # Critical-path pods that share a node while another node is empty (lab 27 part C, E4) are put back one per node
+      # before the verdict: a re-run of cluster-up after a node loss, or an upgraded cluster, is where they stack.
+      # Bounded by the budgets (one eviction at a time); a failure here is only named, the verify below is what fails
+      # the run.
+      - task: cluster-rebalance
+        vars: {ROLE: "{{.ROLE}}", PROVIDER: "{{.PROVIDER}}", APPLY: "1"}
+        ignore_error: true
       # The verdict, asked of the cluster rather than assumed from the steps
       # above: a failing verify fails cluster-up before the line below.
       # scripts/dev/test-cluster-up.sh runs it.
@@ -2513,6 +2528,33 @@ tasks:
       - >-
         ../../../scripts/ops/cluster-coredns-ha.sh --tfvars "envs/{{.ROLE}}-{{.PROVIDER}}.tfvars"
         {{if .APPLY}}--apply{{end}}
+
+  cluster-rebalance:
+    desc: >-
+      Put critical-path pods back one per node (lab 27 part C, E4). After a node loss or a drain the Gateway, the
+      Barman Cloud plugin, the CNPG operator, istiod, CoreDNS and the Cilium operator are rescheduled onto the nodes
+      that are left and STAY there when the node returns: a spread rule is read at scheduling time only. Both plugin
+      pods on one node blocked a failover for 204 s. Dry run by default: lists every group where a node holds two pods
+      while an eligible node (Ready, schedulable, taints tolerated) holds none, writes nothing, exit 3 on a finding.
+      APPLY=1 evicts the NEWEST pod of a stacked node through the Eviction API (the budgets are honoured), one at a
+      time, waits for the group to be Ready and reads the placement back; it fails when a group is still stacked. A
+      cluster with fewer eligible nodes than replicas is not wrong. `cluster-up`, `cluster-roll` and
+      `cluster-replace-node` run it; `cluster-verify` fails on a finding.
+      Usage: task cluster-rebalance PROVIDER=… [ROLE=management] [APPLY=1]. See scripts/ops/cluster-rebalance.py.
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+      APPLY: '{{.APPLY | default ""}}'
+    env: *provider-env
+    cmds:
+      - task: kubeconfig
+        vars: {ROLE: '{{.ROLE}}', PROVIDER: '{{.PROVIDER}}'}
+      - >-
+        KUBECTL="kubectl --kubeconfig ./kubeconfig --request-timeout=30s"
+        python3 ../../../scripts/ops/cluster-rebalance.py {{if .APPLY}}--apply{{else}}--check{{end}}
 
   cluster-bootstrap-sync:
     desc: >-

@@ -33,7 +33,7 @@ control planes / workers, D = entrées de `worker_storage.disks`.
 | | Scaleway | OVH | Outscale | Proxmox |
 |---|---|---|---|---|
 | Instances | CP+W + bastion `DEV1-S` (2 vCPU / 2 Go) | CP+W + bastion `b3-8` (2 vCPU / 8 Go) | CP+W + bastion `tinav5.c2r2p2` (2 vCPU / 2 Go) | CP+W ; + bastion (1 vCPU / 1 Gio / 10 Gio) seulement avec `enable_bastion` |
-| Disque système | 50 Go `sbs_volume` chacun (`scw_root_volume_size_gb` ; 40 au moins avec `deploy_flux`, imposé) | celui du flavour (50 Go au moins ; un `check` avertit sous 40) | celui de l'OMI (~11-12 Gio) : `outscale_root_volume_size_gb = 50` (un `check` avertit) | `root_disk_gb` (50 Gio) chacun (un `check` avertit sous 40) |
+| Disque système | 50 Go `sbs_volume` chacun (`scw_root_volume_size_gb` ; 40 au moins avec `deploy_flux`, imposé) | celui du flavour (50 Go au moins ; un `check` avertit sous 40) | celui de l'OMI (~11-12 Gio) : `outscale_root_volume_size_gb = 50` (un `check` avertit) ; type `io1` 1500 IOPS par défaut (`outscale_root_volume_type`, `outscale_root_volume_iops`) | `root_disk_gb` (50 Gio) chacun (un `check` avertit sous 40) |
 | Volumes de données | W × D | W × D | W × D | W × D, sur `datastore_id` |
 | IP publiques | 3 : bastion, public gateway, LB de l'API | 2 flottantes : bastion, LB de l'API | 2 : bastion, NAT | aucune — `host_public_ip` est la tienne |
 | Load balancers | 1 | 1 (Octavia) | 1 (LBU) | aucun — VIP Talos |
@@ -156,8 +156,23 @@ pas couvert (ses exemples sont sous le plancher, voir plus haut).
 Outscale (les exemples sont inchangés et restent dans le quota de 20 vCPU) : aucune forme ne tient dans le quota par défaut de 20 vCPU et passe la porte. 3 workers de 3 vCPU échouent (ci-dessus), et 4 workers de
 3 vCPU demandent 3 + 4 nœuds x 3 + 2 (bastion) = 23 vCPU. La plus petite forme qui passe sur le papier est 3+3 `tinav5.c4r8p2` (4 vCPU / 8 Go) : 26 vCPU
 avec le bastion (mince, voir le paragraphe 0.4.0 ci-dessus), et la forme 3 + 4 des autres clouds fait 30 vCPU, donc une hausse de quota d'abord. Aucune n'a été exécutée sur Outscale. Les nœuds de 6 Go du lab 16 sont aussi tombés dans une cascade
-d'E/S et de mémoire après une sauvegarde-restauration et un redémarrage drainé (#376) ; le volume racine est gp2 (type non configurable ici), et un passage
-manuel en `io1 3000` ne l'a pas arrêtée. L'exemple fixe maintenant `outscale_root_volume_size_gb = 50` au lieu de le laisser en commentaire.
+d'E/S et de mémoire après une sauvegarde-restauration et un redémarrage drainé (#376) ; le volume racine était gp2 (type non configurable alors), et un passage
+manuel en `io1 3000` ne l'a pas arrêtée. L'exemple fixe maintenant `outscale_root_volume_size_gb = 50` au lieu de le laisser en commentaire. Le type est une variable depuis le labo 27 partie C (ci-dessous).
+
+## Forme minimale supportée par provider, et le quota Outscale (labo 27 partie C, E3)
+
+La plateforme (le dépôt apps à son défaut) demande environ **9 vCPU de requests** (8,7 mesurés au labo 27 partie C sur 3 CP + 3 W de 3 vCPU : les workers étaient à 97-99 % de leur CPU allouable). Un drain, un `cluster-roll` ou une perte de nœud exige que les workers MOINS UN les tiennent, sinon des pods restent Pending (12 l'ont été, dont un pod Gateway et la place qu'un failover de base demande). La forme supportée, sur tous les clouds, est donc :
+
+| Provider | Forme supportée avec la plateforme | vCPU avec le bastion | Note |
+|---|---|---|---|
+| Scaleway | 3 CP + 4 W de `POP2-4C-16G` (les exemples) | 30 | déroulable, voir l'arithmétique ci-dessus |
+| OVH | 3 CP + 4 W de `c3-8` (4 vCPU / 8 Go) (les exemples) | 30 | déroulable, voir l'arithmétique ci-dessus |
+| Outscale | 3 CP + 4 W de `tinav5.c4r8p2` (4 vCPU / 8 Go) | 30 | **demande d'abord une hausse de quota** (30 vCPU / 64 Go, 8 VM) |
+| Proxmox | 3 CP + 4 W, 4 vCPU / 8 Go au moins | à vous | |
+
+**Ce que permet le quota Outscale par défaut (mesuré, labo 27 partie C : 20 vCPU, 10 VM, 20 IP publiques, 100 volumes, 20 load balancers).** Un cluster nu (Cilium seul) tient. 3 CP + 3 W de `tinav5.c3r8p2` (3 vCPU / 8 Go) plus le bastion (2 vCPU) font exactement 20 vCPU, 7 VM : il s'installe, `cluster-verify` passe, 41 Kustomizations étaient Ready 20 min après `cluster-up`, et une perte brutale de nœud a gardé chaque commit acquitté, mais ce n'est PAS une forme supportée : aucun drain ne finit sans pods Pending, `cluster-roll` refuse (sa règle des 200 % ne passe pas), rien ne peut être remplacé (un nœud de rechange ne tient pas dans le quota), aucun second cluster ne tient (ni restauration d'essai, ni répétition d'un roll Talos), et une perte de nœud a mis 924 s à redonner un cluster entier (OVH : 155 s). Rien dans le code ne le cache : un `check` (`outscale_platform_shape`) avertit au plan quand `deploy_flux` est actif et que les workers moins un tiennent moins de 9 vCPU, et les exemples le disent dans leurs commentaires. Demandez le quota d'abord ; ne lancez pas la plateforme sur le quota par défaut en espérant que les exercices de panne passent.
+
+**Type du volume racine Outscale (E3).** `gp2` donne 3 IOPS par Gio : la racine de 50 Go faisait **150 IOPS**, et containerd, le kubelet et les reconstructions Longhorn étaient affamés (`CRI DeadlineExceeded`, un worker NotReady deux fois dans une séance). `outscale_root_volume_type` est maintenant une variable, défaut **`io1`** avec `outscale_root_volume_iops = 1500` (dix fois plus ; l'API autorise 300 IOPS par Gio au plus et 13000 en tout, un `check` avertit sur le couple). `gp2` garde l'ancien comportement (l'épingler dans le tfvars) ; `standard` est magnétique et déconseillé. Effets, aucun mesuré : io1 est facturé pour le volume ET les IOPS provisionnées, chaque nœud coûte donc plus qu'avant (lire la grille de prix Outscale de votre région : 7 à 10 nœuds à 1500 IOPS est le calcul à faire) ; le quota de volumes ne change pas (un volume racine par nœud) ; le changement ne touche que les NOUVEAUX nœuds (une VM en marche garde son volume : `ignore_changes`), un cluster existant demande donc `task cluster-roll` pour en profiter. **NON PROUVÉ sur un cluster** : que l'API accepte une racine io1 pour l'OMI Talos telle que mappée ici, et que 1500 IOPS supprime l'affamement (un `io1 3000` manuel au labo 16 sur des nœuds de 6 Go n'a pas arrêté cette cascade, qui avait aussi une cause mémoire). Le prochain labo Outscale doit prouver les deux avant de faire confiance au défaut.
 
 ## Disque système et pile applicative complète (tous les providers)
 
@@ -168,7 +183,7 @@ volume de 20 Go : DiskPressure, pods évincés (25 pods Zitadel dans les premiè
 **Minimum : 40 Go par nœud avec la pile applicative ; le défaut est 50 Go** (environ 46 Go utilisables) : les ~11 Go d'images, le second jeu qu'une mise
 à jour de chart tire avant le ramasse-miettes de l'ancien (le kubelet lance le GC des images à 85 %), les journaux et de la marge. Par provider :
 Scaleway `scw_root_volume_size_gb` (50 ; une validation refuse moins de 40 avec `deploy_flux = true`) ; OVH le flavour (`b3-8` : 50 Go ; un `check`
-avertit sous 40 Go) ; Outscale `outscale_root_volume_size_gb` (null = la taille de l'OMI, l'image Talos brute, ~11-12 Gio, **insuffisant** ; un `check`
+avertit sous 40 Go) ; Outscale `outscale_root_volume_size_gb` (type : `outscale_root_volume_type`, défaut io1 / 1500 IOPS ; null = la taille de l'OMI, l'image Talos brute, ~11-12 Gio, **insuffisant** ; un `check`
 avertit avec `deploy_flux`, ne vaut que pour les nœuds créés ensuite) ; Proxmox `root_disk_gb` (50 Gio ; un `check` avertit sous 40).
 
 Augmenter la valeur Scaleway sur un cluster existant redimensionne le `sbs_volume` sur place (lab 12 : plan « 10 to change », aucun nœud remplacé) ;

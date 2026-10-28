@@ -256,6 +256,27 @@ check "outscale_root_volume_for_platform" {
   }
 }
 
+# A warning, not a failure: io1 allows 300 IOPS per GiB at most; with the OMI-sized root (null, about 12 GiB) the ceiling is 3600.
+check "outscale_root_iops_ratio" {
+  assert {
+    condition     = var.outscale_root_volume_type != "io1" || local.osc_dist.control_planes + local.osc_dist.workers == 0 || var.outscale_root_volume_iops <= 300 * coalesce(var.outscale_root_volume_size_gb, 12)
+    error_message = "outscale_root_volume_iops (${var.outscale_root_volume_iops}) is above 300 IOPS per GiB of outscale_root_volume_size_gb (${coalesce(var.outscale_root_volume_size_gb, 12)} GiB; null = the OMI's ~12): the API refuses it. Lower the IOPS or raise the size."
+  }
+}
+
+# A warning, not a failure: the platform asks about 9 vCPU of requests (lab 27 part C: 8.7 vCPU on a 3 CP + 3 W cluster of
+# 3 vCPU nodes, workers at 97-99 % of their allocatable CPU), and the workers MINUS ONE must hold it or a drain, a roll or a node
+# loss leaves pods Pending (12 did) and the failover targets with them. The vCPU count is read from the Outscale type name
+# (tinavN.cNrM...); a name that does not match is not judged. docs/capacity.md, "Minimum supported shape".
+check "outscale_platform_shape" {
+  assert {
+    condition = !(var.deploy_flux && local.osc_dist.workers > 0) || !can(regex("\\.c[0-9]+r", local.osc_dist.instance_type)) || (
+      (local.osc_dist.workers - 1) * tonumber(regex("\\.c([0-9]+)r", local.osc_dist.instance_type)[0]) >= 9
+    )
+    error_message = "deploy_flux on Outscale with ${local.osc_dist.workers} worker(s) of ${local.osc_dist.instance_type}: the platform asks about 9 vCPU of requests, and the workers minus one hold less. A drain, a roll or a node loss will leave pods Pending and the CNPG failover without room (lab 27 part C: 12 Pending, 924 s to a whole cluster). Supported shape: 3 control planes + 4 workers of 4 vCPU / 8 GB (30 vCPU with the bastion, ask the quota first); the default 20 vCPU quota hosts a bare cluster only. docs/capacity.md, Minimum supported shape."
+  }
+}
+
 # A warning, not a failure: a Proxmox disk below 40 GiB cannot hold the application stack's images (~11 GB per node).
 check "proxmox_root_disk_for_platform" {
   assert {
@@ -366,6 +387,8 @@ module "outscale" {
 
   instance_type       = local.osc_dist.instance_type
   root_volume_size_gb = var.outscale_root_volume_size_gb
+  root_volume_type    = var.outscale_root_volume_type
+  root_volume_iops    = var.outscale_root_volume_iops
   image_id            = local.osc_dist.image_id
   image_name          = local.osc_image_name
   availability_zones  = local.osc_dist.availability_zones

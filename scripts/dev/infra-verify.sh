@@ -242,6 +242,20 @@ if [ "$PROVIDER" != local ]; then
     unk "could not read Deployment kube-system/cilium-operator — the operator replica count is UNCHECKED"
   fi
 fi
+# Critical-path pods share a node while another node is empty (lab 27 part C, E4): after a node loss or a drain the pods are
+# rescheduled onto the nodes that are left and stay there when the node returns (a spread rule is read at scheduling time only).
+# Both Barman Cloud plugin pods on one node blocked a failover for 204 s. A group with fewer eligible nodes than replicas is not
+# wrong. The checker is scripts/ops/cluster-rebalance.py (groups: Gateway, Barman Cloud plugin, CNPG operator, istiod, CoreDNS,
+# Cilium operator); absent groups (a pure-infra cluster) are skipped. Not judged on the local provider (one Docker node).
+if [ "$PROVIDER" != local ]; then
+  info "No two replicas of a critical pod share a node while another node is empty"
+  rb_out="$(KUBECTL="kubectl --kubeconfig ${KUBECONFIG} --request-timeout=30s" timeout 120 python3 "$ROOT/scripts/ops/cluster-rebalance.py" --check 2>&1)"; rb_rc=$?
+  case "$rb_rc" in
+    0) ok "every critical pod group is spread over the nodes that can hold it" ;;
+    3) bad "critical pods share a node although another node is empty (a failover or the ingress then depends on that one node): $(grep '^  x ' <<<"$rb_out" | sed 's/^  x //' | paste -sd';' -). Fix: task cluster-rebalance PROVIDER=${PROVIDER} ROLE=${ROLE} APPLY=1 (evicts the newest pod of each stacked node, one at a time, within the budgets)" ;;
+    *) unk "could not read the placement of the critical pods (exit ${rb_rc}): ${rb_out##*$'\n'}" ;;
+  esac
+fi
 FLUX_NS="$(cfg_value flux_namespace)"; FLUX_NS="${FLUX_NS:-flux-system}"
 
 # Not cosmetic. deploy_flux defaults to false; if something re-enables it the cluster silently stops being the thing this

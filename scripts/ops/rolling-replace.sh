@@ -694,6 +694,16 @@ if [[ "$SCOPE" == "all" || "$SCOPE" == "cp" ]]; then
   done
 fi
 
+# A drained node's pods went to the nodes that were left and stay there once it is back (lab 27 part C, E4): put the critical
+# ones (Gateway, Barman Cloud plugin, CNPG operator, istiod, CoreDNS, Cilium operator) back one per node. Not fatal here: the
+# verdict is cluster-verify, which fails on it; this only names the command when it could not.
+if [[ $DRY_RUN -eq 0 && $STOP_REQUESTED -eq 0 ]]; then
+  REBALANCE_CMD="${REBALANCE_CMD:-python3 $(dirname "${BASH_SOURCE[0]}")/cluster-rebalance.py}"
+  # shellcheck disable=SC2086  # the command line is meant to split (the tests replace it)
+  KUBECTL="kubectl --kubeconfig ${KUBECONFIG_FILE} --request-timeout=30s" $REBALANCE_CMD --apply \
+    || warn "critical pods still share a node: run  task cluster-rebalance PROVIDER=${PROVIDER} APPLY=1  (cluster-verify fails on it)"
+fi
+
 hr
 # A real run's "complete" line is finish_roll's: it cannot be said before the check.
 if [[ $DRY_RUN -eq 1 ]]; then

@@ -27,6 +27,18 @@ variable "root_volume_size_gb" {
   default     = null
 }
 
+variable "root_volume_type" {
+  description = "Root (BSU) volume type of every NEW node: gp2 (3 IOPS per GiB), io1 (provisioned IOPS, root_volume_iops) or standard. See the root variable outscale_root_volume_type."
+  type        = string
+  default     = "io1"
+}
+
+variable "root_volume_iops" {
+  description = "Provisioned IOPS of an io1 root volume; ignored for other types. See the root variable outscale_root_volume_iops."
+  type        = number
+  default     = 1500
+}
+
 variable "worker_storage" {
   description = <<-EOT
     Dedicated data disks per worker. Each `disks` entry creates one BSU volume
@@ -192,7 +204,7 @@ variable "app_lb_node_ports" {
 }
 
 variable "app_lb_allowed_cidrs" {
-  description = "Source CIDRs allowed to reach the application LB (80/443). Empty = no filter (the historical behaviour). Non-empty = only these, plus the cluster's own egress address; see the root variable of the same name."
+  description = "Source CIDRs allowed to reach the application LB (80/443). Empty = no filter, which on Outscale is an explicit 0.0.0.0/0 rule on 80 and 443 (a security group admits nothing unlisted). Non-empty = only these, plus the cluster's own egress address; see the root variable of the same name."
   type        = list(string)
   default     = []
 }

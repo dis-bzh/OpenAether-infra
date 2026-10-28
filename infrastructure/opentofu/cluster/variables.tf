@@ -427,6 +427,40 @@ variable "outscale_root_volume_size_gb" {
   }
 }
 
+variable "outscale_root_volume_type" {
+  description = <<-EOT
+    Outscale only: BSU type of the root volume of every NEW node. Default io1 (provisioned IOPS, see outscale_root_volume_iops).
+    Lab 27 part C: nodes with the old hard-coded gp2 at 50 GB had 150 IOPS (gp2 gives 3 IOPS per GiB), containerd and the
+    kubelet starved (`CRI DeadlineExceeded`, a worker NotReady twice) and a whole cluster took 924 s to come back after one node
+    loss (OVH: 155 s). `gp2` restores the old behaviour (cheaper, slower; the IOPS then follow the size: 100 GiB = 300);
+    `standard` is the magnetic type and is not recommended. io1 is billed for the storage AND the provisioned IOPS: read the
+    Outscale price list for your region, the effect has not been measured here. Applies to nodes created after the change only
+    (a running VM is not touched, `ignore_changes`): replace the nodes one at a time with `task cluster-roll`. The data disks of
+    `worker_storage` have their own type. UNPROVEN on a cluster until the next Outscale lab.
+  EOT
+  type        = string
+  default     = "io1"
+  validation {
+    condition     = contains(["gp2", "io1", "standard"], var.outscale_root_volume_type)
+    error_message = "outscale_root_volume_type must be gp2, io1 or standard."
+  }
+}
+
+variable "outscale_root_volume_iops" {
+  description = <<-EOT
+    Outscale only: provisioned IOPS of an io1 root volume (ignored for gp2 and standard). Default 1500: ten times the 150 IOPS
+    of the old 50 GB gp2 root. The API allows 1 to 13000 and at most 300 IOPS per GiB, so a 50 GB volume takes up to 13000 and
+    the OMI-sized one (about 12 GiB, outscale_root_volume_size_gb = null) up to 3600; a `check` warns when the pair is out of
+    that ratio. Billed per provisioned IOPS: see outscale_root_volume_type.
+  EOT
+  type        = number
+  default     = 1500
+  validation {
+    condition     = var.outscale_root_volume_iops >= 1 && var.outscale_root_volume_iops <= 13000
+    error_message = "outscale_root_volume_iops must be between 1 and 13000."
+  }
+}
+
 variable "worker_storage" {
   description = <<-EOT
     Dedicated data storage for worker nodes (the active provider only — one

@@ -451,6 +451,10 @@ case "$MODE" in
     exit 0 ;;
 esac
 
+# The build downloads the compressed raw and decompresses it next to it: about 11.3 GiB on top (lab 27 part C, E5: three attempts died on
+# "No space left on device" after the download). Asked before the first byte, only where a build can run (not --list/--prune/--retain/--import).
+disk_preflight() { oa_require_free_gib "${OA_IMAGE_CACHE_CHECK_DIR:-$ROOT/infrastructure/opentofu/talos-image}" "${OA_IMAGE_MIN_FREE_GIB:-12}" "the Talos image build (raw ~11.3 GiB + compressed)" || exit 1; }
+
 if [ "$ENSURE" = true ]; then
   echo "▶ --ensure: checking whether the image needs (re)building..."
   # Plan ONCE, to a file, and apply THAT file. -auto-approve discarded the plan
@@ -462,7 +466,7 @@ if [ "$ENSURE" = true ]; then
   tofu plan -detailed-exitcode -out="$PLAN" "${APPLY_VARS[@]}" || PLAN_EXIT=$?
   case "$PLAN_EXIT" in
     0) echo "✓ image already up to date — skipping apply" ;;
-    2) refuse_taken_omi; tofu apply "$PLAN" ;;
+    2) refuse_taken_omi; disk_preflight; tofu apply "$PLAN" ;;
     *)
       echo "✗ tofu plan failed (exit ${PLAN_EXIT})"
       exit 1
@@ -471,6 +475,7 @@ if [ "$ENSURE" = true ]; then
 else
   # Interactive on purpose: tofu shows and applies the SAME in-memory plan, so
   # the yes a human types answers the plan they just read. Nothing to freeze.
+  disk_preflight
   tofu apply "${APPLY_VARS[@]}"
 fi
 

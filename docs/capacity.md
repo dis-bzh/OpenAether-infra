@@ -33,7 +33,7 @@ planes / workers, D = entries in `worker_storage.disks`.
 | | Scaleway | OVH | Outscale | Proxmox |
 |---|---|---|---|---|
 | Instances | CP+W + bastion `DEV1-S` (2 vCPU / 2 GB) | CP+W + bastion `b3-8` (2 vCPU / 8 GB) | CP+W + bastion `tinav5.c2r2p2` (2 vCPU / 2 GB) | CP+W; + bastion (1 vCPU / 1 GiB / 10 GiB) only with `enable_bastion` |
-| Node system disk | 50 GB `sbs_volume` each (`scw_root_volume_size_gb`; at least 40 with `deploy_flux`, enforced) | the flavour's disk (at least 50 GB; `check` warns below 40) | the OMI's (~11-12 GiB): set `outscale_root_volume_size_gb = 50` (`check` warns) | `root_disk_gb` (50 GiB) each (`check` warns below 40) |
+| Node system disk | 50 GB `sbs_volume` each (`scw_root_volume_size_gb`; at least 40 with `deploy_flux`, enforced) | the flavour's disk (at least 50 GB; `check` warns below 40) | the OMI's (~11-12 GiB): set `outscale_root_volume_size_gb = 50` (`check` warns); type `io1` 1500 IOPS by default (`outscale_root_volume_type`, `outscale_root_volume_iops`) | `root_disk_gb` (50 GiB) each (`check` warns below 40) |
 | Data volumes | W × D | W × D | W × D | W × D, on `datastore_id` |
 | Public IPs | 3: bastion, public gateway, API LB | 2 floating: bastion, API LB | 2: bastion, NAT | none — `host_public_ip` is yours |
 | Load balancers | 1 | 1 (Octavia) | 1 (LBU) | none — Talos VIP |
@@ -155,8 +155,23 @@ not covered (its examples are below the floor, see above).
 Outscale (the examples are unchanged and stay within the 20 vCPU quota): no shape fits the default 20 vCPU quota and passes the gate. 3 workers of 3 vCPU fail (above), and 4 workers of 3 vCPU need
 3 + 4 nodes x 3 + 2 (bastion) = 23 vCPU. The smallest passing shape on the arithmetic is 3+3 `tinav5.c4r8p2` (4 vCPU / 8 GB): 26 vCPU with
 the bastion (thin, see the 0.4.0 paragraph above), and the 3 + 4 shape of the other clouds is 30 vCPU, so a quota raise comes first. Neither has been run on Outscale. The 6 GB nodes of lab 16 also fell into an IO and memory
-cascade after one backup and restore and one drained reboot (#376); the root volume is gp2 (type not configurable here), and an `io1 3000`
-change made by hand did not stop it. The example now sets `outscale_root_volume_size_gb = 50` rather than leaving it commented.
+cascade after one backup and restore and one drained reboot (#376); the root volume was gp2 (type not configurable then), and an `io1 3000`
+change made by hand did not stop it. The example now sets `outscale_root_volume_size_gb = 50` rather than leaving it commented. The type is a variable since lab 27 part C (below).
+
+## Minimum supported shape per provider, and the Outscale quota (lab 27 part C, E3)
+
+The platform (the apps repository at its default) asks about **9 vCPU of requests** (8.7 measured in lab 27 part C on 3 CP + 3 W of 3 vCPU: the workers sat at 97 to 99 % of their allocatable CPU). A drain, a `cluster-roll` or a node loss needs the workers MINUS ONE to hold that, or pods stay Pending (12 did, among them a Gateway pod and the places a database failover needs). So the supported shape, on every cloud, is:
+
+| Provider | Supported shape with the platform | vCPU with the bastion | Note |
+|---|---|---|---|
+| Scaleway | 3 CP + 4 W of `POP2-4C-16G` (the examples) | 30 | rollable, see the arithmetic above |
+| OVH | 3 CP + 4 W of `c3-8` (4 vCPU / 8 GB) (the examples) | 30 | rollable, see the arithmetic above |
+| Outscale | 3 CP + 4 W of `tinav5.c4r8p2` (4 vCPU / 8 GB) | 30 | **needs a quota raise first** (30 vCPU / 64 GB, 8 VMs) |
+| Proxmox | 3 CP + 4 W, 4 vCPU / 8 GB at least | yours | |
+
+**What the default Outscale quota allows (measured, lab 27 part C: 20 vCPU, 10 VMs, 20 public IPs, 100 volumes, 20 load balancers).** A bare cluster (Cilium only) fits. 3 CP + 3 W of `tinav5.c3r8p2` (3 vCPU / 8 GB) plus the bastion (2 vCPU) is exactly 20 vCPU, 7 VMs: it installs, `cluster-verify` passes, 41 Kustomizations were Ready 20 min after `cluster-up`, and a hard node loss kept every acknowledged commit, but it is NOT a supported shape: no drain completes without Pending pods, `cluster-roll` refuses (its 200 % rule cannot pass), nothing can be replaced (a spare node does not fit the quota), no second cluster fits (no scratch restore, no Talos roll rehearsal), and a node loss took 924 s to return to a whole cluster (OVH: 155 s). Nothing in the code hides this: a `check` (`outscale_platform_shape`) warns at plan time when `deploy_flux` is on and the workers minus one hold less than 9 vCPU, and the examples say so in their comments. Ask the quota first; do not run the platform on the default quota and expect the failure drills to pass.
+
+**Outscale root volume type (E3).** `gp2` gives 3 IOPS per GiB: the 50 GB root was **150 IOPS**, and containerd, the kubelet and the Longhorn rebuilds starved (`CRI DeadlineExceeded`, a worker NotReady twice in one sitting). `outscale_root_volume_type` is now a variable, default **`io1`** with `outscale_root_volume_iops = 1500` (ten times more; the API allows up to 300 IOPS per GiB and 13000 in all, a `check` warns on the pair). `gp2` keeps the old behaviour (pin it in the tfvars to keep it); `standard` is magnetic and not recommended. Effects, none of them measured: io1 is billed for the volume AND the provisioned IOPS, so each node costs more than before (read the Outscale price list for your region: 7 to 10 nodes at 1500 IOPS is the figure to compute); the volume quota is unchanged (one root volume per node); the change reaches NEW nodes only (a running VM keeps its volume: `ignore_changes`), so an existing cluster needs `task cluster-roll` to benefit. **UNPROVEN on a cluster**: that the API accepts an io1 root for the Talos OMI as mapped here, and that 1500 IOPS removes the starvation (a lab 16 manual `io1 3000` on 6 GB nodes did not stop that cascade, which also had a memory cause). The next Outscale lab must prove both before the default is trusted.
 
 ## System disk and the full application stack (all providers)
 
@@ -172,7 +187,7 @@ chart upgrade pulls before the old one is garbage-collected (the kubelet starts 
 |---|---|---|---|
 | Scaleway | `scw_root_volume_size_gb` | 50 | a validation refuses less than 40 with `deploy_flux = true` (20 stays valid without it) |
 | OVH | the flavour (`flavor_name`) | `b3-8` / `c3-8`: 50 GB | a `check` warns when the flavour's disk, read from the account, is below 40 GB |
-| Outscale | `outscale_root_volume_size_gb` (BSU root of the VM) | null = the OMI's own size, the raw Talos image (~11-12 GiB), **not enough** | a `check` warns with `deploy_flux` until it is 40 or more; applies to nodes created afterwards |
+| Outscale | `outscale_root_volume_size_gb` (BSU root of the VM; type: `outscale_root_volume_type`, default io1 / 1500 IOPS) | null = the OMI's own size, the raw Talos image (~11-12 GiB), **not enough** | a `check` warns with `deploy_flux` until it is 40 or more; applies to nodes created afterwards |
 | Proxmox | `root_disk_gb` in `node_distribution` | 50 GiB | a `check` warns below 40 |
 
 Raising Scaleway's value on a running cluster is an in-place resize of the `sbs_volume` (lab 12: `cluster-up` plan "10 to change", no node
