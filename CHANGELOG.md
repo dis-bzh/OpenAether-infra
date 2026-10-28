@@ -20,6 +20,15 @@ in git. 0.1.0 is the first entry describing something proven.
   for both. Left out: Talos v1.14.4 and cilium 1.20.3 (probe failed; cilium 1.20.4 is out since), flux-schema 0.17.0, OpenTofu 1.13.2, plumber v0.7.11, tflint v0.65.0, aws-cli 2.38.5, checkov 3.3.30
   and commitizen 4.19.3 (too young). Rung: mocked.
 
+### Fixed
+
+- **`test-checkov-custom-checks.sh` finds the control plane's `lifecycle` block by itself** (#396): its CKV_OA_1 case looked for `size_in_gb = 20` next to the block, which 0.3.0 turned into a
+  variable, so the case failed on `main` (6 passed, 1 failed). It now removes the first `lifecycle { ignore_changes = [image] }` after the `control_plane` header and the script is 7/0 again. CI
+  never ran this script (only `task security` does). Rung: mocked.
+- **`gen-flow-matrix.sh` prints the same table under `mawk` as under `gawk`** (#397): its pattern `^ {4,}security_group_id` relies on a regex interval that mawk, the default awk of Debian and
+  Ubuntu, does not honour, so three Outscale rows read `-` instead of their source and `test-flow-matrix.sh` failed there (12 passed, 2 failed). It is now `^    [ ]*security_group_id`: 14/0
+  under both awks, and the output of every provider in both languages is byte-identical. Rung: mocked.
+
 ## [0.3.2] — 2026-10-22
 
 0.3.2 is a **security patch** of 0.3.1. It pairs with OpenAether-apps 0.3.2, which carries the actual change (Zitadel v4.19.5 against three HIGH account-takeover advisories, a generated login session

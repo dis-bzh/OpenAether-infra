@@ -48,36 +48,17 @@ echo
 echo "=== CKV_OA_1: removing a control_plane's ignore_changes is caught ==="
 
 python3 - "$SCW_MAIN" <<'PY'
-import sys
+import re, sys
 path = sys.argv[1]
 text = open(path).read()
-needle = '''  # Boot image = initial medium only; talosctl upgrade owns the live version.
-  # See provider-contract.md § "Node image drift".
-  lifecycle {
-    ignore_changes = [image]
-  }
-  zone       = element(var.additional_zones, count.index)
-  project_id = var.project_id
-
-  root_volume {
-    volume_type           = var.root_volume_type
-    size_in_gb            = 20
-    delete_on_termination = true
-  }
-
-  # No public IP - private network only'''
-replacement = '''  zone       = element(var.additional_zones, count.index)
-  project_id = var.project_id
-
-  root_volume {
-    volume_type           = var.root_volume_type
-    size_in_gb            = 20
-    delete_on_termination = true
-  }
-
-  # No public IP - private network only'''
-assert needle in text, "fixture text not found — has scw/main.tf changed shape?"
-open(path, "w").write(text.replace(needle, replacement, 1))
+# Drop the first `lifecycle { ignore_changes = [image] }` after the control_plane resource header. Located by the
+# block itself, not by the lines around it, so a change to a neighbouring attribute (the root volume size, say)
+# cannot make the fixture miss.
+start = text.find('resource "scaleway_instance_server" "control_plane"')
+block = re.compile(r"  lifecycle \{\n    ignore_changes = \[image\]\n  \}\n")
+m = block.search(text, start) if start >= 0 else None
+assert m, "fixture text not found — has the control_plane's lifecycle block in scw/main.tf changed shape?"
+open(path, "w").write(text[:m.start()] + text[m.end():])
 PY
 
 out="$(run)"
