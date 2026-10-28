@@ -72,7 +72,8 @@ case "$PROV" in
       /(port_range_max|to_port_range) +=/ { v = $3; gsub(/[^0-9a-z_.]/, "", v); pmax = v }
       /(remote_ip_prefix|ip_range) +=/ { v = $0; sub(/^[^=]*= */, "", v); gsub(/"/, "", v); src = (v ~ /each\.value/ ? (app ? "`app_lb_allowed_cidrs`, cluster egress" : "`admin_ip`") : (v ~ /outscale_subnet\.public/ ? "public subnet (LB)" : (v ~ /^[0-9]/ ? "`" v "`" : "`" v "`"))) }
       # The group of the rule itself is a 2-space attribute; the group it admits is `remote_group_id` or a deeper `security_group_id`.
-      /remote_group_id|^ {4,}security_group_id/ { s = srcfrom($0); if (s != "") src = s }
+      # `[ ]*`, not `{4,}`: mawk, the default awk of Debian and Ubuntu, does not honour intervals.
+      /remote_group_id|^    [ ]*security_group_id/ { s = srcfrom($0); if (s != "") src = s }
       /count += +var\.deploy_app_lb/ { cond = "`deploy_app_lb`" }
       # restrict_inter_node swaps the two broad rules for the explicit list: count flips one way, for_each the other.
       /count += +var\.restrict_inter_node/ { cond = "not `restrict_inter_node`" }
