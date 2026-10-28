@@ -2497,6 +2497,8 @@ tasks:
       rollout and reads it back. Idempotent. `cluster-up` runs it before its verify. Usage: task cluster-
       coredns-ha PROVIDER=…
       [ROLE=management] [APPLY=1]. See scripts/ops/cluster-coredns-ha.sh and docs/upgrade.md.
+      The same step converges the CILIUM OPERATOR to min(2, nodes) replicas (it ran 1 before 0.4.0; patch file
+      scripts/ops/cilium-operator-ha-patch.json).
     dir: infrastructure/opentofu/cluster
     requires:
       vars: [PROVIDER]

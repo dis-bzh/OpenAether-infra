@@ -51,6 +51,7 @@ case "\$*" in
   *"k8s-app=cilium"*) printf 'c1 1/1 Running\nc2 1/1 Running\nc3 1/1 Running\n' ;;
   *"deploy coredns -o json") [ -f "$FX/coredns.unreadable" ] && exit 1; cat "$FX/coredns.json" ;;
   *"deploy coredns"*) echo 2 ;;
+  *"deploy cilium-operator -o json") [ -f "$FX/operator.unreadable" ] && exit 1; cat "$FX/operator.json" ;;
   *"get ns "*|*"get namespace "*) [ -f "$FX/no-flux-ns" ] && exit 1; echo Active ;;
   *"wait --for=condition=Available"*) echo ok ;;
   "-n flux-system get deployments -o json") [ -f "$FX/flux.unreadable" ] && exit 1; render "$FX/flux.live" deploy ;;
@@ -80,11 +81,12 @@ chmod +x "$W/stub"; for t in kubectl sleep; do ln -s "$W/stub" "$W/bin/$t"; done
 
 mkdns() { # <replicas> <hard hostname spread: true|false> — the Deployment kube-system/coredns as the apiserver returns it
   jq -nc --argjson r "$1" --argjson h "$2" '{spec:{replicas:$r,template:{spec:(if $h then {topologySpreadConstraints:[{topologyKey:"kubernetes.io/hostname",whenUnsatisfiable:"DoNotSchedule",maxSkew:1}]} else {} end)}}}' >"$FX/coredns.json"; }
+mkop() { jq -nc --argjson r "$1" '{spec:{replicas:$r}}' >"$FX/operator.json"; }
 mkgr() { jq -nc --arg r "$1" '{spec:{ref:{name:$r}}}' >"$FX/gr.json"; }
 mkks() { jq -nc --arg r "$1" '{spec:{postBuild:{substitute:{GIT_REF:$r}}}}' >"$FX/ks.json"; }
 reset() {
   rm -rf "$FX"; mkdir -p "$FX"; cp "$W/flux.target" "$FX/flux.live"; cp "$W/cilium.target" "$FX/cilium.live"
-  mkgr refs/tags/0.4.0; mkks refs/tags/0.4.0; mkdns 3 true
+  mkgr refs/tags/0.4.0; mkks refs/tags/0.4.0; mkdns 3 true; mkop 2
   echo '{"items":[]}' >"$FX/cnpg.json"
   printf 'git_ref = "refs/tags/0.4.0"\ndeploy_flux = true\ncluster_name = "c"\nenvironment = "dev"\n' >"$TFV"
   cp "$REAL_M"/{cilium.yaml,cilium-hubble-drops.yaml,flux-install.yaml} "$M/"
@@ -218,6 +220,35 @@ dep = next(d for d in yaml.safe_load_all(txt) if d and d["kind"] == "Deployment"
 want = {"spec": {"replicas": dep["spec"]["replicas"], "template": {"spec": {k: dep["spec"]["template"]["spec"][k] for k in ("tolerations", "topologySpreadConstraints")}}}}
 sys.exit(0 if patch == want else 1)
 PY
+
+echo "--- the Cilium operator runs 2 replicas (critical-path audit) ---"
+reset; run
+has "✓ the Cilium operator runs 2 replica(s)" && ok "2 replicas: passes" || bad "$(grep -i operator "$W/out")"
+reset; mkop 1; run
+{ [ -n "$(badline 'the Cilium operator has 1 replica(s), the manifest declares 2')" ] && has "kubectl -n kube-system patch deployment cilium-operator --type merge --patch-file scripts/ops/cilium-operator-ha-patch.json" && [ "$rc" -ne 0 ]; } \
+  && ok "the Talos-created operator (1 replica): BAD with the one-time command, run fails" || bad "$(grep -i operator "$W/out")"
+reset; : >"$FX/operator.unreadable"; run
+{ [ -n "$(unkline 'could not read Deployment kube-system/cilium-operator')" ] && ! has "✓ the Cilium operator runs"; } && ok "unreadable: UNKNOWN, not a pass" || bad "$(grep -i operator "$W/out")"
+reset; mkop 1; run local
+! has "the Cilium operator has" && ok "provider local: not judged" || bad "local judged"
+# the shipped manifest and the one-time patch say the same, and the local render keeps one replica
+python3 -I - "$PWD/scripts/ops/cilium-operator-ha-patch.json" "$PWD/$REAL_M/cilium.yaml" "$PWD/$REAL_M/cilium-hubble-drops.yaml" <<'PY' && ok "cilium-operator-ha-patch.json equals the operator Deployment of both committed artifacts (2 replicas, zone preference, budget of one, required hostname anti-affinity)" || bad "the patch file or the committed Cilium artifacts drifted"
+import json, sys, yaml
+patch = json.load(open(sys.argv[1]))
+for f in sys.argv[2:]:
+    docs = [d for d in yaml.safe_load_all(open(f)) if d]
+    dep = next(d for d in docs if d["kind"] == "Deployment" and d["metadata"]["name"] == "cilium-operator")
+    pod = dep["spec"]["template"]["spec"]
+    want = {"spec": {"replicas": dep["spec"]["replicas"], "strategy": dep["spec"]["strategy"], "template": {"spec": {"topologySpreadConstraints": pod["topologySpreadConstraints"]}}}}
+    assert patch == want, f
+    pdb = next(d for d in docs if d["kind"] == "PodDisruptionBudget" and d["metadata"]["name"] == "cilium-operator")
+    assert pdb["spec"]["maxUnavailable"] == 1 and pdb["spec"]["selector"]["matchLabels"].items() <= dep["spec"]["template"]["metadata"]["labels"].items()
+    anti = pod["affinity"]["podAntiAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]
+    assert any(t["topologyKey"] == "kubernetes.io/hostname" for t in anti), "hostnetwork pods must never share a node"
+    assert dep["spec"]["replicas"] == 2
+PY
+grep -q -- '--set operator.replicas=1' scripts/bootstrap/render-bootstrap-manifests.sh && [ "$(grep -c -- '--set operator.replicas=1' scripts/bootstrap/render-bootstrap-manifests.sh)" = 1 ] \
+  && ok "the local render keeps one operator replica (one Docker node); production renders 2" || bad "operator.replicas in the render script is not 1 (local) + 2 (production)"
 
 echo
 echo "pins-verify: $PASS passed, $FAIL failed"

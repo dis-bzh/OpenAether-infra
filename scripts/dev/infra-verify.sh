@@ -223,6 +223,25 @@ if [ "$PROVIDER" != local ] && [ "$(cfg_value coredns_ha)" != false ]; then
     unk "could not read Deployment kube-system/coredns — the replica count and spread are UNCHECKED"
   fi
 fi
+# The Cilium operator runs 2 replicas since 0.4.0 (critical-path audit: it ran 1). Same trap as CoreDNS above: the Cilium manifest is
+# an inline manifest, Talos creates its objects only when absent, so a cluster built by an older release keeps ONE operator replica
+# (the new budget appears, the Deployment does not change). Not judged on the local provider (one Docker node, replicas 1 by design).
+if [ "$PROVIDER" != local ]; then
+  info "The Cilium operator runs 2 replicas"
+  op_fix="kubectl -n kube-system patch deployment cilium-operator --type merge --patch-file scripts/ops/cilium-operator-ha-patch.json   (the operator pods restart one at a time; docs/upgrade.md, From 0.3.x to 0.4.0)"
+  if op_json="$(K -n kube-system get deploy cilium-operator -o json 2>/dev/null)" && [ -n "$op_json" ]; then
+    op_have="$(jq -r '.spec.replicas // empty' <<<"$op_json" 2>/dev/null)"
+    if ! [[ "$op_have" =~ ^[0-9]+$ ]]; then
+      unk "could not read the replica count of Deployment kube-system/cilium-operator"
+    elif [ "$EXPECTED" -ge 2 ] && [ "$op_have" -lt 2 ]; then
+      bad "the Cilium operator has ${op_have} replica(s), the manifest declares 2: a lost node leaves identity and node garbage collection and the Gateway/LB-IPAM controllers down for the 5 minute toleration; an object Talos created earlier is never rewritten by an inline manifest. One-time: ${op_fix}"
+    else
+      ok "the Cilium operator runs ${op_have} replica(s)"
+    fi
+  else
+    unk "could not read Deployment kube-system/cilium-operator — the operator replica count is UNCHECKED"
+  fi
+fi
 FLUX_NS="$(cfg_value flux_namespace)"; FLUX_NS="${FLUX_NS:-flux-system}"
 
 # Not cosmetic. deploy_flux defaults to false; if something re-enables it the cluster silently stops being the thing this
