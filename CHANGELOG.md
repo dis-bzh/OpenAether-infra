@@ -14,6 +14,12 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ## [Unreleased]
 
+### Changed
+
+- **flux-schema 0.15.0 → 0.16.0 and Helm 4.3.0 → 4.3.1** (Cléa #91, each probed green in a bare container and past the 7-day cooling-off): `ci.yml` and `scripts/setup.sh`
+  for both. Left out: Talos v1.14.4 and cilium 1.20.3 (probe failed; cilium 1.20.4 is out since), flux-schema 0.17.0, OpenTofu 1.13.2, plumber v0.7.11, tflint v0.65.0, aws-cli 2.38.5, checkov 3.3.30
+  and commitizen 4.19.3 (too young). Rung: mocked.
+
 ## [0.3.2] — 2026-10-22
 
 0.3.2 is a **security patch** of 0.3.1. It pairs with OpenAether-apps 0.3.2, which carries the actual change (Zitadel v4.19.5 against three HIGH account-takeover advisories, a generated login session

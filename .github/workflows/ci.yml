@@ -269,7 +269,7 @@ jobs:
       - name: Install flux-schema plugin
         env:
           # renovate: datasource=github-releases depName=fluxcd/flux-schema extractVersion=^v(?<version>.*)$
-          FLUX_SCHEMA_VERSION: "0.15.0"
+          FLUX_SCHEMA_VERSION: "0.16.0"
         run: flux plugin install "schema@${FLUX_SCHEMA_VERSION}"
 
       # One-time per-runner setup task itself doesn't need — tflint plugin init
@@ -304,7 +304,7 @@ jobs:
       - name: Install Helm (pinned + checksum-verified)
         env:
           # renovate: datasource=github-releases depName=helm/helm extractVersion=^v(?<version>.*)$
-          HELM_VERSION: "4.3.0"
+          HELM_VERSION: "4.3.1"
         run: |
           set -euo pipefail
           asset="helm-v${HELM_VERSION}-linux-amd64.tar.gz"
