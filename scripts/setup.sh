@@ -40,9 +40,9 @@ FLUX_VERSION="2.9.6"
 # pin as ci.yml's lint job, installed through `flux plugin install`, which
 # does its own checksum verification (fluxcd/flux2 RFC 0013).
 # renovate: datasource=github-releases depName=fluxcd/flux-schema extractVersion=^v(?<version>.*)$
-FLUX_SCHEMA_VERSION="0.15.0"
+FLUX_SCHEMA_VERSION="0.16.0"
 # renovate: datasource=github-releases depName=helm/helm extractVersion=^v(?<version>.*)$
-HELM_VERSION="4.3.0"
+HELM_VERSION="4.3.1"
 # Five more, pinned so Cléa compares a version instead of "whatever is newest today".
 # kubectl and aws-cli install from a named URL; the three Python tools via pip.
 # YAMLLINT_VERSION MUST equal the pip pin in ci.yml (check-version-drift.sh).
@@ -51,7 +51,7 @@ KUBECTL_VERSION="1.37.1"
 # renovate: datasource=github-tags depName=aws/aws-cli
 AWSCLI_VERSION="2.37.11"
 # renovate: datasource=pypi depName=checkov
-CHECKOV_VERSION="3.3.29"
+CHECKOV_VERSION="3.3.30"
 # renovate: datasource=pypi depName=yamllint
 YAMLLINT_VERSION="1.38.0"
 # renovate: datasource=pypi depName=pre-commit
