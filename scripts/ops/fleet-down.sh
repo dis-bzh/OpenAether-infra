@@ -319,10 +319,14 @@ if [ "$FAILED" -eq 0 ]; then
   elif [ "$VERIFY_CLUSTER" = "-" ]; then
     warn "cluster_name/environment not readable in ${TFV##*/}: the provider side was NOT verified (python3 scripts/ops/verify-provider-clean.py <cluster> $VERIFY_KIND)"
   else
-    for vtry in $(seq 1 "${OA_VERIFY_ATTEMPTS:-4}"); do
+    # A counted loop in the shell itself (no `seq`): and vrc starts at "could not be verified", so a zero or unreadable
+    # OA_VERIFY_ATTEMPTS never leaves it unset under `set -u`.
+    vrc=2; VERIFY_OUT=""; VERIFY_MAX="${OA_VERIFY_ATTEMPTS:-4}"
+    case "$VERIFY_MAX" in '' | *[!0-9]*) VERIFY_MAX=4 ;; esac
+    for ((vtry = 1; vtry <= VERIFY_MAX; vtry++)); do
       VERIFY_OUT="$(python3 "$VERIFY" "$VERIFY_CLUSTER" "$VERIFY_KIND" 2>&1)"; vrc=$?
       [ "$vrc" -eq 1 ] || break
-      [ "$vtry" -lt "${OA_VERIFY_ATTEMPTS:-4}" ] && { warn "attempt ${vtry}: $PROVIDER still has resources of '$VERIFY_CLUSTER', waiting for the provider to settle"; sleep "${OA_VERIFY_WAIT:-30}"; }
+      [ "$vtry" -lt "$VERIFY_MAX" ] && { warn "attempt ${vtry}: $PROVIDER still has resources of '$VERIFY_CLUSTER', waiting for the provider to settle"; sleep "${OA_VERIFY_WAIT:-30}"; }
     done
     case "$vrc" in
       0) ok "$PROVIDER holds nothing named after '$VERIFY_CLUSTER'" ;;

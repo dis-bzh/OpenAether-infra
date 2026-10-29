@@ -248,7 +248,7 @@ CHECKS = {
 # account", where seven block volumes billed for three days behind a clean
 # instance list.
 SCOPE = {
-    "openstack": "servers, load balancers",
+    "openstack": "servers, load balancers, networks, routers, security groups named after the cluster",
     "outscale": "VMs, unassociated public IPs, load balancers, Nets, subnets, route tables, internet and NAT services, security groups "
                 "named after the cluster (OA_CLEAN_IGNORE skips a known stuck Net)",
     "scaleway": "servers, LBs, public gateways, security groups and private networks "

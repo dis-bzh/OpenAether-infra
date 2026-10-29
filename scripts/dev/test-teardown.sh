@@ -510,6 +510,10 @@ expect_rc 0 "a check that could not run does not fail the teardown"
 expect_out "could NOT be verified" "but says so"
 run "$FLEET_DOWN" stubcloud --plan-file "$STUB_DIR/d.tfplan" --yes --force-no-edges
 expect_out "was NOT verified" "a provider without a check says so too"
+OA_VERIFY_ATTEMPTS=0 run "$FLEET_DOWN" outscale --plan-file "$STUB_DIR/d.tfplan" --yes --force-no-edges
+expect_rc 0 "zero attempts: no unbound variable, the teardown is not failed"
+refute_out "unbound variable" "and nothing crashes under set -u"
+expect_out "could NOT be verified" "it says the provider side was not checked"
 unset OA_VERIFY_ATTEMPTS OA_VERIFY_WAIT
 rm -f "$OA_ENVS_DIR/management-outscale.tfvars"
 
