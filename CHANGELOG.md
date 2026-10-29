@@ -19,6 +19,8 @@ in git. 0.1.0 is the first entry describing something proven.
 - **flux-schema 0.15.0 → 0.16.0 and Helm 4.3.0 → 4.3.1** (Cléa #91, each probed green in a bare container and past the 7-day cooling-off): `ci.yml` and `scripts/setup.sh`
   for both. Left out: Talos v1.14.4 and cilium 1.20.3 (probe failed; cilium 1.20.4 is out since), flux-schema 0.17.0, OpenTofu 1.13.2, plumber v0.7.11, tflint v0.65.0, aws-cli 2.38.5, checkov 3.3.30
   and commitizen 4.19.3 (too young). Rung: mocked.
+- **checkov 3.3.29 → 3.3.30** (Cléa #91, probed green in a bare container, released 2026-10-20): `scripts/setup.sh`. Left out: OpenTofu 1.13.2 and tflint v0.65.0 (not probed), flux-schema 0.17.0,
+  commitizen 4.19.3, plumber v0.7.16, feint v0.14.0 and aws-cli 2.39.0 (too young or not probed). Rung: mocked.
 
 ### Fixed
 
