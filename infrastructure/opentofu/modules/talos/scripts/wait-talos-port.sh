@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Wait until the Talos API ANSWERS on the given endpoint.
 # Usage: ENDPOINT=<host[:port]> [NODE=<ip>] [MAX_WAIT_SECONDS=900] ./wait-talos-port.sh
-#   [RECOVER_PROVIDER=ovh RECOVER_NAME=<instance> RECOVER_AFTER=300 RECOVER_CMD=<path of node-provider.py>]
+#   [RECOVER_PROVIDER=ovh RECOVER_NAME=<instance> RECOVER_AFTER=90 RECOVER_CMD=<path of node-provider.py>]
 #
 # Two ways to get this wrong, both met on 2026-08-12/13:
 #

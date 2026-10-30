@@ -1,5 +1,5 @@
 # port_ready_recovery (lab 27 part B, D6/D11, infra #371): the guard that waits for a new node's Talos port may ask the provider for a
-# hard reboot, OVH only, after 120 to 600 s, or not at all. Mocked: this proves what the variable accepts and that it changes nothing
+# hard reboot, OVH only, after 60 to 600 s (90 s shipped, lab 28), or not at all. Mocked: this proves what the variable accepts and that it changes nothing
 # else; that the call frees a real node (28 to 30 s by hand, twice) is proven by the next OVH creation that hits the trap.
 
 mock_provider "talos" {}
@@ -47,6 +47,28 @@ run "ovh_at_300_is_accepted" {
   }
 }
 
+run "ovh_at_90_is_accepted" {
+  command = plan
+  variables {
+    port_ready_recovery = { provider = "ovh", after_seconds = 90 }
+  }
+  assert {
+    condition     = var.port_ready_recovery.after_seconds == 90
+    error_message = "90 s is the shipped wait (lab 28: 5 of 5 trapped creations freed by the reboot, every healthy one answered at its first poll)"
+  }
+}
+
+run "the_lower_bound_is_accepted" {
+  command = plan
+  variables {
+    port_ready_recovery = { provider = "ovh", after_seconds = 60 }
+  }
+  assert {
+    condition     = var.port_ready_recovery.after_seconds == 60
+    error_message = "60 s, about twice the measured boot (28 to 34 s), is the lowest accepted wait"
+  }
+}
+
 run "another_provider_is_refused" {
   command = plan
   variables {
@@ -59,6 +81,14 @@ run "a_wait_shorter_than_a_boot_is_refused" {
   command = plan
   variables {
     port_ready_recovery = { provider = "ovh", after_seconds = 30 }
+  }
+  expect_failures = [var.port_ready_recovery]
+}
+
+run "a_wait_just_under_the_bound_is_refused" {
+  command = plan
+  variables {
+    port_ready_recovery = { provider = "ovh", after_seconds = 59 }
   }
   expect_failures = [var.port_ready_recovery]
 }

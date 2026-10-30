@@ -82,9 +82,14 @@ T="$ROOT/infrastructure/opentofu"
   && [ "$(grep -c 'RECOVER_NAME     = "${var.cluster_name}-' "$T/modules/talos/main.tf")" = 2 ] \
   && [ "$(grep -c 'node-provider.py' "$T/modules/talos/main.tf")" -ge 2 ] \
   && ok_ "both guards (control plane and worker) pass the provider, the instance name and the script to the wait" || bad "the module does not pass the recovery environment to both guards"
+RV="$(sed -n '/variable "port_ready_hard_reboot_after_seconds"/,/^}/p' "$T/cluster/variables.tf")"
 grep -q 'provider      = contains(local.active_providers, "ovh") ? "ovh" : ""' "$T/cluster/main.tf" \
-  && grep -q 'default     = 300' <(sed -n '/variable "port_ready_hard_reboot_after_seconds"/,/^}/p' "$T/cluster/variables.tf") \
-  && ok_ "the root passes \"ovh\" only when OVH is active, 300 s by default" || bad "the root wiring changed"
+  && grep -q 'default     = 90$' <<<"$RV" \
+  && ok_ "the root passes \"ovh\" only when OVH is active, 90 s by default (it was 300 s before lab 28)" || bad "the root wiring changed"
+# 90 s is only reachable if both validations (the root's and the module's, which sees the value last) accept it: the lower bound is 60.
+grep -q 'var.port_ready_hard_reboot_after_seconds >= 60 &&' <<<"$RV" \
+  && grep -q 'var.port_ready_recovery.after_seconds >= 60 &&' "$T/modules/talos/variables.tf" \
+  && ok_ "root and module both accept 60 to 600 s (and 0 = off): the default of 90 s is inside the bounds" || bad "a validation still refuses 90 s"
 grep -q -- '--younger-than' "$ROOT/scripts/ops/node-provider.py" \
   && ok_ "node-provider.py knows the age limit the guard sends" || bad "node-provider.py has no --younger-than"
 

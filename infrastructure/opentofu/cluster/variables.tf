@@ -228,16 +228,22 @@ variable "skip_port_ready_wait" {
 
 variable "port_ready_hard_reboot_after_seconds" {
   description = <<-EOT
-    OVH only. A new instance that the provider calls ACTIVE but whose Talos API never answers (infra #371; 2 of 12 creations in
-    lab 27 part B, +5 to +11 minutes each) is hard-rebooted through the provider API after this many seconds of waiting, at most
-    twice, and only while it is less than an hour old (scripts/ops/node-provider.py hard-reboot --younger-than). 0 turns it off.
-    120 to 600. A reboot of a node in maintenance mode loses nothing; the same call was the manual fix (28 to 30 s).
+    OVH only. A new instance that the provider calls ACTIVE but whose Talos API never answers (infra #371; lab 27: 2 of 12
+    creations, +5 to +11 minutes each; lab 28: 5 of 14, all freed by the reboot at the first attempt) is hard-rebooted through the
+    provider API after this many seconds of waiting, at most twice, and only while it is less than an hour old
+    (scripts/ops/node-provider.py hard-reboot --younger-than). 0 turns it off. 60 to 600.
+    Default 90 since lab 28 (owner decision 2026-10-30); it was 300 in the first version (lab 27), which cost 3.5 minutes on every
+    trapped creation. Why 90 is safe: the guard starts after the instance is ACTIVE (in `cluster-up`, about 13 minutes after in
+    lab 28), every healthy OVH creation on record answered at the guard's first poll (26: 17 in the logs of labs d1, fa, o1, relval
+    and 27D, 9 in lab 28; none between 1 and 300 s), and a cold boot after a hard reboot answers in 28 to 34 s, so 90 s is about
+    three boots even if the guard started at the very instant of ACTIVE. A reboot of a node in maintenance mode loses nothing; a
+    needless one costs one boot.
   EOT
   type        = number
-  default     = 300
+  default     = 90
   validation {
-    condition     = var.port_ready_hard_reboot_after_seconds == 0 || (var.port_ready_hard_reboot_after_seconds >= 120 && var.port_ready_hard_reboot_after_seconds <= 600)
-    error_message = "port_ready_hard_reboot_after_seconds must be 0 (off) or 120 to 600."
+    condition     = var.port_ready_hard_reboot_after_seconds == 0 || (var.port_ready_hard_reboot_after_seconds >= 60 && var.port_ready_hard_reboot_after_seconds <= 600)
+    error_message = "port_ready_hard_reboot_after_seconds must be 0 (off) or 60 to 600."
   }
 }
 

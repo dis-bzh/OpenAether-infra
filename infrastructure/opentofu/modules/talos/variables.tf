@@ -92,7 +92,7 @@ variable "port_ready_recovery" {
     terraform_data.talos_port_ready_* waits for the port; when `after_seconds` have passed without an answer it runs
     scripts/ops/node-provider.py hard-reboot <provider> for that node, at most twice, and only on a machine created less than an
     hour ago (the guard also runs when a tunnel is down on a cluster that has been serving for days). `provider` is "ovh" or ""
-    (off): the OVH instance that is ACTIVE with a dead Talos was seen on 2 of 12 creations (lab 27 part B), the other two providers
+    (off): the OVH instance that is ACTIVE with a dead Talos was seen on 2 of 12 creations (lab 27 part B) and 5 of 14 (lab 28), the other two providers
     were never seen to need it and their reboot call has not been run against a real account. `after_seconds` 0 turns it off.
   EOT
   type = object({
@@ -105,8 +105,8 @@ variable "port_ready_recovery" {
     error_message = "port_ready_recovery.provider must be \"ovh\" or \"\" (off): only OVH needs it, and node-provider.py's age check exists for OVH only."
   }
   validation {
-    condition     = var.port_ready_recovery.after_seconds == 0 || (var.port_ready_recovery.after_seconds >= 120 && var.port_ready_recovery.after_seconds <= 600)
-    error_message = "port_ready_recovery.after_seconds must be 0 (off) or 120 to 600: shorter reboots a machine that is still booting, longer eats the 900 s the wait has."
+    condition     = var.port_ready_recovery.after_seconds == 0 || (var.port_ready_recovery.after_seconds >= 60 && var.port_ready_recovery.after_seconds <= 600)
+    error_message = "port_ready_recovery.after_seconds must be 0 (off) or 60 to 600: shorter reboots a machine that is still booting (about 30 s), longer eats the 900 s the wait has."
   }
 }
 
