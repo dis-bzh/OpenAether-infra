@@ -52,9 +52,14 @@ deploy_app_lb   = true
 node_distribution = {
   ovh = {
     control_planes     = 3
-    workers            = 3
-    # 3 workers, not 2: lab 16 measured 82% + 91% = 172% of one worker's CPU requested on 2 c3-8, and `cluster-roll`
-    # refuses above (workers - 1) x 100%. With 3 the same load is about 90% of that limit (docs/capacity.md).
+    workers            = 4
+    # 4 workers, not 3 (nor 2): lab 16 measured 82% + 91% = 172% of one worker's CPU requested on 2 c3-8, and `cluster-roll`
+    # refuses above (workers - 1) x 100%. The full platform measured about 9 vCPU (223-228% of a worker) on Scaleway in lab 21,
+    # above the 8 vCPU that 3 workers of 4 vCPU leave; with 4 it is about 75% of that limit (docs/capacity.md).
+    # "5 workers zone-HA" profile (infra #389): set `workers = 5` and nothing else. Workers go round-robin over `availability_zones`, so 5 land
+    # 2 + 2 + 1 on eu-west-par-a/b/c and the loss of ANY ONE zone leaves 3 workers (300%) for about 245% requested (measured on Scaleway, lab 22). With 4 (this example)
+    # the zone holding two workers cannot be lost: 2 stay (200%) for 224%. `task failure-domain-check PROVIDER=ovh` says which
+    # (script test: scripts/dev/test-failure-domain-check.sh). Costs one more instance; check your quota first (docs/capacity.md).
     region             = "EU-WEST-PAR"
     # c3-8 (4 vCPU / 8 GB), not b3-8 (2 vCPU): measured 2026-08-15, three b3-8
     # workers sit at ~99% of CPU requests with the platform on them, so no node
@@ -160,3 +165,15 @@ s3_replica_region   = "gra"                              # prod: e.g. fr-par
 # --- Node system disk --------------------------------------------------------
 # The root disk is the flavour's. The application stack needs ~11 GB of images per node: pick a flavour with at least
 # 50 GB (b3-8 has 50); with deploy_flux a `check` warns when the flavour's disk is below 40 GB.
+
+# Audit sink (infra #318, docs/audit-sink.md): a second copy of the Kubernetes audit log OUTSIDE the cluster, object lock, client-side
+# encryption. Off by default. Also needs the apps component audit-log-sink and a dedicated key pair
+# (scripts/ops/backup-key-recipe.sh <this file> audit-sink; OA_AUDIT_SINK_S3_ACCESS_KEY_ID / OA_AUDIT_SINK_S3_SECRET_ACCESS_KEY at seed time).
+# audit_sink_placement          = "other_provider"   # other_provider | same_provider_other_region | both
+# audit_sink_endpoint           = "https://s3.fr-par.scw.cloud"   # an OVH cluster: the sink on Scaleway
+# audit_sink_region             = "fr-par"
+# audit_sink_secondary_endpoint = ""                 # only with "both": the cluster's own provider, another region
+# audit_sink_secondary_region   = ""
+# audit_sink_prefix             = "audit"
+# audit_sink_lock_mode          = "governance"       # compliance needs audit_sink_compliance_ack = true (irreversible until the retention ends)
+# audit_sink_retention_days     = 365

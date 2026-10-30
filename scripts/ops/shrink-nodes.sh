@@ -196,6 +196,23 @@ pinned_pvs() { # <node>
     | "\(.metadata.name) (\(.spec.claimRef.namespace // "-")/\(.spec.claimRef.name // "-"))"'
 }
 
+# The commands that clear <node> of its node-local volumes, for the refusal below (docs/upgrade.md, "Evacuating a node before
+# a shrink"). One line per fact the guard reads: the claim (PVC) and the PersistentVolume, which a `Retain` class leaves behind
+# as `Released` and which keeps the node pinned until it is deleted too.
+evacuation_steps() { # <node> <pinned_pvs lines>
+  local node="$1" line pv claim ns pvc
+  echo "    kubectl cordon ${node}"
+  echo "    # a CNPG primary on it first: kubectl cnpg promote <cluster> <replica instance> -n <namespace>; a Raft member (OpenBao): bao operator raft remove-peer first"
+  echo "    # then, for the pod that uses each volume below: kubectl -n <namespace> delete pod <pod>   (CNPG and StatefulSets recreate it on another node)"
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    pv="${line%% (*}"; claim="${line#*(}"; claim="${claim%)}"; ns="${claim%%/*}"; pvc="${claim#*/}"
+    if [[ "$ns" != "-" && "$pvc" != "-" ]]; then echo "    kubectl -n ${ns} delete pvc ${pvc}     # skip it when the volume is already Released: its claim is gone"; fi
+    echo "    kubectl delete pv ${pv}     # a Retain volume stays pinned to the node as Released until it is deleted"
+  done <<<"$2"
+  echo "    task cluster-shrink-plan PROVIDER=${PROVIDER}$([[ $ROLE == management ]] || echo " ROLE=${ROLE}")     # again: it reads the volumes afresh"
+}
+
 # Longhorn rebuilds a replica elsewhere only if there is an elsewhere: the lines of volumes that want more
 # replicas than the schedulable nodes left once ALL of <node>... are gone.
 longhorn_room() { # <node>...
@@ -209,7 +226,7 @@ longhorn_room() { # <node>...
 
 SC_NODES=()
 survey_removal() { # read-only: refuse before any mutation. Tolerates a resumed run: a node already gone, an etcd already left.
-  local nj i ip node pvs lh cap pct w nodes=0 total=0 leaving=0 notready peer pep pip mt m want tip skip
+  local nj i ip node pvs lh cap mem pct w nodes=0 total=0 leaving=0 notready peer pep pip mt m want tip skip
   nj="$("${KCTL[@]}" get nodes -o json 2>"$D/k.err")" || die "kubectl cannot reach the API ($(tail -n 1 "$D/k.err"))"
   SC_NODES=()
   for i in "${SC_IDX[@]}"; do
@@ -244,7 +261,8 @@ survey_removal() { # read-only: refuse before any mutation. Tolerates a resumed 
     pvs="$(pinned_pvs "$node")" || die "could not list the volumes"
     [[ -z "$pvs" ]] || die "${node} holds node-local volumes, which removal destroys:
 $(sed 's/^/    /' <<<"$pvs")
-  Move that data off the node first (CNPG: switch over, scale the instance elsewhere)."
+  Move that data off the node first (CNPG: switch over, scale the instance elsewhere). The guard stays; the steps:
+$(evacuation_steps "$node" "$pvs")"
   done
   if (( ${#SC_NODES[@]} > 0 )); then
     lh="$(longhorn_room "${SC_NODES[@]}")" || die "could not read Longhorn"
@@ -260,6 +278,15 @@ $(sed 's/^/    /' <<<"$lh")
     done <<<"$cap"
     (( nodes - leaving >= 1 && total <= (nodes - leaving) * 100 )) \
       || die "the ${nodes} workers request ${total}% of one worker's CPU; the $((nodes - leaving)) that stay hold $(( (nodes - leaving) * 100 ))%. Add capacity or keep the node."
+    # And their memory: the CPU passed a shrink whose evacuated pods then stayed Pending for lack of it (lab 27 part B, F-SHRINKMEM).
+    mem="$(worker_memory_requests)" || die "the workers could not be described — refusing to remove blind."
+    nodes=0; total=0; leaving=0
+    while read -r w pct; do
+      [[ "$pct" =~ ^[0-9]+$ ]] || continue; nodes=$((nodes + 1)); total=$((total + pct))
+      printf '%s\n' "${SC_NODES[@]:-}" | grep -qxF "$w" && leaving=$((leaving + 1))
+    done <<<"$mem"
+    (( nodes == 0 || (nodes - leaving >= 1 && total <= (nodes - leaving) * 100) )) \
+      || die "the ${nodes} workers request ${total}% of one worker's memory; the $((nodes - leaving)) that stay hold $(( (nodes - leaving) * 100 ))%. Add capacity or keep the node."
   fi
   ok "the cluster can lose ${SC_CLASS} ${SC_IDX[*]}"
 }

@@ -14,6 +14,8 @@ directly instead of trusting that silence means clean.
 Never deletes anything — see scripts/ops/purge-orphans/ for that (whole
 account, deliberately manual, not safe to call unattended from here).
 
+`task cluster-down` (scripts/ops/fleet-down.sh) runs it after the destroy and FAILS on a leftover (lab 27 part C, E5).
+
 Exit codes: 0 clean, 1 leftovers found (printed to stdout), 2 could not verify
 (missing credentials / unsupported provider — printed to stderr).
 
@@ -152,7 +154,58 @@ def outscale_leftovers(cluster: str) -> list[str]:
     for ip in call("ReadPublicIps").get("PublicIps", []):
         if not ip.get("VmId") and not ip.get("LinkPublicIpId"):
             leftovers.append(f"unassociated EIP {ip.get('PublicIp')}")
+    leftovers += outscale_network_leftovers(cluster, call)
     return leftovers
+
+
+def outscale_network_leftovers(cluster: str, call) -> list[str]:
+    """Load balancers, Nets, subnets, route tables, internet services, NAT services and security groups named after the cluster.
+
+    Lab 27 part C (E5): `cluster-down` ended with "fleet-down complete" while 2 load balancers, a subnet, a route table, an internet
+    service and the Net were still there (purge-orphans removed them): this check only listed VMs and unassociated IPs, so it could
+    not see them. A resource belongs to the cluster when its Name tag or load balancer name contains `cluster`, or when it sits in a Net
+    that does. OA_CLEAN_IGNORE (comma-separated ids) skips a known stuck Net (infra #43: the provider cannot delete it) and everything in it.
+    """
+    ignore = {i.strip() for i in os.environ.get("OA_CLEAN_IGNORE", "").split(",") if i.strip()}
+
+    def name_of(o: dict) -> str:
+        return next((t["Value"] for t in o.get("Tags", []) if t["Key"] == "Name"), "")
+
+    def mine(o: dict) -> bool:
+        return cluster in name_of(o) or cluster in (o.get("LoadBalancerName") or "") or cluster in (o.get("SecurityGroupName") or "")
+
+    nets = call("ReadNets").get("Nets", [])
+    ignored_nets = {n["NetId"] for n in nets if n["NetId"] in ignore}
+    mine_nets = {n["NetId"] for n in nets if n["NetId"] not in ignored_nets and mine(n)}
+    out = [f"net {n['NetId']} ({name_of(n)})" for n in nets if n["NetId"] in mine_nets]
+
+    def in_scope(o: dict, ident: str) -> bool:
+        if ident in ignore or o.get("NetId") in ignored_nets:
+            return False
+        return mine(o) or o.get("NetId") in mine_nets
+
+    for lb in call("ReadLoadBalancers").get("LoadBalancers", []):
+        if lb.get("NetId") in ignored_nets or lb["LoadBalancerName"] in ignore:
+            continue
+        if cluster in lb["LoadBalancerName"] or lb.get("NetId") in mine_nets:
+            out.append(f"load balancer {lb['LoadBalancerName']}")
+    for sub in call("ReadSubnets").get("Subnets", []):
+        if in_scope(sub, sub["SubnetId"]):
+            out.append(f"subnet {sub['SubnetId']} ({name_of(sub) or sub.get('IpRange')})")
+    for rt in call("ReadRouteTables").get("RouteTables", []):
+        if in_scope(rt, rt["RouteTableId"]):
+            out.append(f"route table {rt['RouteTableId']} ({name_of(rt)})")
+    for igw in call("ReadInternetServices").get("InternetServices", []):
+        if in_scope(igw, igw["InternetServiceId"]):
+            out.append(f"internet service {igw['InternetServiceId']}")
+    for nat in call("ReadNatServices").get("NatServices", []):
+        if nat.get("State") != "deleted" and in_scope(nat, nat["NatServiceId"]):
+            out.append(f"NAT service {nat['NatServiceId']}")
+    for sg in call("ReadSecurityGroups").get("SecurityGroups", []):
+        # The Net's default group goes with the Net; a group of ours alone is a leftover.
+        if sg.get("SecurityGroupName") != "default" and in_scope(sg, sg["SecurityGroupId"]):
+            out.append(f"security group {sg['SecurityGroupId']} ({sg.get('SecurityGroupName')})")
+    return out
 
 
 def _scaleway():
@@ -195,8 +248,9 @@ CHECKS = {
 # account", where seven block volumes billed for three days behind a clean
 # instance list.
 SCOPE = {
-    "openstack": "servers, load balancers",
-    "outscale": "VMs, unassociated public IPs",
+    "openstack": "servers, load balancers, networks, routers, security groups named after the cluster",
+    "outscale": "VMs, unassociated public IPs, load balancers, Nets, subnets, route tables, internet and NAT services, security groups "
+                "named after the cluster (OA_CLEAN_IGNORE skips a known stuck Net)",
     "scaleway": "servers, LBs, public gateways, security groups and private networks "
                 "named or tagged after the cluster; every detached flexible IP, LB IP, "
                 "gateway IP and volume (block or instance API) in the project",

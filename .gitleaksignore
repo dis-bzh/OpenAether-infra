@@ -26,3 +26,12 @@
 67cbbf91aa94bc830643297504d0f6b9a7badc00:infrastructure/opentofu/modules/talos/tests/node-nameservers.tftest.hcl:openaether-public-ipv4:339
 67cbbf91aa94bc830643297504d0f6b9a7badc00:infrastructure/opentofu/modules/talos/tests/node-nameservers.tftest.hcl:openaether-public-ipv4:355
 67cbbf91aa94bc830643297504d0f6b9a7badc00:infrastructure/opentofu/modules/talos/tests/node-nameservers.tftest.hcl:openaether-public-ipv4:363
+
+# The fixture bucket name of test-dr-restore-plan.sh (a made-up "zz" account, nobody's bucket) in three intermediate commits of the
+# 0.4.0 branch. The env-data rule reads it as a real bucket name; the head spells it so it does not. History is not rewritten, and a
+# scan of the PR's commits re-reads these five lines. Each fingerprint is one commit, one file, one rule, one line.
+92d122e40f66b49d3f25b02eb461d806f6c6acdb:scripts/dev/test-dr-restore-plan.sh:openaether-bucket-name:92
+510a71dcd9507643cb89ed69ceee3e9afc95c457:scripts/dev/test-dr-restore-plan.sh:openaether-bucket-name:102
+510a71dcd9507643cb89ed69ceee3e9afc95c457:scripts/dev/test-dr-restore-plan.sh:openaether-bucket-name:108
+f16dde0a7e24fc656e3423f6536ecd783f4b810b:scripts/dev/test-dr-restore-plan.sh:openaether-bucket-name:102
+f16dde0a7e24fc656e3423f6536ecd783f4b810b:scripts/dev/test-dr-restore-plan.sh:openaether-bucket-name:108

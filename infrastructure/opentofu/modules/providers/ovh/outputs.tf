@@ -16,6 +16,11 @@ output "control_plane_zones" {
   value       = openstack_compute_instance_v2.control_plane[*].availability_zone
 }
 
+output "worker_zones" {
+  description = "Availability zone of each worker, in worker_private_ips order"
+  value       = openstack_compute_instance_v2.worker[*].availability_zone
+}
+
 # Load Balancer IPs (floating IPs)
 output "k8s_lb_ip" {
   description = "Public IP of the Kubernetes API LB (6443), or the private Talos VIP when k8s_lb_mode = \"vip\""
@@ -64,7 +69,7 @@ output "app_lb_monitors" {
   description = "health monitors of the app LB http and https pools, for tests"
   value = {
     for k, m in { http = openstack_lb_monitor_v2.http, https = openstack_lb_monitor_v2.https } :
-    k => one([for x in m : { type = x.type, delay = x.delay, timeout = x.timeout, max_retries = x.max_retries }])
+    k => one([for x in m : { type = x.type, delay = x.delay, timeout = x.timeout, max_retries = x.max_retries, max_retries_down = x.max_retries_down }])
   }
 }
 

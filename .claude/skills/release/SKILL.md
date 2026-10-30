@@ -47,7 +47,14 @@ validation leg turned it on, so what the pin asserts is that the tag exists and
    the archive** — and check that the quick start's commands exist and its values
    are accepted. Infra's `tags` ruleset blocks moving or deleting a tag, so a
    defect found after tagging cannot be re-cut away.
-3. Tag it, then a GitHub release, with notes that name the limits.
+3. Tag it, then a GitHub release, with notes that name the limits. The tag is an **annotated, signed** tag made with
+   the release key of the signer table (`docs/signed-commits.md`), pushed **before** the release exists, and the
+   release is created against it: `git tag -s -u <fingerprint> -m "OpenAether-infra <tag>" <tag> <release sha>`,
+   `./scripts/dev/check-release-tag.sh <tag>` (annotated, signer in the table), `git push origin <tag>`, then
+   `gh release create <tag> --verify-tag --notes-file notes.md`. The notes carry the release commit SHA in full. A client
+   checks it with `git verify-tag <tag>` (the public key is `docs/signers/release-vps.asc`, compare its fingerprint
+   with the table) and `git rev-parse <tag>^{commit}` against the notes. Immutable releases are on; no admin token is
+   used in CI, so bypass actors are checked by hand each release (`check-required-checks.sh`, checklist section 8).
 
 ## The notes must admit what is not fixed
 

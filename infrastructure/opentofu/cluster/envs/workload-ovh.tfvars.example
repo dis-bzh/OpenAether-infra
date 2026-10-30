@@ -28,7 +28,7 @@ deploy_app_lb   = true
 node_distribution = {
   ovh = {
     control_planes     = 3
-    workers            = 3
+    workers            = 4 # 4 workers of 4 vCPU keep `cluster-roll` passable with the full platform, docs/capacity.md
     region             = "EU-WEST-PAR"
     # c3-8 (4 vCPU / 8 GB), not b3-8 (2 vCPU): measured 2026-08-15, three b3-8
     # workers sit at ~99% of CPU requests with the platform on them, so no node

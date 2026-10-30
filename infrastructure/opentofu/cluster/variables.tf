@@ -72,6 +72,105 @@ variable "backup_retention_days" {
   }
 }
 
+# ==============================================================================
+# Audit sink (infra #318): a second copy of the audit logs OUTSIDE the cluster. docs/audit-sink.md.
+# Read from the tfvars by scripts/lib/audit-sink.sh (the buckets exist before OpenTofu runs); the only things OpenTofu does
+# with them are the checks and the two non-secret values it publishes in the cluster-identity ConfigMap (the egress policy
+# needs the sink's host name, and a policy cannot read a Secret). Off by default: nothing changes for a deployed cluster.
+# ==============================================================================
+
+variable "audit_sink_placement" {
+  description = <<-EOT
+    Where the second copy of the Kubernetes audit log lives (class A, zero loss; docs/audit-sink.md):
+
+      off                          (default) no sink; nothing in the cluster or the apps changes.
+      other_provider               another cloud than the cluster's (proposed default when the sink is on): survives an
+                                   account-level event on the cluster's cloud.
+      same_provider_other_region   the cluster's own provider in another region: cheaper, one account, but an account-level
+                                   event reaches both copies unless audit_sink_lock_mode = "compliance".
+      both                         audit_sink_endpoint = another provider AND audit_sink_secondary_endpoint = the cluster's
+                                   provider in another region.
+  EOT
+  type        = string
+  default     = "off"
+  validation {
+    condition     = contains(["off", "other_provider", "same_provider_other_region", "both"], var.audit_sink_placement)
+    error_message = "audit_sink_placement must be off, other_provider, same_provider_other_region or both."
+  }
+  validation {
+    condition     = var.audit_sink_placement == "off" || (var.audit_sink_endpoint != "" && var.audit_sink_region != "")
+    error_message = "audit_sink_placement is on: audit_sink_endpoint and audit_sink_region are required."
+  }
+  validation {
+    condition     = var.audit_sink_placement != "both" || (var.audit_sink_secondary_endpoint != "" && var.audit_sink_secondary_region != "")
+    error_message = "audit_sink_placement = both: audit_sink_secondary_endpoint and audit_sink_secondary_region are required."
+  }
+}
+
+variable "audit_sink_endpoint" {
+  description = "S3 endpoint of the first audit sink (https://...). other_provider and both: another provider than the cluster's; same_provider_other_region: the cluster's provider. Whether it is on the right cloud is checked by scripts/lib/audit-sink.sh and a check block, not here (a plan and a destroy must keep working)."
+  type        = string
+  default     = ""
+}
+
+variable "audit_sink_region" {
+  description = "S3 region of the first audit sink (for same_provider_other_region it must differ from s3_primary_region)."
+  type        = string
+  default     = ""
+}
+
+variable "audit_sink_secondary_endpoint" {
+  description = "Only with audit_sink_placement = both: S3 endpoint of the SAME-provider sink in another region."
+  type        = string
+  default     = ""
+}
+
+variable "audit_sink_secondary_region" {
+  description = "Only with audit_sink_placement = both: its region (must differ from s3_primary_region)."
+  type        = string
+  default     = ""
+}
+
+variable "audit_sink_prefix" {
+  description = "Key prefix inside the sink bucket; the shipper writes <prefix>/<node>/<UTC day>/."
+  type        = string
+  default     = "audit"
+  validation {
+    condition     = can(regex("^[a-z0-9][a-z0-9/_-]{0,62}$", var.audit_sink_prefix)) && !endswith(var.audit_sink_prefix, "/")
+    error_message = "audit_sink_prefix must be lowercase letters, digits, - _ and /, not end with /, at most 63 characters."
+  }
+}
+
+variable "audit_sink_lock_mode" {
+  description = "Object-lock mode of the sink bucket(s): governance (default; a key with the bypass right can still remove a version) or compliance (nobody can, the account owner included, until the retention ends: needs audit_sink_compliance_ack = true)."
+  type        = string
+  default     = "governance"
+  validation {
+    condition     = contains(["governance", "compliance"], var.audit_sink_lock_mode)
+    error_message = "audit_sink_lock_mode must be governance or compliance."
+  }
+  validation {
+    condition     = var.audit_sink_lock_mode != "compliance" || var.audit_sink_compliance_ack
+    error_message = "audit_sink_lock_mode = compliance cannot be undone before the retention ends, by anyone: set audit_sink_compliance_ack = true to say you mean it."
+  }
+}
+
+variable "audit_sink_retention_days" {
+  description = "Default object-lock retention of the sink, in days (also the expiry of non-current versions)."
+  type        = number
+  default     = 365
+  validation {
+    condition     = var.audit_sink_retention_days >= 1 && var.audit_sink_retention_days <= 3650 && floor(var.audit_sink_retention_days) == var.audit_sink_retention_days
+    error_message = "audit_sink_retention_days must be a whole number of days from 1 to 3650."
+  }
+}
+
+variable "audit_sink_compliance_ack" {
+  description = "Explicit opt-in for audit_sink_lock_mode = compliance: the locked objects, and the bucket, cannot be removed before audit_sink_retention_days have passed."
+  type        = bool
+  default     = false
+}
+
 variable "environment" {
   description = "Deployment environment (e.g., dev, prod)"
   type        = string
@@ -125,6 +224,27 @@ variable "skip_port_ready_wait" {
   EOT
   type        = bool
   default     = false
+}
+
+variable "port_ready_hard_reboot_after_seconds" {
+  description = <<-EOT
+    OVH only. A new instance that the provider calls ACTIVE but whose Talos API never answers (infra #371; lab 27: 2 of 12
+    creations, +5 to +11 minutes each; lab 28: 5 of 14, all freed by the reboot at the first attempt) is hard-rebooted through the
+    provider API after this many seconds of waiting, at most twice, and only while it is less than an hour old
+    (scripts/ops/node-provider.py hard-reboot --younger-than). 0 turns it off. 60 to 600.
+    Default 90 since lab 28 (owner decision 2026-10-30); it was 300 in the first version (lab 27), which cost 3.5 minutes on every
+    trapped creation. Why 90 is safe: the guard starts after the instance is ACTIVE (in `cluster-up`, about 13 minutes after in
+    lab 28), every healthy OVH creation on record answered at the guard's first poll (26: 17 in the logs of labs d1, fa, o1, relval
+    and 27D, 9 in lab 28; none between 1 and 300 s), and a cold boot after a hard reboot answers in 28 to 34 s, so 90 s is about
+    three boots even if the guard started at the very instant of ACTIVE. A reboot of a node in maintenance mode loses nothing; a
+    needless one costs one boot.
+  EOT
+  type        = number
+  default     = 90
+  validation {
+    condition     = var.port_ready_hard_reboot_after_seconds == 0 || (var.port_ready_hard_reboot_after_seconds >= 60 && var.port_ready_hard_reboot_after_seconds <= 600)
+    error_message = "port_ready_hard_reboot_after_seconds must be 0 (off) or 60 to 600."
+  }
 }
 
 variable "secrets_prevent_destroy" {
@@ -181,7 +301,7 @@ variable "talos_version" {
   description = "Talos Linux version"
   type        = string
   # renovate: datasource=github-releases depName=siderolabs/talos
-  default = "v1.14.2"
+  default = "v1.14.4"
 }
 
 variable "kubernetes_version" {
@@ -299,7 +419,7 @@ variable "scw_root_volume_size_gb" {
 variable "outscale_root_volume_size_gb" {
   description = <<-EOT
     Outscale only: size in GB of the root (BSU) volume of every NEW node. null (the default) keeps the size of the OMI, which is
-    the raw Talos image rounded up to a GiB (about 11-12): Talos then has only a few GB of EPHEMERAL, which the full application
+    the raw Talos image rounded down to a GiB (about 11-12): Talos then has only a few GB of EPHEMERAL, which the full application
     stack (~11 GB of images per worker) does not fit. Set 50 for a cluster that carries the platform; a `check` warns when
     deploy_flux is on and this is null. Applies to nodes created after the change only (the volume of an existing VM
     is not resized in place by this provider; `ignore_changes` keeps a running node from being replaced): to grow a running
@@ -310,6 +430,40 @@ variable "outscale_root_volume_size_gb" {
   validation {
     condition     = var.outscale_root_volume_size_gb == null || (var.outscale_root_volume_size_gb >= 20 && var.outscale_root_volume_size_gb <= 14901)
     error_message = "outscale_root_volume_size_gb must be null or between 20 and 14901."
+  }
+}
+
+variable "outscale_root_volume_type" {
+  description = <<-EOT
+    Outscale only: BSU type of the root volume of every NEW node. Default io1 (provisioned IOPS, see outscale_root_volume_iops).
+    Lab 27 part C: nodes with the old hard-coded gp2 at 50 GB had 150 IOPS (gp2 gives 3 IOPS per GiB), containerd and the
+    kubelet starved (`CRI DeadlineExceeded`, a worker NotReady twice) and a whole cluster took 924 s to come back after one node
+    loss (OVH: 155 s). `gp2` restores the old behaviour (cheaper, slower; the IOPS then follow the size: 100 GiB = 300);
+    `standard` is the magnetic type and is not recommended. io1 is billed for the storage AND the provisioned IOPS: read the
+    Outscale price list for your region, the effect has not been measured here. Applies to nodes created after the change only
+    (a running VM is not touched, `ignore_changes`): replace the nodes one at a time with `task cluster-roll`. The data disks of
+    `worker_storage` have their own type. UNPROVEN on a cluster until the next Outscale lab.
+  EOT
+  type        = string
+  default     = "io1"
+  validation {
+    condition     = contains(["gp2", "io1", "standard"], var.outscale_root_volume_type)
+    error_message = "outscale_root_volume_type must be gp2, io1 or standard."
+  }
+}
+
+variable "outscale_root_volume_iops" {
+  description = <<-EOT
+    Outscale only: provisioned IOPS of an io1 root volume (ignored for gp2 and standard). Default 1500: ten times the 150 IOPS
+    of the old 50 GB gp2 root. The API allows 1 to 13000 and at most 300 IOPS per GiB, so a 50 GB volume takes up to 13000 and
+    the OMI-sized one (about 12 GiB, outscale_root_volume_size_gb = null) up to 3600; a `check` warns when the pair is out of
+    that ratio. Billed per provisioned IOPS: see outscale_root_volume_type.
+  EOT
+  type        = number
+  default     = 1500
+  validation {
+    condition     = var.outscale_root_volume_iops >= 1 && var.outscale_root_volume_iops <= 13000
+    error_message = "outscale_root_volume_iops must be between 1 and 13000."
   }
 }
 
@@ -395,6 +549,47 @@ variable "node_time_servers" {
   EOT
   type        = list(string)
   default     = []
+}
+
+variable "etcd_snapshot_api_access" {
+  description = <<-EOT
+    Lets the apps repository's scheduled etcd snapshot (CronJob etcd-snapshot, foundation-databases) reach the Talos API of the
+    control planes with ONE role, os:etcd:backup (take a snapshot, nothing else): machine.features.kubernetesTalosAPIAccess,
+    allowed for the namespace foundation-databases only. This is what removes "nothing runs the snapshot for you" without putting
+    the state passphrase, the S3 keys and a Talos admin credential on the bastion. true (default) on a new cluster; on an existing
+    one the next apply re-applies the control planes' machine configuration (one at a time; a reboot is not expected, but try it on
+    a throwaway cluster first). false keeps the configs as they were, and the operator's `task etcd-snapshot` is then the only
+    snapshot. Details: docs/backup-policy.md.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "coredns_ha" {
+  description = "Run OpenAether's own CoreDNS (min(3, nodes) replicas on different nodes, a budget, a 30 s toleration) instead of the 2-replica Talos one (infra #388, modules/talos). False keeps the Talos Deployment; docs/resilience.md says what each does on a Talos upgrade."
+  type        = bool
+  default     = true
+}
+
+variable "node_monitor_grace_period_seconds" {
+  description = <<-EOT
+    Seconds the kube-controller-manager waits for a node's heartbeat before marking it NotReady (Kubernetes default 50).
+    Default 30 (owner decision 2026-10-26): it sets the controller manager and, below 40, the kubelet heartbeat to match
+    (lease duration = this value, status every this value / 4, 4 chances to be heard). 0 changes nothing: the Kubernetes
+    default 50 s applies (the opt-out). 20 to 300 otherwise. Why 30: the node power-off write-gap target (75 s) is met only
+    at 30 s (lab 27, Scaleway: 82-86 s at the default, 62-70 s at 30 s, 49-62 s at 20 s), with no NotReady, eviction or
+    failover in a 30 minute nominal soak at 30 s. EVIDENCE FROM ONE PROVIDER: the OVH and Outscale labs are the next
+    proof, and the default goes back to 0 if they flap. Not measured: a soak during a roll. On an existing cluster the
+    next `cluster-up` re-applies the machine config of every node (about 7.5 min per apply in lab 27, no reboot).
+    Details on the variable of the same name in modules/talos/variables.tf.
+  EOT
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.node_monitor_grace_period_seconds == 0 || (var.node_monitor_grace_period_seconds >= 20 && var.node_monitor_grace_period_seconds <= 300 && var.node_monitor_grace_period_seconds == floor(var.node_monitor_grace_period_seconds))
+    error_message = "node_monitor_grace_period_seconds must be 0 (Kubernetes default, 50 s) or a whole number of seconds between 20 and 300."
+  }
 }
 
 variable "node_baseline" {

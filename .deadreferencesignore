@@ -21,3 +21,16 @@ scripts/clea/README.md:./scripts/render.sh
 # "their" is stephrobert/feint (the emulator this script drives), not this
 # repository. Verified present at stephrobert/feint@docs/proxy.md.
 scripts/dev/feint.sh:docs/proxy.md
+
+# 0.4.0 M4: these documents name files of the OTHER repository, OpenAether-apps, each time next to its name (the HA audit
+# scripts/check-ha.py and its allow-list scripts/ha-allowlist.yaml, and the runbooks docs/runbooks.md). Present there on the
+# same release branch; not paths of this repository.
+CHANGELOG.md:scripts/check-ha.py
+docs/capacity.md:scripts/check-ha.py
+docs/capacity.fr.md:scripts/check-ha.py
+docs/resilience.md:scripts/check-ha.py
+docs/resilience.md:scripts/ha-allowlist.yaml
+docs/resilience.md:docs/runbooks.md
+docs/resilience.fr.md:scripts/check-ha.py
+docs/resilience.fr.md:scripts/ha-allowlist.yaml
+docs/resilience.fr.md:docs/runbooks.md

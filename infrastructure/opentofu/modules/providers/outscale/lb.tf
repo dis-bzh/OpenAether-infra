@@ -6,6 +6,23 @@
 # Outscale LBs return a DNS name (not IP).
 # ==============================================================================
 
+locals {
+  # ONE health check shape for both load balancers (lab 27 part C, E6): the app LB ran 5 s x 2 and the API LB 10 s x 3, and a
+  # dead control plane stayed in rotation 30-35 s against a 10 s target. A dead member leaves after
+  # unhealthy_threshold x check_interval + timeout at worst = 2 x 5 + 3 = 13 s (the old values give 3 x 10 + 5 = 35 s, which is
+  # what the lab measured), and 8 s at best. COMPUTED, not measured: UNPROVEN until an Outscale drill (stop a control plane,
+  # time its exit from the LB, target <= 10 s total; the worst case is above it). Provider ranges: check_interval 5-600,
+  # timeout 2-60, thresholds 2-10, so the interval and the threshold are already at their minimum. Cost: a TCP check does not
+  # see a member that accepts the connection but is starved, and one that is slow to accept can flap in and out. Only `port`
+  # differs between the two load balancers and stays on each resource.
+  lb_health_check = {
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+    check_interval      = 5
+    timeout             = 3
+  }
+}
+
 # --- Kubernetes API LB ---
 
 resource "outscale_load_balancer" "k8s" {
@@ -43,14 +60,20 @@ resource "outscale_load_balancer" "k8s" {
 # (the LB accepts the connection but has no healthy backend). Observed several
 # times on the Outscale management. Since `health_check` is a computed attribute
 # on outscale_load_balancer, it is set through this dedicated resource.
+#
+# local.lb_health_check (5 s x 2, 13 s computed) since lab 27 part C (E6); it was 10 s x 3 with a 5 s timeout and kept a dead
+# control plane in rotation 30-35 s. On an existing cluster the provider (outscale 1.8.1) marks `health_check` ForceNew, so
+# the plan REPLACES THIS ATTRIBUTES RESOURCE ONLY: its destroy calls no API (no policy_names) and its create is one
+# UpdateLoadBalancer on the load balancer that already exists. The load balancer, its DNS name, its listener and its backends
+# (outscale_load_balancer_vms.k8s) are not part of the change.
 resource "outscale_load_balancer_attributes" "k8s" {
   load_balancer_name = outscale_load_balancer.k8s.load_balancer_name
 
   health_check {
-    healthy_threshold   = 2
-    unhealthy_threshold = 3
-    check_interval      = 10
-    timeout             = 5
+    healthy_threshold   = local.lb_health_check.healthy_threshold
+    unhealthy_threshold = local.lb_health_check.unhealthy_threshold
+    check_interval      = local.lb_health_check.check_interval
+    timeout             = local.lb_health_check.timeout
     port                = 6443
     protocol            = "TCP"
   }
@@ -101,4 +124,23 @@ resource "outscale_load_balancer_vms" "app" {
   count              = var.deploy_app_lb ? 1 : 0
   load_balancer_name = outscale_load_balancer.app[0].load_balancer_name
   backend_vm_ids     = outscale_vm.worker[*].vm_id
+}
+
+# The app LB health check. Without this resource the LB keeps the provider default (check_interval 30 s, healthy_threshold
+# 10, see the k8s LB above): a dead worker stays in rotation for minutes. One check per LB, not per listener: it probes the
+# http NodePort, which the same Gateway Service answers on every node that is up, https included. Ranges (provider docs):
+# check_interval 5-600, timeout 2-60, thresholds 2-10. 5 s x 2 plus the 3 s timeout takes a dead member out in about 13 s.
+# UNVERIFIED on a real partition (docs/resilience.md). Same values as the k8s LB check above: local.lb_health_check.
+resource "outscale_load_balancer_attributes" "app" {
+  count              = var.deploy_app_lb ? 1 : 0
+  load_balancer_name = outscale_load_balancer.app[0].load_balancer_name
+
+  health_check {
+    healthy_threshold   = local.lb_health_check.healthy_threshold
+    unhealthy_threshold = local.lb_health_check.unhealthy_threshold
+    check_interval      = local.lb_health_check.check_interval
+    timeout             = local.lb_health_check.timeout
+    port                = var.app_lb_node_ports.http
+    protocol            = "TCP"
+  }
 }

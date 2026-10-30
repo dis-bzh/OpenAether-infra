@@ -41,7 +41,11 @@
 # Longhorn rebuilds from the surviving replicas — check they are healthy first.
 #
 # Usage: rolling-replace.sh <provider> [--workers-only|--cp-only] [--upgrade]
-#                          [--dry-run] [--yes]
+#                          [--dry-run] [--yes] [--node=NAME|--ip=ADDR [--dead]]
+#   --node / --ip: act on THIS node only (by Kubernetes node name, or private address when the Node object is gone).
+#   --dead: the node does not answer (0.4.0 M4, `task cluster-replace-node`). No drain: the node is cordoned, its etcd
+#   member removed (control plane), its Node object deleted so that its pods are freed at once, then the same two
+#   applies recreate it. The survivors are checked first (etcd quorum, every other node Ready); replacement only.
 #   --upgrade: `talosctl upgrade` in place (version changes) instead of
 #   replacing the VM. Reads the target from talos_version in the tfvars.
 #   Needs: tofu init, AWS_* creds, open Talos tunnels, ./talosconfig + ./kubeconfig.
@@ -56,6 +60,9 @@ shift || true
 SCOPE="all"        # all | workers | cp
 DRY_RUN=0
 ASSUME_YES=0
+ONLY_NODE=""      # --node=: replace/upgrade this node only
+ONLY_IP=""        # --ip=: the same, by private address (the Node object may be gone)
+DEAD=0            # --dead: the node does not answer; see the header
 UPGRADE=0         # --upgrade: in-place `talosctl upgrade`, no VM replacement
 # The role used to be the literal "management", here and in the Taskfile, while
 # `task cluster-roll` declared a ROLE variable nothing read. So `cluster-upgrade
@@ -72,11 +79,18 @@ for arg in "$@"; do
     --dry-run)      DRY_RUN=1 ;;
     --upgrade)      UPGRADE=1 ;;
     --yes|-y)       ASSUME_YES=1 ;;
+    --node=*)       ONLY_NODE="${arg#--node=}" ;;
+    --ip=*)         ONLY_IP="${arg#--ip=}" ;;
+    --dead)         DEAD=1 ;;
     --role=*)       ROLE="${arg#--role=}" ;;
     *) echo "✗ unknown flag: $arg" >&2; exit 2 ;;
   esac
 done
 [ -n "$ROLE" ] || { echo "✗ --role= given with no value" >&2; exit 2; }
+if [[ $DEAD -eq 1 ]]; then
+  [[ -n "$ONLY_NODE$ONLY_IP" ]] || { echo "✗ --dead needs --node=NAME or --ip=ADDR: it acts on one node" >&2; exit 2; }
+  [[ $UPGRADE -eq 0 ]] || { echo "✗ --dead replaces a machine; it cannot be combined with --upgrade" >&2; exit 2; }
+fi
 
 # Provider → module name in cluster/main.tf (junction modules, count-gated).
 case "$PROVIDER" in
@@ -91,10 +105,10 @@ esac
 # is actually unproven, not about the whole script — the blanket warning
 # contradicted this file's own header and taught readers to ignore it.
 if [[ "$PROVIDER" == "ovh" && "$UPGRADE" -eq 0 ]]; then
-  # --cp-only was exercised live on OVH (2026-10-17, three control planes in 12 min); a worker replacement was not
-  # (the capacity gate refused on two workers).
-  echo "⚠ ovh: only the control-plane REPLACEMENT has been exercised on a live cluster, not the" >&2
-  echo "  worker replacement — run --dry-run first and review the targets." >&2
+  # --cp-only was exercised live on OVH (2026-10-17, three control planes in 12 min); a worker replacement stopped at its destroy
+  # guard in lab 27 part B (F-OVHREPL: the Octavia members follow the new address) and was finished by hand; the fix is offline.
+  echo "⚠ ovh: the control-plane REPLACEMENT has been exercised on a live cluster; the worker replacement stopped at" >&2
+  echo "  its destroy guard in lab 27 and has not run since the fix (docs/resilience.md) — run --dry-run first and review the targets." >&2
 elif [[ "$PROVIDER" != "scaleway" && "$UPGRADE" -eq 0 ]]; then
   echo "⚠ ${PROVIDER}: the node-REPLACEMENT path has never been exercised on a live" >&2
   echo "  cluster (only --upgrade has) — run --dry-run first and review the targets." >&2
@@ -125,6 +139,8 @@ UPGRADE_CONFIRM_TIMEOUT="${UPGRADE_CONFIRM_TIMEOUT:-120}"
 STOP_REQUESTED=0
 trap 'STOP_REQUESTED=1; printf "\n⚠ stop requested — finishing the node in flight, then stopping.\n" >&2' INT TERM
 ETCD_TIMEOUT="${ETCD_TIMEOUT:-300}"               # seconds
+API_TIMEOUT="${API_TIMEOUT:-300}"                 # seconds, for the kube-apiserver of a control plane to serve (#42)
+API_STABLE_POLLS="${API_STABLE_POLLS:-3}"         # consecutive Ready polls: one lucky poll between two restarts is not serving
 LONGHORN_TIMEOUT="${LONGHORN_TIMEOUT:-600}"       # seconds
 POLL=10                                           # seconds between health polls
 
@@ -180,6 +196,28 @@ mapfile -t WK_IPS < <(jq -r '.worker_private_ips.value[]? // empty' <<<"$OUTPUTS
 [[ ${#CP_IPS[@]} -gt 0 ]] || die "no control_plane_private_ips in tofu output — is the infra deployed?"
 
 info "Cluster: ${NODE_PREFIX} on ${PROVIDER}  (${#CP_IPS[@]} CP, ${#WK_IPS[@]} workers)"
+# --node / --ip: which entry of the state is it? The private address is the identity all providers agree on.
+ONLY_T=""; ONLY_I=""
+if [[ -n "$ONLY_NODE$ONLY_IP" ]]; then
+  only_ip="$ONLY_IP"
+  if [[ -z "$only_ip" ]]; then
+    only_ip="$("${KCTL[@]}" get node "$ONLY_NODE" -o jsonpath="{.status.addresses[?(@.type=='InternalIP')].address}" 2>/dev/null)" || only_ip=""
+  fi
+  if [[ -z "$only_ip" ]]; then
+    # A worker needs it as much as a control plane (lab 27 sitting 3). Name the exact flag, the whole command, and the
+    # addresses the state holds: the number in the node name is the index into its list.
+    echo "✗ cannot tell the address of node ${ONLY_NODE}: no Node object answers (it is gone, or it never registered)." >&2
+    echo "  --ip=<private address> is needed for a WORKER as well as for a control plane. Run again with it:" >&2
+    echo "    task cluster-replace-node PROVIDER=${PROVIDER}$([[ $ROLE == management ]] || echo " ROLE=${ROLE}") NODE=${ONLY_NODE} -- --even-if-running --ip=<private address>" >&2
+    echo "  Addresses in the state (the number in the node name is the position): control planes: ${CP_IPS[*]:-none}; workers: ${WK_IPS[*]:-none}" >&2
+    echo "  (or: tofu output control_plane_private_ips / worker_private_ips)" >&2
+    exit 1
+  fi
+  for k in "${!CP_IPS[@]}"; do if [[ "${CP_IPS[$k]}" == "$only_ip" ]]; then ONLY_T="cp"; ONLY_I="$k"; fi; done
+  for k in "${!WK_IPS[@]}"; do if [[ "${WK_IPS[$k]}" == "$only_ip" ]]; then ONLY_T="worker"; ONLY_I="$k"; fi; done
+  [[ -n "$ONLY_T" ]] || die "no node of this state has the address ${only_ip} - wrong PROVIDER or ROLE?"
+  info "Single node: ${ONLY_T} ${ONLY_I} (${only_ip})$([[ $DEAD -eq 1 ]] && echo ', dead: no drain')"
+fi
 info "Scope: ${SCOPE}   dry-run: $([[ $DRY_RUN -eq 1 ]] && echo yes || echo no)"
 
 # --- talos endpoint per node (matches talos-tunnels.sh: CP 50000+i, WK 50100+i,
@@ -210,8 +248,11 @@ replace_node() { # <type: cp|worker> <index>
   # the nodes are ip-10-0-0-53 and every `kubectl cordon` here failed on "node
   # not found" — the dry-run printed the invented names and looked fine.
   # The private IP is the one identity all providers agree on.
-  node_name="$(k8s_node_for_ip "$node_ip")" \
-    || die "no Kubernetes node has internal IP ${node_ip} — is the cluster the one this state describes?"
+  if ! node_name="$(k8s_node_for_ip "$node_ip")"; then
+    # A dead node whose Node object is already gone (an earlier, interrupted attempt) is still replaceable by name.
+    if [[ $DEAD -eq 1 && -n "$ONLY_NODE" ]]; then node_name="$ONLY_NODE"
+    else die "no Kubernetes node has internal IP ${node_ip} — is the cluster the one this state describes?"; fi
+  fi
   ep="$(talos_ep "$t" "$i")"
   cfg_addr="module.talos.talos_machine_configuration_apply.${tf_t}[${i}]"
 
@@ -261,13 +302,20 @@ replace_node() { # <type: cp|worker> <index>
 
   # Split for the two applies below: the instance alone, then the config.
   local -a infra_targets=() cfg_targets=(-target="$cfg_addr" -replace="$cfg_addr")
-  local cfg_max=1 tgt
+  local cfg_max=1 tgt tainted
   for tgt in "${targets[@]}"; do
     [[ "$tgt" == "-target=${cfg_addr}" || "$tgt" == "-target=${guard_addr}" ]] || infra_targets+=("$tgt")
   done
   if [[ -n "$guard_addr" ]]; then
     cfg_targets+=(-target="$guard_addr" -replace="$guard_addr"); cfg_max=2
   fi
+  # OVH: the load balancer members of a worker follow its new address, so the config plan replaces them too (F-OVHREPL). Named in the
+  # targets so the apply does it deterministically, and counted in the destroy bound as exactly what they are.
+  local lb_member
+  while IFS= read -r lb_member; do
+    [[ -n "$lb_member" ]] || continue
+    cfg_targets+=(-target="$lb_member"); cfg_max=$((cfg_max + 1))
+  done < <(node_lb_members "$tf_t" "$i")
 
   hr
   info "Node ${node_name}  (ip ${node_ip}, talos ${ep})"
@@ -276,19 +324,28 @@ replace_node() { # <type: cp|worker> <index>
     if [[ $UPGRADE -eq 1 ]]; then
       echo "  would: talosctl upgrade -e ${ep} -n ${node_ip} --image ${TALOS_IMAGE} --wait"
       echo "         (Talos cordons and drains the node itself, and refuses a CP that would cost etcd its quorum)"
-      echo "  would: wait Talos health @ ${ep}, node Ready, $( [[ $t == cp ]] && echo 'etcd 3/3, ' )Longhorn healthy"
+      echo "  would: wait Talos health @ ${ep}, node Ready, $( [[ $t == cp ]] && echo 'etcd 3/3, kube-apiserver serving, ' )Longhorn healthy"
       return 0
     fi
     echo "  would: kubectl cordon ${node_name}"
-    echo "  would: kubectl drain ${node_name} --ignore-daemonsets --delete-emptydir-data --timeout=${DRAIN_TIMEOUT}"
+    if [[ $DEAD -eq 1 ]]; then
+      echo "  would: NOT drain (the node is dead)"
+    else
+      echo "  would: kubectl drain ${node_name} --ignore-daemonsets --delete-emptydir-data --timeout=${DRAIN_TIMEOUT}"
+    fi
+    if [[ $t == cp && $DEAD -eq 0 ]]; then
+      echo "  would: talosctl shutdown -e ${ep} -n ${node_ip} --force --wait=false, then wait up to ${GRACEFUL_STOP_TIMEOUT}s until the node stops answering"
+      echo "         (only if all ${#CP_IPS[@]} control planes report a healthy etcd and there are at least 3; otherwise skipped with a warning)"
+    fi
     [[ $t == cp ]] && echo "  would: talosctl etcd remove-member ${node_name} (via a healthy peer CP)"
+    [[ $DEAD -eq 1 ]] && echo "  would: kubectl delete node ${node_name} (frees its pods at once)"
     echo "  would: tofu plan -out=<instance.tfplan> ${infra_targets[*]} -replace='${inst_addr}' \\"
     echo "                    -var-file='${TFVARS}' -var talos_bootstrap=true"
     echo "         count its deletes from 'tofu show -json', then: tofu apply <instance.tfplan>"
     echo "  would: tofu plan -out=<config.tfplan> ${cfg_targets[*]} \\"
     echo "                    -var-file='${TFVARS}' -var talos_bootstrap=true"
     echo "         count its deletes from 'tofu show -json', then: tofu apply <config.tfplan>"
-    echo "  would: wait Talos health @ ${ep}, node Ready, $( [[ $t == cp ]] && echo 'etcd 3/3, ' )Longhorn healthy"
+    echo "  would: wait Talos health @ ${ep}, node Ready, $( [[ $t == cp ]] && echo 'etcd 3/3, kube-apiserver serving, ' )Longhorn healthy"
     echo "  would: kubectl uncordon ${node_name}"
     return 0
   fi
@@ -402,16 +459,35 @@ replace_node() { # <type: cp|worker> <index>
   # fresh VM with no config.
   saved_plan_apply "${node_name}-instance" "$t" "$i" "${#infra_targets[@]}" "" check \
     "${infra_targets[@]}" -replace="$inst_addr"
-  saved_plan_apply "${node_name}-config" "$t" "$i" "$cfg_max" "" check "${cfg_targets[@]}"
+  # A node whose earlier replacement stopped after the destroy (the provider was out of stock) has a TAINTED server in the
+  # state. The config plan then also deletes that server, which counted as "more than one resource" and refused the re-run until
+  # an operator ran `tofu untaint` by hand (lab 27, F-STOCK: 71 min). The instance apply below replaces it anyway: allow for it.
+  tainted="$(tainted_count "${infra_targets[@]#-target=}")"
+  if (( tainted > 0 )); then
+    warn "${tainted} resource(s) of ${node_name} are tainted: an earlier replacement stopped after the destroy. This run replaces them; nothing to untaint by hand."
+  fi
+  saved_plan_apply "${node_name}-config" "$t" "$i" "$(( cfg_max + tainted ))" "" check "${cfg_targets[@]}"
 
-  # 1. cordon + drain (evacuate workloads, trigger Longhorn rebuild / app failover)
-  cordon_drain "$node_name"
+  # 1. cordon + drain (evacuate workloads, trigger Longhorn rebuild / app failover). A dead node cannot be drained:
+  # it is cordoned, and its Node object is deleted once its etcd member (control plane) is gone.
+  if [[ $DEAD -eq 1 ]]; then
+    cordon_dead "$node_name"
+  else
+    cordon_drain "$node_name"
+  fi
+
+  # 1a. control plane, alive: stop it gracefully now that it is drained (lab 27 sitting 3: the workers' Lease stalls of 46-97 s
+  # at every replacement went to 8-9 s). Not for a dead node, which cannot answer; skips itself when a gate does not hold.
+  if [[ "$t" == "cp" && $DEAD -eq 0 ]]; then
+    stop_cp_gracefully "$node_name" "$node_ip" "$i"
+  fi
 
   # 1b. control plane: evict the stale etcd member BEFORE destroying the VM, while
   # the remaining peers still hold quorum. (tofu destroy = ungraceful leave.)
   if [[ "$t" == "cp" ]]; then
     etcd_remove_member "$node_name" "$node_ip" "$i"
   fi
+  if [[ $DEAD -eq 1 ]]; then delete_dead_node_object "$node_name"; fi
 
   # 2. TWO applies, and the split is the whole point.
   #
@@ -436,6 +512,20 @@ replace_node() { # <type: cp|worker> <index>
   saved_plan_apply "${node_name}-instance" "$t" "$i" "${#infra_targets[@]}" \
     "tofu apply (instance) failed for ${node_name} — cluster left with ${node_name} cordoned; investigate before retrying" \
     apply "${infra_targets[@]}" -replace="$inst_addr"
+
+  # The address of an OVH worker follows its instance, and the tunnel to its Talos API, the port check of the config apply and the
+  # identity every talosctl call below names were all made for the OLD one (lab 27, F-OVHREPL: 4 min 50 s on a tunnel to a
+  # machine that was gone). Read the new one from the state the apply just wrote, refresh the outputs, open the tunnels again.
+  local new_ip
+  new_ip="$(instance_address "$inst_addr")"
+  if [[ -n "$new_ip" && "$new_ip" != "$node_ip" ]]; then
+    info "${node_name} came back on ${new_ip}, not ${node_ip}: refreshing the outputs and the Talos tunnels before its config…"
+    refresh_state_outputs || die "could not refresh the outputs after the new address of ${node_name} — the VM exists but is unconfigured; re-run to resume"
+    "$(dirname "${BASH_SOURCE[0]}")/../bootstrap/talos-tunnels.sh" open . \
+      || die "could not reopen the Talos tunnels — the VM exists but is unconfigured; run task tunnels-up, then re-run to resume"
+    node_ip="$new_ip"
+    if [[ "$t" == worker ]]; then WK_IPS[i]="$new_ip"; fi
+  fi
 
   info "tofu 2/2 — wait for the new node, then apply its Talos config…"
   saved_plan_apply "${node_name}-config" "$t" "$i" "$cfg_max" \
@@ -468,6 +558,9 @@ replace_node() { # <type: cp|worker> <index>
   # 6. for control planes: etcd must be back to full membership before the next CP
   if [[ "$t" == "cp" ]]; then
     wait_etcd_healthy "${#CP_IPS[@]}" || die "etcd did not return to ${#CP_IPS[@]}/${#CP_IPS[@]} healthy — STOP (do NOT replace another CP)"
+    # And its kube-apiserver must serve before the next control plane goes down (#42): etcd 3/3 and a Ready node do
+    # not say so, and the load balancer's TCP check keeps a not-ready apiserver in rotation for up to 75 s.
+    wait_apiserver_ready "$node_name" || die "kube-apiserver on ${node_name} does not serve after ${API_TIMEOUT}s — STOP (do NOT touch another control plane)"
   fi
 
   # 7. back into rotation, BEFORE the Longhorn gate: Longhorn does not schedule a
@@ -479,6 +572,12 @@ replace_node() { # <type: cp|worker> <index>
   # 8. Longhorn rebuild complete (no degraded/faulted) before the next node is touched
   wait_longhorn_healthy || die "Longhorn not healthy after replacing ${node_name} — STOP"
   ok "Node ${node_name} $([[ $UPGRADE -eq 1 ]] && echo upgraded || echo replaced) and back in rotation"
+  # A drained replace KEEPS the Node object, so the volumes of the old disk are not "older than the Node" and
+  # `cluster-replaced-node-cleanup` finds none by itself (lab 26, C1): name the exact command while it matters.
+  if [[ $UPGRADE -eq 0 && $DEAD -eq 0 && "$t" == worker ]]; then
+    info "Pods of ${node_name} that crash-loop on 'mkdir ... permission denied' (a CNPG replica, loki, vmselect: local-path volumes of the old disk) are dropped with:"
+    info "  task cluster-replaced-node-cleanup NODE=${node_name} -- --disk-replaced   (prints the commands; add --clean to run the safe ones)"
+  fi
 }
 
 # ==============================================================================
@@ -488,7 +587,9 @@ replace_node() { # <type: cp|worker> <index>
 hr
 info "Pre-flight health check…"
 if [[ $DRY_RUN -eq 0 ]]; then
-  wait_etcd_healthy "${#CP_IPS[@]}" || die "etcd is not ${#CP_IPS[@]}/${#CP_IPS[@]} healthy — refusing to start a rolling replace on an unhealthy cluster"
+  if [[ $DEAD -eq 0 ]]; then
+    wait_etcd_healthy "${#CP_IPS[@]}" || die "etcd is not ${#CP_IPS[@]}/${#CP_IPS[@]} healthy — refusing to start a rolling replace on an unhealthy cluster"
+  fi
   "${KCTL[@]}" get nodes >/dev/null 2>&1 || die "kubectl cannot reach the API via ${KUBECONFIG_FILE}"
   # WAIT, do not sample once. cluster-upgrade.sh calls this immediately after a
   # Kubernetes version bump, and a kubelet that has just restarted is NotReady
@@ -503,7 +604,7 @@ if [[ $DRY_RUN -eq 0 ]]; then
   # retry until someone uncordoned by hand.
   nodes_deadline=$(( SECONDS + NODE_READY_TIMEOUT ))
   info "Waiting for every node to be Ready…"
-  while :; do
+  while [[ $DEAD -eq 0 ]]; do
     # A FAILED query is not "every node is Ready". Keeping the exit status is
     # the difference between waiting and draining a cluster we cannot see.
     if raw="$("${KCTL[@]}" get nodes --no-headers 2>/dev/null)" && [[ -n "$raw" ]]; then
@@ -527,11 +628,15 @@ fi
 
 if [[ $DRY_RUN -eq 0 && $ASSUME_YES -eq 0 ]]; then
   hr
+  if [[ $DEAD -eq 1 ]]; then
+    warn "This will DESTROY and recreate the DEAD node ${ONLY_NODE:-${ONLY_IP}} on ${PROVIDER}: its system disk is wiped."
+    warn "Local-path data on it (OpenBao raft member, a CNPG instance, a vmstorage replica) is lost and rebuilt from the peers."
+    read -rp "Proceed with replacing the dead node? [y/N] " a
   # The prompt described the REPLACE path in both modes. `--upgrade` destroys
   # nothing and wipes nothing — it reboots each node into a new Talos version and
   # keeps its disk, identity and etcd membership — so the warning was frightening
   # and wrong for half the runs that reach it.
-  if [[ $UPGRADE -eq 1 ]]; then
+  elif [[ $UPGRADE -eq 1 ]]; then
     warn "This will upgrade Talos IN PLACE, one node at a time, on ${PROVIDER}."
     warn "No instance is destroyed and no disk is wiped; each node reboots once."
     read -rp "Proceed with the rolling upgrade? [y/N] " a
@@ -553,25 +658,50 @@ if [[ $DRY_RUN -eq 0 ]]; then
   # behind with nothing to restore them. Restoring a cluster that was never
   # changed is a no-op; not restoring one that was is the failure that matters.
   trap finish_roll EXIT
-  cnpg_maintenance true
-  # Now that the budgets are actually gone, ask everything else that is knowable
-  # before the first node is touched — see preflight_roll.
-  preflight_roll
+  if [[ $DEAD -eq 1 ]]; then
+    # Nothing is drained, so no budget needs relaxing: the survivors are what has to be checked.
+    dead_node_survey "$ONLY_T" "$ONLY_I" "${ONLY_NODE:-$(k8s_node_for_ip "${ONLY_IP}" || echo "${ONLY_IP}")}"
+  else
+    cnpg_maintenance true
+    # Now that the budgets are actually gone, ask everything else that is knowable
+    # before the first node is touched — see preflight_roll.
+    preflight_roll
+  fi
 fi
 
 # Workers first (heavy stateful load), then control planes (etcd-gated).
 if [[ "$SCOPE" == "all" || "$SCOPE" == "workers" ]]; then
-  for j in "${!WK_IPS[@]}"; do stop_here worker && break; replace_node worker "$j"; done
+  for j in "${!WK_IPS[@]}"; do
+    [[ -z "$ONLY_T" || ( "$ONLY_T" == worker && "$ONLY_I" == "$j" ) ]] || continue
+    stop_here worker && break; replace_node worker "$j"
+  done
 fi
 if [[ "$SCOPE" == "all" || "$SCOPE" == "cp" ]]; then
   for j in $(cp_roll_order); do
+    [[ -z "$ONLY_T" || ( "$ONLY_T" == cp && "$ONLY_I" == "$j" ) ]] || continue
     stop_here cp && break
+    # Every apiserver serves BEFORE this control plane is touched: two out together is an API outage (#42).
+    if [[ $DRY_RUN -eq 0 ]]; then
+      # The dead control plane serves nothing: the other ones all must.
+      api_want=$(( ${#CP_IPS[@]} - DEAD ))
+      wait_apiservers_all_ready "$api_want" || die "not every kube-apiserver serves after ${API_TIMEOUT}s — refusing to take a control plane down"
+    fi
     # Re-read each time: leadership can move for reasons that are not ours.
-    if [[ $DRY_RUN -eq 0 && "$j" == "$(etcd_leader_index || true)" ]]; then
+    if [[ $DRY_RUN -eq 0 && $DEAD -eq 0 && "$j" == "$(etcd_leader_index || true)" ]]; then
       forfeit_leadership "$j"
     fi
     replace_node cp "$j"
   done
+fi
+
+# A drained node's pods went to the nodes that were left and stay there once it is back (lab 27 part C, E4): put the critical
+# ones (Gateway, Barman Cloud plugin, CNPG operator, istiod, CoreDNS, Cilium operator) back one per node. Not fatal here: the
+# verdict is cluster-verify, which fails on it; this only names the command when it could not.
+if [[ $DRY_RUN -eq 0 && $STOP_REQUESTED -eq 0 ]]; then
+  REBALANCE_CMD="${REBALANCE_CMD:-python3 $(dirname "${BASH_SOURCE[0]}")/cluster-rebalance.py}"
+  # shellcheck disable=SC2086  # the command line is meant to split (the tests replace it)
+  KUBECTL="kubectl --kubeconfig ${KUBECONFIG_FILE} --request-timeout=30s" $REBALANCE_CMD --apply \
+    || warn "critical pods still share a node: run  task cluster-rebalance PROVIDER=${PROVIDER} APPLY=1  (cluster-verify fails on it)"
 fi
 
 hr

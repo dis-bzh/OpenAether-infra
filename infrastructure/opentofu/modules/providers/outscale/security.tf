@@ -73,14 +73,17 @@ resource "outscale_security_group_rule" "https" {
   ip_range          = outscale_subnet.public.ip_range
 }
 
-# Public clients of the app LB, only when app_lb_allowed_cidrs is set. Outscale has no
-# source ACL on a load balancer: its filter is the LB's security group, which here is
-# this cluster group. Keys are known at plan time (the NAT address is not), as for_each needs.
+# Public clients of the app LB. Outscale has no source ACL on a load balancer: its filter is the LB's security
+# group, which here is this cluster group, and a security group admits NOTHING that is not listed. So the variable's
+# "empty = no filter" (Scaleway: no ACL, OVH: no allowed_cidrs) has to be written as an explicit 0.0.0.0/0 rule on 80
+# and 443; without it the LB was closed to everybody (lab 27 part C, E1: TCP to the LB timed out from everywhere).
+# Non-empty = only those CIDRs plus the cluster's own egress address (the NAT; pods reach the Gateway through the LB).
+# Keys are known at plan time (the NAT address is not), as for_each needs.
 locals {
-  app_lb_sources = var.deploy_app_lb && length(var.app_lb_allowed_cidrs) > 0 ? merge(
+  app_lb_sources = !var.deploy_app_lb ? {} : length(var.app_lb_allowed_cidrs) == 0 ? { "open" = "0.0.0.0/0" } : merge(
     { for c in var.app_lb_allowed_cidrs : c => c },
     { "cluster-egress" = "${outscale_public_ip.nat.public_ip}/32" },
-  ) : {}
+  )
 }
 
 resource "outscale_security_group_rule" "app_lb_http" {

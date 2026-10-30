@@ -198,6 +198,66 @@ cfg_value() { # <key> — TF_VAR_<key>, else the env file, else empty
 }
 WANT_FLUX=false; [ "$(cfg_value deploy_flux)" = true ] && WANT_FLUX=true
 WANT_APP_LB=false; [ "$(cfg_value deploy_app_lb)" = true ] && WANT_APP_LB=true
+
+# The CoreDNS HA of 0.4.0 is an inline manifest, and Talos creates an inline manifest's objects only when they are absent (lab 26,
+# K2): on a cluster built by an older release the Talos-created Deployment stays at 2 replicas with no spread, while the budget (new)
+# does appear. So "CoreDNS answers" (above) is not "CoreDNS is what the config declares": compare the Deployment with the declared
+# shape, in both directions. The declared count is min(3, nodes), as modules/talos computes it.
+if [ "$PROVIDER" != local ] && [ "$(cfg_value coredns_ha)" != false ]; then
+  info "CoreDNS runs the declared replica count and spread"
+  dns_fix="kubectl -n kube-system patch deployment coredns --type merge --patch-file scripts/ops/coredns-ha-patch.json   (a rolling restart of the CoreDNS pods; docs/upgrade.md, From 0.3.x to 0.4.0)"
+  dns_want=$(( EXPECTED < 3 ? EXPECTED : 3 ))
+  if dns_json="$(K -n kube-system get deploy coredns -o json 2>/dev/null)" && [ -n "$dns_json" ] && [ "$dns_want" -ge 1 ]; then
+    dns_have="$(jq -r '.spec.replicas // empty' <<<"$dns_json" 2>/dev/null)"
+    dns_hard="$(jq -r '[.spec.template.spec.topologySpreadConstraints[]? | select(.topologyKey == "kubernetes.io/hostname" and .whenUnsatisfiable == "DoNotSchedule")] | length' <<<"$dns_json" 2>/dev/null)"
+    if ! [[ "$dns_have" =~ ^[0-9]+$ ]] || ! [[ "$dns_hard" =~ ^[0-9]+$ ]]; then
+      unk "could not read the replica count or the spread of Deployment kube-system/coredns"
+    elif [ "$dns_have" -ne "$dns_want" ]; then
+      bad "CoreDNS has ${dns_have} replica(s) (spec), the config declares ${dns_want} (coredns_ha: min(3, nodes)) — $([ "$dns_have" -lt "$dns_want" ] && echo BEHIND || echo AHEAD of) the declaration; an object Talos created earlier is never rewritten by an inline manifest. One-time: ${dns_fix}"
+    elif [ "$dns_hard" -eq 0 ]; then
+      bad "CoreDNS has ${dns_have} replica(s) but no hard spread over nodes: they can share one node, whose loss takes DNS down. One-time: ${dns_fix}"
+    else
+      ok "CoreDNS runs the declared ${dns_want} replica(s) with a hard spread over nodes"
+    fi
+  else
+    unk "could not read Deployment kube-system/coredns — the replica count and spread are UNCHECKED"
+  fi
+fi
+# The Cilium operator runs 2 replicas since 0.4.0 (critical-path audit: it ran 1). Same trap as CoreDNS above: the Cilium manifest is
+# an inline manifest, Talos creates its objects only when absent, so a cluster built by an older release keeps ONE operator replica
+# (the new budget appears, the Deployment does not change). Not judged on the local provider (one Docker node, replicas 1 by design).
+if [ "$PROVIDER" != local ]; then
+  info "The Cilium operator runs 2 replicas"
+  op_fix="kubectl -n kube-system patch deployment cilium-operator --type merge --patch-file scripts/ops/cilium-operator-ha-patch.json   (the operator pods restart one at a time; docs/upgrade.md, From 0.3.x to 0.4.0)"
+  if op_json="$(K -n kube-system get deploy cilium-operator -o json 2>/dev/null)" && [ -n "$op_json" ]; then
+    op_have="$(jq -r '.spec.replicas // empty' <<<"$op_json" 2>/dev/null)"
+    if ! [[ "$op_have" =~ ^[0-9]+$ ]]; then
+      unk "could not read the replica count of Deployment kube-system/cilium-operator"
+    elif [ "$EXPECTED" -ge 2 ] && [ "$op_have" -lt 2 ]; then
+      bad "the Cilium operator has ${op_have} replica(s), the manifest declares 2: a lost node leaves identity and node garbage collection and the Gateway/LB-IPAM controllers down for the 5 minute toleration; an object Talos created earlier is never rewritten by an inline manifest. One-time: ${op_fix}"
+    else
+      ok "the Cilium operator runs ${op_have} replica(s)"
+    fi
+  else
+    unk "could not read Deployment kube-system/cilium-operator — the operator replica count is UNCHECKED"
+  fi
+fi
+# Critical-path pods share a node while another node is empty (lab 27 part C, E4): after a node loss or a drain the pods are
+# rescheduled onto the nodes that are left and stay there when the node returns (a spread rule is read at scheduling time only).
+# Both Barman Cloud plugin pods on one node blocked a failover for 204 s. A group with fewer eligible nodes than replicas is not
+# wrong. The checker is scripts/ops/cluster-rebalance.py (groups: Gateway, Barman Cloud plugin, CNPG operator, istiod, CoreDNS,
+# Cilium operator); absent groups (a pure-infra cluster) are skipped. CoreDNS is also judged per zone (lab 28, I2: all three replicas
+# in one zone after an install): two in one zone while another zone with an eligible node holds none, with 3 or more such zones.
+# Not judged on the local provider (one Docker node).
+if [ "$PROVIDER" != local ]; then
+  info "No two replicas of a critical pod share a node while another node is empty"
+  rb_out="$(KUBECTL="kubectl --kubeconfig ${KUBECONFIG} --request-timeout=30s" timeout 120 python3 "$ROOT/scripts/ops/cluster-rebalance.py" --check 2>&1)"; rb_rc=$?
+  case "$rb_rc" in
+    0) ok "every critical pod group is spread over the nodes that can hold it" ;;
+    3) bad "critical pods share a node (CoreDNS: or a zone, with three or more zones) although another node (zone) is empty (a failover, the ingress or the DNS then depends on that one node or zone): $(grep '^  x ' <<<"$rb_out" | sed 's/^  x //' | paste -sd';' -). Fix: task cluster-rebalance PROVIDER=${PROVIDER} ROLE=${ROLE} APPLY=1 (evicts the newest pod of each stacked node or zone, one at a time, within the budgets)" ;;
+    *) unk "could not read the placement of the critical pods (exit ${rb_rc}): ${rb_out##*$'\n'}" ;;
+  esac
+fi
 FLUX_NS="$(cfg_value flux_namespace)"; FLUX_NS="${FLUX_NS:-flux-system}"
 
 # Not cosmetic. deploy_flux defaults to false; if something re-enables it the cluster silently stops being the thing this
@@ -310,6 +370,153 @@ version_check() { # <label> <field> <key>
 
 version_check "Talos"      '.status.nodeInfo.osImage'        talos_version
 version_check "Kubernetes" '.status.nodeInfo.kubeletVersion' kubernetes_version
+
+# --- Cilium and the Flux controllers run the version the artifacts pin (infra #408) ---------------------------------------
+#
+# Talos creates an inline-manifest object when it is missing and does not update one that exists, so a bumped Cilium or Flux
+# pin (render-bootstrap-manifests.sh) never reaches a running cluster by itself. Compared in BOTH directions, per workload:
+# behind and ahead are both a difference. The pin is what the committed artifact installs (scripts/lib/pins.sh), the running
+# version is the image tag of the workload spec. The local Docker cluster is rebuilt, not upgraded, and renders its own Cilium.
+# shellcheck source=../lib/pins.sh
+source "$ROOT/scripts/lib/pins.sh"
+pins_check() { # <label> <artifact file> <kind> <fix-when-behind> <fix-when-ahead> [ns]
+  local label="$1" file="$2" kind="$3" behind="$4" ahead="$5" want have diff line
+  if [ ! -f "$file" ]; then unk "${label}: the pinned artifact ${file##*/} is not readable here — the running version is UNCHECKED"; return; fi
+  want="$(oa_artifact_pins "$kind" "$file")"
+  have="$(oa_live_pins "$kind" "${6:-}")" || have=""
+  if [ -z "$want" ]; then unk "${label}: no image found in ${file##*/} — nothing to compare against"; return; fi
+  if [ -z "$have" ]; then unk "${label}: could not read the running workloads (API error or none found) — their versions are UNCHECKED"; return; fi
+  diff="$(oa_pin_diff "$want" "$have")"
+  if [ -z "$diff" ]; then
+    ok "${label} run the pinned version ($(awk '{print $3}' <<<"$want" | sort -u | paste -sd, -))"
+    return
+  fi
+  while read -r line; do
+    pv="$(awk '{print $4}' <<<"$line")"; rv="$(awk '{print $6}' <<<"$line")"; line="${line#* }"   # drop the kind: the label says it
+    case "$line" in
+      *"not running"*) bad "${label}: ${line}. ${behind}" ;;
+      *"not pinned"*) bad "${label}: ${line} — the artifact no longer has it. ${ahead}" ;;
+      *) # "<kind> <name> pinned A running B": which side is ahead decides the advice
+         if oa_semver_lt "$pv" "$rv"; then bad "${label}: ${line} — the cluster is AHEAD of the pin. ${ahead}"
+         else bad "${label}: ${line} — the cluster is BEHIND the pin. ${behind}"; fi ;;
+    esac
+  done <<<"$diff"
+}
+if [ "$PROVIDER" != local ]; then
+info "Cilium and Flux run the version the artifacts pin"
+if [ -f "$VER_TFVARS" ] && grep -qE '^[[:space:]]*(cilium_manifest|flux_manifest)[[:space:]]*=' "$VER_TFVARS" \
+   && ! grep -qE '^[[:space:]]*(cilium_manifest|flux_manifest)[[:space:]]*=[[:space:]]*null' "$VER_TFVARS"; then
+  unk "cilium_manifest or flux_manifest is overridden in ${VER_TFVARS##*/}: the manifest the cluster was built from is not the committed one — the versions are UNCHECKED"
+else
+  CIL_FILE="$CLUSTER_DIR/bootstrap-manifests/cilium.yaml"
+  [ "$(cfg_value cilium_hubble_drop_log)" = true ] && CIL_FILE="$CLUSTER_DIR/bootstrap-manifests/cilium-hubble-drops.yaml"
+  pins_check "Cilium" "$CIL_FILE" cilium \
+    "Cilium is never upgraded in place by this repository: rebuild aside (docs/upgrade.md, 'Cilium and Flux on a running cluster')." \
+    "Set the pin back (render-bootstrap-manifests.sh) or rebuild aside; a downgrade is not done in place (docs/upgrade.md)."
+  if [ "$WANT_FLUX" = true ]; then
+    pins_check "Flux controllers" "$CLUSTER_DIR/bootstrap-manifests/flux-install.yaml" flux \
+      "Move them: task cluster-bootstrap-sync PROVIDER=${PROVIDER} ROLE=${ROLE} APPLY=1" \
+      "Set the pin back (render-bootstrap-manifests.sh) or rebuild aside; a downgrade is not done in place (docs/upgrade.md)." "$FLUX_NS"
+  fi
+fi
+fi
+
+# The apps ref (git_ref): what Flux follows against what the config declares, in both directions (infra #408). Three values: the
+# tfvars, the GitRepository's spec.ref.name, the Kustomization's GIT_REF. Only when the config asks for Flux.
+if [ "$PROVIDER" != local ] && [ "$WANT_FLUX" = true ]; then
+info "The apps ref Flux follows is the git_ref the config declares"
+DECL_REF="$(oa_declared_git_ref "$CLUSTER_DIR" "$VER_TFVARS")"
+if GR_REF="$(K -n "$FLUX_NS" get gitrepositories.source.toolkit.fluxcd.io openaether -o json 2>/dev/null)" \
+   && KS_REF="$(K -n "$FLUX_NS" get kustomizations.kustomize.toolkit.fluxcd.io openaether-platform -o json 2>/dev/null)"; then
+  LIVE_GR_REF="$(jq -r '.spec.ref.name // ""' <<<"$GR_REF" 2>/dev/null)"
+  LIVE_KS_REF="$(jq -r '.spec.postBuild.substitute.GIT_REF // ""' <<<"$KS_REF" 2>/dev/null)"
+  FIXREF="task cluster-apps-ref PROVIDER=${PROVIDER} ROLE=${ROLE} APPLY=1"
+  if [ -z "$DECL_REF" ]; then
+    unk "no git_ref is declared (TF_VAR_git_ref, ${VER_TFVARS##*/}, variables.tf) — the apps ref is UNCHECKED"
+  elif [ -z "$LIVE_GR_REF" ]; then
+    unk "the GitRepository openaether has no spec.ref.name (another ref form, or unreadable) — the apps ref is UNCHECKED"
+  elif [ "$LIVE_GR_REF" = "$DECL_REF" ] && [ "$LIVE_KS_REF" = "$DECL_REF" ]; then
+    ok "the GitRepository and GIT_REF both follow the declared git_ref (${DECL_REF})"
+  else
+    [ "$LIVE_GR_REF" = "$DECL_REF" ] || bad "the GitRepository openaether follows ${LIVE_GR_REF}, git_ref declares ${DECL_REF}. Move the cluster: ${FIXREF}  (or keep the cluster's ref: ... REF=${LIVE_GR_REF} APPLY=1 writes it into the tfvars)"
+    [ "$LIVE_KS_REF" = "$DECL_REF" ] || bad "GIT_REF of the Kustomization openaether-platform is '${LIVE_KS_REF:-empty}', git_ref declares ${DECL_REF}. Move the cluster: ${FIXREF}"
+  fi
+  case "$DECL_REF" in refs/heads/*) warn "git_ref ${DECL_REF} is a branch, a moving ref: Flux applies whatever lands on it. Pin a tag outside a throwaway lab" ;; esac
+else
+  unk "could not read the GitRepository openaether or the Kustomization openaether-platform — the apps ref is UNCHECKED"
+fi
+fi
+
+# --- The platform CNPG Clusters run the 0.4.0 synchronous replication and archive (study LAB-B2) ----------------------------
+#
+# Declared: the block spec.postgresql.synchronous = any / 1 / required / failoverQuorum (the 0.4.0 content). Converged by
+# `task cnpg-presync` (BEFORE the apps ref moves; docs/upgrade.md "From 0.3.x to 0.4.0"). Checked here on EVERY Cluster the apps
+# content manages (label openaether.io/managed in OA_CNPG_NAMESPACES, default foundation-databases; not db-profile or rt-*
+# Clusters: the same selection as cnpg-presync): the block is on the spec, ContinuousArchiving is True, the primary holds a
+# non-empty synchronous_standby_names, every replica is quorum/sync in pg_stat_replication, and the FailoverQuorum object exists.
+# BAD says the command; UNKNOWN when a fact cannot be read. A running state that the spec does not declare is BAD too.
+# Nothing is printed from the databases but pod names and the words quorum/sync. Silent when the cluster has no CNPG Cluster.
+if [ "$PROVIDER" != local ]; then
+CNPG_NS="${OA_CNPG_NAMESPACES:-foundation-databases}"
+cnpg_header=0
+cnpg_head() { if [ "$cnpg_header" = 0 ]; then info "The platform CNPG Clusters: synchronous replication, archiving, failover quorum"; cnpg_header=1; fi; }
+for ns in $CNPG_NS; do
+  if ! CL_LIST="$(K -n "$ns" get clusters.postgresql.cnpg.io -l openaether.io/managed=true -o json 2>&1)"; then
+    case "$CL_LIST" in
+      *"doesn't have a resource type"*|*"no matches for kind"*|*"could not find the requested resource"*) ;;
+      *) cnpg_head; unk "could not list the CNPG Clusters of ${ns} — their synchronous replication and archiving are UNCHECKED" ;;
+    esac
+    continue
+  fi
+  while IFS= read -r CL; do
+    [ -n "$CL" ] || continue
+    cnpg_head
+    cname="$(jq -r '.metadata.name' <<<"$CL")"; cid="${ns}/${cname}"
+    cinst="$(jq -r '.spec.instances // 1' <<<"$CL")"; cprim="$(jq -r '.status.currentPrimary // ""' <<<"$CL")"
+    cfix="task cnpg-presync PROVIDER=${PROVIDER} ROLE=${ROLE} APPLY=1"
+    declared=0
+    jq -e '(.spec.postgresql.synchronous // {}) as $s | $s.method == "any" and $s.number == 1 and $s.dataDurability == "required" and $s.failoverQuorum == true' <<<"$CL" >/dev/null && declared=1
+    if [ "$declared" = 0 ]; then
+      bad "${cid}: spec.postgresql.synchronous is not the 0.4.0 block (any / 1 / required / failoverQuorum true): $(jq -c '.spec.postgresql.synchronous // "(none)"' <<<"$CL"). Before the apps ref moves: ${cfix}"
+    fi
+    carch="$(jq -r '[.status.conditions[]? | select(.type == "ContinuousArchiving") | .status] | first // "absent"' <<<"$CL")"
+    case "$carch" in
+      True) ok "${cid}: ContinuousArchiving True" ;;
+      absent) unk "${cid}: no ContinuousArchiving condition on the Cluster — archiving is UNCHECKED" ;;
+      *) bad "${cid}: ContinuousArchiving is ${carch}: WAL is not reaching the store. Read: kubectl cnpg status ${cname} -n ${ns}; a Cluster stuck after the 0.4.0 move: docs/upgrade.md (break-glass R1, R2). Then: task backup-verify" ;;
+    esac
+    if [ -z "$cprim" ]; then
+      unk "${cid}: no current primary in the status — synchronous replication is UNCHECKED"
+    elif ! SNAMES="$(K -n "$ns" exec "$cprim" -c postgres -- psql -U postgres -Atc "show synchronous_standby_names" 2>/dev/null)"; then
+      unk "${cid}: could not ask the primary ${cprim} for synchronous_standby_names — UNCHECKED"
+    elif ! REPL="$(K -n "$ns" exec "$cprim" -c postgres -- psql -U postgres -Atc "select application_name, sync_state from pg_stat_replication" 2>/dev/null)"; then
+      unk "${cid}: could not read pg_stat_replication on ${cprim} — UNCHECKED"
+    else
+      nsync="$(grep -cE '\|(quorum|sync)$' <<<"$REPL" || true)"
+      if [ -n "$SNAMES" ]; then
+        if [ "$declared" = 0 ]; then
+          bad "${cid}: the primary runs synchronous replication (synchronous_standby_names is set) but the spec does not declare the 0.4.0 block — the running state and the declaration disagree. ${cfix}"
+        elif [ "$nsync" -ge $((cinst - 1)) ]; then
+          ok "${cid}: synchronous_standby_names set on ${cprim}, ${nsync} replica(s) quorum/sync"
+        else
+          bad "${cid}: synchronous_standby_names is set but only ${nsync} of $((cinst - 1)) replica(s) are quorum/sync in pg_stat_replication. Read: kubectl cnpg status ${cname} -n ${ns}"
+        fi
+      elif [ "$declared" = 1 ]; then
+        bad "${cid}: the spec asks for synchronous replication and synchronous_standby_names is EMPTY on ${cprim} (the lost reload, cloudnative-pg#11627). Reload: kubectl -n ${ns} exec <pod> -c postgres -- psql -U postgres -Atc \"select pg_reload_conf()\" on every instance; docs/upgrade.md (break-glass R1, R2)"
+      fi
+    fi
+    if FQ="$(K -n "$ns" get failoverquorums.postgresql.cnpg.io "$cname" -o name 2>&1)"; then
+      if [ "$declared" = 1 ]; then ok "${cid}: the FailoverQuorum object exists"
+      else bad "${cid}: a FailoverQuorum object exists but the spec does not declare failoverQuorum true — the running state and the declaration disagree"; fi
+    else
+      case "$FQ" in
+        *NotFound*|*"not found"*) [ "$declared" = 0 ] || bad "${cid}: the spec declares failoverQuorum true and the FailoverQuorum object does not exist. Read: kubectl cnpg status ${cname} -n ${ns}; the operator creates it at its next reconcile (a single 'not found' line right after the patch is normal)" ;;
+        *) unk "${cid}: could not read the FailoverQuorum object — UNCHECKED" ;;
+      esac
+    fi
+  done < <(jq -c '.items[] | select(((.metadata.labels["openaether.io/db-profile"] // "") == "") and (.metadata.name | startswith("rt-") | not))' <<<"$CL_LIST")
+done
+fi
 
 # --- The fleet runs the image the config names ----------------------------------
 #

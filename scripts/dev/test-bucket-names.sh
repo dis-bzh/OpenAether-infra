@@ -15,6 +15,8 @@
 # provider (Scaleway "in our whole platform", OVH "within OVHcloud", Outscale per
 # region), so the hardcoded names were unusable by any second account.
 set -uo pipefail
+# Hermetic: the real talos-image.sh asks for ~12 GiB of free disk before a build (E5); this test is not about the disk of the machine it runs on.
+export OA_IMAGE_MIN_FREE_GIB=0
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source=../lib/common.sh

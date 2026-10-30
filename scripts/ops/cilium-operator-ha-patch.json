@@ -1,0 +1,1 @@
+{"spec":{"replicas":2,"strategy":{"rollingUpdate":{"maxSurge":"25%","maxUnavailable":"50%"},"type":"RollingUpdate"},"template":{"spec":{"topologySpreadConstraints":[{"labelSelector":{"matchLabels":{"io.cilium/app":"operator"}},"maxSkew":1,"topologyKey":"topology.kubernetes.io/zone","whenUnsatisfiable":"ScheduleAnyway"}]}}}}

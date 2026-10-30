@@ -484,6 +484,39 @@ refute_out "s3-example-dev-stubcloud-tfstate-dev" \
   "it does not print the raw cluster_name, which names nothing"
 
 
+echo "=== the provider side must be empty before it says complete (lab 27 part C, E5) ==="
+
+# A destroy that succeeded is not a provider that is empty: 2 load balancers, a subnet, a route table, an internet service and the
+# Net outlived "fleet-down complete" on Outscale. verify-provider-clean.py (stubbed here as python3) is asked after the destroy.
+cat >"$OA_ENVS_DIR/management-outscale.tfvars" <<'TFV'
+cluster_name  = "openaether"
+environment   = "dev"
+TFV
+export OA_VERIFY_ATTEMPTS=2 OA_VERIFY_WAIT=0
+plan "${CLUSTER_INFO_OK}get clusters.cluster.x-k8s.io -A\t0\t\n"
+STUB_PY_RC=0 run "$FLEET_DOWN" outscale --plan-file "$STUB_DIR/d.tfplan" --yes --force-no-edges
+expect_rc 0 "a clean provider: fleet-down ends rc 0"
+expect_out "fleet-down complete" "and says complete"
+grep -q 'verify-provider-clean.py openaether-dev outscale' "$STUB_PY_LOG" && ok "the provider was asked about 'openaether-dev' (cluster_name-environment)" \
+  || bad "verify-provider-clean was not called with the cluster name: $(tr '\n' ';' <"$STUB_PY_LOG")"
+STUB_PY_RC=1 STUB_PY_OUT="load balancer openaether-dev-app-lb" run "$FLEET_DOWN" outscale --plan-file "$STUB_DIR/d.tfplan" --yes --force-no-edges
+expect_rc 1 "leftovers on the provider: fleet-down FAILS"
+refute_out "fleet-down complete" "and does not say complete"
+expect_out "load balancer openaether-dev-app-lb" "it lists what is left"
+expect_out "purge-orphans/outscale.py" "and names the purge"
+[ "$(grep -c 'verify-provider-clean.py' "$STUB_PY_LOG")" = 2 ] && ok "the check is repeated (attempts) before it fails" || bad "attempts: $(grep -c 'verify-provider-clean.py' "$STUB_PY_LOG")"
+STUB_PY_RC=2 STUB_PY_OUT="missing credential" run "$FLEET_DOWN" outscale --plan-file "$STUB_DIR/d.tfplan" --yes --force-no-edges
+expect_rc 0 "a check that could not run does not fail the teardown"
+expect_out "could NOT be verified" "but says so"
+run "$FLEET_DOWN" stubcloud --plan-file "$STUB_DIR/d.tfplan" --yes --force-no-edges
+expect_out "was NOT verified" "a provider without a check says so too"
+OA_VERIFY_ATTEMPTS=0 run "$FLEET_DOWN" outscale --plan-file "$STUB_DIR/d.tfplan" --yes --force-no-edges
+expect_rc 0 "zero attempts: no unbound variable, the teardown is not failed"
+refute_out "unbound variable" "and nothing crashes under set -u"
+expect_out "could NOT be verified" "it says the provider side was not checked"
+unset OA_VERIFY_ATTEMPTS OA_VERIFY_WAIT
+rm -f "$OA_ENVS_DIR/management-outscale.tfvars"
+
 echo "=== destroying takes TWO commands, and nothing may collapse them into one ==="
 
 # The requirement: it must be IMPOSSIBLE to destroy in a single command. A macro

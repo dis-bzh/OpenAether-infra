@@ -57,14 +57,16 @@ oa_protection_state() {
 # Returns 1 when something asked for is not confirmed.
 oa_protect_bucket() {
   local b="$1" ep="$2" rg="$3" ak="$4" sk="$5" mode="$6" days="$7" kind="$8"
-  local err cur rules new want_lock="" problems="" st lk_mode
+  local err cur rules new want_lock="" problems="" st lk_mode vers_err=""
   if ! _oa_s3api "$ak" "$sk" "$ep" "$rg" head-bucket --bucket "$b" >/dev/null 2>&1; then
     echo "  ⚠ $b: not there, nothing to protect"; return 1
   fi
   [ "$kind" = lock ] && case "$mode" in governance | compliance) want_lock="$(tr '[:lower:]' '[:upper:]' <<<"$mode")" ;; esac
 
-  err="$(_oa_s3api "$ak" "$sk" "$ep" "$rg" put-bucket-versioning --bucket "$b" \
-          --versioning-configuration Status=Enabled 2>&1 >/dev/null)" || problems+="versioning refused ($(_oa_first_line "$err")); "
+  # A bucket created WITH object lock is versioned already, and Outscale then refuses the PUT (InvalidBucketState, lab 22):
+  # a refusal only counts when the read-back below does not confirm Enabled.
+  vers_err="$(_oa_s3api "$ak" "$sk" "$ep" "$rg" put-bucket-versioning --bucket "$b" \
+          --versioning-configuration Status=Enabled 2>&1 >/dev/null)" || vers_err="${vers_err:-refused}"
 
   # put-bucket-lifecycle-configuration REPLACES the whole set: read the rules first, and write nothing when they cannot be read.
   if cur="$(_oa_s3api "$ak" "$sk" "$ep" "$rg" get-bucket-lifecycle-configuration --bucket "$b" 2>&1)"; then
@@ -87,7 +89,7 @@ oa_protect_bucket() {
   fi
 
   st="$(oa_protection_state "$b" "$ep" "$rg" "$ak" "$sk")"
-  case "$st" in *"versioning=Enabled"*) ;; *) problems+="versioning not confirmed; " ;; esac
+  case "$st" in *"versioning=Enabled"*) ;; *) problems+="${vers_err:+versioning refused ($(_oa_first_line "$vers_err")); }${vers_err:-versioning not confirmed; }" ;; esac
   case "$st" in *"noncurrent_days=$days "*) ;; *) problems+="expiry of old versions not confirmed; " ;; esac
   if [ -n "$want_lock" ]; then
     case "$st" in *"lock=$want_lock:$days") ;; *) problems+="object lock not confirmed; " ;; esac

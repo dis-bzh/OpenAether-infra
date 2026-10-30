@@ -360,3 +360,23 @@ oa_check_passphrase() {
   echo "  Generate one: scripts/ops/gen-passphrase.sh  (OA_PASSPHRASE_CHECK=enforce refuses, =off silences this)" >&2
   [ "$mode" != enforce ]
 }
+
+# Refuse EARLY when a directory cannot hold what a step is about to write (lab 27 part C, E5). The Talos image step downloads the
+# compressed raw and decompresses it next to it (about 11.3 GiB logical): three attempts died on "zstd: No space left on device"
+# after the download, at 8.5, 8.7 and 10 GB free. OA_IMAGE_MIN_FREE_GIB overrides the need (0 = do not check).
+# Usage: oa_require_free_gib <dir> <GiB needed> <what for>     rc 0 enough (or unmeasurable: says so), 1 not enough
+oa_require_free_gib() {
+  local dir="$1" need="$2" what="$3" free_kib free_gib
+  case "$need" in '' | *[!0-9]*) echo "✗ oa_require_free_gib: the size needed must be whole GiB (got '$need')" >&2; return 2 ;; esac
+  [ "$need" -gt 0 ] || return 0
+  mkdir -p "$dir" 2>/dev/null || true
+  free_kib="$(df -Pk "$dir" 2>/dev/null | awk 'NR==2 {print $4}')"
+  case "$free_kib" in '' | *[!0-9]*) echo "~ could not read the free space of $dir: not checked (${what} needs about ${need} GiB)" >&2; return 0 ;; esac
+  free_gib=$(( free_kib / 1024 / 1024 ))
+  if [ "$free_kib" -lt $(( need * 1024 * 1024 )) ]; then
+    echo "✗ ${what} needs about ${need} GiB free in ${dir}; only ~${free_gib} GiB are free (df). Free some room (docker image prune, caches) and run it again:" >&2
+    echo "  nothing was downloaded. OA_IMAGE_MIN_FREE_GIB=0 skips this check." >&2
+    return 1
+  fi
+  return 0
+}

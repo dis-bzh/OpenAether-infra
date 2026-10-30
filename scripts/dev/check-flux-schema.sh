@@ -57,6 +57,14 @@ variable "verify" {
   type    = bool
   default = false
 }
+variable "sink" {
+  type    = string
+  default = ""
+}
+variable "sink2" {
+  type    = string
+  default = ""
+}
 output "manifest" {
   value = templatefile("$ROOT/$TEMPLATE", {
     namespace         = "flux-system"
@@ -67,6 +75,10 @@ output "manifest" {
     backup_target_url = "s3://openaether-check@fr-par/"
     backup_s3_bucket  = "openaether-check"
     backup_s3_endpoint = "s3.fr-par.example.invalid"
+    backup_replica_s3_bucket   = "openaether-check-backup"
+    backup_replica_s3_endpoint = "s3.gra.example.invalid"
+    audit_sink_host            = var.sink
+    audit_sink_secondary_host  = var.sink2
     openbao_pgp_keys  = var.keys
     openbao_threshold = 2
     flux_git_verify_enabled = var.verify
@@ -75,13 +87,17 @@ output "manifest" {
 }
 HCL
 (cd "$tmp/render" && tofu init -input=false >/dev/null 2>&1) || { echo "✗ tofu init failed in the render sandbox" >&2; exit 1; }
-render() { # <name> <keys json> [verify true|false]
-  (cd "$tmp/render" && tofu apply -auto-approve -input=false -var "keys=$2" -var "verify=${3:-false}" >/dev/null 2>&1 && tofu output -raw manifest) > "$tmp/$1.yaml" ||
+render() { # <name> <keys json> [verify true|false] [sink host] [secondary sink host]
+  (cd "$tmp/render" && tofu apply -auto-approve -input=false -var "keys=$2" -var "verify=${3:-false}" -var "sink=${4:-}" -var "sink2=${5:-}" >/dev/null 2>&1 && tofu output -raw manifest) > "$tmp/$1.yaml" ||
     { echo "✗ the template does not render ($1)" >&2; exit 1; }
 }
 render rendered-dev '[]'
 render rendered-prod '["AAAA","BBBB","CCCC"]'
 render rendered-verify '[]' true # opt-in flux_git_verify: Secret + spec.verify must be schema-valid too
+render rendered-sink '[]' false s3.gra.example.invalid s3.par.example.invalid # audit sink (infra #318): two host names for the egress policy
+grep -q '^  AUDIT_SINK_HOST: s3.gra.example.invalid$' "$tmp/rendered-sink.yaml" && grep -q '^  AUDIT_SINK_SECONDARY_HOST: s3.par.example.invalid$' "$tmp/rendered-sink.yaml" &&
+  ! grep -q 'AUDIT_SINK' "$tmp/rendered-dev.yaml" ||
+  { echo "✗ the audit sink hosts are not rendered exactly when they are set" >&2; exit 1; }
 grep -q 'name: git-signers' "$tmp/rendered-verify.yaml" && ! grep -q 'git-signers' "$tmp/rendered-dev.yaml" ||
   { echo "✗ git-signers is not rendered exactly when flux_git_verify is on" >&2; exit 1; }
 grep -q 'name: openbao-operator-keys' "$tmp/rendered-prod.yaml" && ! grep -q 'name: openbao-operator-keys' "$tmp/rendered-dev.yaml" ||
@@ -89,7 +105,7 @@ grep -q 'name: openbao-operator-keys' "$tmp/rendered-prod.yaml" && ! grep -q 'na
 
 flux schema extract crd "$VENDORED" -d "$tmp/schemas" >/dev/null
 
-for f in rendered-dev rendered-prod rendered-verify; do
+for f in rendered-dev rendered-prod rendered-verify rendered-sink; do
   flux schema validate "$tmp/$f.yaml" \
     --schema-location "$tmp/schemas" --schema-location default --verbose
 done

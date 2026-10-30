@@ -12,7 +12,7 @@
 Deux profils différents arrivent ici, et ils ne cherchent pas la même page.
 
 **Vous voulez un cluster.** Celui qui ne demande ni compte ni credentials est
-`task local-up`, un cluster Talos de six nœuds dans Docker ; au Talos 1.14.2 livré,
+`task local-up`, un cluster Talos de six nœuds dans Docker ; au Talos 1.14.4 livré,
 il demande un noyau d'hôte 6.15 ou plus récent (#291), et `task local-up` refuse en une seconde un hôte en dessous.
 Puis [Démarrage rapide](#démarrage-rapide) pour un cloud, ou
 [`docs/first-cluster.fr.md`](docs/first-cluster.fr.md) pour la version pas à pas,
@@ -241,8 +241,8 @@ n'est pas le tien.
 
 ```bash
 # Quotas : OVH et Outscale uniquement — le script ne couvre pas Scaleway.
-# Sur Scaleway, vérifie la console : 3 control planes + 3 workers demandent
-# 6 instances du type de ton tfvars, et un compte neuf peut être plafonné à 1.
+# Sur Scaleway, vérifie la console : 3 control planes + 4 workers demandent
+# 7 instances du type de ton tfvars, et un compte neuf peut être plafonné à 1.
 task preflight-quotas PROVIDER=ovh
 
 task cluster-up ROLE=management PROVIDER=scaleway KEY=~/.ssh/yourkey
@@ -319,6 +319,7 @@ task security            # contrôles de durcissement
 | [docs/admin-access.fr.md](docs/admin-access.fr.md) | Parcours jour-1 de la plateforme applicative : escrow, PKI offline, accès UIs, tests navigateur. **Inutile pour un cluster d'infrastructure seule** |
 | [docs/capi-bootstrap.fr.md](docs/capi-bootstrap.fr.md) | Amorcer un management par CAPI et le rendre autogéré |
 | [docs/deployment-test-matrix.fr.md](docs/deployment-test-matrix.fr.md) | Ce qui est validé, où, et comment |
+| [docs/resilience.fr.md](docs/resilience.fr.md) | Perdre un nœud, un plan de contrôle ou une zone : ce qui survit, les commandes à lancer, les exercices et leurs critères de réussite |
 | [docs/capacity.fr.md](docs/capacity.fr.md) | Ce qu'un cluster consomme par provider, et le plancher de taille |
 | [docs/clea.fr.md](docs/clea.fr.md) | Ce que le rapport de dépendances épingle, et ce qu'un rapport vert peut affirmer |
 | [docs/emulated-cloud.fr.md](docs/emulated-cloud.fr.md) | Tester Scaleway/Outscale contre un émulateur local — et les limites de l'exercice |
@@ -328,6 +329,7 @@ task security            # contrôles de durcissement
 | [docs/key-management.fr.md](docs/key-management.fr.md) | Chaque clé : période, impact si perdue ou fuitée, remplacement, effacement, écarts consignés (TLS-12, TLS-19) |
 | [docs/incident-response.fr.md](docs/incident-response.fr.md) | Compromission suspectée, dans l'ordre : preuves, sauvegardes, confinement, tableau de rotation, point de restauration, registre |
 | [docs/backup-policy.fr.md](docs/backup-policy.fr.md) | Par jeu de données : mécanisme, objectif RPO/RTO, rétention, destination, détenteur de clé, test de restauration, destruction ; ce qui n'est pas sauvegardé |
+| [docs/audit-sink.fr.md](docs/audit-sink.fr.md) | La seconde copie, hors du cluster, verrouillée et chiffrée, du journal d'audit (classe A) : choix de placement et garanties, chemin des données, clés, comportement en panne, limites, critères de réussite du lab |
 | [docs/disaster-recovery.fr.md](docs/disaster-recovery.fr.md) | La chaîne de reprise ordonnée (OpenBao avant la base de Zitadel), prérequis, objectifs de temps, l'exercice annuel |
 | [docs/security-architecture.fr.md](docs/security-architecture.fr.md) | Actifs, chemins d'administration et authentification de chacun, comptes privilégiés, écarts acceptés |
 | [docs/network.fr.md](docs/network.fr.md) | Zones de confiance, plan d'adressage, les deux couches d'application, la matrice de flux (générée depuis le Terraform), lacunes connues |

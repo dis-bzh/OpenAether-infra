@@ -43,7 +43,8 @@ TARGETS = {
                      "test-cnpg-gates-local", "ssh-ca-check", "bastion-baseline-check", "bastion-identity-check"), ("local-docker", "docker")),
     **dict.fromkeys(("infra-plan", "infra-apply", "infra-down-plan", "infra-down", "cluster-up",
                      "cluster-verify", "cluster-roll", "cluster-upgrade", "cluster-shrink",
-                     "cluster-shrink-plan", "cluster-idempotency", "cluster-down", "teardown-all"),
+                     "cluster-shrink-plan", "cluster-idempotency", "cluster-down", "teardown-all",
+                     "cluster-node-recover", "cluster-replace-node", "cluster-replaced-node-cleanup"),
                     ("real-cloud", "tofu")),
 }
 # A plan applies nothing: recorded, and a red one fails the check, but it cannot
@@ -54,6 +55,12 @@ PLANS = {"infra-plan", "infra-down-plan", "cluster-shrink-plan"}
 EXCLUDED = {
     "cluster-security": "reads whatever KUBECONFIG names, local or cloud: no rung to record",
     "cluster-exposure": "probes public addresses from wherever it runs: a check on a cluster, not a rung",
+    "cluster-node-state": "read-only: asks the provider and the cluster about one node, changes nothing and proves no change",
+    "cluster-identity-sync": "dry run by default; with APPLY=1 it writes one ConfigMap on whatever the cluster directory's kubeconfig names: a repair, not a rung",
+    "cluster-apps-ref": "dry run by default; with APPLY=1 it patches two Flux objects and the tfvars on whatever the cluster directory's kubeconfig names: a repair, not a rung",
+    "cluster-rebalance": "dry run by default; with APPLY=1 it evicts critical pods one at a time on whatever the cluster directory's kubeconfig names: a repair, not a rung",
+    "cluster-coredns-ha": "dry run by default; with APPLY=1 it patches the CoreDNS Deployment on whatever the cluster directory's kubeconfig names: a repair, not a rung",
+    "cluster-bootstrap-sync": "dry run by default; with APPLY=1 it applies the Flux install manifest on whatever the cluster directory's kubeconfig names: a repair, not a rung",
     "cluster-netcheck": "sends traffic that must be denied, on whatever KUBECONFIG names: a check, not a rung",
     "feint-test": "its feint-plan and feint-apply children record for it",
     "feint-up": "starts the emulator, proves nothing about a change",

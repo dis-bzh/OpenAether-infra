@@ -454,6 +454,26 @@ tasks:
       - ./scripts/dev/test-rolling-replace.sh
       - ./scripts/dev/test-shrink-nodes.sh
       - ./scripts/dev/test-rwx-drain-gate.sh
+      - ./scripts/dev/test-roll-apiserver-gate.sh
+      - ./scripts/dev/test-node-provider.sh
+      - ./scripts/dev/test-wait-talos-port.sh
+      - ./scripts/dev/test-node-recovery.sh
+      # The volumes a replaced disk leaves behind: which are dropped, which are refused, against a fake kubectl.
+      - ./scripts/dev/test-replaced-node-cleanup.sh
+      # Critical pods sharing a node while another is empty: found, evicted one at a time, never wrongly
+      # (lab 27 part C, E4).
+      - ./scripts/dev/test-cluster-rebalance.sh
+      # The provider side is empty before fleet-down says complete (an Outscale Net, load balancers and a subnet
+      # outlived it in lab 27 part C, E5).
+      - ./scripts/dev/test-verify-provider-clean-outscale.sh
+      # The Talos image build refuses early when the disk cannot hold the raw image (about 12 GiB, lab 27 part C, E5).
+      - ./scripts/dev/test-image-disk-preflight.sh
+      - ./scripts/dev/test-dead-node-roll.sh
+      # The graceful stop of a live control plane before its replacement (F-CPFLAP): gates, order, failures.
+      - ./scripts/dev/test-cp-graceful-stop.sh
+      - ./scripts/dev/test-failure-domain-check.sh
+      # The CoreDNS manifest modules/talos injects (infra #388): selectors, host spread, tolerations, budget.
+      - ./scripts/dev/test-coredns-manifest.sh
       - ./scripts/dev/test-egress-probe.sh
       - ./scripts/dev/test-tunnel-guard.sh
       # The one test that runs talos-tunnels.sh itself: every other harness stubs it (#65).
@@ -491,6 +511,21 @@ tasks:
       # The failover seeds a cluster from the OTHER provider's replica; what it untracks is the
       # difference between a PKI carried over and a destroy plan against a cloud that is gone.
       - ./scripts/dev/test-restore-state.sh
+      # The recovery chain as a command: dry-run runs nothing, --execute needs the name, a failing check stops it.
+      - ./scripts/dev/test-dr-restore-plan.sh
+      # The live cluster-identity ConfigMap against the rendered map (lab 25, D9): a dry run writes nothing,
+      # --apply patches only the rendered keys.
+      - ./scripts/dev/test-cluster-identity-sync.sh
+      # The apps ref (git_ref) of a live cluster against the tfvars and the two Flux objects, and the Cilium / Flux
+      # controller
+      # versions against the pinned artifacts (infra #408): dry runs write nothing, refusals come before any write.
+      - ./scripts/dev/test-cluster-apps-ref.sh
+      # The 0.4.0 synchronous block on the live CNPG Clusters, before the apps ref moves (study LAB-B2): dry run writes
+      # nothing, one patch of spec.postgresql.synchronous only, refusals before any write, no delete and no force.
+      - ./scripts/dev/test-cnpg-presync.sh
+      - ./scripts/dev/test-cluster-coredns-ha.sh
+      - ./scripts/dev/test-cluster-bootstrap-sync.sh
+      - ./scripts/dev/test-pins-verify.sh
       # `nc -z` calls a dead ssh -L tunnel healthy. Two local listeners measure
       # the difference the whole tunnel guard rests on.
       - ./scripts/dev/test-endpoint-probe.sh
@@ -504,6 +539,14 @@ tasks:
       # Which S3 identity opens which bucket (s3-isolation-check.sh), on a fake store: a dedicated pair that
       # reaches the backups, a key the store refuses, and "nothing dedicated" must each fail, never pass.
       - ./scripts/dev/test-s3-isolation.sh
+      # backup-key-recipe.sh (#368): the rights and policies of a dedicated pair, per kind, real bucket names only.
+      - ./scripts/dev/test-backup-key-recipe.sh
+      # The audit sink settings (infra #318): where a sink may sit, COMPLIANCE only with the opt-in.
+      - ./scripts/dev/test-audit-sink-lib.sh
+      # The sink bucket: created with object lock on the right store, read back, a refusal is a failure (class A).
+      - ./scripts/dev/test-audit-sink-buckets.sh
+      # audit-sink-check.sh on real restic repositories: a hole, a recorded loss, a bad password, no lock are defects.
+      - ./scripts/dev/test-audit-sink-check.sh
       # `task state` promises it never writes a state. Real task + real tofu on
       # a local-backend fixture; the state's bytes are compared before and after.
       - ./scripts/dev/test-state-task.sh
@@ -592,6 +635,8 @@ tasks:
       - ./scripts/dev/test-commit-authors.sh
       # Unsigned or badly signed commits are reported (a warning until every maintainer signs): docs/signed-commits.md.
       - ./scripts/dev/test-check-commit-signatures.sh
+      # A release tag is annotated and signed by a key of the signer table (infra #386): release-checklist.md section 8.
+      - ./scripts/dev/test-check-release-tag.sh
       # feint.sh checked `running` once, immediately after `feint start`
       # returned, with no retry — raced on a GitHub-hosted runner and failed
       # CI once with no code change (#169). A stub feint puts the startup
@@ -695,7 +740,11 @@ tasks:
     env:
       OA_ENVIRONMENT: '{{.ENVIRONMENT | default ""}}'
     cmds:
-      - ./scripts/ops/cluster-security-tests.sh
+      # The script reads KUBECONFIG and nothing else (lab 26, K3: "Cannot reach cluster" in a shell that had not
+      # exported it). The caller's own value wins, so a cluster outside this checkout can still be tested.
+      - |
+        export KUBECONFIG="${KUBECONFIG:-$PWD/infrastructure/opentofu/cluster/kubeconfig}"
+        ./scripts/ops/cluster-security-tests.sh
 
   # ===========================================================================
   # Talos image (decoupled — build once per Talos version, reused by clusters)
@@ -757,7 +806,8 @@ tasks:
       APPROVE=auto, and it only warns. Usage: task cluster-up
       ROLE=management|workload PROVIDER=… [KEY=~/.ssh/yourkey] [FORCE=1] [APPROVE=auto].
       It asks on the phase-1 and phase-2 infrastructure plans, showing each, then tofu's own yes for each old
-      image the retention destroys. APPROVE=auto answers the plans for you, for CI and for a shell that cannot
+      image the retention destroys. On a 0.3.x cluster the CNPG presync and the apps ref move are ONE step and
+      CoreDNS is converged before the verify. APPROVE=auto answers the plans for you, for CI and for a shell that cannot
       be asked, and skips the retention.
     # PROVIDER is REQUIRED, not defaulted. Twenty targets used to fall back to
     # scaleway in silence — including destroy and down — so a command typed
@@ -772,6 +822,17 @@ tasks:
       # ask | auto — the value names WHO answers the approval, never whether
       # there is one: every apply still plans, then applies that saved plan.
       APPROVE: '{{.APPROVE | default "ask"}}'
+      # 1 when the config deploys Flux (TF_VAR_deploy_flux, else the env file; anything but the word true is false, the
+      # variable's default). Without Flux there is no GitRepository, no Kustomization and no CNPG Cluster to move:
+      # the presync, identity and apps-ref steps below are skipped (a pure-infra cluster, e.g. the DR chain's step 2).
+      FLUX_ON:
+        sh: |
+          v="${TF_VAR_deploy_flux:-}"
+          E=infrastructure/opentofu/cluster/envs
+          F="$E/{{.ROLE}}-{{.PROVIDER}}.tfvars"
+          AWK='$1 ~ /^[ \t]*deploy_flux[ \t]*$/ { sub(/#.*/, "", $2); gsub(/[ "\t]/, "", $2); print $2; exit }'
+          [ -n "$v" ] || v="$(awk -F= "$AWK" "$F" 2>/dev/null)"
+          [ "$v" = true ] && echo 1 || echo 0
     cmds:
       - defer: *receipt
       # Everything a later phase needs, checked BEFORE anything bills. The SSH
@@ -929,6 +990,225 @@ tasks:
       # has to reach it. APPROVE=auto inside is not a bypass: the first checkpoint
       # above already asked, and --check had told it what this would roll.
       - ./scripts/internal/converge-versions.sh {{.PROVIDER}} {{.ROLE}} {{.KEY}}
+      # CNPG presync (study LAB-B2) and the apps ref, ONE step when the presync has work to do. The 0.4.0 apps
+      # content changes
+      # the pod spec (Barman plugin sidecar) and the PostgreSQL `synchronous` settings in one Flux apply, which
+      # stuck a Cluster
+      # on a reduced lab. Enabling `synchronous` first, as its own step, did not. But the presync only lives on
+      # the cluster
+      # once the apps ref has moved: Flux, still on the OLD ref, re-applies the 0.3.x content at its 10 minute
+      # reconcile and
+      # reverts it (instances 3 -> 2, `synchronous` gone; lab 27, FA), so a stop between the two loops for ever.
+      # The presync
+      # and the ref move therefore run back to back in this pass, with no stop in between. Between the two, the
+      # presync is read
+      # again: if Flux undid it meanwhile it is applied again (at most twice), so the ref never moves over
+      # Clusters without it.
+      # Not a Flux suspend: Flux re-resumes a suspended child Kustomization within about a minute (lab 27, FD,
+      # the parent applies
+      # it), and suspending the root would freeze the very reconcile the ref move needs, with a resume to
+      # guarantee on every exit.
+      # Under APPROVE=auto the presync scales a Cluster of fewer than 3 instances to 3 (SCALE=1) in the same
+      # patch: the 0.4.0 head
+      # declares 3, and labs 26 and 27 showed that stopping is worse than scaling. Other refusals (unhealthy
+      # Cluster, no recent
+      # Backup, a roll under way, a pod without the plugin sidecar) still fail the run, never worked around. Without
+      # APPROVE=auto the same combined step is asked once, "yes" typed. On a plain bring-up of a NEW cluster no
+      # CNPG Cluster
+      # exists yet: the script exits 0 and says nothing. Same shape as the steps below: the TASK (backend env,
+      # kubeconfig),
+      # `task -x` for the script's own exit code.
+      - |
+        if [ "{{.FLUX_ON}}" != 1 ]; then
+          echo "~ deploy_flux is not true: no Flux, no CNPG Cluster and no GitRepository to move;"
+          echo "  the CNPG presync, the cluster-identity sync and the apps-ref steps are skipped."
+          exit 0
+        fi
+        PS="task -x cnpg-presync PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}"
+        PSW="task cnpg-presync PROVIDER={{.PROVIDER}} ROLE={{.ROLE}} APPLY=1 SCALE=1"
+        AR="task -x cluster-apps-ref PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}"
+        MOVE="task cluster-apps-ref PROVIDER={{.PROVIDER}} ROLE={{.ROLE}} APPLY=1"
+        window() {
+          $PS APPLY=1 SCALE=1 || return 1
+          n=0
+          while :; do
+            rc=0; $PS || rc=$?
+            [ "$rc" = 0 ] && break
+            n=$((n + 1))
+            if [ "$rc" != 3 ] || [ "$n" -gt 2 ]; then
+              echo "✗ the CNPG Clusters do not keep the synchronous block (exit $rc after $n re-apply):" >&2
+              echo "  the apps ref was NOT moved." >&2
+              return 1
+            fi
+            echo "~ the presync was undone before the ref moved (Flux, still on the old ref): applying it again."
+            $PS APPLY=1 SCALE=1 || return 1
+          done
+          rc=0; $AR APPLY=1 || rc=$?
+          case "$rc" in
+            0) ;;
+            4) echo "~ apps ref: no GitRepository yet (Flux bootstrap not applied): nothing to move." >&2 ;;
+            *) return 1 ;;
+          esac
+        }
+        both() {
+          echo "  Run them back to back, nothing in between (Flux, still on the old ref, undoes the presync" >&2
+          echo "  at its next reconcile):" >&2
+          echo "    $PSW" >&2
+          echo "    $MOVE" >&2
+          echo "  (a dry run ends with exit status 3; a bare 'task' shows it as 201.)" >&2
+        }
+        rc=0; $PS || rc=$?
+        case "$rc" in
+          0) ;;
+          3)
+            if [ "{{.APPROVE}}" = auto ]; then
+              window || { echo "✗ the presync + apps ref step failed." >&2; both; exit 1; }
+            elif [ -t 0 ]; then
+              printf '\nEnable synchronous replication on these CNPG Clusters now (a Cluster of fewer than 3 instances'
+              printf ' is scaled to 3), then move the apps ref at once, in this one step? Only "yes" is accepted: '
+              read -r reply
+              [ "$reply" = yes ] || {
+                echo "✗ not done: moving the apps ref over Clusters without synchronous replication can leave them" >&2
+                echo "  stuck, and the presync alone is undone by Flux on the old ref." >&2
+                both
+                exit 1
+              }
+              window || { echo "✗ the presync + apps ref step failed." >&2; both; exit 1; }
+            else
+              echo "✗ CNPG Clusters lack the 0.4.0 synchronous settings and nobody can be asked." >&2
+              both
+              exit 1
+            fi ;;
+          *)
+            echo "✗ cnpg-presync failed (exit $rc). Run it alone to see why (no APPLY=1: writes nothing):" >&2
+            echo "    task cnpg-presync PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}" >&2
+            exit "$rc" ;;
+        esac
+      # The cluster-identity ConfigMap of a cluster built by an OLDER release is never rewritten by the apply
+      # above: Talos creates an inline manifest's objects when missing and does not update one that exists (lab
+      # 25, D9). The apps that read a new key stay NotReady while cluster-verify can still pass. So the
+      # difference is looked for here and either written (APPROVE=auto, or "yes" at a terminal) or the run
+      # FAILS with the command that writes it: it never ends green over a ConfigMap that is not what the config
+      # renders.
+      # Both steps go through the TASKS (cluster-identity-sync, cluster-apps-ref), never the scripts: the tasks carry
+      # the provider env anchor (TF_DATA_DIR and the S3 credentials, without which `tofu output` stops at "Backend
+      # initialization required") and fetch the kubeconfig first. Calling the script from here failed lab 26 twice,
+      # after a 41-minute roll (F1). `task -x` hands back the script's own exit code: without it the script's 3
+      # ("differs") and 4 ("not there yet") both reach this shell as 201 ("task: Failed to run task ... exit status 3").
+      - |
+        [ "{{.FLUX_ON}}" = 1 ] || exit 0
+        ID="task -x cluster-identity-sync PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}"
+        WRITE="task cluster-identity-sync PROVIDER={{.PROVIDER}} ROLE={{.ROLE}} APPLY=1"
+        rc=0; $ID || rc=$?
+        case "$rc" in
+          0) ;;
+          4) echo "~ cluster-identity: no ConfigMap yet (Flux bootstrap not applied): nothing to sync." >&2 ;;
+          3)
+            if [ "{{.APPROVE}}" = auto ]; then
+              $ID APPLY=1 || exit 1
+            elif [ -t 0 ]; then
+              printf '\nWrite these cluster-identity keys? Only "yes" is accepted: '
+              read -r reply
+              [ "$reply" = yes ] || {
+                echo "✗ not written: the apps that read them stay NotReady. Write them:" >&2
+                echo "    $WRITE" >&2
+                echo "  (a dry run ends with exit status 3; a bare 'task' shows it as 201.)" >&2
+                exit 1
+              }
+              $ID APPLY=1 || exit 1
+            else
+              echo "✗ cluster-identity differs from what the config renders and nobody can be asked. Write it:" >&2
+              echo "    $WRITE" >&2
+              echo "  (a dry run ends with exit status 3; a bare 'task' shows it as 201.)" >&2
+              exit 1
+            fi ;;
+          *)
+            echo "✗ cluster-identity-sync failed (exit $rc). Run it alone to see why (no APPLY=1: writes nothing):" >&2
+            echo "    task cluster-identity-sync PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}" >&2
+            exit "$rc" ;;
+        esac
+      # The apps ref is an inline-manifest object too: git_ref in the tfvars does not move a running cluster (infra
+      # #408).
+      # Same rule as above: written (APPROVE=auto, or "yes" at a terminal) or the run FAILS naming the command.
+      - |
+        [ "{{.FLUX_ON}}" = 1 ] || exit 0
+        AR="task -x cluster-apps-ref PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}"
+        MOVE="task cluster-apps-ref PROVIDER={{.PROVIDER}} ROLE={{.ROLE}} APPLY=1"
+        rc=0; $AR || rc=$?
+        case "$rc" in
+          0) ;;
+          4) echo "~ apps ref: no GitRepository yet (Flux bootstrap not applied): nothing to move." >&2 ;;
+          3)
+            if [ "{{.APPROVE}}" = auto ]; then
+              $AR APPLY=1 || exit 1
+            elif [ -t 0 ]; then
+              printf '\nPoint the live GitRepository and GIT_REF at the git_ref of the tfvars? Only "yes" is accepted: '
+              read -r reply
+              [ "$reply" = yes ] || {
+                echo "✗ not moved: Flux keeps following the old ref. Move it:" >&2
+                echo "    $MOVE" >&2
+                echo "  (a dry run ends with exit status 3; a bare 'task' shows it as 201.)" >&2
+                exit 1
+              }
+              $AR APPLY=1 || exit 1
+            else
+              echo "✗ the apps ref Flux follows differs from git_ref and nobody can be asked. Move it:" >&2
+              echo "    $MOVE" >&2
+              echo "  (a dry run ends with exit status 3; a bare 'task' shows it as 201.)" >&2
+              exit 1
+            fi ;;
+          *)
+            echo "✗ cluster-apps-ref failed (exit $rc). Run it alone to see why (no APPLY=1: writes nothing):" >&2
+            echo "    task cluster-apps-ref PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}" >&2
+            exit "$rc" ;;
+        esac
+      # The CoreDNS HA of 0.4.0 is an inline manifest too, and Talos never rewrites the Deployment a cluster
+      # built by an older
+      # release already has (lab 26, K2). The verify below fails on it (lab 27, FB: the one-time patch used to
+      # be documented AFTER
+      # cluster-up, so an upgraded cluster could never end rc 0). Converged here, before the verdict: dry run,
+      # then the patch at
+      # APPROVE=auto or a typed "yes" (a rolling restart of the DNS pods, 6 s in lab 27), else the run FAILS
+      # naming the command.
+      # Idempotent: a Deployment already in the declared shape is left alone and nothing is asked.
+      - |
+        CD="task -x cluster-coredns-ha PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}"
+        CDW="task cluster-coredns-ha PROVIDER={{.PROVIDER}} ROLE={{.ROLE}} APPLY=1"
+        rc=0; $CD || rc=$?
+        case "$rc" in
+          0) ;;
+          3)
+            if [ "{{.APPROVE}}" = auto ]; then
+              $CD APPLY=1 || exit 1
+            elif [ -t 0 ]; then
+              printf '\nPatch the CoreDNS Deployment to the declared replicas and spread'
+              printf ' (a rolling restart of the DNS pods)? Only "yes" is accepted: '
+              read -r reply
+              [ "$reply" = yes ] || {
+                echo "✗ not patched: cluster-verify fails on CoreDNS. Patch it:" >&2
+                echo "    $CDW" >&2
+                echo "  (a dry run ends with exit status 3; a bare 'task' shows it as 201.)" >&2
+                exit 1
+              }
+              $CD APPLY=1 || exit 1
+            else
+              echo "✗ CoreDNS is not the declared shape and nobody can be asked. Patch it:" >&2
+              echo "    $CDW" >&2
+              echo "  (a dry run ends with exit status 3; a bare 'task' shows it as 201.)" >&2
+              exit 1
+            fi ;;
+          *)
+            echo "✗ cluster-coredns-ha failed (exit $rc). Run it alone to see why (no APPLY=1: writes nothing):" >&2
+            echo "    task cluster-coredns-ha PROVIDER={{.PROVIDER}} ROLE={{.ROLE}}" >&2
+            exit "$rc" ;;
+        esac
+      # Critical-path pods that share a node while another node is empty (lab 27 part C, E4) are put back one per node
+      # before the verdict: a re-run of cluster-up after a node loss, or an upgraded cluster, is where they stack.
+      # Bounded by the budgets (one eviction at a time); a failure here is only named, the verify below is what fails
+      # the run.
+      - task: cluster-rebalance
+        vars: {ROLE: "{{.ROLE}}", PROVIDER: "{{.PROVIDER}}", APPLY: "1"}
+        ignore_error: true
       # The verdict, asked of the cluster rather than assumed from the steps
       # above: a failing verify fails cluster-up before the line below.
       # scripts/dev/test-cluster-up.sh runs it.
@@ -956,6 +1236,11 @@ tasks:
       - |
         echo "✓ cluster-up complete: cluster-verify passed."
         echo "  Run this exact command again to converge again."
+        echo "  cluster-up did NOT change, and cluster-verify only compares: the Cilium and Flux controllers"
+        echo "  of a running cluster (task cluster-bootstrap-sync moves Flux; Cilium is a rebuild aside),"
+        echo "  the apps content beyond the ref above, the versions of CAPI child clusters, and any object"
+        echo "  Talos created earlier from an inline manifest (the cluster-identity keys and the apps ref"
+        echo "  are the two this run looked at)."
 
   # ===========================================================================
   # Cluster Lifecycle
@@ -1325,11 +1610,125 @@ tasks:
       - SSH_KEY="{{.KEY}}" ../../../scripts/bootstrap/talos-tunnels.sh open .
       # --role BEFORE CLI_ARGS: a role passed by the caller in `-- …` then wins,
       # which is the ordering every other flag here already has.
+      # SSH_KEY: a worker whose address follows its instance (OVH) needs the tunnels opened again mid-replacement.
       - >-
-        ../../../scripts/ops/rolling-replace.sh {{.PROVIDER}} --role={{.ROLE}}
+        SSH_KEY="{{.KEY}}" ../../../scripts/ops/rolling-replace.sh {{.PROVIDER}} --role={{.ROLE}}
         {{if eq .APPROVE "auto"}}--yes {{end}}{{.CLI_ARGS}}
       - task: _backup-state
         vars: {PROVIDER: "{{.PROVIDER}}"}
+
+  cluster-node-state:
+    desc: >-
+      READ-ONLY. What the provider says about one node's machine, whether its kubelet and Talos port answer, and
+      the ONE next command (VERDICT=healthy|recover|replace|wait|unknown). The first step of every NodeUnreachable
+      / NodeNotReady alert.
+      Usage: task cluster-node-state PROVIDER=… NODE=<kubernetes node name> [ROLE=management] [KEY=~/.ssh/key] [--
+      --ip=<private address, when the Node object is gone>]
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER, NODE]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+      KEY: '{{.KEY | default "~/.ssh/id_ed25519"}}'
+    env: *provider-env
+    cmds:
+      - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
+      - SSH_KEY="{{.KEY}}" ../../../scripts/bootstrap/talos-tunnels.sh open .
+      - ../../../scripts/ops/node-recovery.sh state {{.PROVIDER}} --node={{.NODE}} --role={{.ROLE}} {{.CLI_ARGS}}
+
+  cluster-node-recover:
+    desc: >-
+      The machine runs at the provider but the node is silent (OVH ACTIVE while dead, infra #371): a provider HARD
+      reboot and a bounded wait. Refuses when the provider says the machine is not running, and when no other node
+      answers through the tunnels (then the tunnels are the fault). Destroys nothing; the serial console trace is
+      lost, read it first.
+      Usage: task cluster-node-recover PROVIDER=… NODE=<node> [ROLE=management] [KEY=~/.ssh/key] [APPROVE=auto]
+      [-- --ip=ADDR]
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER, NODE]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+      KEY: '{{.KEY | default "~/.ssh/id_ed25519"}}'
+      APPROVE: '{{.APPROVE | default "ask"}}'
+    env: *provider-env
+    cmds:
+      - defer: *receipt
+      - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
+      - SSH_KEY="{{.KEY}}" ../../../scripts/bootstrap/talos-tunnels.sh open .
+      - >-
+        ../../../scripts/ops/node-recovery.sh recover {{.PROVIDER}} --node={{.NODE}} --role={{.ROLE}}
+        {{if eq .APPROVE "auto"}}--yes {{end}}{{.CLI_ARGS}}
+
+  cluster-replace-node:
+    desc: >-
+      Replace ONE dead node through the same OpenTofu path as cluster-roll, without a drain: a survey of the
+      survivors (every other node Ready; for a control plane, an etcd quorum without it), the etcd member removed,
+      the Node object deleted, the two applies, then Ready, uncordon, the Longhorn and apiserver gates. Wipes the
+      node's system disk and its local-path data. Refuses a Ready node (use cluster-roll) and a machine the
+      provider calls running (use cluster-node-recover first). An operator command: the management cluster has no
+      automatic node replacement.
+      Usage: task cluster-replace-node PROVIDER=… NODE=<node> [ROLE=management] [KEY=~/.ssh/key] [APPROVE=auto]
+      [-- --dry-run|--even-if-running|--ip=ADDR|--clean]
+      Afterwards it lists the pods whose local-path volume stayed on the old disk (CNPG instances, an OpenBao
+      member, loki, vmselect: they do not start by themselves) and PRINTS the commands that drop them; --clean
+      runs them, for the safe cases only (task cluster-replaced-node-cleanup does the same on its own).
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER, NODE]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+      KEY: '{{.KEY | default "~/.ssh/id_ed25519"}}'
+      APPROVE: '{{.APPROVE | default "ask"}}'
+    env: *provider-env
+    cmds:
+      - defer: *receipt
+      - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
+      - SSH_KEY="{{.KEY}}" ../../../scripts/bootstrap/talos-tunnels.sh open .
+      - >-
+        SSH_KEY="{{.KEY}}" ../../../scripts/ops/node-recovery.sh replace {{.PROVIDER}} --node={{.NODE}} --role={{.ROLE}}
+        {{if eq .APPROVE "auto"}}--yes {{end}}{{.CLI_ARGS}}
+      - task: _backup-state
+        vars: {PROVIDER: "{{.PROVIDER}}"}
+
+  cluster-replaced-node-cleanup:
+    desc: >-
+      After task cluster-replace-node: list the volumes the old disk of NODE left behind (local-path volumes
+      created before the replacement Node) and the pods stuck on them, and PRINT the exact kubectl commands.
+      With --clean it runs them for the known safe cases only (a CNPG replica with a healthy primary elsewhere,
+      an OpenBao member while a raft majority is Ready, Loki/vmstorage/vmselect with another Ready replica) and
+      refuses the rest; one member per workload per run.
+      Usage: task cluster-replaced-node-cleanup NODE=<node> [-- --clean]
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [NODE]
+    preconditions: *refuse-local
+    cmds:
+      - defer: *receipt
+      - >-
+        KUBECTL="kubectl --kubeconfig ./kubeconfig --request-timeout=30s"
+        python3 ../../../scripts/ops/replaced-node-cleanup.py --node {{.NODE}} {{.CLI_ARGS}}
+
+  failure-domain-check:
+    desc: >-
+      READ-ONLY. For every failure domain (zone, AZ, subregion, host) that holds a node: would losing it stop etcd,
+      leave too few workers or too little CPU, break the OpenBao raft quorum, take a database or a Longhorn volume
+      with it, or remove the Gateway? Placement comes from the state (control_plane_zones, worker_zones), the rest
+      from the cluster. Exit 1 when some loss is not survivable. The cloud drill is in docs/resilience.md.
+      Usage: task failure-domain-check PROVIDER=… [ROLE=management] [-- --strict]
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+    env: *provider-env
+    cmds:
+      - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
+      - ../../../scripts/ops/failure-domain-check.sh {{.PROVIDER}} --role={{.ROLE}} {{.CLI_ARGS}}
 
   cluster-shrink-plan:
     desc: >-
@@ -1914,6 +2313,22 @@ tasks:
       - tofu init -reconfigure $(../../../scripts/internal/tf-backend.sh envs/{{.ROLE}}-{{.PROVIDER}}.tfvars)
       - '{{.GEN_ENV}}../../../scripts/ops/restore-state.sh envs/{{.FROM}}.tfvars envs/{{.ROLE}}-{{.PROVIDER}}.tfvars'
 
+  dr-restore-plan:
+    desc: >-
+      The disaster-recovery chain of docs/disaster-recovery.md as one command, a check after each step, a timing
+      report. DRY-RUN by default: prints the ordered steps with this cluster's commands and the inputs each one still
+      needs (run it BEFORE the day). Usage: task dr-restore-plan PROVIDER=scaleway [ROLE=management] --
+      [--from primary|replica]
+      [--scenario rebuild|etcd] [--seal-key-file F --restic-password-file F --bao-token-file F --recovery-shares-dir D]
+      [--db-source pitr|dump] [--strict]. Execute: -- --execute --confirm <cluster_name> (the script has the rest)
+    requires:
+      vars: [PROVIDER]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+    cmds:
+      - ./scripts/ops/dr-restore-plan.sh {{.PROVIDER}} --role {{.ROLE}} {{.CLI_ARGS}}
+
   cluster-upgrade:
     aliases: [upgrade]
     desc: >-
@@ -1974,7 +2389,8 @@ tasks:
       requested number of control planes (not all in one zone or host), Cilium on
       each, CoreDNS serving, no Flux and no app load balancer unless deploy_flux / deploy_app_lb
       ask for them (then Flux Available and the balancer present), the Talos and Kubernetes versions the
-      config pins, the schematic it pins, and a tfstate replica in the backup store.
+      config pins, the schematic it pins, the Cilium and Flux controller versions the artifacts pin, the apps ref Flux
+      follows against git_ref, and a tfstate replica in the backup store.
       Usage: task verify PROVIDER=scaleway [ROLE=management]
     # See backup-state above: the *provider-env anchor needs this dir, and the
     # first version of this target shipped without it and exited 127 everywhere.
@@ -2001,6 +2417,172 @@ tasks:
       - task: kubeconfig
         vars: {ROLE: '{{.ROLE}}', PROVIDER: '{{.PROVIDER}}'}
       - ../../../scripts/dev/infra-verify.sh {{.PROVIDER}} {{.ROLE}}
+
+  cluster-identity-sync:
+    desc: >-
+      Make the cluster-identity ConfigMap (flux-system) of a RUNNING cluster match what OpenTofu renders (lab 25, D9:
+      Talos never updates an inline manifest's object that exists, so a key added by a newer release never arrives by
+      itself). Dry run by default: it shows the difference and writes nothing (exit 3 when there is one); APPLY=1 writes
+      only the rendered keys, reads them back and asks Flux to reconcile. Idempotent. No secret is read or printed.
+      Usage: task cluster-identity-sync PROVIDER=… [ROLE=management] [APPLY=1].
+      See scripts/ops/cluster-identity-sync.sh and docs/upgrade.md.
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+      APPLY: '{{.APPLY | default ""}}'
+    env: *provider-env
+    cmds:
+      - task: kubeconfig
+        vars: {ROLE: '{{.ROLE}}', PROVIDER: '{{.PROVIDER}}'}
+      - ../../../scripts/ops/cluster-identity-sync.sh{{if .APPLY}} --apply{{end}}
+
+  cnpg-presync:
+    desc: >-
+      Enable the 0.4.0 synchronous replication on the LIVE CloudNativePG Clusters of a 0.3.x platform BEFORE the
+      apps ref moves (study LAB-B2; docs/upgrade.md "From 0.3.x to 0.4.0"): applying it together with the plugin
+      sidecar in one Flux apply can leave a Cluster stuck (cloudnative-pg#11627). Selects every Cluster the apps
+      content manages (label openaether.io/managed, namespaces foundation-databases or OA_CNPG_NAMESPACES, not
+      profile or rt-* Clusters). Dry run by default: lists each Cluster without the block, writes nothing, exit 3
+      on a difference. APPLY=1 patches ONLY spec.postgresql.synchronous (any / 1 / required / failoverQuorum),
+      then waits for healthy, all instances ready, synchronous_standby_names set and the replicas in the quorum;
+      after 120 s it reloads the configuration on every instance (R1); at the timeout it prints the break-glass
+      steps (R2) and fails: it never deletes a pod. Refuses (exit 2) on an unhealthy Cluster, no recent Backup, a
+      roll under way, a pod that predates the plugin sidecar, or a Cluster with fewer than 3 instances unless
+      SCALE=1 (instances 3 in the same patch; cluster-up passes it under APPROVE=auto). Also sets
+      spec.smartShutdownTimeout 5 (a planned primary restart is bounded, lab 27 FI). Proven on Scaleway in lab
+      27 (the Flux revert on the old ref is why cluster-up moves the apps ref right after). No secret is
+      read or printed. Usage: task cnpg-presync PROVIDER=… [ROLE=management] [APPLY=1] [SCALE=1].
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+      APPLY: '{{.APPLY | default ""}}'
+      SCALE: '{{.SCALE | default ""}}'
+    env: *provider-env
+    cmds:
+      - task: kubeconfig
+        vars: {ROLE: '{{.ROLE}}', PROVIDER: '{{.PROVIDER}}'}
+      - >-
+        ../../../scripts/ops/cnpg-presync.sh --tfvars "envs/{{.ROLE}}-{{.PROVIDER}}.tfvars"
+        {{if .SCALE}}--scale{{end}} {{if .APPLY}}--apply{{end}}
+
+  cluster-apps-ref:
+    desc: >-
+      Make the apps ref of a RUNNING cluster match git_ref (infra #408): the ref the GitRepository `openaether`
+      follows and the GIT_REF of the Kustomization `openaether-platform` (Talos never updates an inline manifest's
+      object that exists, so editing git_ref and running cluster-up does not move them). Dry run by default: shows
+      tfvars / GitRepository / GIT_REF and writes nothing (exit 3 on a difference). APPLY=1 patches BOTH live
+      objects, rewrites git_ref in the tfvars (backup kept, diff shown) when REF=refs/tags/X differs from it, asks
+      Flux to reconcile and waits for the revision of that ref. A branch is a moving ref: warned about, and
+      refused as REF unless ALLOW_BRANCH=1. Signature settings are never touched. Usage: task cluster-apps-ref
+      PROVIDER=… [ROLE=management] [REF=refs/tags/X] [APPLY=1] [ALLOW_BRANCH=1]. See
+      scripts/ops/cluster-apps-ref.sh and docs/upgrade.md.
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+      APPLY: '{{.APPLY | default ""}}'
+      REF: '{{.REF | default ""}}'
+      ALLOW_BRANCH: '{{.ALLOW_BRANCH | default ""}}'
+    env: *provider-env
+    cmds:
+      - task: kubeconfig
+        vars: {ROLE: '{{.ROLE}}', PROVIDER: '{{.PROVIDER}}'}
+      - >-
+        ../../../scripts/ops/cluster-apps-ref.sh --tfvars "envs/{{.ROLE}}-{{.PROVIDER}}.tfvars"
+        {{if .REF}}--ref "{{.REF}}"{{end}} {{if .ALLOW_BRANCH}}--allow-branch{{end}} {{if .APPLY}}--apply{{end}}
+
+  cluster-coredns-ha:
+    desc: >-
+      Make the CoreDNS Deployment of a RUNNING cluster the declared shape: min(3, nodes) replicas and a hard
+      spread over nodes
+      (lab 26 K2, lab 27 FB: Talos never rewrites a Deployment that exists, so a cluster built by an older
+      release keeps 2
+      replicas without spread). Dry run by default: shows replicas and spread and writes nothing (exit 3 on a
+      difference).
+      APPLY=1 patches the Deployment with scripts/ops/coredns-ha-patch.json (a rolling restart of the DNS pods),
+      waits for the
+      rollout and reads it back. Idempotent. `cluster-up` runs it before its verify. Usage: task cluster-
+      coredns-ha PROVIDER=…
+      [ROLE=management] [APPLY=1]. See scripts/ops/cluster-coredns-ha.sh and docs/upgrade.md.
+      The same step converges the CILIUM OPERATOR to min(2, nodes) replicas (it ran 1 before 0.4.0; patch file
+      scripts/ops/cilium-operator-ha-patch.json).
+      CoreDNS also gets a spread over ZONES (lab 28, I2): required (DoNotSchedule, minDomains 3) when the nodes carry
+      three or more zone labels and every node has one, a preference otherwise.
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+      APPLY: '{{.APPLY | default ""}}'
+    env: *provider-env
+    cmds:
+      - task: kubeconfig
+        vars: {ROLE: '{{.ROLE}}', PROVIDER: '{{.PROVIDER}}'}
+      - >-
+        ../../../scripts/ops/cluster-coredns-ha.sh --tfvars "envs/{{.ROLE}}-{{.PROVIDER}}.tfvars"
+        {{if .APPLY}}--apply{{end}}
+
+  cluster-rebalance:
+    desc: >-
+      Put critical-path pods back one per node (lab 27 part C, E4). After a node loss or a drain the Gateway, the
+      Barman Cloud plugin, the CNPG operator, istiod, CoreDNS and the Cilium operator are rescheduled onto the nodes
+      that are left and STAY there when the node returns: a spread rule is read at scheduling time only. Both plugin
+      pods on one node blocked a failover for 204 s. Dry run by default: lists every group where a node holds two pods
+      while an eligible node (Ready, schedulable, taints tolerated) holds none, writes nothing, exit 3 on a finding.
+      APPLY=1 evicts the NEWEST pod of a stacked node through the Eviction API (the budgets are honoured), one at a
+      time, waits for the group to be Ready and reads the placement back; it fails when a group is still stacked. A
+      cluster with fewer eligible nodes than replicas is not wrong. CoreDNS is also judged per ZONE (lab 28, I2): two
+      replicas in one zone while another zone with an eligible node holds none, when three or more zones have one.
+      `cluster-up`, `cluster-roll` and `cluster-replace-node` run it; `cluster-verify` fails on a finding.
+      Usage: task cluster-rebalance PROVIDER=… [ROLE=management] [APPLY=1]. See scripts/ops/cluster-rebalance.py.
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+      APPLY: '{{.APPLY | default ""}}'
+    env: *provider-env
+    cmds:
+      - task: kubeconfig
+        vars: {ROLE: '{{.ROLE}}', PROVIDER: '{{.PROVIDER}}'}
+      - >-
+        KUBECTL="kubectl --kubeconfig ./kubeconfig --request-timeout=30s"
+        python3 ../../../scripts/ops/cluster-rebalance.py {{if .APPLY}}--apply{{else}}--check{{end}}
+
+  cluster-bootstrap-sync:
+    desc: >-
+      Compare the Cilium and Flux controllers a RUNNING cluster runs with the pinned bootstrap artifacts
+      (cilium.yaml, flux-install.yaml, checked against upstream-artifacts.lock), and move the FLUX controllers
+      (infra #408). Dry run by default (exit 3 on a difference). APPLY=1: server-side apply of flux-install.yaml,
+      refused on a downgrade, on more than one minor at a time, and while a Talos or Kubernetes roll may be under
+      way; waits for every rollout, then re-reads. Cilium is NEVER applied here (exit 5): rebuild aside,
+      docs/upgrade.md. COMPONENT=flux|cilium|all (default all). Usage: task cluster-bootstrap-sync PROVIDER=…
+      [ROLE=management] [COMPONENT=…] [APPLY=1]. See scripts/ops/cluster-bootstrap-sync.sh.
+    dir: infrastructure/opentofu/cluster
+    requires:
+      vars: [PROVIDER]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+      APPLY: '{{.APPLY | default ""}}'
+      COMPONENT: '{{.COMPONENT | default "all"}}'
+    env: *provider-env
+    cmds:
+      - task: kubeconfig
+        vars: {ROLE: '{{.ROLE}}', PROVIDER: '{{.PROVIDER}}'}
+      - >-
+        ../../../scripts/ops/cluster-bootstrap-sync.sh --tfvars "envs/{{.ROLE}}-{{.PROVIDER}}.tfvars"
+        --component "{{.COMPONENT}}" {{if .APPLY}}--apply{{end}}
 
   cluster-exposure:
     desc: >-
@@ -2038,7 +2620,9 @@ tasks:
     cmds:
       - task: kubeconfig
         vars: {ROLE: '{{.ROLE}}', PROVIDER: '{{.PROVIDER}}'}
-      - ../../../scripts/ops/cluster-netcheck.sh {{if .CILIUM}}--cilium{{end}}
+      # The kubeconfig the task above just wrote, pinned (lab 26, K3): the script only reads KUBECONFIG, and an
+      # exported one would aim it at another cluster (as kubeconfig-new and talosconfig-new do).
+      - KUBECONFIG="$PWD/kubeconfig" ../../../scripts/ops/cluster-netcheck.sh {{if .CILIUM}}--cilium{{end}}
 
   escrow:
     desc: >-

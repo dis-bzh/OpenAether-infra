@@ -215,7 +215,7 @@ run() { # <mode args…> — from the cluster dir; sets OUT, RC
   : >"$CALLS"
   # A run that does not end is a failure, not a hung harness.
   OUT="$( cd "$C" && timeout 60 env PATH="$W/bin:$PATH" POLL=0 POWEROFF_TIMEOUT=5 ETCD_TIMEOUT=5 LONGHORN_TIMEOUT=5 EVICT_TIMEOUT=5 \
-          RESTORE_TIMEOUT=3 RESTORE_POLL=0 PLACED_TIMEOUT=3 "${ENVV[@]}" "$W/scripts/ops/shrink-nodes.sh" "$@" 2>&1 )"; RC=$?
+          RESTORE_TIMEOUT=3 RESTORE_POLL=0 RESTORE_RETRY_WAIT=0 PLACED_TIMEOUT=3 "${ENVV[@]}" "$W/scripts/ops/shrink-nodes.sh" "$@" 2>&1 )"; RC=$?
 }
 calls() { cat "$CALLS"; }
 line_of() { grep -n -- "$1" "$CALLS" | head -1 | cut -d: -f1; }
@@ -299,6 +299,11 @@ echo "=== what the cluster must be able to lose ==="
 echo '{"items":[{"metadata":{"name":"pvc-a"},"spec":{"claimRef":{"namespace":"db","name":"data-0"},"nodeAffinity":{"required":{"nodeSelectorTerms":[{"matchExpressions":[{"key":"kubernetes.io/hostname","operator":"In","values":["oa-lab-worker-1"]}]}]}}}}]}' >"$W/pv.json"
 ENVV=(STUB_PV_FILE="$W/pv.json"); plan_run scaleway "$WPLAN"; ENVV=(X=1)
 refuses "a volume pinned to the node is refused, with the volume and its claim named" 'pvc-a \(db/data-0\)'
+# The refusal prints the next commands (lab 27 sitting 3: the operator had to work them out, and the Released PV is easy to miss).
+{ grep -q 'kubectl cordon oa-lab-worker-1' <<<"$OUT" && grep -q 'kubectl -n db delete pvc data-0' <<<"$OUT" \
+  && grep -q 'kubectl delete pv pvc-a' <<<"$OUT" && grep -q 'task cluster-shrink-plan PROVIDER=scaleway' <<<"$OUT"; } \
+  && ok "…and prints the next commands: cordon, delete the claim, delete the PV, plan again" \
+  || bad "the refusal does not print the evacuation commands: ${OUT}"
 echo '{"items":[{"metadata":{"name":"oa-lab-worker-0"},"spec":{"allowScheduling":true}},{"metadata":{"name":"oa-lab-worker-1"},"spec":{"allowScheduling":true}}]}' >"$W/lh-nodes.json"
 echo '{"items":[{"metadata":{"name":"vol-1"},"spec":{"numberOfReplicas":2}}]}' >"$W/lh-volumes.json"
 setup; cp "$W/lh-nodes.json" "$W/lh-volumes.json" "$ST/"; printf '%s' "$WPLAN" >"$ST/plan.scope.json"
@@ -310,6 +315,13 @@ refuses "an apiserver error on the Longhorn CRD is not read as 'Longhorn is not 
 setup; printf 'Name: oa-lab-worker-0\n  cpu                1 (90%%)\nName: oa-lab-worker-1\n  cpu                1 (80%%)\n' >"$ST/describe.txt"
 printf '%s' "$WPLAN" >"$ST/plan.scope.json"; run scaleway --plan
 refuses "workers whose CPU requests the remaining ones cannot hold are refused" 'request 170%'
+# F-SHRINKMEM (lab 27 part B): the CPU fits, the memory does not - the evacuated pods would stay Pending.
+setup; printf 'Name: oa-lab-worker-0\n  cpu                1 (25%%)\n  memory             6Gi (80%%)\nName: oa-lab-worker-1\n  cpu                1 (20%%)\n  memory             6Gi (75%%)\n' >"$ST/describe.txt"
+printf '%s' "$WPLAN" >"$ST/plan.scope.json"; run scaleway --plan
+refuses "workers whose MEMORY requests the remaining ones cannot hold are refused, though the CPU fits" "request 155% of one worker's memory"
+setup; printf 'Name: oa-lab-worker-0\n  cpu                1 (25%%)\n  memory             6Gi (40%%)\nName: oa-lab-worker-1\n  cpu                1 (20%%)\n  memory             6Gi (35%%)\n' >"$ST/describe.txt"
+printf '%s' "$WPLAN" >"$ST/plan.scope.json"; run scaleway --plan
+{ [ "$RC" = 0 ] && [ -f "$SCOPE_F" ]; } && ok "…and memory that fits does not change the verdict" || bad "memory that fits was refused (rc ${RC}): ${OUT}"
 setup; nodes_json oa-lab-cp-0 10.0.0.10 oa-lab-cp-1 10.0.0.11 oa-lab-cp-2 10.0.0.12 oa-lab-worker-0 10.0.1.10 oa-lab-cp-9 10.0.1.11 >"$ST/nodes.json"
 printf '%s' "$WPLAN" >"$ST/plan.scope.json"; run scaleway --plan
 refuses "a node that carries the control-plane label (an EMPTY value, as Talos sets it) is not removed as a worker" 'not a worker node by its labels'

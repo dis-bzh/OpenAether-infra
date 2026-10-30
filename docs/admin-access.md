@@ -165,7 +165,7 @@ not in the default kustomization).
 Gateway's NodePorts, with no source filter: every route then answers anyone who sets its Host header, and the route's own login is its only protection
 (the register is `OpenAether-apps/docs/public-exposure.md`; the filtering picture is [`network.md`](network.md), section 6). Off by default.
 
-**Optional source filter, `app_lb_allowed_cidrs`** (a list of IPv4 CIDRs, empty = no filter = what a cluster did before it existed). Set it in the tfvars and run the usual `tofu plan`:
+**Optional source filter, `app_lb_allowed_cidrs`** (a list of IPv4 CIDRs, empty = no filter = what a cluster did before it existed; on Outscale that is an explicit `0.0.0.0/0` rule on 80 and 443, since a security group admits nothing unlisted: until 0.4.0-rc1 the Outscale load balancer was closed to everybody when the list was empty, lab 27 part C). Set it in the tfvars and run the usual `tofu plan`:
 the plan must show an **update in place** of the Scaleway frontends / OVH listeners (or new Outscale rules) and no `must be replaced`: a replaced load balancer changes the public IP.
 The list must hold every public client you want to keep (an office, a CI runner, an uptime monitor); the cluster's own egress address is added for you, because pods reach
 `https://zitadel.openaether.local` through the load balancer. Roll it out in stages: empty, then `["0.0.0.0/0"]` (machinery on, still open: the plan shows the in-place update),

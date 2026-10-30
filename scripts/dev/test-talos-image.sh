@@ -16,6 +16,8 @@
 # the stubs record their argv. No cloud, no account, no bill, no network.
 # ==============================================================================
 set -uo pipefail
+# Hermetic: the real talos-image.sh asks for ~12 GiB of free disk before a build (E5); this test is not about the disk of the machine it runs on.
+export OA_IMAGE_MIN_FREE_GIB=0
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 # go-task reads the caller's environment as variables: Cléa's probe lane exports VERSION=<the version under probe>, and
 # the Taskfile then handed that to the script (#286). The harness defines its own environment instead of inheriting it.

@@ -176,6 +176,9 @@ resource "openstack_lb_monitor_v2" "http" {
   delay       = 5
   timeout     = 3
   max_retries = 2
+  # Failures before a member goes to ERROR. Octavia's default is 3 (the provider documents it), so a dead member may need
+  # three failed checks, not two: set explicitly (owner decision 2026-10-27, lab 27 sitting 3).
+  max_retries_down = 2
 }
 
 resource "openstack_lb_member_v2" "http" {
@@ -217,6 +220,9 @@ resource "openstack_lb_monitor_v2" "https" {
   delay       = 5
   timeout     = 3
   max_retries = 2
+  # Failures before a member goes to ERROR. Octavia's default is 3 (the provider documents it), so a dead member may need
+  # three failed checks, not two: set explicitly (owner decision 2026-10-27, lab 27 sitting 3).
+  max_retries_down = 2
 }
 
 resource "openstack_lb_member_v2" "https" {
