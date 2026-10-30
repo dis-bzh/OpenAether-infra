@@ -212,10 +212,15 @@ reset; mkdns 2 false; printf 'coredns_ha = false\n' >>"$TFV"; run
 reset; mkdns 2 false; run local
 ! has "✓ CoreDNS runs the declared" && ok "provider local: not judged" || bad "local judged"
 # the one-time patch must say what the manifest says (drift guard)
-python3 -I - "$PWD/scripts/ops/coredns-ha-patch.json" "$PWD/infrastructure/opentofu/modules/talos/coredns.yaml.tftpl" <<'PY' && ok "scripts/ops/coredns-ha-patch.json equals the manifest's replicas, tolerations and spread (3 replicas)" || bad "the patch file drifted from coredns.yaml.tftpl"
+# (the patch is the 3-zone shape: the template rendered with zone_hard = true; cluster-coredns-ha.sh softens the zone term below 3 zones)
+python3 -I - "$PWD/scripts/ops/coredns-ha-patch.json" "$PWD/infrastructure/opentofu/modules/talos/coredns.yaml.tftpl" <<'PY' && ok "scripts/ops/coredns-ha-patch.json equals the manifest's replicas, tolerations and spread (3 replicas, 3 zones: the zone term required)" || bad "the patch file drifted from coredns.yaml.tftpl"
 import json, sys, yaml
 patch = json.load(open(sys.argv[1]))
 txt = open(sys.argv[2]).read().replace("${replicas}", "3").replace("${min_domains}", "3").replace("${image_tag}", "v0")
+txt = txt.replace("${zone_when}", "DoNotSchedule").replace("${zone_min_domains}", "3")
+txt = "".join(l for l in txt.splitlines(True) if not l.startswith("%{"))
+zone = [c for c in patch["spec"]["template"]["spec"]["topologySpreadConstraints"] if c["topologyKey"] == "topology.kubernetes.io/zone"]
+assert len(zone) == 1 and zone[0]["whenUnsatisfiable"] == "DoNotSchedule" and zone[0]["minDomains"] == 3 and zone[0]["nodeTaintsPolicy"] == "Honor", "the patch must carry the required zone term"
 dep = next(d for d in yaml.safe_load_all(txt) if d and d["kind"] == "Deployment")
 want = {"spec": {"replicas": dep["spec"]["replicas"], "template": {"spec": {k: dep["spec"]["template"]["spec"][k] for k in ("tolerations", "topologySpreadConstraints")}}}}
 sys.exit(0 if patch == want else 1)

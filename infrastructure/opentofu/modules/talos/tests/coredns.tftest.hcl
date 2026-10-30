@@ -103,3 +103,83 @@ run "on_changes_the_trigger_so_an_existing_cluster_gets_it" {
     error_message = "the manifest must be in the replace trigger"
   }
 }
+
+# Zone spread (infra #388, lab 28 I2): the hostname spread alone let all three replicas land in ONE zone at install, so a zone loss
+# could take every DNS replica. With three or more zones and a zone label on EVERY node the zone term is required (DoNotSchedule,
+# minDomains 3 so a replica created before the other zones registered waits for one, nodeTaintsPolicy Honor so a lost zone's nodes
+# are not counted as empty domains); with fewer, or a node without the label, it stays a preference: a hard rule would leave the
+# pods Pending on a node that has no label (no topology key), or on a cluster that has two zones.
+
+run "three_zones_make_the_zone_spread_required" {
+  command = apply
+  variables {
+    node_zones = {
+      control_plane = ["z-a", "z-b", "z-c"]
+      worker        = ["z-a", "z-b", "z-c", "z-a"]
+    }
+  }
+  assert {
+    condition = one([for c in yamldecode([for d in split("\n---\n", local.coredns_manifests[0].contents) : d if strcontains(d, "kind: Deployment")][0]).spec.template.spec.topologySpreadConstraints :
+    c if c.topologyKey == "topology.kubernetes.io/zone"]).whenUnsatisfiable == "DoNotSchedule"
+    error_message = "three zones, every node labelled: the zone spread must be required, or all replicas can share a zone"
+  }
+  assert {
+    condition = one([for c in yamldecode([for d in split("\n---\n", local.coredns_manifests[0].contents) : d if strcontains(d, "kind: Deployment")][0]).spec.template.spec.topologySpreadConstraints :
+    c if c.topologyKey == "topology.kubernetes.io/zone"]).minDomains == 3
+    error_message = "minDomains 3 on the zone term: a replica created before the other zones registered must wait, not join the first zone"
+  }
+  assert {
+    condition = one([for c in yamldecode([for d in split("\n---\n", local.coredns_manifests[0].contents) : d if strcontains(d, "kind: Deployment")][0]).spec.template.spec.topologySpreadConstraints :
+    c if c.topologyKey == "topology.kubernetes.io/zone"]).nodeTaintsPolicy == "Honor"
+    error_message = "nodeTaintsPolicy Honor: the nodes of a lost zone are not an empty domain the replacement must wait for"
+  }
+  assert {
+    condition = one([for c in yamldecode([for d in split("\n---\n", local.coredns_manifests[0].contents) : d if strcontains(d, "kind: Deployment")][0]).spec.template.spec.topologySpreadConstraints :
+    c if c.topologyKey == "kubernetes.io/hostname"]).whenUnsatisfiable == "DoNotSchedule"
+    error_message = "the hostname spread stays required"
+  }
+}
+
+run "two_zones_keep_the_zone_spread_a_preference" {
+  command = apply
+  variables {
+    node_zones = {
+      control_plane = ["z-a", "z-b", "z-a"]
+      worker        = ["z-b", "z-a", "z-b", "z-a"]
+    }
+  }
+  assert {
+    condition = one([for c in yamldecode([for d in split("\n---\n", local.coredns_manifests[0].contents) : d if strcontains(d, "kind: Deployment")][0]).spec.template.spec.topologySpreadConstraints :
+    c if c.topologyKey == "topology.kubernetes.io/zone"]).whenUnsatisfiable == "ScheduleAnyway"
+    error_message = "two zones: the zone spread stays a preference (a required one would leave a replica without a third zone)"
+  }
+  assert {
+    condition = try(one([for c in yamldecode([for d in split("\n---\n", local.coredns_manifests[0].contents) : d if strcontains(d, "kind: Deployment")][0]).spec.template.spec.topologySpreadConstraints :
+    c if c.topologyKey == "topology.kubernetes.io/zone"]).minDomains, null) == null
+    error_message = "minDomains is only valid with DoNotSchedule: the soft zone term must not carry it"
+  }
+}
+
+run "a_node_without_a_zone_label_keeps_it_a_preference" {
+  command = apply
+  variables {
+    node_zones = {
+      control_plane = ["z-a", "z-b", "z-c"]
+      worker        = ["z-a", "z-b", "z-c", ""]
+    }
+  }
+  assert {
+    condition = one([for c in yamldecode([for d in split("\n---\n", local.coredns_manifests[0].contents) : d if strcontains(d, "kind: Deployment")][0]).spec.template.spec.topologySpreadConstraints :
+    c if c.topologyKey == "topology.kubernetes.io/zone"]).whenUnsatisfiable == "ScheduleAnyway"
+    error_message = "a node with no zone label can never take a pod under a required zone rule: the term stays a preference"
+  }
+}
+
+run "no_zone_information_keeps_it_a_preference" {
+  command = apply
+  assert {
+    condition = one([for c in yamldecode([for d in split("\n---\n", local.coredns_manifests[0].contents) : d if strcontains(d, "kind: Deployment")][0]).spec.template.spec.topologySpreadConstraints :
+    c if c.topologyKey == "topology.kubernetes.io/zone"]).whenUnsatisfiable == "ScheduleAnyway"
+    error_message = "no node_zones (local Docker, Proxmox): the zone term is a preference"
+  }
+}

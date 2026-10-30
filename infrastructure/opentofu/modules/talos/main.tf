@@ -130,12 +130,23 @@ locals {
   # = min(3, nodes): a one-node lab has one, a 3 + 4 cluster has three. minDomains equals it, so a replica created
   # before the other nodes registered waits for a different node instead of sharing one.
   coredns_replicas = min(3, var.control_plane_count + var.worker_count)
+  # The zone term (lab 28, I2): required when the nodes sit in three or more zones AND every node carries its zone label (a node
+  # without one has no topology key, so a required rule would never place a pod on it); a preference otherwise. The replicas are
+  # then min(3, nodes) = 3, and minDomains equals them, as for the nodes. cluster-coredns-ha.sh applies the same rule to a live cluster.
+  coredns_node_zones = concat(
+    [for i in range(var.control_plane_count) : try(var.node_zones.control_plane[i], "")],
+    [for i in range(var.worker_count) : try(var.node_zones.worker[i], "")],
+  )
+  coredns_zone_hard = length(distinct(compact(local.coredns_node_zones))) >= 3 && !contains(local.coredns_node_zones, "")
   coredns_manifests = var.coredns_ha ? [{
     name = "coredns"
     contents = templatefile("${path.module}/coredns.yaml.tftpl", {
-      replicas    = local.coredns_replicas
-      min_domains = local.coredns_replicas
-      image_tag   = var.coredns_image_tag
+      replicas         = local.coredns_replicas
+      min_domains      = local.coredns_replicas
+      zone_hard        = local.coredns_zone_hard
+      zone_when        = local.coredns_zone_hard ? "DoNotSchedule" : "ScheduleAnyway"
+      zone_min_domains = local.coredns_replicas
+      image_tag        = var.coredns_image_tag
     })
   }] : []
   # Talos then neither creates nor upgrades kube-system/coredns: the inline manifest does (infra #388). Off renders

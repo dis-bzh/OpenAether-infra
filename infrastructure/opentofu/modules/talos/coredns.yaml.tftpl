@@ -1,6 +1,6 @@
 # OpenAether CoreDNS, shipped as a Talos inline manifest with cluster.coreDNS.disabled = true (infra #388).
 # Same names, labels and ClusterIP as the Talos-owned one, so kubelet, Services and NetworkPolicies (k8s-app: kube-dns)
-# do not notice. What differs: ${replicas} replicas that must sit on different nodes, a PodDisruptionBudget, a short
+# do not notice. What differs: ${replicas} replicas that must sit on different nodes (and zones), a PodDisruptionBudget, a short
 # not-ready/unreachable toleration. docs/resilience.md says what a Talos upgrade does with it.
 apiVersion: v1
 kind: ServiceAccount
@@ -152,7 +152,11 @@ spec:
           tolerationSeconds: 30
       # Different nodes, or the pod waits: with minDomains the scheduler refuses to stack replicas while fewer nodes than
       # ${min_domains} exist, so a replica created before the other nodes registered is not left sharing a node (lab 21:
-      # both Talos replicas sat on one worker). A zone is a preference.
+      # both Talos replicas sat on one worker). Different zones too when there are three or more, every node carrying its label
+      # (zone_hard; lab 28: all three replicas sat in ONE zone after an install, so a zone loss could take every DNS replica).
+      # Required there, with the same minDomains reasoning for the zones; Honor so that the nodes of a lost zone (NotReady taints
+      # the replicas do not tolerate) are not an empty domain the replacement must wait for. Below three zones, or with a node that
+      # has no label (no topology key: a required rule would never place a pod on it), it is a preference.
       topologySpreadConstraints:
         - maxSkew: 1
           minDomains: ${min_domains}
@@ -163,7 +167,11 @@ spec:
               k8s-app: kube-dns
         - maxSkew: 1
           topologyKey: topology.kubernetes.io/zone
-          whenUnsatisfiable: ScheduleAnyway
+          whenUnsatisfiable: ${zone_when}
+%{ if zone_hard }
+          minDomains: ${zone_min_domains}
+%{ endif }
+          nodeTaintsPolicy: Honor
           labelSelector:
             matchLabels:
               k8s-app: kube-dns

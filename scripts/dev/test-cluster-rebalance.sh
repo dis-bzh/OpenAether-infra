@@ -5,6 +5,8 @@
 # cordoned, NotReady or tainted node is not an empty node; one eviction at a time, through the Eviction API; a refused eviction
 # (PDB) is retried then fails the run; a group that cannot be fixed fails the run; an absent group is not an error. What a real
 # scheduler and PDB do is NOT reproduced here (UNPROVEN until a lab: drain a node, bring it back, run the task).
+# Zones (lab 28, I2): CoreDNS is also judged per ZONE: two replicas in one zone while another zone that has an eligible node holds
+# none is wrong, but only when three or more zones have eligible nodes (below that the spread over zones is a preference).
 # Usage: test-cluster-rebalance.sh
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -38,6 +40,9 @@ if a[0] == "create" and a[1] == "--raw":
     else:
         free = [n["metadata"]["name"] for n in st["nodes"] if not any(q["spec"]["nodeName"] == n["metadata"]["name"] for q in st["pods"] if q["metadata"]["labels"] == p["metadata"]["labels"])
                 and not n["spec"].get("unschedulable") and not n["spec"].get("taints")]
+        zone = lambda nd: next((n["metadata"].get("labels", {}).get("topology.kubernetes.io/zone", "") for n in st["nodes"] if n["metadata"]["name"] == nd), "")
+        held = {zone(q["spec"]["nodeName"]) for q in st["pods"] if q is not p and q["metadata"]["labels"] == p["metadata"]["labels"]}
+        free = [n for n in free if zone(n) not in held] + [n for n in free if zone(n) in held]  # the zone spread: an empty zone first
         p["spec"]["nodeName"] = free[0] if free else p["spec"]["nodeName"]
         p["metadata"]["name"] = name + "-n"; p["metadata"]["creationTimestamp"] = "2026-10-28T20:00:00Z"
     save(); sys.exit(0)
@@ -51,8 +56,8 @@ mk() { # <variant>
   python3 -I - "$ST" "$1" <<'PY'
 import json, sys
 st_path, v = sys.argv[1:3]
-def node(n, ready=True, cordon=False, taints=None):
-    return {"metadata": {"name": n}, "spec": {"unschedulable": cordon, "taints": taints or []},
+def node(n, ready=True, cordon=False, taints=None, zone=None):
+    return {"metadata": {"name": n, "labels": {"topology.kubernetes.io/zone": zone} if zone else {}}, "spec": {"unschedulable": cordon, "taints": taints or []},
             "status": {"conditions": [{"type": "Ready", "status": "True" if ready else "False"}]}}
 def pod(ns, name, nd, labels, created="2026-10-28T10:00:00Z", tols=None):
     return {"metadata": {"namespace": ns, "name": name, "labels": labels, "creationTimestamp": created},
@@ -79,6 +84,21 @@ elif v == "refused":
 elif v == "noroom":
     pods[4]["spec"]["nodeName"] = "w-0"; st["noroom"] = True
 elif v == "absent": pods = []
+elif v.startswith("zones"):  # CoreDNS only (the lab 28 install: 3 pods on 3 DIFFERENT nodes, all in zone b); the control planes are eligible (tolerated)
+    DNS = {"k8s-app": "kube-dns"}
+    tol = [{"key": "node-role.kubernetes.io/control-plane", "operator": "Exists", "effect": "NoSchedule"}]
+    cpt = [{"key": "node-role.kubernetes.io/control-plane", "effect": "NoSchedule"}]
+    z = {"cp-0": "a", "cp-1": "b", "cp-2": "c", "w-0": "a", "w-1": "b", "w-2": "c", "w-3": "a", "w-4": "b", "w-5": "c"}
+    nodes = [node(n, taints=cpt if n.startswith("cp") else None, zone=z[n]) for n in z]
+    where = ["cp-1", "w-1", "w-4"]  # zone b three times: one pod per node, the hard spread over nodes is met
+    if v == "zones-ok": where = ["cp-0", "w-1", "w-2"]
+    elif v == "zones-two":  # only two zones have an eligible node (c is NotReady and cordoned): {2, 1} is the best that fits
+        nodes = [node(n, ready=n[-1] not in "25", taints=cpt if n.startswith("cp") else None, zone=z[n]) for n in z]
+        where = ["cp-0", "w-3", "w-1"]
+    elif v == "zones-nolabel":  # the third zone's nodes carry no label: only two ZONES are known
+        nodes = [node(n, taints=cpt if n.startswith("cp") else None, zone=z[n] if z[n] != "c" else None) for n in z]
+    pods = [pod("kube-system", "dns-%d" % i, nd, DNS, created="2026-10-28T1%d:00:00Z" % i, tols=tol) for i, nd in enumerate(where)]
+    if v == "zones-noroom": st["noroom"] = True
 st.update(nodes=nodes, pods=pods)
 json.dump(st, open(st_path, "w"))
 PY
@@ -113,6 +133,24 @@ mk refused; run --apply
 { [ "$rc" = 1 ] && grep -q "refused" <<<"$out"; } && ok_ "an eviction the PDB refuses is retried, then the run FAILS" || bad "refused rc $rc / $out"
 mk noroom; run --apply
 { [ "$rc" = 1 ] && [ "$(evictions)" -le 4 ] && grep -q "still stacked" <<<"$out"; } && ok_ "a group that stays stacked fails the run after a bounded number of evictions ($(evictions))" || bad "noroom rc $rc / $out"
+zones_of() { python3 -I -c 'import json,sys; st=json.load(open(sys.argv[1])); z={n["metadata"]["name"]: n["metadata"].get("labels",{}).get("topology.kubernetes.io/zone","") for n in st["nodes"]}; print(" ".join(sorted(z[p["spec"]["nodeName"]] for p in st["pods"] if p["metadata"]["labels"].get(sys.argv[2])==sys.argv[3])))' "$ST" "$1" "$2"; }
+
+mk zones-ok; run --check
+{ [ "$rc" = 0 ] && [ "$(evictions)" = 0 ] && grep -q "ok CoreDNS: 3 pod(s) on 3 node(s)" <<<"$out"; } && ok_ "CoreDNS one per zone: --check passes" || bad "zones-ok rc $rc / $out"
+mk zones; run --check
+{ [ "$rc" = 3 ] && [ "$(evictions)" = 0 ] && grep -q "x CoreDNS: zone(s) b hold 2 or more of its pods while a, c hold none" <<<"$out" && grep -q "task cluster-rebalance" <<<"$out"; } \
+  && ok_ "lab 28: three CoreDNS pods on three nodes of ONE zone while two zones are empty: --check exits 3, names the zones, writes nothing" || bad "zones --check rc $rc / $out"
+mk zones; run --apply
+{ [ "$rc" = 0 ] && [ "$(evictions)" = 2 ] && [ "$(zones_of k8s-app kube-dns)" = "a b c" ] && grep -q "evict kube-system/dns-2 (newest pod of zone b)" <<<"$out"; } \
+  && ok_ "--apply: two evictions, the newest pod of the stacked zone each time, one CoreDNS pod per zone at the end" || bad "zones --apply rc $rc / evictions $(evictions) / $out"
+run --check; [ "$rc" = 0 ] && ok_ "after --apply, --check passes" || bad "zones check after apply rc $rc"
+mk zones-two; run --check
+{ [ "$rc" = 0 ] && [ "$(evictions)" = 0 ]; } && ok_ "only two zones have an eligible node (the third is NotReady): two pods in one zone are not wrong, the zone spread is a preference" || bad "zones-two rc $rc / $out"
+mk zones-nolabel; run --check
+{ [ "$rc" = 0 ] && [ "$(evictions)" = 0 ]; } && ok_ "nodes without a zone label are not a zone: two known zones, nothing judged" || bad "zones-nolabel rc $rc / $out"
+mk zones-noroom; run --apply
+{ [ "$rc" = 1 ] && grep -q "CoreDNS: still stacked" <<<"$out"; } && ok_ "a zone stack that cannot be fixed fails the run" || bad "zones-noroom rc $rc / $out"
+
 mk absent; run --apply
 { [ "$rc" = 0 ] && grep -q "not installed yet" <<<"$out"; } && ok_ "absent groups are not an error" || bad "absent rc $rc / $out"
 run --bogus; [ "$rc" = 2 ] && ok_ "an unknown argument is a usage error" || bad "usage rc $rc"

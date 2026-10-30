@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# cluster-coredns-ha.sh makes the CoreDNS Deployment of a LIVE cluster the shape the config declares: min(3, nodes) replicas and a
-# hard spread over nodes (lab 26 K2, lab 27 FB; docs/upgrade.md "From 0.3.x to 0.4.0"). It does the same, in the same step, for the
+# cluster-coredns-ha.sh makes the CoreDNS Deployment of a LIVE cluster the shape the config declares: min(3, nodes) replicas, a
+# hard spread over nodes (lab 26 K2, lab 27 FB; docs/upgrade.md "From 0.3.x to 0.4.0") and a spread over zones, required when the
+# nodes carry three or more zones and EVERY node has its zone label, a preference otherwise (lab 28, I2: all three replicas sat in
+# one zone after an install; a node without the label could never take a pod under a required rule). It does the same, in the same step, for the
 # CILIUM OPERATOR (0.4.0 critical-path audit): the Cilium manifest is an inline manifest too, so a cluster built by an older release
 # keeps its ONE operator replica; the declared shape is min(2, nodes) replicas (scripts/ops/cilium-operator-ha-patch.json). The name
 # stays "coredns" because `cluster-up` and the docs call it by that name; both are the objects Talos never rewrites.
@@ -13,9 +15,10 @@
 # this step before its verify.
 #
 # WHAT IT DOES. Dry run (default): reads the Deployment kube-system/coredns and the node count, prints replicas and spread against
-# the declaration, writes nothing. --apply: merge-patches the Deployment with scripts/ops/coredns-ha-patch.json (replicas and
-# minDomains lowered to the node count when there are fewer than 3 nodes: the file is the 3-node shape), then waits for the rollout
-# and reads the Deployment back. Idempotent: in sync, it does nothing. A rolling restart of the DNS pods happens only when the spec
+# the declaration, writes nothing. --apply: merge-patches the Deployment with scripts/ops/coredns-ha-patch.json (replicas and the
+# hostname minDomains lowered to the node count when there are fewer than 3 nodes; the zone term made a preference, without its
+# minDomains, when the zone rule above is not met: the file is the 3-node, 3-zone shape), then waits for the rollout and reads the
+# Deployment back. Idempotent: in sync, it does nothing. A rolling restart of the DNS pods happens only when the spec
 # differs (maxUnavailable of the Deployment and the budget keep two answering; lab 27: 6 s, 0 failed lookups at 1 Hz).
 #
 # CoreDNS is skipped when coredns_ha = false or the Deployment is absent; the operator is skipped on its own absence (Cilium is
@@ -63,10 +66,17 @@ export KUBECONFIG="$CLUSTER_DIR/kubeconfig"
 [ -s "$KUBECONFIG" ] || fail "no kubeconfig at infrastructure/opentofu/cluster/kubeconfig (task kubeconfig PROVIDER=… ROLE=…)"
 
 ERR="$(mktemp)"; trap 'rm -f "$ERR"' EXIT
-nodes="$(kubectl get nodes --no-headers 2>"$ERR" | wc -l)" || true
+NODES_JSON="$(kubectl get nodes -o json 2>"$ERR")" || true
+nodes="$(jq -r '.items | length' <<<"$NODES_JSON" 2>/dev/null)" || true
 [[ "$nodes" =~ ^[0-9]+$ ]] && [ "$nodes" -ge 1 ] || fail "cannot count the nodes: $(head -c 300 "$ERR")"
 want=$(( nodes < 3 ? nodes : 3 ))
 op_want=$(( nodes < 2 ? nodes : 2 ))
+# The zone rule: the nodes the cluster HAS (not the ones that are Ready this minute: the declared shape is the topology, and a zone that
+# is down for a while must not flip the rule), three or more distinct zone labels and no node without one.
+zones="$(jq -r '[.items[].metadata.labels["topology.kubernetes.io/zone"] // empty | select(. != "")] | unique | length' <<<"$NODES_JSON")"
+unlabeled="$(jq -r '[.items[] | select((.metadata.labels["topology.kubernetes.io/zone"] // "") == "")] | length' <<<"$NODES_JSON")"
+zone_hard=0; { [ "$zones" -ge 3 ] && [ "$unlabeled" -eq 0 ]; } && zone_hard=1
+zone_decl="a preference"; [ "$zone_hard" -eq 1 ] && zone_decl="required"
 
 # --- CoreDNS ---------------------------------------------------------------------------------------------------------------------
 read_dep() {
@@ -77,28 +87,35 @@ read_dep() {
   have="$(jq -r '.spec.replicas // empty' <<<"$DEP")"
   hard="$(jq -r '[.spec.template.spec.topologySpreadConstraints[]? | select(.topologyKey == "kubernetes.io/hostname" and .whenUnsatisfiable == "DoNotSchedule")] | length' <<<"$DEP")"
   [[ "$have" =~ ^[0-9]+$ ]] && [[ "$hard" =~ ^[0-9]+$ ]] || fail "cannot read the replica count or the spread of kube-system/coredns"
+  zone_have="$(jq -r '[.spec.template.spec.topologySpreadConstraints[]? | select(.topologyKey == "topology.kubernetes.io/zone")] | first | .whenUnsatisfiable // "none"' <<<"$DEP")"
 }
-in_sync() { [ "$have" -eq "$want" ] && [ "$hard" -gt 0 ]; }
+# A required zone term that the topology does not ask for is left alone (a cluster that lost a zone for good is not churned); a
+# zone term that the topology asks to be required but is not, is a difference.
+in_sync() { [ "$have" -eq "$want" ] && [ "$hard" -gt 0 ] && { [ "$zone_hard" -eq 0 ] || [ "$zone_have" = DoNotSchedule ]; }; }
 
 DIFF=0
 converge_coredns() {
   read_dep || return 0
-  echo "CoreDNS (kube-system/coredns): $have replica(s), $hard hard hostname spread constraint(s); declared: $want replica(s) (min(3, $nodes node(s))) with a hard spread over nodes."
+  echo "CoreDNS (kube-system/coredns): $have replica(s), $hard hard hostname spread constraint(s), zone spread: $zone_have; declared: $want replica(s) (min(3, $nodes node(s))) with a hard spread over nodes and a zone spread that is $zone_decl ($zones zone(s), $unlabeled node(s) without a zone label)."
   if in_sync; then echo "✓ CoreDNS already is the declared shape: nothing to do."; return 0; fi
   if [ "$APPLY" -ne 1 ]; then
     echo "✗ CoreDNS differs from the declaration. NOTHING was written (dry run)." >&2
     echo "  Converge it (a rolling restart of the DNS pods): task cluster-coredns-ha PROVIDER=… ROLE=… APPLY=1" >&2
     DIFF=1; return 0
   fi
-  patch="$(jq -c --argjson n "$want" '.spec.replicas = $n | (.spec.template.spec.topologySpreadConstraints[] | select(.minDomains != null)).minDomains = $n' "$PATCH_FILE")" \
-    || fail "the patch file is not what this script can adjust"
+  patch="$(jq -c --argjson n "$want" --argjson z "$zone_hard" '
+      .spec.replicas = $n
+      | (.spec.template.spec.topologySpreadConstraints[] | select(.topologyKey == "kubernetes.io/hostname")).minDomains = $n
+      | if $z == 1 then .
+        else (.spec.template.spec.topologySpreadConstraints[] | select(.topologyKey == "topology.kubernetes.io/zone")) |= (.whenUnsatisfiable = "ScheduleAnyway" | del(.minDomains))
+        end' "$PATCH_FILE")" || fail "the patch file is not what this script can adjust"
   kubectl -n kube-system patch deployment coredns --type merge -p "$patch" >/dev/null 2>"$ERR" || fail "patch of kube-system/coredns refused: $(head -c 300 "$ERR")"
-  echo "▶ kube-system/coredns patched (replicas $want, hard spread over nodes, zone preference, 30 s tolerations)."
+  echo "▶ kube-system/coredns patched (replicas $want, hard spread over nodes, zone spread $zone_decl, 30 s tolerations)."
   kubectl -n kube-system rollout status deployment coredns --timeout="${TIMEOUT}s" >/dev/null 2>"$ERR" \
     || fail "the CoreDNS rollout did not finish within ${TIMEOUT} s: $(head -c 300 "$ERR")"
   read_dep || fail "kube-system/coredns disappeared during the patch"
   in_sync || fail "after the patch CoreDNS has $have replica(s) and $hard hard spread constraint(s); declared $want"
-  echo "✓ CoreDNS converged: $have replica(s), hard spread over nodes."
+  echo "✓ CoreDNS converged: $have replica(s), hard spread over nodes, zone spread $zone_decl."
 }
 
 # --- Cilium operator (0.4.0 critical-path audit) --------------------------------------------------------------------------------------

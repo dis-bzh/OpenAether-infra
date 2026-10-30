@@ -2514,6 +2514,8 @@ tasks:
       [ROLE=management] [APPLY=1]. See scripts/ops/cluster-coredns-ha.sh and docs/upgrade.md.
       The same step converges the CILIUM OPERATOR to min(2, nodes) replicas (it ran 1 before 0.4.0; patch file
       scripts/ops/cilium-operator-ha-patch.json).
+      CoreDNS also gets a spread over ZONES (lab 28, I2): required (DoNotSchedule, minDomains 3) when the nodes carry
+      three or more zone labels and every node has one, a preference otherwise.
     dir: infrastructure/opentofu/cluster
     requires:
       vars: [PROVIDER]
@@ -2538,8 +2540,9 @@ tasks:
       while an eligible node (Ready, schedulable, taints tolerated) holds none, writes nothing, exit 3 on a finding.
       APPLY=1 evicts the NEWEST pod of a stacked node through the Eviction API (the budgets are honoured), one at a
       time, waits for the group to be Ready and reads the placement back; it fails when a group is still stacked. A
-      cluster with fewer eligible nodes than replicas is not wrong. `cluster-up`, `cluster-roll` and
-      `cluster-replace-node` run it; `cluster-verify` fails on a finding.
+      cluster with fewer eligible nodes than replicas is not wrong. CoreDNS is also judged per ZONE (lab 28, I2): two
+      replicas in one zone while another zone with an eligible node holds none, when three or more zones have one.
+      `cluster-up`, `cluster-roll` and `cluster-replace-node` run it; `cluster-verify` fails on a finding.
       Usage: task cluster-rebalance PROVIDER=… [ROLE=management] [APPLY=1]. See scripts/ops/cluster-rebalance.py.
     dir: infrastructure/opentofu/cluster
     requires:

@@ -246,13 +246,15 @@ fi
 # rescheduled onto the nodes that are left and stay there when the node returns (a spread rule is read at scheduling time only).
 # Both Barman Cloud plugin pods on one node blocked a failover for 204 s. A group with fewer eligible nodes than replicas is not
 # wrong. The checker is scripts/ops/cluster-rebalance.py (groups: Gateway, Barman Cloud plugin, CNPG operator, istiod, CoreDNS,
-# Cilium operator); absent groups (a pure-infra cluster) are skipped. Not judged on the local provider (one Docker node).
+# Cilium operator); absent groups (a pure-infra cluster) are skipped. CoreDNS is also judged per zone (lab 28, I2: all three replicas
+# in one zone after an install): two in one zone while another zone with an eligible node holds none, with 3 or more such zones.
+# Not judged on the local provider (one Docker node).
 if [ "$PROVIDER" != local ]; then
   info "No two replicas of a critical pod share a node while another node is empty"
   rb_out="$(KUBECTL="kubectl --kubeconfig ${KUBECONFIG} --request-timeout=30s" timeout 120 python3 "$ROOT/scripts/ops/cluster-rebalance.py" --check 2>&1)"; rb_rc=$?
   case "$rb_rc" in
     0) ok "every critical pod group is spread over the nodes that can hold it" ;;
-    3) bad "critical pods share a node although another node is empty (a failover or the ingress then depends on that one node): $(grep '^  x ' <<<"$rb_out" | sed 's/^  x //' | paste -sd';' -). Fix: task cluster-rebalance PROVIDER=${PROVIDER} ROLE=${ROLE} APPLY=1 (evicts the newest pod of each stacked node, one at a time, within the budgets)" ;;
+    3) bad "critical pods share a node (CoreDNS: or a zone, with three or more zones) although another node (zone) is empty (a failover, the ingress or the DNS then depends on that one node or zone): $(grep '^  x ' <<<"$rb_out" | sed 's/^  x //' | paste -sd';' -). Fix: task cluster-rebalance PROVIDER=${PROVIDER} ROLE=${ROLE} APPLY=1 (evicts the newest pod of each stacked node or zone, one at a time, within the budgets)" ;;
     *) unk "could not read the placement of the critical pods (exit ${rb_rc}): ${rb_out##*$'\n'}" ;;
   esac
 fi
