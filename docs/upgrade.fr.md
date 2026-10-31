@@ -407,11 +407,11 @@ il dé-cordonne le nœud, liste les pods et refuse de continuer. À la main : dr
 `kubectl -n longhorn-system get pods -o wide | grep share-manager` doit montrer un autre nœud. Test hors ligne : `scripts/dev/test-rwx-drain-gate.sh`.
 Pas encore prouvé sur un cluster : qu'un nœud drainé redémarre ensuite en 1,5 minute environ (le dépôt apps raccourcit aussi les délais NFS RWX).
 
-### Un worker qui porte un share-manager RWX attaché, ou une base à instance unique, ne se vide pas (labo 28, I3)
+### Un worker qui porte un share-manager RWX attaché ne se vide pas (labo 28, I3)
 
 Échelon : observé sur UN cluster (OVH, labo 28, 3 plans de contrôle + 6 workers, 2026-10-29 : trois essais sur le même worker, dont un par le chemin du produit) ; la cause est lue dans ce labo, la procédure ci-dessous n'a PAS été exécutée sur un cluster ; la correction en code est pour la 0.4.1. Pas une déclaration de conformité.
 
-**Symptôme.** `task cluster-roll PROVIDER=… -- --node=<worker>` (et un simple `kubectl drain`) sur un worker qui porte le share-manager Longhorn d'un volume RWX attaché, ou l'unique instance d'un cluster CNPG à instance unique (le profil `light`) : le survey est propre, puis « Cordon + drain » attend ses 900 s (`error when evicting pods/instance-manager-... in longhorn-system ... global timeout reached`) et le roll REFUSE (« could not be drained (timeout 900s) - refusing to reboot it under workloads that would not move »), **rc 201 après 1 026 s (17 minutes)**. Aucun dégât : les budgets et les Kustomizations Flux sont rétablis, le nœud est ré-ouvert et non redémarré, aucun autre nœud n'a quitté Ready, 0 écrivain de base sur 6 a perdu un commit acquitté, HTTP 0 échantillon en échec sur 1 065. Le même roll sur un worker SANS ces éléments : rc 0 en 789 s (13 min 09 s, NOMINAL). `cluster-upgrade` et `cluster-shrink` utilisent le même drain ; ils n'ont pas été essayés sur un tel worker.
+**Symptôme.** `task cluster-roll PROVIDER=… -- --node=<worker>` (et un simple `kubectl drain`) sur un worker qui porte le share-manager Longhorn d'un volume RWX attaché (dans le labo, ce worker portait aussi l'unique instance d'un cluster CNPG à instance unique, le profil `light` ; le roll ne s'arrête PAS pour une telle instance, voir la section suivante) : le survey est propre, puis « Cordon + drain » attend ses 900 s (`error when evicting pods/instance-manager-... in longhorn-system ... global timeout reached`) et le roll REFUSE (« could not be drained (timeout 900s) - refusing to reboot it under workloads that would not move »), **rc 201 après 1 026 s (17 minutes)**. Aucun dégât : les budgets et les Kustomizations Flux sont rétablis, le nœud est ré-ouvert et non redémarré, aucun autre nœud n'a quitté Ready, 0 écrivain de base sur 6 a perdu un commit acquitté, HTTP 0 échantillon en échec sur 1 065. Le même roll sur un worker SANS ces éléments : rc 0 en 789 s (13 min 09 s, NOMINAL). `cluster-upgrade` et `cluster-shrink` utilisent le même drain ; ils n'ont pas été essayés sur un tel worker.
 
 **Cause (telle que lue au labo).** Deux budgets qui n'admettent aucune interruption. (1) Le budget `instance-manager-*` de Longhorn pour le nœud, maintenu tant que le nœud porte un volume attaché (node-drain-policy `block-if-contains-last-replica` ; listé plus haut comme nul par construction) : le share-manager d'un volume RWX en garde un attaché, et le roll ne peut pas évincer l'instance manager. (2) Une base à instance unique a un budget de primaire `minAvailable: 1` avec 0 interruption admise, et aucun réplica vers lequel basculer : un simple `kubectl drain` l'attend indéfiniment. Le roll coupe les budgets des Clusters CNPG qu'il connaît, donc dans le labo c'est le budget de Longhorn qui a retenu le roll, mais l'instance unique n'a de toute façon nulle part où aller (son volume est local au nœud) : sa base est arrêtée tant que le nœud est hors service (913 s au labo). Le contrôle RWX de `cordon_drain` (« holds no Longhorn RWX share-manager or client ») s'exécute APRÈS le retour du drain : un drain qui ne revient jamais ne l'atteint pas.
 
@@ -428,7 +428,27 @@ Pas encore prouvé sur un cluster : qu'un nœud drainé redémarre ensuite en 1,
 3. Pour le worker qui en porte un : avec un volume RWX, arrêter les charges qui montent la claim (les mettre à 0), attendre que le volume soit `detached` et qu'aucun pod `share-manager` ne soit sur le nœud, rouler, puis les remettre : leurs écrivains sont arrêtés pendant ce temps (l'interruption RWX acceptée est d'environ 100 s lors d'une panne, ici c'est un arrêt planifié). Avec une base à instance unique, annoncer son arrêt pendant le roll (913 s mesurées) ou lui donner d'abord une seconde instance (le profil `standard`).
 4. Ne pas forcer : ne pas supprimer un budget ni le pod à la main pour passer l'attente (le labo l'a fait une fois, dans un exercice, et cela a coupé l'instance unique). Un roll refusé a tout rétabli : corriger la cause et relancer la même commande, les nœuds déjà faits sont ignorés.
 
-**Pour la 0.4.1** (code, pas dans la 0.4.0) : étendre le contrôle RWX de `cluster-roll` pour qu'il s'exécute aussi AVANT le drain sur un worker, nomme les volumes et échoue en quelques secondes au lieu de 900 s ; le drain bloqué du profil `light` reste documenté ici.
+**Pour la 0.4.1** (code, pas dans la 0.4.0) : étendre le contrôle RWX de `cluster-roll` pour qu'il s'exécute aussi AVANT le drain sur un worker, nomme les volumes et échoue en quelques secondes au lieu de 900 s ; un simple `kubectl drain` du nœud d'une base `light` reste bloqué par son budget (ci-dessus), mais `cluster-roll` coupe ce budget et ne s'arrête pas pour elle : quand le roll passe, une base `light` est perdue et non bloquée (section suivante).
+
+### Un remplacement de nœud détruit les données d'une base à instance unique (profil `light` ; labo 28B, I17)
+
+Échelon : observé sur UN cluster (Scaleway, labo 28B, 3 plans de contrôle + 6 workers, 2026-10-30) ; l'avertissement dans le roll est pour la 0.4.1, sans date. Pas une déclaration de conformité.
+
+Une base `light` (profil d'OpenAether-apps : 1 instance, volume `local-path-retain` local au nœud, aucune sauvegarde) a son unique copie sur le disque de son nœud. `task cluster-roll -- --node=<worker>` et `task cluster-replace-node` détruisent l'ancienne machine et en créent une nouvelle avec un nouveau disque : **les données d'un cluster `light` présent sur ce nœud sont détruites**. Labo 28B : le roll d'un worker qui portait `lab27-light` s'est terminé (rc 0 en 790 s, NOMINAL, drain terminé), 42 583 commits acquittés de l'écrivain de test ont disparu, et le nettoyage qui suit le remplacement a REFUSÉ le volume (« primary of record: its data was on the replaced disk »), trop tard pour y changer quoi que ce soit ; le labo 27B avait rencontré le même refus. L'instance unique n'a pas retenu le roll à cette occasion (aucun share-manager RWX sur ce nœud, contrairement au cas ci-dessus) : ne pas compter sur le roll pour s'arrêter devant une base `light`.
+
+C'est hors de la règle de zéro perte acquittée, par décision du propriétaire du 2026-10-30 : `light` est documenté comme « stockage local au nœud ... perdu avec son disque, aucune sauvegarde, données que l'on peut perdre » (la page des profils de base de données d'OpenAether-apps), et la règle couvre `ha`, `standard`, les bases de la plateforme et la forge.
+
+**Avant de rouler ou de remplacer un nœud** (simples lectures) :
+
+```bash
+NODE=<worker>
+kubectl get pods -A -l cnpg.io/cluster --field-selector spec.nodeName="$NODE" -o wide
+kubectl get clusters.postgresql.cnpg.io -A -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,INSTANCES:.spec.instances
+```
+
+Un pod d'un Cluster à `INSTANCES` 1 sur ce nœud est une base `light` dont les données partent avec le nœud. Passer d'abord son application en `standard` ou `ha` (une autre copie existe alors), ou accepter la perte.
+
+**Pour la 0.4.1** (code, pas dans la 0.4.0, sans date) : le survey de `cluster-roll` et de `cluster-replace-node` nomme les Clusters dont l'unique copie est sur le nœud et demande un oui explicite.
 
 ### Ne jamais redémarrer sans drain un worker qui porte une instance CNPG
 

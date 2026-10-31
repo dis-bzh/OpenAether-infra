@@ -391,11 +391,11 @@ node, lists the pods and refuses to go on. By hand: drain, then
 `kubectl -n longhorn-system get pods -o wide | grep share-manager` must show another node. Offline test: `scripts/dev/test-rwx-drain-gate.sh`.
 Not yet proven on a cluster: that a drained node then reboots in about 1.5 minutes (the apps repo also shortens the RWX NFS timeouts).
 
-### A worker that holds an attached RWX share-manager, or a single-instance database, does not drain (lab 28, I3)
+### A worker that holds an attached RWX share-manager does not drain (lab 28, I3)
 
 Rung: observed on ONE cluster (OVH, lab 28, 3 control planes + 6 workers, 2026-10-29: three attempts on the same worker, one with the product path); the cause is read from that lab, the procedure below was NOT run on a cluster; the code fix is for 0.4.1. Not a compliance claim.
 
-**Symptom.** `task cluster-roll PROVIDER=… -- --node=<worker>` (and a plain `kubectl drain`) on a worker that carries the Longhorn share-manager of an attached RWX volume, or the only instance of a single-instance CNPG cluster (the `light` profile): the survey is clean, then "Cordon + drain" waits its 900 s (`error when evicting pods/instance-manager-... in longhorn-system ... global timeout reached`) and the roll REFUSES ("could not be drained (timeout 900s) - refusing to reboot it under workloads that would not move"), **rc 201 after 1,026 s (17 minutes)**. No damage: the budgets and the Flux Kustomizations are restored, the node is uncordoned and not rebooted, no other node left Ready, 0 of 6 database writers lost an acknowledged commit, HTTP 0 failed samples of 1,065. The same roll on a worker WITHOUT them: rc 0 in 789 s (13 min 09 s, NOMINAL). `cluster-upgrade` and `cluster-shrink` use the same drain; they were not tried on such a worker.
+**Symptom.** `task cluster-roll PROVIDER=… -- --node=<worker>` (and a plain `kubectl drain`) on a worker that carries the Longhorn share-manager of an attached RWX volume (in the lab that worker also held the only instance of a single-instance CNPG cluster, the `light` profile; the roll does NOT stop for such an instance, see the next section): the survey is clean, then "Cordon + drain" waits its 900 s (`error when evicting pods/instance-manager-... in longhorn-system ... global timeout reached`) and the roll REFUSES ("could not be drained (timeout 900s) - refusing to reboot it under workloads that would not move"), **rc 201 after 1,026 s (17 minutes)**. No damage: the budgets and the Flux Kustomizations are restored, the node is uncordoned and not rebooted, no other node left Ready, 0 of 6 database writers lost an acknowledged commit, HTTP 0 failed samples of 1,065. The same roll on a worker WITHOUT them: rc 0 in 789 s (13 min 09 s, NOMINAL). `cluster-upgrade` and `cluster-shrink` use the same drain; they were not tried on such a worker.
 
 **Cause (as read in the lab).** Two budgets that allow no disruption. (1) Longhorn's `instance-manager-*` budget of the node, kept while the node holds an attached volume (node-drain-policy `block-if-contains-last-replica`; listed above as zero by construction): an RWX volume's share-manager keeps one attached, and the roll cannot evict the instance manager. (2) A single-instance database has a primary budget of `minAvailable: 1` with 0 disruptions allowed, and no replica to switch to: a plain `kubectl drain` waits on it for ever. The roll turns the budgets of the CNPG Clusters it knows off, so in the lab it was Longhorn's budget that held the roll, but the single instance has nowhere to go either way (its volume is node-local): its database is down for as long as the node is out (913 s in the lab). The RWX check of `cordon_drain` ("holds no Longhorn RWX share-manager or client") runs AFTER the drain returns, so a drain that never returns never reaches it.
 
@@ -412,7 +412,27 @@ Rung: observed on ONE cluster (OVH, lab 28, 3 control planes + 6 workers, 2026-1
 3. For the worker that holds one: with an RWX volume, stop the workloads that mount the claim (scale them to 0), wait until the volume shows `detached` and no `share-manager` pod is on the node, roll, then scale them back: their writers are down for that time (the accepted RWX gap is about 100 s on a failure, this is a planned stop). With a single-instance database, announce its downtime for the roll (913 s measured) or give it a second instance first (the `standard` profile).
 4. Do not force: do not delete a budget or the pod by hand to get past the wait (the lab did once, in a drill, and it cut the single instance). A refused roll has restored everything: fix the cause and run the same command again, nodes already done are skipped.
 
-**For 0.4.1** (code, not in 0.4.0): extend the RWX check of `cluster-roll` so that it also runs BEFORE the drain on a worker, names the volumes and fails in seconds instead of after 900 s; the `light` profile's blocked drain stays documented here.
+**For 0.4.1** (code, not in 0.4.0): extend the RWX check of `cluster-roll` so that it also runs BEFORE the drain on a worker, names the volumes and fails in seconds instead of after 900 s; a plain `kubectl drain` of the node of a `light` database stays blocked by its budget (above), but `cluster-roll` turns that budget off and does not stop for it: when the roll goes through, a `light` database is lost, not blocked (next section).
+
+### A node replace destroys the data of a single-instance database (`light` profile; lab 28B, I17)
+
+Rung: observed on ONE cluster (Scaleway, lab 28B, 3 control planes + 6 workers, 2026-10-30); the warning in the roll is for 0.4.1, with no date. Not a compliance claim.
+
+A `light` database (OpenAether-apps profile: 1 instance, node-local `local-path-retain` volume, no backup) has its only copy on the disk of its node. `task cluster-roll -- --node=<worker>` and `task cluster-replace-node` destroy the old machine and create a new one with a new disk, so **the data of a `light` cluster on that node is destroyed**. Lab 28B: the roll of a worker that held `lab27-light` finished (rc 0 in 790 s, NOMINAL, drain completed), 42,583 acknowledged commits of the test writer were gone, and the cleanup after the replace REFUSED the volume ("primary of record: its data was on the replaced disk"), too late to change anything; lab 27B met the same refusal. The single instance did not hold the roll there (no RWX share-manager on that node, unlike the case above): do not count on the roll to stop for a `light` database.
+
+This is outside the zero-acknowledged-loss rule, by the owner's decision of 2026-10-30: `light` is documented as "node-local storage ... lost with its disk, no backup, data you can lose" (the database profiles page of OpenAether-apps), and the rule covers `ha`, `standard`, the platform's databases and the forge.
+
+**Before you roll or replace a node** (plain reads):
+
+```bash
+NODE=<worker>
+kubectl get pods -A -l cnpg.io/cluster --field-selector spec.nodeName="$NODE" -o wide
+kubectl get clusters.postgresql.cnpg.io -A -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,INSTANCES:.spec.instances
+```
+
+A pod of a Cluster with `INSTANCES` 1 on that node is a `light` database whose data goes with the node. Move its application to `standard` or `ha` first (another copy then exists), or accept the loss.
+
+**For 0.4.1** (code, not in 0.4.0, no date): the survey of `cluster-roll` and `cluster-replace-node` names the Clusters whose only copy sits on the node and asks for an explicit yes.
 
 ### Never reboot a worker undrained when it carries a CNPG instance
 
