@@ -36,6 +36,12 @@ signer l'intermédiaire de la PKI) : [`admin-access.fr.md`](admin-access.fr.md).
   un `DEV1-S` ; ce que consomme chaque provider, et si son exemple atteint le
   plancher de dimensionnement : [`capacity.fr.md`](capacity.fr.md).
 - Une paire de clés SSH que tu possèdes déjà, ou `ssh-keygen -t ed25519`.
+- Environ **12 Gio d'espace disque libre** dans ton clone (`infrastructure/opentofu/talos-image`) : la construction
+  de l'image télécharge l'image brute compressée et la décompresse à côté, environ 11,3 Gio en tout (les 4,5 Go
+  annoncés d'abord dans infra #405 étaient trop bas : trois constructions sont mortes sur `No space left on device`
+  après le téléchargement, à 8,5, 8,7 et 10 Go libres). Quand il doit construire l'image, `task cluster-up` demande avant le premier octet
+  (`OA_IMAGE_MIN_FREE_GIB`, 12 par défaut, 0 coupe le contrôle) et, si le disque manque, s'arrête en affichant les
+  deux chiffres.
 - De quoi conserver une passphrase que tu ne peux pas te permettre de perdre :
   elle chiffre l'état, le kubeconfig et le talosconfig, et rien ne les déchiffre
   sans elle.

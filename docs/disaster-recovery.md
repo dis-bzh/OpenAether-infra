@@ -137,6 +137,48 @@ right after the API answers, or build with `deploy_flux = false` and enable it a
 restic repository of the **cluster that died** under the prefix the new cluster expects (the repository prefix is the cluster name; a new cluster name needs the old prefix in the command);
 (c) the PITR chain is on the provider that failed in a provider loss: only the daily dump survives on the other one (RPO 24 h).
 
+### Where the DR chain may stop (lab 28B)
+
+Lab 28B (Scaleway, 2026-10-30, a NOMINAL fault-free rebuild: 3 CP + 7 W destroyed, 3 CP + 6 W rebuilt, the replica store at the same provider, a DEVELOPMENT OpenBao, Flux following a lab branch) timed the chain as one run. **RTO measured: the data was back 43 min after the declared disaster, and the chain was verified end to end 68 min 3 s after it (target 8 h, met by a factor of 7).** Said plainly, **the chain is NOT unattended**: it stopped twice with a non-zero code although the data was intact (two false negatives), and three steps were done by hand. A stop is loud (`✗ the chain stopped at '<step>'; fix it and resume with --from-step <step>`), never silent; the script fixes are planned for 0.4.1, with no date.
+
+| Stop | What you see | Why | What to check by hand, then |
+|---|---|---|---|
+| **`dbs` ends rc 1** (426 s in) although the data came back | `pg_restore` errors on the live `grafana-db` such as `cannot drop sequence public.short_url_id_seq because other objects depend on it`, `relation "short_url_id_seq" already exists`, `relation "short_url_pkey" already exists` (3 in the lab, `errors ignored on restore: 3`) | `resume` unsuspends everything except `identity*`, so Grafana starts one step before `dbs` and creates its schema in the empty database; `pg_restore --clean` then meets objects that exist, and `load_dump` tolerates only `cannot drop inherited constraint` | It is a false negative **only if every error is of that kind** (an object that already exists, or cannot be dropped for its dependants). Anything else (permission denied, connection, a missing archive) is a real failure: stop. Then prove both databases with the chain's own canary check (below): two lines `canary chain intact, newest row …`, and the rows you know (a seed table, a count). Remove the scratch Clusters the step would have removed (below), and resume with `--from-step identity` |
+| **`verify` waits 900 s, then fails** with `the copy of the new archive to the replica store (job dr-replicate) did not complete` (`cluster-verify` had passed) | The Job `dr-replicate` is gone (`NotFound`) | `kubectl create job --from=cronjob/cnpg-store-replicate` gives the Job an owner reference to the CronJob, whose `successfulJobsHistoryLimit` is 1: the next scheduled run (every 15 minutes) deletes it, and the step reads `NotFound` until its timeout | Copy again and wait on the new Job, then run the restore test by hand (below). Resume with nothing else: the restore test below is the rest of `verify` |
+
+The three hand steps, with the exact commands (namespace `foundation-databases`; from the root of this repository):
+
+1. **The break-glass token between two segments.** Step `openbao` needs `--bao-token-file`, a root token of the FRESH cluster, which does not exist before step `flux` has built it. Run the chain in two segments: `--only artifacts,cluster,seedkey,flux,hold,generation` (1 047 s in the lab), mint the token (`bao operator generate-root`, a quorum of share holders: apps `vault/README.md`; with the development bootstrap one plaintext share, about 3 s), write it to a file readable by you only, then `--from-step openbao --bao-token-file <file>`.
+2. **The canary check and the scratch cleanup after the `dbs` stop.** The script's own check, run from this repository's root (it needs `python3`; `$CANARY_SQL` and `$CANARY_PY` are lifted from the script, so they cannot drift):
+
+   ```bash
+   eval "$(sed -n '/^CANARY_PY=/,/^CANARY_SQL=/p' scripts/ops/dr-restore-plan.sh)"
+   for pair in zitadel-db:zitadel grafana-db:grafana; do
+     c="${pair%%:*}"; db="${pair##*:}"
+     p="$(kubectl -n foundation-databases get clusters.postgresql.cnpg.io "$c" -o jsonpath='{.status.currentPrimary}')"
+     kubectl -n foundation-databases exec "$p" -c postgres -- psql -U postgres -d "$db" -X -At -F "$(printf '\t')" -c "$CANARY_SQL" | python3 -c "$CANARY_PY"
+   done
+   kubectl -n foundation-databases delete clusters.postgresql.cnpg.io zitadel-db-dr grafana-db-dr --ignore-not-found --wait=false
+   ```
+
+   Expected: `canary chain intact, newest row <a time just before the disaster>` twice (a broken chain prints `canary chain broken at <counters>` and exits 1: that is a real failure). The lab ran exactly this and got `canary chain intact` twice, with the seed rows (5 000 per database) and their checksums identical to those taken before the disaster.
+3. **The restore test of the rebuilt cluster (`dr-check`) by hand**, after the `verify` stop:
+
+   ```bash
+   kubectl -n foundation-databases delete job dr-replicate dr-check --ignore-not-found
+   kubectl -n foundation-databases create job --from=cronjob/cnpg-store-replicate dr-replicate
+   kubectl -n foundation-databases wait --for=condition=complete job/dr-replicate --timeout=900s
+   kubectl -n foundation-databases create job --from=cronjob/cnpg-recovery-restore-test dr-check
+   kubectl -n foundation-databases wait --for=condition=complete job/dr-check --timeout=900s
+   kubectl -n foundation-databases logs job/dr-check --all-containers | grep -E '^(PASS|SKIP|FAIL) '
+   ```
+
+   Passed means **four `PASS` lines** (zitadel-db and grafana-db, each from the primary and from the replica store) and no `SKIP` and no `FAIL`: a run that skips every combination also ends `Complete`, which is why the script reads the lines (lab 20). The lab got four `PASS`, each recovery healthy in 66, 66, 78 and 72 s. If `wait` says `NotFound` for `dr-replicate`, the next scheduled run pruned it after it finished: the copy was done, go on.
+
+Two more things the lab saw, neither a stop of the script: after the raft restore `openbao-0` (the pod where the restore ran) stayed a standby with `local node not active but active cluster node not found` and logins answered 500 for 25 minutes until that pod was deleted (the step's check had passed, and it deletes only `openbao-1` and `-2` when they do not follow): look at `bao status` on each pod, and `kubectl -n foundation-vault delete pod openbao-0` if it has no active node. And the in-place **etcd restore** (`--scenario etcd`, not part of the rebuild chain or of the 68 minutes) brought the API back within about 3 minutes of the reset, but the platform did not come back by itself (a Cilium agent stuck `Terminating`, one node whose pods stayed unreachable until it was rebooted, controllers to restart): about 42 minutes to a green `cluster-verify`; its recipe is planned for 0.4.1.
+
+**The OpenBao raft restore is proven with the DEVELOPMENT bootstrap only.** `bao operator raft snapshot restore -force` gave a 3-member leader in 7.4 s (lab 28B) and 8 s (lab 27 sitting 3), and the `openbao` step took 9 s in the chain (the restic restore from the replica store included). The break-glass token came from the single plaintext recovery share of that bootstrap. A production-style restore (recovery shares encrypted to the holders' PGP keys, a quorum minting the token) needs the recovery keys that the owner holds and was **not run**: the 8 h RTO says nothing about the time of the people it needs.
+
 ## 4. Rebuild with data loss: when a prerequisite is missing
 
 | Missing | What you can still do |

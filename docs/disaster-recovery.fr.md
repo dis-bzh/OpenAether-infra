@@ -136,6 +136,48 @@ en cas d'échec, et un test de restauration ne peut jamais toucher un objet viva
 que le nouveau cluster attend (le préfixe du dépôt est le nom du cluster ; un nouveau nom de cluster demande l'ancien préfixe dans la commande) ; (c) la chaîne PITR est chez le provider
 tombé en cas de perte de provider : seul le dump quotidien survit chez l'autre (RPO 24 h).
 
+### Où la chaîne de reprise peut s'arrêter (lab 28B)
+
+Le lab 28B (Scaleway, 2026-10-30, reconstruction NOMINALE sans panne : 3 CP + 7 W détruits, 3 CP + 6 W reconstruits, store réplica chez le même provider, OpenBao de DÉVELOPPEMENT, Flux sur une branche de lab) a chronométré la chaîne en une seule passe. **RTO mesuré : les données étaient revenues 43 min après le sinistre déclaré, et la chaîne était vérifiée de bout en bout 68 min 3 s après lui (cible 8 h, tenue d'un facteur 7).** Pour le dire franchement, **la chaîne n'est PAS sans surveillance** : elle s'est arrêtée deux fois avec un code non nul alors que les données étaient intactes (deux faux négatifs), et trois étapes ont été faites à la main. Un arrêt est bruyant (`✗ the chain stopped at '<étape>'; fix it and resume with --from-step <étape>`), jamais silencieux ; les correctifs du script sont prévus pour la 0.4.1, sans date.
+
+| Arrêt | Ce qu'on voit | Pourquoi | À vérifier à la main, puis |
+|---|---|---|---|
+| **`dbs` se termine en rc 1** (après 426 s) alors que les données sont revenues | des erreurs `pg_restore` sur le `grafana-db` vivant, comme `cannot drop sequence public.short_url_id_seq because other objects depend on it`, `relation "short_url_id_seq" already exists`, `relation "short_url_pkey" already exists` (3 dans le lab, `errors ignored on restore: 3`) | `resume` réactive tout sauf `identity*` : Grafana démarre donc une étape avant `dbs` et crée son schéma dans la base vide ; `pg_restore --clean` rencontre alors des objets déjà là, et `load_dump` ne tolère que `cannot drop inherited constraint` | C'est un faux négatif **seulement si chaque erreur est de ce type** (un objet qui existe déjà, ou qu'on ne peut pas supprimer à cause de ses dépendants). Toute autre (permission refusée, connexion, archive absente) est un vrai échec : s'arrêter. Puis prouver les deux bases avec le contrôle canari de la chaîne (ci-dessous) : deux lignes `canary chain intact, newest row …`, et les lignes que vous connaissez (une table témoin, un compte). Supprimer les Clusters jetables que l'étape aurait supprimés (ci-dessous), et reprendre avec `--from-step identity` |
+| **`verify` attend 900 s, puis échoue** avec `the copy of the new archive to the replica store (job dr-replicate) did not complete` (`cluster-verify` avait réussi) | Le Job `dr-replicate` a disparu (`NotFound`) | `kubectl create job --from=cronjob/cnpg-store-replicate` donne au Job une référence de propriétaire vers le CronJob, dont `successfulJobsHistoryLimit` vaut 1 : la prochaine exécution planifiée (toutes les 15 minutes) le supprime, et l'étape lit `NotFound` jusqu'à son délai | Recopier et attendre le nouveau Job, puis lancer le test de restauration à la main (ci-dessous). Rien d'autre à reprendre : le test ci-dessous est la fin de `verify` |
+
+Les trois étapes à la main, avec les commandes exactes (namespace `foundation-databases` ; depuis la racine de ce dépôt) :
+
+1. **Le jeton break-glass entre deux segments.** L'étape `openbao` demande `--bao-token-file`, un jeton root du cluster FRAIS, qui n'existe pas avant que l'étape `flux` l'ait construit. Lancer la chaîne en deux segments : `--only artifacts,cluster,seedkey,flux,hold,generation` (1 047 s au lab), fabriquer le jeton (`bao operator generate-root`, un quorum de porteurs de parts : apps `vault/README.md` ; avec l'amorçage de développement, une part en clair, environ 3 s), l'écrire dans un fichier lisible par vous seul, puis `--from-step openbao --bao-token-file <fichier>`.
+2. **Le contrôle canari et le nettoyage des Clusters jetables après l'arrêt de `dbs`.** Le contrôle du script lui-même, depuis la racine du dépôt (il demande `python3` ; `$CANARY_SQL` et `$CANARY_PY` sont extraits du script, donc ne peuvent pas dériver) :
+
+   ```bash
+   eval "$(sed -n '/^CANARY_PY=/,/^CANARY_SQL=/p' scripts/ops/dr-restore-plan.sh)"
+   for pair in zitadel-db:zitadel grafana-db:grafana; do
+     c="${pair%%:*}"; db="${pair##*:}"
+     p="$(kubectl -n foundation-databases get clusters.postgresql.cnpg.io "$c" -o jsonpath='{.status.currentPrimary}')"
+     kubectl -n foundation-databases exec "$p" -c postgres -- psql -U postgres -d "$db" -X -At -F "$(printf '\t')" -c "$CANARY_SQL" | python3 -c "$CANARY_PY"
+   done
+   kubectl -n foundation-databases delete clusters.postgresql.cnpg.io zitadel-db-dr grafana-db-dr --ignore-not-found --wait=false
+   ```
+
+   Attendu : `canary chain intact, newest row <une heure juste avant le sinistre>` deux fois (une chaîne rompue affiche `canary chain broken at <compteurs>` et sort en 1 : c'est un vrai échec). Le lab a lancé exactement cela et obtenu `canary chain intact` deux fois, avec les lignes témoins (5 000 par base) et leurs sommes identiques à celles prises avant le sinistre.
+3. **Le test de restauration du cluster reconstruit (`dr-check`) à la main**, après l'arrêt de `verify` :
+
+   ```bash
+   kubectl -n foundation-databases delete job dr-replicate dr-check --ignore-not-found
+   kubectl -n foundation-databases create job --from=cronjob/cnpg-store-replicate dr-replicate
+   kubectl -n foundation-databases wait --for=condition=complete job/dr-replicate --timeout=900s
+   kubectl -n foundation-databases create job --from=cronjob/cnpg-recovery-restore-test dr-check
+   kubectl -n foundation-databases wait --for=condition=complete job/dr-check --timeout=900s
+   kubectl -n foundation-databases logs job/dr-check --all-containers | grep -E '^(PASS|SKIP|FAIL) '
+   ```
+
+   Réussi veut dire **quatre lignes `PASS`** (zitadel-db et grafana-db, chacune depuis le store primaire et le store réplica), aucun `SKIP`, aucun `FAIL` : un passage qui saute toutes les combinaisons finit aussi `Complete`, c'est pourquoi le script lit les lignes (lab 20). Le lab a obtenu quatre `PASS`, chaque récupération saine en 66, 66, 78 et 72 s. Si `wait` répond `NotFound` pour `dr-replicate`, l'exécution planifiée suivante l'a supprimé une fois terminé : la copie était faite, continuer.
+
+Deux autres choses vues au lab, qui ne sont pas des arrêts du script : après la restauration raft, `openbao-0` (le pod où la restauration a tourné) est resté en attente (standby) avec `local node not active but active cluster node not found` et les connexions ont répondu 500 pendant 25 minutes jusqu'à la suppression de ce pod (le contrôle de l'étape avait réussi, et elle ne supprime que `openbao-1` et `-2` s'ils ne suivent pas) : regarder `bao status` sur chaque pod, et `kubectl -n foundation-vault delete pod openbao-0` s'il n'a pas de nœud actif. Et la **restauration etcd** sur place (`--scenario etcd`, hors de la chaîne de reconstruction et des 68 minutes) a rendu l'API en 3 minutes environ après la réinitialisation, mais la plateforme n'est pas revenue seule (un agent Cilium bloqué en `Terminating`, un nœud dont les pods sont restés injoignables jusqu'à son redémarrage, des contrôleurs à relancer) : environ 42 minutes jusqu'à un `cluster-verify` vert ; sa recette est prévue pour la 0.4.1.
+
+**La restauration raft d'OpenBao est prouvée avec l'amorçage de DÉVELOPPEMENT seulement.** `bao operator raft snapshot restore -force` a donné un leader à 3 membres en 7,4 s (lab 28B) et 8 s (lab 27 séance 3), et l'étape `openbao` a pris 9 s dans la chaîne (restauration restic depuis le store réplica comprise). Le jeton break-glass venait de l'unique part de récupération en clair de cet amorçage. Une restauration de type production (parts de récupération chiffrées aux clés PGP des porteurs, un quorum qui fabrique le jeton) demande les clés de récupération que détient le propriétaire et n'a **pas été jouée** : le RTO de 8 h ne dit rien du temps des personnes qu'elle demande.
+
 ## 4. Reconstruire en perdant des données : quand un prérequis manque
 
 | Manque | Ce qu'on peut encore faire |

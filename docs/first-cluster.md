@@ -35,6 +35,11 @@ ended (seeding OpenBao, signing the PKI intermediate): [`admin-access.md`](admin
   each provider consumes, and whether its example meets the sizing floor:
   [`capacity.md`](capacity.md).
 - An SSH keypair you already have, or `ssh-keygen -t ed25519`.
+- About **12 GiB of free disk** in your clone (`infrastructure/opentofu/talos-image`): the image build downloads the
+  compressed raw image and decompresses it next to it, about 11.3 GiB in all (the 4.5 GB first reported in infra #405
+  was too low: three builds died on `No space left on device` after the download, at 8.5, 8.7 and 10 GB free).
+  When it has to build the image, `task cluster-up` asks before the first byte (`OA_IMAGE_MIN_FREE_GIB`, default 12, 0 turns the check off) and, when
+  the disk is short, stops and prints both figures.
 - Somewhere to keep a passphrase you cannot afford to lose: it encrypts the
   state, the kubeconfig and the talosconfig, and nothing can decrypt them
   without it.
