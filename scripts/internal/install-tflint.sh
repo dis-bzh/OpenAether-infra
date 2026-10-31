@@ -12,7 +12,7 @@
 set -euo pipefail
 
 # renovate: datasource=github-releases depName=terraform-linters/tflint
-TFLINT_VERSION="v0.64.0"
+TFLINT_VERSION="v0.65.0"
 
 # shellcheck source=scripts/lib/common.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"

@@ -22,8 +22,9 @@ in git. 0.1.0 is the first entry describing something proven.
 - **checkov 3.3.29 → 3.3.30** (Cléa #91, probed green in a bare container, released 2026-10-20): `scripts/setup.sh`. Left out: OpenTofu 1.13.2 and tflint v0.65.0 (not probed), flux-schema 0.17.0,
   commitizen 4.19.3, plumber v0.7.16, feint v0.14.0 and aws-cli 2.39.0 (too young or not probed). Rung: mocked.
 - **OpenTofu 1.13.1 → 1.13.2** (Cléa #91, probed green in a bare container, released 2026-10-21): the five `tofu_version` pins of `ci.yml`, the one of `real-cloud-regression.yml` and `TOFU_VERSION`
-  in `scripts/setup.sh`, kept equal. Left out: commitizen 4.19.3 (too young until 2026-10-31), flux-schema 0.17.0 (until 2026-10-30), tflint v0.65.0 (not probed), plumber v0.7.16 and feint v0.14.0 (too
-  young or not probed). Rung: mocked.
+  in `scripts/setup.sh`, kept equal. Left out: commitizen 4.19.3 (too young until 2026-10-31), flux-schema 0.17.0 (not probed at 0.17.0), plumber v0.7.16 and feint v0.14.0 (too young or not probed).
+  Rung: mocked.
+- **tflint v0.64.0 → v0.65.0** (Cléa #91, probed green in a bare container, released 2026-10-22): `scripts/internal/install-tflint.sh`, the single pin `task lint` installs it from. Rung: mocked.
 
 ### Fixed
 
