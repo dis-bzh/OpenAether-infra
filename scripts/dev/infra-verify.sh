@@ -672,6 +672,22 @@ system_volume_check "$(K get nodes -o jsonpath='{range .items[*]}{.status.addres
 apiserver_encryption_check
 fi
 
+# The application-backups replica bucket: the -backup twin of the data bucket (BACKUP_REPLICA_S3_BUCKET of cluster-identity, main.tf).
+# cnpg-store-replicate copies the CNPG archive there every 15 minutes; with no bucket it fails with NoSuchBucket and the second
+# copy does not exist (infra #391, lab 28B). Absent is a failure; a store that cannot answer is UNCHECKED, never a false red.
+# shellcheck disable=SC2069  # the CLI's stderr is the point, its stdout is not
+app_backups_replica_check() { # <bucket> <endpoint> <access key> <secret key>
+  local err rc=0
+  err="$(AWS_ACCESS_KEY_ID="$3" AWS_SECRET_ACCESS_KEY="$4" timeout 90 aws s3api head-bucket --bucket "$1" --endpoint-url "$2" 2>&1 >/dev/null)" || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    ok "the application-backups replica bucket exists: ${1} (the second copy of the CNPG archive goes there)"
+  elif grep -qE '\(404\)|NoSuchBucket|Not Found' <<<"$err"; then
+    bad "the application-backups replica bucket ${1} does not exist on ${2}: cnpg-store-replicate fails with NoSuchBucket every 15 minutes and the second copy of the CNPG archive does not exist. task cluster-up PROVIDER=… ROLE=… creates it (ensure-buckets.sh)"
+  else
+    unk "could not tell whether the application-backups replica bucket ${1} exists on ${2} (${err:0:160}) — the second copy of the CNPG archive is UNCHECKED"
+  fi
+}
+
 info "The state is backed up"
 
 if [ "$PROVIDER" = local ]; then
@@ -727,6 +743,13 @@ else
     fi
   else
     bad "no tfstate object found in ${BUCKET} — the backup claim is unproven"
+  fi
+  # …and the application-backups replica twin, which backup_immutability = off used to leave out (infra #391).
+  if [ -n "$CN" ] && [ -n "$ENVN" ]; then
+    APP_REPL="$(oa_backup_bucket "$(oa_project "$CN" "$(tfv "$TFVARS" bucket_suffix)")" "$PROVIDER" "$ENVN")-backup"
+    REPL_AK="$("$ROOT/scripts/internal/resolve-s3-cred.sh" "$PROVIDER" ak backup "${REPL_EP:-$PRIM_EP}")"
+    REPL_SK="$("$ROOT/scripts/internal/resolve-s3-cred.sh" "$PROVIDER" sk backup "${REPL_EP:-$PRIM_EP}")"
+    app_backups_replica_check "$APP_REPL" "${REPL_EP:-$PRIM_EP}" "$REPL_AK" "$REPL_SK"
   fi
   # Cross-provider is a PRODUCTION rule, and variables.tf says so in as many
   # words ("Prod: a different provider"). Failing a dev cluster for it is a

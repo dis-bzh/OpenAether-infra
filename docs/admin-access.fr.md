@@ -90,7 +90,7 @@ et il lit `OA_SLACK_WEBHOOK_URL` / `OA_DEADMANSSWITCH_URL` (des placeholders son
 avec un avertissement, s'ils manquent). Les buckets doivent **préexister** (restic ne les
 crée pas), sur des providers différents en production : le bucket des backups applicatifs
 `s3-<projet>-<provider>-backups-<env>` et son jumeau `-backup` ; le script annonce le premier.
-Avec `backup_immutability` dans le tfvars, `ensure-buckets.sh` crée aussi cette paire (et versionne ou verrouille les buckets : `backup-policy.fr.md`, section 3).
+`ensure-buckets.sh` crée cette paire dans tous les modes, `backup_immutability = off` compris (avec lui positionné, il versionne ou verrouille aussi les buckets : `backup-policy.fr.md`, section 3), et `task cluster-verify` échoue si le jumeau `-backup` manque.
 
 Il est **create-only** : chaque secret est écrit avec `cas=0`, donc un re-run ne peut en
 écraser aucun (une valeur changée n'échoue pas, elle casse ce qui tient l'ancienne). Son

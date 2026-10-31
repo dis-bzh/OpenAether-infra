@@ -5,9 +5,13 @@
 # convention as cluster/backup.tf): tfstate and artifacts, each with a -backup
 # replica, plus Loki's own logs bucket (no replica; seed-openbao.sh points Loki at it).
 #
-# backup_immutability (tfvars, default off = nothing below changes): versioned | governance | compliance also creates
-# the application-backups bucket pair and turns on versioning, noncurrent-version expiry and, for governance/compliance,
-# an object lock with a default retention on the buckets that hold copies and logs. Read back, never assumed.
+# The application-backups pair (restic, Longhorn and the CNPG archive on the primary; its -backup twin is the second copy of
+# the CNPG archive, which cnpg-store-replicate writes) is created in EVERY mode: without the twin that job fails with
+# NoSuchBucket every 15 minutes (infra #391).
+#
+# backup_immutability (tfvars, default off = no versioning, no lock, nothing protected): versioned | governance | compliance
+# turns on versioning, noncurrent-version expiry and, for governance/compliance, an object lock with a default retention on
+# the buckets that hold copies and logs. Read back, never assumed.
 # A refusal by the provider is a loud warning (exit 1 with OA_BUCKET_PROTECTION_STRICT=1).
 #
 # Only the STATE PRIMARY must exist before `tofu init` (the S3 backend does not
@@ -200,6 +204,17 @@ else
   exit 1
 fi
 
+# --- Application backups (restic, Longhorn, CNPG) ------------------------------
+#
+# The seed and the apps need the pair, and it used to be created by hand, or only under backup_immutability: a default install
+# then had no replica twin, and cnpg-store-replicate failed with NoSuchBucket every 15 minutes (infra #391, lab 28B). Created in
+# every mode; "lock" asks for object lock only when backup_immutability is governance or compliance (LOCKING), so with off
+# these are plain buckets, as the state and logs buckets are.
+ensure_bucket "$BACKUPS_PRIMARY" "$PRIMARY_EP" "$PRIMARY_REGION" "$PRIMARY_AK" "$PRIMARY_SK" lock ||
+  echo "  ⚠ ${BACKUPS_PRIMARY} not ready: restic, Longhorn and CNPG have no destination"
+ensure_bucket "${BACKUPS_PRIMARY}-backup" "$REPLICA_EP" "$REPLICA_REGION" "$BACKUP_AK" "$BACKUP_SK" lock ||
+  echo "  ⚠ ${BACKUPS_PRIMARY}-backup not ready: the second copy of the application backups has no destination (cluster-verify reports it)"
+
 # --- Protection (backup_immutability) -----------------------------------------
 #
 # Opt-in. A versioned bucket turns a delete into a marker; an object lock keeps the version itself until the retention
@@ -211,11 +226,6 @@ protect() { # name endpoint region ak sk lock|nolock
 }
 if [ "$IMMUT" != off ]; then
   echo "▶ Protecting the buckets that hold copies (backup_immutability = ${IMMUT}, ${RETENTION} days)"
-  # Application backups (restic, Longhorn, CNPG): the seed and the apps need them, and they used to be created by hand.
-  ensure_bucket "$BACKUPS_PRIMARY" "$PRIMARY_EP" "$PRIMARY_REGION" "$PRIMARY_AK" "$PRIMARY_SK" lock ||
-    echo "  ⚠ ${BACKUPS_PRIMARY} not ready: restic, Longhorn and CNPG have no destination"
-  ensure_bucket "${BACKUPS_PRIMARY}-backup" "$REPLICA_EP" "$REPLICA_REGION" "$BACKUP_AK" "$BACKUP_SK" lock ||
-    echo "  ⚠ ${BACKUPS_PRIMARY}-backup not ready: the second copy of the application backups has no destination"
   protect "$STATE_PRIMARY"             "$PRIMARY_EP" "$PRIMARY_REGION" "$PRIMARY_AK" "$PRIMARY_SK" nolock
   protect "$ARTIFACT_PRIMARY"          "$PRIMARY_EP" "$PRIMARY_REGION" "$PRIMARY_AK" "$PRIMARY_SK" nolock
   protect "$BACKUPS_PRIMARY"           "$PRIMARY_EP" "$PRIMARY_REGION" "$PRIMARY_AK" "$PRIMARY_SK" lock

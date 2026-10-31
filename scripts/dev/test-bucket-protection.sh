@@ -4,7 +4,8 @@
 # each bucket and refuses object lock on a bucket not created with it, the way the providers do.
 #
 # What this pins, and why each is here:
-#   - off (the default) touches nothing: no write call, no new bucket. A deployed cluster must not change on upgrade.
+#   - off (the default) protects nothing (no versioning, lifecycle or lock call) but still creates the application-backups
+#     pair, so the second copy of the CNPG archive has its bucket on a default install (infra #391).
 #   - versioned / governance / compliance do what they say on the right buckets, and READ IT BACK; a call a store accepts
 #     and ignores is the failure this guards against.
 #   - a lifecycle rule someone else set (the CNPG WAL expiry, say) survives: the API replaces the whole set.
@@ -46,13 +47,34 @@ run() { env PATH="$SB:$PATH" SCW_AWS_ACCESS_KEY_ID=OPKEY SCW_AWS_SECRET_ACCESS_K
 b() { printf '%s/buckets/%s' "$FAKE_S3" "$1"; }
 writes() { grep -cE ' (put-|create-bucket)' "$FAKE_S3/calls.log" | tr -d ' '; }
 
-echo "--- off (the default): nothing is touched, nothing new is created ---"
+echo "--- off (the default): the application-backups pair exists (infra #391), and nothing is protected ---"
 reset; mk_tfvars
 OUT="$(run)"; RC=$?
 is "completes" 0 "$RC"
-is "only the five buckets of 0.2.1 exist" "5" "$(ls "$FAKE_S3/buckets" | wc -l | tr -d ' ')"
-[ ! -d "$(b "$BK")" ] && ok "the application-backups bucket is still the operator's to create" || bad "$BK was created with the protection off"
+is "seven buckets: the five of 0.2.1 and the application-backups pair" "7" "$(ls "$FAKE_S3/buckets" | wc -l | tr -d ' ')"
+[ -d "$(b "$BK")" ] && ok "the application-backups bucket is created ($BK)" || bad "$BK was not created with the protection off"
+[ -d "$(b "$BK-backup")" ] && ok "…and its replica twin, the second copy of the CNPG archive ($BK-backup)" || bad "$BK-backup (the replica cnpg-store-replicate writes to) was not created with the protection off"
+grep -q "^OPKEY create-bucket $BK$" "$FAKE_S3/calls.log" && grep -q "^REPKEY create-bucket $BK-backup$" "$FAKE_S3/calls.log" \
+  && ok "the primary with the primary's key, the replica with the replica store's" || bad "wrong keys: $(head -40 "$FAKE_S3/calls.log")"
+grep -q "^create-bucket $BK-backup https://replica.example$" "$FAKE_S3/endpoints.log" \
+  && ok "the replica twin is created on the replica endpoint" || bad "the replica twin went to another endpoint: $(grep "$BK-backup" "$FAKE_S3/endpoints.log")"
+for x in $BK $BK-backup; do
+  [ -f "$(b "$x")/lock_enabled" ] && bad "  $x has an object lock with the protection off" || ok "  $x is not locked (off adds no lock, as before)"
+done
 grep -qE ' put-(bucket|object)' "$FAKE_S3/calls.log" && bad "a put-* call was made with the protection off" || ok "no versioning, lifecycle or lock call"
+: >"$FAKE_S3/calls.log"; OUT="$(run)"; RC=$?
+is "a re-run completes" 0 "$RC"
+grep -q ' create-bucket ' "$FAKE_S3/calls.log" && bad "a re-run created a bucket again" || ok "…and creates nothing: every bucket answers 'exists'"
+grep -q "✓ $BK-backup (exists)" <<<"$OUT" && ok "the replica twin is reported as existing" || bad "no 'exists' line for the replica twin: $OUT"
+reset; mk_tfvars; mkdir -p "$(b "$BK")"; : >"$FAKE_S3/calls.log"
+OUT="$(run)"; RC=$?
+is "a primary the operator created by hand is kept, and the missing replica twin is added" "0 yes" "$RC $([ -d "$(b "$BK-backup")" ] && echo yes || echo no)"
+grep -q "^OPKEY create-bucket $BK$" "$FAKE_S3/calls.log" && bad "the operator's own bucket was created again" || ok "the existing primary was not touched"
+echo "--- off: a provider that refuses the replica twin is a warning that names it, not a refused deploy ---"
+reset; mk_tfvars; printf 'AccessDenied' >"$FAKE_S3/refuse/create-bucket.$BK-backup"
+OUT="$(run)"; RC=$?
+is "completes" 0 "$RC"
+grep -q "$BK-backup not ready" <<<"$OUT" && ok "the warning names the bucket and what it costs" || bad "no warning: $OUT"
 grep -q 'nothing here stops' <<<"$OUT" && bad "the prod advisory is printed for a dev cluster" || ok "no advisory on dev"
 sed -i 's#^environment.*#environment = "prod"#' "$SB/t.tfvars"; reset
 OUT="$(run)"
@@ -152,6 +174,49 @@ for v in 'backup_immutability = "locked"' 'backup_retention_days = "abc"' 'backu
   OUT="$(run)"; RC=$?
   [ "$RC" -ne 0 ] && is "  '$v' refused, nothing created" "0" "$(ls "$FAKE_S3/buckets" | wc -l | tr -d ' ')" || bad "  '$v' accepted"
 done
+
+echo "--- cluster-verify: the application-backups replica bucket the cluster names must exist (infra #391) ---"
+# app_backups_replica_check is lifted out of infra-verify.sh and run against the fake store, with its ok/bad/unk reduced to
+# one line each. A bucket that is not there is a FAILURE (cnpg-store-replicate fails every 15 minutes and the second copy of the
+# CNPG archive does not exist); a store that cannot answer is UNCHECKED, never a false red and never green.
+SUT="${SUT:-$PWD/scripts/dev/infra-verify.sh}"
+FN="$SB/verify-fn.sh"; awk '/^app_backups_replica_check\(\) \{/,/^}/' "$SUT" >"$FN"
+if [ "$(grep -c '^app_backups_replica_check()' "$FN")" != 1 ]; then
+  bad "app_backups_replica_check is not in $SUT: cluster-verify cannot see a missing replica bucket"
+else
+  ok "the check was found in the script under test"
+  check() { # <bucket> <access key> — sets VOUT
+    # shellcheck disable=SC1090  # $FN is the function lifted out of the script under test just above
+    VOUT="$( ( ok() { echo "OK: $*"; }; bad() { echo "BAD: $*"; }; unk() { echo "UNK: $*"; }
+               PATH="$SB:$PATH"; source "$FN"
+               app_backups_replica_check "$1" https://replica.example "$2" REPSECRET ) 2>&1 )"
+  }
+  reset; mkdir -p "$(b "$BK-backup")"
+  check "$BK-backup" REPKEY
+  grep -q "^OK: .*$BK-backup" <<<"$VOUT" && ! grep -qE '^(BAD|UNK)' <<<"$VOUT" && ok "the bucket is there: one OK line naming it" || bad "present bucket: $VOUT"
+  grep -q "^REPKEY head-bucket $BK-backup$" "$FAKE_S3/calls.log" && grep -q "^head-bucket $BK-backup https://replica.example$" "$FAKE_S3/endpoints.log" \
+    && ok "…asked of the replica endpoint with the replica store's key" || bad "wrong endpoint or key: $(cat "$FAKE_S3/calls.log" "$FAKE_S3/endpoints.log")"
+  reset
+  check "$BK-backup" REPKEY
+  grep -q "^BAD: .*$BK-backup" <<<"$VOUT" && grep -q 'https://replica.example' <<<"$VOUT" && grep -q 'second copy' <<<"$VOUT" && ! grep -q '^OK' <<<"$VOUT" \
+    && ok "the bucket is absent: a FAILURE that names the bucket, the endpoint and what is lost" || bad "absent bucket did not fail: $VOUT"
+  grep -q 'task cluster-up' <<<"$VOUT" && ok "…and says what creates it" || bad "no remedy named: $VOUT"
+  reset; mkdir -p "$(b "$BK-backup")"; printf 'invalid\n' >"$FAKE_S3/id/BADKEY"
+  check "$BK-backup" BADKEY
+  grep -q '^UNK:' <<<"$VOUT" && ! grep -qE '^(OK|BAD)' <<<"$VOUT" && ok "a key the store rejects is UNCHECKED, not a false red" || bad "rejected key: $VOUT"
+  reset; mkdir -p "$(b "$BK-backup")" "$(b other)"; printf 'bucket other\n' >"$FAKE_S3/id/ONLYOTHER"
+  check "$BK-backup" ONLYOTHER
+  grep -q '^UNK:' <<<"$VOUT" && ! grep -qE '^(OK|BAD)' <<<"$VOUT" && ok "access denied on an existing bucket is UNCHECKED" || bad "denied: $VOUT"
+  # Wired in: after the state replica check, only where there is a provider, with the BACKUP credentials of the replica endpoint.
+  SECT="$(awk '/^info "The state is backed up"/{f=1} f{print} /^printf .%s passed/ && f{exit}' "$SUT")"
+  LN_ELSE="$(grep -n '^else$' <<<"$SECT" | head -1 | cut -d: -f1)"; LN_CALL="$(grep -n 'app_backups_replica_check' <<<"$SECT" | head -1 | cut -d: -f1)"
+  [ -n "$LN_ELSE" ] && [ -n "$LN_CALL" ] && [ "$LN_CALL" -gt "$LN_ELSE" ] \
+    && ok "the section calls it only on the non-local branch (the Docker lane has no S3)" || bad "not wired after the PROVIDER = local branch: else $LN_ELSE, call $LN_CALL"
+  grep -q 'oa_backup_bucket .*-backup"' <<<"$SECT" \
+    && ok "…on the name oa_backup_bucket() gives plus -backup, the twin ensure-buckets.sh creates" || bad "the bucket name is not derived from oa_backup_bucket: $SECT"
+  grep -q 'REPL_AK=.*resolve-s3-cred.sh.* ak backup ' <<<"$SECT" && grep -q 'REPL_SK=.*resolve-s3-cred.sh.* sk backup ' <<<"$SECT" \
+    && ok "…with the replica store's credentials (backup), not the primary's" || bad "the replica check does not use the backup credentials"
+fi
 
 echo
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"

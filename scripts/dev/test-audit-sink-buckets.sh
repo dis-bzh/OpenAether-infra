@@ -27,11 +27,11 @@ run() { env -i HOME="$HOME" FAKE_S3="$FAKE_S3" PATH="$SB:$PATH" SCW_AWS_ACCESS_K
   ./scripts/internal/ensure-buckets.sh "$SB/t.tfvars" 2>&1; }
 PLACE='audit_sink_placement = "other_provider"'; EP="audit_sink_endpoint = \"$OVH\""; RG='audit_sink_region = "gra"'
 
-echo "--- off (the default): no audit bucket, same buckets as before ---"
+echo "--- off (the default): no audit bucket, the same buckets as without a sink ---"
 reset; mk; OUT="$(run)"; RC=$?
 is "completes" 0 "$RC"
 [ ! -d "$FAKE_S3/buckets/$AUD" ] && ok "no audit bucket" || bad "an audit bucket exists with the sink off"
-is "five buckets, as in 0.2.1" 5 "$(ls "$FAKE_S3/buckets" | wc -l | tr -d ' ')"
+is "seven buckets: the five of 0.2.1 and the application-backups pair (infra #391)" 7 "$(ls "$FAKE_S3/buckets" | wc -l | tr -d ' ')"
 
 echo "--- other_provider, GOVERNANCE (default), backup_immutability off: still created WITH object lock ---"
 reset; mk "$PLACE" "$EP" "$RG"; OUT="$(run)"; RC=$?

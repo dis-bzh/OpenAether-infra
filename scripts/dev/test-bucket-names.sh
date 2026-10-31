@@ -76,6 +76,13 @@ if grep -qF 'backup_data_bucket = "${local.backup_bucket_prefix}-backups-${var.e
 else
   bad "backup.tf:local.backup_data_bucket changed — oa_backup_bucket() and seed-openbao.sh now name a different bucket"
 fi
+# The replica twin the apps read (cluster-identity BACKUP_REPLICA_S3_BUCKET) is the one ensure-buckets.sh creates and
+# infra-verify.sh checks: <data bucket>-backup (infra #391). A different name here is a bucket nothing creates.
+if grep -qF 'BACKUP_REPLICA_S3_BUCKET   = "${local.backup_data_bucket}-backup"' "$ROOT/infrastructure/opentofu/cluster/main.tf"; then
+  ok "main.tf:BACKUP_REPLICA_S3_BUCKET is <data bucket>-backup, the twin ensure-buckets.sh creates and cluster-verify checks"
+else
+  bad "main.tf:BACKUP_REPLICA_S3_BUCKET changed — ensure-buckets.sh and infra-verify.sh now create and check another bucket than the apps write to"
+fi
 
 echo "=== every name is legal on all three providers ==="
 # 3-63 characters, lowercase alphanumerics and hyphens, no leading or trailing

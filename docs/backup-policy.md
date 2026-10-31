@@ -52,14 +52,16 @@ and **not verified on any provider** (support and cost differ; the lab checklist
 
 | `backup_immutability` | What `ensure-buckets.sh` sets, then reads back | What it gives | What it does not |
 |---|---|---|---|
-| `off` (default) | nothing | nothing changes on a deployed cluster | a stolen S3 key deletes the copies |
+| `off` (default) | no versioning, no rule, no lock (the application-backups pair is still created, below) | the protection of a deployed cluster does not change | a stolen S3 key deletes the copies |
 | `versioned` | versioning on seven buckets; a rule `oa-noncurrent-expiry` expires non-current versions after `backup_retention_days` (60) | a delete or a restic prune by an in-cluster key leaves a version behind | a key allowed `DeleteObjectVersion`, or `PutBucketVersioning` or `PutLifecycleConfiguration`, undoes it: that is the key policy of section 4 |
 | `governance` | as `versioned`, and an object lock with a default retention of `backup_retention_days` on the five buckets that hold copies or logs, created with it | an ordinary key cannot remove a version before the retention ends | a key allowed the bypass permission can; the bucket cannot be emptied meanwhile |
 | `compliance` | as `governance` | nobody can remove a locked version before the retention ends, the account owner included | it cannot be undone either: the bucket cannot be emptied or deleted until then, and the cost of the versions is owed |
 
 - **Which buckets.** Locked (created with the lock): the application backups and their `-backup` twin, the state and artifact replicas, Loki's logs. Only versioned: the state and artifact primaries, which tofu writes.
-  The application-backups pair, until now created by hand, is created by the script in any mode but `off`. Object lock usually has to be set when a bucket is **created**: on one that exists without it the call is refused,
-  reported, and the bucket is neither deleted nor replaced (create a new one, or accept `versioned`; changing `bucket_suffix` renames all of them).
+  The application-backups pair (`s3-<project>-<provider>-backups-<env>` and its `-backup` twin, the second copy of the CNPG archive that `cnpg-store-replicate` writes every 15 minutes) is created by the script in **every** mode, `off` included (infra #391):
+  before 0.4.0 `off` left it to the operator, a default install had no twin, and the job failed with `NoSuchBucket` every 15 minutes. With `off` the pair is plain: no versioning, no lock, nothing else. `task cluster-verify` fails when the twin is missing.
+  Object lock usually has to be set when a bucket is **created**: on one that exists without it the call is refused,
+  reported, and the bucket is neither deleted nor replaced (create a new one, or accept `versioned`; changing `bucket_suffix` renames all of them). So choose `backup_immutability` before the first `cluster-up` if you want the pair locked: a pair created under `off` stays unlocked when you later ask for `governance` or `compliance`.
 - **Rule of thumb for the retention.** Loki deletes its chunks at 365 days (apps) and a delete under versioning leaves a marker and a version for `backup_retention_days` more; restic prune does the same for the
   repositories. Storage grows by about the churn of that many days. A deleted log or backup therefore stays physically present for the retention: not a fit for data that must be gone at once.
 - **`compliance` tried on the three stores (lab 22, 2026-10-21, one throwaway bucket each, one object, retention 1 day, nothing real in them).** Scaleway, OVH and Outscale all accept a bucket created with object lock and

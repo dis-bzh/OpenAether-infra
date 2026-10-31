@@ -134,7 +134,7 @@ namespaced variables above.
 `task cluster-up` checks this file before it builds anything: the SSH key exists and is
 the private half of `bastion_ssh_keys`, the tfvars file exists, the
 passphrase is set and is not the placeholder, and BOTH S3 credential pairs work
-(it creates the four buckets to find out, which is why the passphrase comes
+(it creates the buckets to find out, which is why the passphrase comes
 first). All of it runs before the image build.
 
 ## 3. The cluster file
@@ -147,7 +147,7 @@ $EDITOR management-scaleway.tfvars
 
 | field | what to put in it |
 |---|---|
-| `cluster_name` | yours. **It has a default, so no checker will tell you to change it** — and its first segment names all four cluster buckets |
+| `cluster_name` | yours. **It has a default, so no checker will tell you to change it** — and its first segment names all the cluster buckets |
 | `bucket_suffix` | **set it unless you are the original author.** S3 bucket names are unique across a whole provider, not per account — Scaleway documents them unique "in our whole platform", OVH "within OVHcloud". Without one you will collide with names somebody already took. `task bucket-suffix` prints one; pick it once, changing it later orphans every bucket you have |
 | `environment` | `dev` or `prod`, nothing else. Pick it once: it names the state bucket. `prod` needs the replica on another provider: `task cluster-up` refuses before spending when `s3_replica_endpoint` is the primary's endpoint or the same cloud (an S3 it cannot name only has to be another endpoint). A cluster name that already has a state object is only warned before spending, then `task cluster-up` fails at its verify step; that includes one torn down by `task cluster-down`, which keeps the state bucket. `dev` may share the primary's store |
 | `admin_ip` | `curl -s ifconfig.me` as a `/32`. It is both the SSH allow-list and the apiserver LB ACL |
@@ -194,7 +194,7 @@ harness refuses a blind apply therefore needs the owner's explicit permission fo
 owner's, not the repository's. Copy the `deploy_flux = true` and `deploy_app_lb = true` lines of the example: without them the cluster
 is infrastructure only (the verifier reports flux-system as red by design).
 
-In order it creates the four state and artifact buckets (the credential check
+In order it creates the state, artifact, logs and application-backups buckets (the credential check
 above), builds the Talos image and uploads it — **measured at 52 s on Scaleway,
 2026-08-17**, for two buckets, one snapshot and one image per zone — applies the
 infrastructure, opens one SSH tunnel per node, then applies the machine configs
@@ -238,8 +238,12 @@ balancer `active` and 3 backends. The support request covering it is closed. One
 Net from before the fix still refuses deletion on a dependency no read returns;
 only the provider can clear that, and a second request is open for it.
 
-Six buckets exist afterwards: state and artifacts, each with a `-backup` twin,
-plus the image and its import area.
+Nine buckets exist afterwards: state, artifacts and application backups (restic,
+Longhorn, the CNPG archive), each with a `-backup` twin, plus Loki's logs bucket,
+the image and its import area. The application-backups twin is the second copy of
+the CNPG archive, and it exists with the default `backup_immutability = off` too
+(before 0.4.0 it did not, and `cnpg-store-replicate` failed with `NoSuchBucket` every
+15 minutes); `task cluster-verify` fails when it is missing.
 
 Re-running resumes. So does an edit that adds a worker: `task cluster-up` creates the
 machine, opens the tunnels, then configures only the new node
