@@ -1,8 +1,8 @@
-# Release checklist — 0.3.2 (security patch of 0.3.1)
+# Release checklist — 0.4.0 (the resilience release)
 
 English only: rewritten each release, and two copies would drift.
 
-What to run before tagging 0.3.2 (a security patch of 0.3.1: no new scope, the tables below are those of 0.3.0 unless a line says 0.3.1 or 0.3.2) and telling anyone about it. Ordered by what
+What to run before tagging 0.4.0 (the resilience release: the tables below are those of 0.3.0 unless a line says 0.4.0; its evidence is in `CHANGELOG.md` `[0.4.0]`) and telling anyone about it. Ordered by what
 fails cheapest. **Stop at the first red** — every later step assumes the earlier
 ones held.
 
@@ -25,7 +25,7 @@ completion.
 | §4–§6 clouds | Labs 11 to 15c (2026-10-16 to 2026-10-18): Scaleway, OVH, Outscale, each once; see the `[0.3.0]` section of `CHANGELOG.md` for what ran and what did not. Run again with the **tags** pinned before tagging. |
 | §7 upgrade, growth, removal | Scaleway lifecycle from 0.2.1 + apps 0.2.0 (lab 15c); the etcd restore and real node replacement through the roll were **not run**. |
 | §8 mechanics, §9 stranger | To run at the cut. |
-| Before the tag | 0.3.2: `git_ref` of the tfvars examples and of `variables.tf` points at `refs/tags/0.3.2` of OpenAether-apps (0.3.1 pinned `refs/tags/0.3.1`), which must exist first (released first). The branch history is unsigned (squash merge, signed by GitHub; #332, #333). |
+| Before the tag | 0.4.0: `git_ref` of the tfvars examples and of `variables.tf` points at `refs/tags/0.4.0` of OpenAether-apps (0.3.2 pinned `refs/tags/0.3.2`), which must exist first (released first). The branch history is unsigned (squash merge, signed by GitHub; #332, #333). |
 
 ---|---|
 | §1 clean machine | Run at the release commit (the stranger clone of §9). |
@@ -413,7 +413,7 @@ script or runbook wraps `talosctl rollback`. The notes say it is unproven.
 ## 8. Release mechanics
 
 Only once everything above is green. There is **no release workflow**
-(`.github/workflows` holds `ci`, `clea`, `repo-settings`, `security`, and the manual,
+(`.github/workflows` holds `ci`, `clea`, `repo-settings`, `release-tag` (it only checks the tag), `security`, and the manual,
 dormant `real-cloud-regression`, which is not one): the tag and
 the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
 
@@ -424,7 +424,7 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       out, including what you chose not to fix (`CLAUDE.md`: an audit is not a
       PR). Never write a closing keyword before an issue number in a commit, PR
       or the notes: GitHub reads prose, and an open issue was closed that way.
-- [ ] `CHANGELOG.md`: `[0.3.2]` carries its date and anything merged since
+- [ ] `CHANGELOG.md`: `[0.4.0]` carries its date and anything merged since
       the text was written is folded into it (`[Unreleased]` stays empty), in the
       voice of 0.1.0: what it claims **and** what it does not, each with its rung,
       no hand-typed counts. Upgrade notes: unset pins inherit the new default and
@@ -463,6 +463,18 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       `repo-settings.yml` only warns about it. The `tags` ruleset blocks moving
       or deleting any tag, so **0.1.0's re-cut is not available**: §9 runs first,
       and the release skill's "Withdrawing a tag" needs an admin to relax it.
+- [ ] the tag is **annotated and signed** by a key of the signer table (`docs/signed-commits.md`, #386), made on the
+      release sha and pushed before the release exists:
+      ```bash
+      git tag -s -u 1D5895FDC14F5BAD6D1B170B5CA26229559044A2 -m "OpenAether-infra <tag>" <tag> <release sha>
+      ./scripts/dev/check-release-tag.sh <tag> --notes notes.md    # annotated, signer in the table, notes name the sha
+      git push origin <tag>
+      gh release create <tag> --verify-tag --notes-file notes.md   # refuses when the tag is not on the remote
+      ```
+      The notes carry the release commit sha in full. A client verifies with `git verify-tag <tag>` (public key
+      `docs/signers/release-vps.asc`, fingerprint compared with the table) and `git rev-parse <tag>^{commit}` against the
+      notes. Immutable releases are on (owner, 2026-10); `.github/workflows/release-tag.yml` repeats the check when a tag
+      arrives. It is a verdict after the fact: run it before pushing.
 - [ ] §9's stranger clone ran on the release commit; then tag it. `git describe
       --tags` is clean and `git rev-parse 0.2.0^{commit}` is the sha §9 tested.
 - [ ] a GitHub Release by hand, whose notes name the limits and end with an **Open

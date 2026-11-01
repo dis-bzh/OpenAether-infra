@@ -14,6 +14,11 @@ output "control_plane_zones" {
   value       = scaleway_instance_server.control_plane[*].zone
 }
 
+output "worker_zones" {
+  description = "Zone of each worker, in worker_private_ips order"
+  value       = scaleway_instance_server.worker[*].zone
+}
+
 # Load Balancer IPs
 output "k8s_lb_ip" {
   description = "Public IP of the Kubernetes API LB (6443), or the private Talos VIP when k8s_lb_mode = \"vip\""
@@ -67,5 +72,21 @@ output "app_lb_acls" {
         [for x in [try(scaleway_lb_acl.app_deny[k], null)] : x if x != null],
       ) : "${a.action[0].type} ${try(join(",", a.match[0].ip_subnet), "(known after apply)")}"
     ]
+  }
+}
+
+# Test-only: the health check the app LB backends carry (a test cannot read a child module's resources); null = no app LB.
+output "app_lb_health_checks" {
+  description = "Health check of the app LB http and https backends, for tests (null = no app LB)"
+  value = {
+    for k, b in { http = scaleway_lb_backend.http, https = scaleway_lb_backend.https } : k => one([
+      for x in b : {
+        delay       = x.health_check_delay
+        timeout     = x.health_check_timeout
+        max_retries = x.health_check_max_retries
+        port        = x.health_check_port
+        tcp         = length(x.health_check_tcp) > 0
+      }
+    ])
   }
 }

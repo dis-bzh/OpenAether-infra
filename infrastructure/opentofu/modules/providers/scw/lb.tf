@@ -53,6 +53,17 @@ resource "scaleway_lb_backend" "http" {
   forward_port_algorithm = "roundrobin"
   forward_protocol       = "tcp"
   server_ips             = [for ip in scaleway_ipam_ip.worker : split("/", ip.address)[0]]
+
+  # Explicit TCP health check. Without these lines the backend carries the provider defaults (delay 60s, timeout 30s,
+  # 2 retries): a worker whose network is black-holed stays in rotation for a minute and more (lab 27 sitting 3, partition
+  # of a node holding a Gateway pod: 41 of 327 probes failed, longest run 14 s). Worst case to take a dead node out:
+  # one check interval + 2 failed checks of 3 s, about 13 s (UNVERIFIED on a real partition, see docs/resilience.md).
+  # The API LB below is another object with another check, left alone on purpose.
+  health_check_delay       = "5s"
+  health_check_timeout     = "3s"
+  health_check_max_retries = 2
+  health_check_port        = var.app_lb_node_ports.http
+  health_check_tcp {}
 }
 
 resource "scaleway_lb_frontend" "http" {
@@ -76,6 +87,17 @@ resource "scaleway_lb_backend" "https" {
   forward_port_algorithm = "roundrobin"
   forward_protocol       = "tcp"
   server_ips             = [for ip in scaleway_ipam_ip.worker : split("/", ip.address)[0]]
+
+  # Explicit TCP health check. Without these lines the backend carries the provider defaults (delay 60s, timeout 30s,
+  # 2 retries): a worker whose network is black-holed stays in rotation for a minute and more (lab 27 sitting 3, partition
+  # of a node holding a Gateway pod: 41 of 327 probes failed, longest run 14 s). Worst case to take a dead node out:
+  # one check interval + 2 failed checks of 3 s, about 13 s (UNVERIFIED on a real partition, see docs/resilience.md).
+  # The API LB below is another object with another check, left alone on purpose.
+  health_check_delay       = "5s"
+  health_check_timeout     = "3s"
+  health_check_max_retries = 2
+  health_check_port        = var.app_lb_node_ports.https
+  health_check_tcp {}
 }
 
 resource "scaleway_lb_frontend" "https" {

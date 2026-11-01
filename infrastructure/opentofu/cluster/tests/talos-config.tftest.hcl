@@ -524,6 +524,11 @@ run "node_log_forwarding_reaches_the_talos_module" {
 run "node_baseline_and_time_servers_are_off_by_default" {
   command = plan
 
+  # The kubelet heartbeat of node_monitor_grace_period_seconds (default 30 since 0.4.0) shares this patch: 0 isolates the baseline.
+  variables {
+    node_monitor_grace_period_seconds = 0
+  }
+
   assert {
     condition     = length(module.talos.node_baseline_patch.sysctls) == 0 && length(module.talos.node_baseline_patch.worker) == 0 && length(module.talos.node_baseline_patch.control_plane_kubelet) == 0
     error_message = "node_baseline must default to null at the cluster root: opt-in, and no node's config changes."

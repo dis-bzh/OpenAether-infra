@@ -10,6 +10,8 @@
 # Offline, no credentials: the S3 keys the guards insist on are placeholders.
 # ==============================================================================
 set -uo pipefail
+# Hermetic: the real talos-image.sh asks for ~12 GiB of free disk before a build (E5); this test is not about the disk of the machine it runs on.
+export OA_IMAGE_MIN_FREE_GIB=0
 cd "$(dirname "${BASH_SOURCE[0]}")/../.." || exit 1
 
 PASS=0; FAIL=0
@@ -33,6 +35,13 @@ echo "\$(basename "\$0") \$*" >>"$W/calls.log"
 case "\$(basename "\$0") \$*" in
   "tofu plan"*) for a in "\$@"; do case "\$a" in -out=*) : >"\${a#-out=}" ;; esac; done ;;
   "tofu output -raw "*) echo "fixture-\$3" ;;
+  # The real tofu, in a cluster directory whose backend was not initialised in THIS shell (lab 26, F1): it refuses unless
+  # the task env (TF_DATA_DIR and the S3 credentials of *provider-env) is there.
+  "tofu output -json cluster_identity")
+    if [ -z "\${TF_DATA_DIR:-}" ] || [ -z "\${AWS_ACCESS_KEY_ID:-}" ] || [ -z "\${AWS_SECRET_ACCESS_KEY:-}" ]; then
+      echo "Error: Backend initialization required, please run \"tofu init\"" >&2; exit 1
+    fi
+    echo '{}' ;;
   "talos-version.sh workload-"*) echo v0.0.1-fixture ;;
   talos-version.sh*) echo v0.0.0-fixture ;;
   tf-backend.sh*) echo -backend-config=path=fixture.tfstate ;;
@@ -40,6 +49,24 @@ case "\$(basename "\$0") \$*" in
   ssh-keygen*) exit 1 ;;
   infra-verify.sh*) echo "fixture verifier \$*: exit \${VERIFY_RC:?}"; exit "\$VERIFY_RC" ;;
   adopt-bootstrap.sh*) exit "\${ADOPT_RC:-0}" ;;
+  # The real scripts run tofu from the cluster directory, as the task leaves them; so does the stub.
+  cluster-identity-sync.sh*) (cd "$C" && tofu output -json cluster_identity >/dev/null) || { echo "✗ tofu output cluster_identity failed" >&2; exit 1; }
+                             case "\$*" in *--apply*) exit "\${APPLY_RC:-0}" ;; *) exit "\${IDENTITY_RC:-0}" ;; esac ;;
+  # The presync: a dry run answers PRESYNC_RC (3 = a difference) until an apply has run; then 0, "applied" being what the apply
+  # does. REVERT_N makes Flux undo it: that many dry runs after an apply answer 3 again, as a reconcile of the OLD ref would.
+  cnpg-presync.sh*--apply*) : >"$W/presync.applied"; echo "\$*" >>"$W/presync.args"; exit "\${PSAPPLY_RC:-0}" ;;
+  cnpg-presync.sh*)
+    if [ -e "$W/presync.applied" ]; then
+      n=\$(cat "$W/presync.undone" 2>/dev/null || echo 0)
+      if [ "\$n" -lt "\${REVERT_N:-0}" ]; then echo \$((n + 1)) >"$W/presync.undone"; exit 3; fi
+      exit 0
+    fi
+    [ -n "\${PSAPPLY_RC:-}" ] && exit 3; exit "\${PRESYNC_RC:-0}" ;;
+  cluster-coredns-ha.sh*--apply*) : >"$W/coredns.applied"; exit "\${COREDNS_APPLY_RC:-0}" ;;
+  cluster-coredns-ha.sh*) [ -e "$W/coredns.applied" ] && exit 0; exit "\${COREDNS_RC:-0}" ;;
+  cluster-apps-ref.sh*--apply*) exit "\${REFAPPLY_RC:-0}" ;;
+  cluster-apps-ref.sh*) exit "\${REF_RC:-0}" ;;
+  cluster-netcheck.sh*|cluster-security-tests.sh*) echo "\$(basename "\$0") KUBECONFIG=\${KUBECONFIG:-unset}" >>"$W/kc.log" ;;
   talos-image.sh*--retain*) echo "fixture retention \$*"; exit "\${RETAIN_RC:-0}" ;;
 esac
 exit 0
@@ -48,26 +75,31 @@ chmod +x "$W/stub"
 for s in internal/talos-version.sh internal/ensure-buckets.sh internal/check-openbao-keys.sh internal/converge-versions.sh \
          internal/tf-backend.sh internal/bootstrap-in-state.sh internal/explain-failure.sh bootstrap/talos-image.sh \
          bootstrap/render-bootstrap-manifests.sh bootstrap/talos-tunnels.sh bootstrap/adopt-bootstrap.sh bootstrap/grow-nodes.sh internal/refuse-node-deletes.sh \
-         ops/backup-state.sh dev/infra-verify.sh; do
+         ops/backup-state.sh ops/cnpg-presync.sh ops/cluster-coredns-ha.sh ops/cluster-identity-sync.sh ops/cluster-apps-ref.sh ops/cluster-netcheck.sh ops/cluster-security-tests.sh dev/infra-verify.sh; do
   ln -s "$W/stub" "$W/scripts/$s"
 done
 ln -s "$W/stub" "$W/bin/tofu"; ln -s "$W/stub" "$W/bin/ssh-keygen"
 echo 'fixture: rendered' >"$C/bootstrap-manifests/cilium.yaml"
-for e in management-scaleway workload-ovh; do echo 'cluster_name = "fixture"' >"$C/envs/$e.tfvars"; done
+# Flux ON, like the clusters these cases model: the presync, identity and apps-ref steps only run where Flux is deployed.
+for e in management-scaleway workload-ovh; do printf 'cluster_name = "fixture"\ndeploy_flux = true\n' >"$C/envs/$e.tfvars"; done
+# Flux OFF (a pure-infra cluster: the DR chain's step 2) in the file, and unset (the variable's default is false).
+printf 'cluster_name = "fixture"\ndeploy_flux = false\n' >"$C/envs/noflux-scaleway.tfvars"
+printf 'cluster_name = "fixture"\n' >"$C/envs/unset-scaleway.tfvars"
 : >"$W/key"
 
 O="$W/out"
-run() { # PCHK=<mode> sets OA_PASSPHRASE_CHECK; <verifier rc> <task args...> — combined output in $O, calls in calls.log; EXTRA=NAME=value sets one env var, last, so it overrides the defaults; TTY=1 gives it a terminal that answers "yes" to every question
+run() { # PCHK=<mode> sets OA_PASSPHRASE_CHECK; <verifier rc> <task args...> — combined output in $O, calls in calls.log; EXTRA="NAME=value [NAME=value]" sets env vars, last, so it overrides the defaults; TTY=1 gives it a terminal that answers "yes" to every question
   local rc="$1"; shift
-  : >"$W/calls.log"
+  local -a xtra=(); [ -n "${EXTRA:-}" ] && read -ra xtra <<<"$EXTRA"
+  : >"$W/calls.log"; rm -f "$W/presync.applied" "$W/presync.undone" "$W/presync.args" "$W/coredns.applied"
   local cmd=(env -i PATH="$W/bin:$PATH" HOME="$W" VERIFY_RC="$rc" NO_COLOR=1
       TF_VAR_encryption_passphrase=fixture-passphrase-of-at-least-32-characters
       SCW_ACCESS_KEY=scw-access-key SCW_SECRET_KEY=scw-secret-key
       OVH_AWS_ACCESS_KEY_ID=ovh-access-key OVH_AWS_SECRET_ACCESS_KEY=ovh-secret-key
-      ${PCHK:+OA_PASSPHRASE_CHECK="$PCHK"} ${EXTRA:+"$EXTRA"}
+      ${PCHK:+OA_PASSPHRASE_CHECK="$PCHK"} "${xtra[@]}"
       "$TASK" -d "$W" "$@")
   if [ -n "${TTY:-}" ]; then
-    printf 'yes\n%.0s' 1 2 3 4 5 6 7 8 9 | script -qefc "$(printf '%q ' "${cmd[@]}")" /dev/null >"$O" 2>&1
+    { printf 'yes\n%.0s' $(seq 1 "${TTY_YES:-9}"); printf 'no\n%.0s' 1 2 3; } | script -qefc "$(printf '%q ' "${cmd[@]}")" /dev/null >"$O" 2>&1
     local st=$?; tr -d '\r' <"$O" >"$O.lf" && mv "$O.lf" "$O"; return "$st"
   fi
   "${cmd[@]}" </dev/null >"$O" 2>&1
@@ -139,7 +171,8 @@ adopted_once workload ovh
 K='^tofu output -raw kubeconfig'
 k1="$(grep -n "$K" "$W/calls.log" | head -1 | cut -d: -f1)"; k2="$(line_of "$W/calls.log" "$K")"
 c="$(line_of "$W/calls.log" '^converge-versions.sh ')"; i="$(line_of "$W/calls.log" '^infra-verify.sh')"
-[ "$(calls "$K")" = 2 ] && [ -n "$c" ] && [ -n "$i" ] && [ "${k1:-0}" -lt "$c" ] && [ "$c" -lt "${k2:-0}" ] && [ "$k2" -lt "$i" ] \
+# The identity and apps-ref TASKS fetch it too (lab 26, F1), so "at least two": one before the roll, the last after it.
+[ "$(calls "$K")" -ge 2 ] && [ -n "$c" ] && [ -n "$i" ] && [ "${k1:-0}" -lt "$c" ] && [ "$c" -lt "${k2:-0}" ] && [ "$k2" -lt "$i" ] \
   && ok "kubeconfig is fetched before the roll, and again between the roll and the verifier" \
   || bad "fetches: $(calls "$K"), first ${k1:-none}, last ${k2:-none}; roll at ${c:-none}; verify at ${i:-none}"
 
@@ -265,6 +298,200 @@ run 0 cluster-verify PROVIDER=scaleway; rc=$?
   || bad "exit $rc, refreshes $(calls '^tofu output -raw kubeconfig'), verifier $(calls '^infra-verify.sh ')"
 [ "$(stat -c %a "$C/kubeconfig" "$C/talosconfig" 2>/dev/null | sort -u)" = 600 ] \
   && ok "kubeconfig and talosconfig are written 0600" || bad "modes: $(stat -c '%n %a' "$C/kubeconfig" "$C/talosconfig" 2>&1 | tr '\n' ' ')"
+
+
+echo "--- cluster-identity: a ConfigMap that differs is written or the run fails, never green over it (lab 25, D9) ---"
+ID='^cluster-identity-sync.sh'
+run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+c="$(line_of "$W/calls.log" '^converge-versions.sh ')"; d="$(line_of "$W/calls.log" "$ID")"; i="$(line_of "$W/calls.log" '^infra-verify.sh')"
+[ "$rc" = 0 ] && [ "$(calls "$ID")" = 1 ] && [ "$(calls "$ID --apply")" = 0 ] && [ -n "$c" ] && [ -n "$d" ] && [ -n "$i" ] && [ "$c" -lt "$d" ] && [ "$d" -lt "$i" ] \
+  && ok "in sync: one dry run, after the roll and before the verifier, nothing written" \
+  || bad "exit $rc, calls: $(grep -c "$ID" "$W/calls.log"), roll ${c:-none}, sync ${d:-none}, verify ${i:-none}"
+EXTRA=IDENTITY_RC=3 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" = 0 ] && [ "$(calls "$ID --apply")" = 1 ] && ok "APPROVE=auto and a difference: it is written, the run goes on" \
+  || bad "exit $rc, applies $(calls "$ID --apply"): $(tail_of)"
+EXTRA=APPLY_RC=1 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" = 0 ] && ok "(control) a sync that was not asked to apply does not fail the run" || bad "control exit $rc"
+EXTRA=IDENTITY_RC=1 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" != 0 ] && ! grep -q 'cluster-up complete' "$O" && ok "a sync failure fails cluster-up" || bad "exit $rc"
+EXTRA=IDENTITY_RC=4 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" = 0 ] && [ "$(calls "$ID --apply")" = 0 ] && ok "ConfigMap not there yet (exit 4): a warning, not a failure" || bad "exit $rc"
+TTY=1 EXTRA=IDENTITY_RC=3 run 0 cluster-up KEY="$W/key" PROVIDER=scaleway; rc=$?
+[ "$(calls "$ID --apply")" = 1 ] && grep -q 'Write these cluster-identity keys' "$O" && ok "at a terminal it asks, and writes on yes" || bad "exit $rc, applies $(calls "$ID --apply"): $(tail_of)"
+
+
+echo "--- F1 (lab 26): the steps run through the TASKS, so tofu has its backend and credentials; the messages name the exact command ---"
+# The env of run() holds no TF_DATA_DIR and no AWS_* variable. The stub tofu refuses `output` without them, as the real one does.
+run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" = 0 ] && grep -q '^tofu output -json cluster_identity' "$W/calls.log" \
+  && ok "cluster-up resolved the backend and the S3 credentials for the identity step (tofu output answered)" \
+  || bad "exit $rc, identity step without the provider env: $(grep -h 'Backend\|failed' "$O" | head -2 | tr '\n' ' ')"
+TTY=1 TTY_YES=2 EXTRA=IDENTITY_RC=3 run 0 cluster-up KEY="$W/key" PROVIDER=scaleway ROLE=management; rc=$?
+[ "$rc" != 0 ] && grep -qF '    task cluster-identity-sync PROVIDER=scaleway ROLE=management APPLY=1' "$O" && grep -q 'shows it as 201' "$O" \
+  && ok "an answer other than yes: the failure names the command with PROVIDER and ROLE filled in, and says 201" \
+  || bad "exit $rc: $(tail_of)"
+TTY=1 TTY_YES=2 EXTRA=REF_RC=3 run 0 cluster-up KEY="$W/key" PROVIDER=scaleway ROLE=management; rc=$?
+[ "$rc" != 0 ] && grep -qF '    task cluster-apps-ref PROVIDER=scaleway ROLE=management APPLY=1' "$O" && grep -q 'shows it as 201' "$O" \
+  && ok "the same for the apps ref" || bad "exit $rc: $(tail_of)"
+EXTRA=IDENTITY_RC=1 run 0 "${UP[@]}" PROVIDER=scaleway ROLE=management; rc=$?
+[ "$rc" != 0 ] && grep -qF 'task cluster-identity-sync PROVIDER=scaleway ROLE=management' "$O" && grep -q 'failed (exit 1)' "$O" \
+  && ok "any other failure keeps its own exit code in the message and names the command to run alone" || bad "exit $rc: $(tail_of)"
+
+
+echo "--- CNPG presync (study LAB-B2): synchronous replication is enabled BEFORE the apps ref moves, or the run fails ---"
+PS='^cnpg-presync.sh'
+PSA='^cnpg-presync.sh --tfvars [^ ]* .*--apply'
+run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+c="$(line_of "$W/calls.log" '^converge-versions.sh ')"; p="$(line_of "$W/calls.log" "$PS")"; a="$(line_of "$W/calls.log" '^cluster-apps-ref.sh')"
+d="$(line_of "$W/calls.log" '^cluster-identity-sync.sh')"; i="$(line_of "$W/calls.log" '^infra-verify.sh')"
+[ "$rc" = 0 ] && [ "$(calls "$PS")" = 1 ] && [ "$(calls "$PSA")" = 0 ] && [ -n "$p" ] && [ "$c" -lt "$p" ] && [ "$p" -lt "$a" ] && [ "$p" -lt "$d" ] && [ "$a" -lt "$i" ] \
+  && ok "nothing to presync (exit 0): one dry run, after the roll and BEFORE the apps ref and the identity steps, nothing written" \
+  || bad "exit $rc, calls $(calls "$PS"), roll ${c:-none}, presync ${p:-none}, apps-ref ${a:-none}, identity ${d:-none}"
+! grep -qE '^(CNPG Clusters|✓ synchronous|✗ .*(cnpg|CNPG))' "$O" && ok "and it is quiet: a new cluster's bring-up never mentions it" || bad "output mentions the presync: $(grep -E '^(CNPG|✓ synch|✗)' "$O" | head -2)"
+K='^tofu output -raw kubeconfig'
+[ "$(awk -v p="$p" -v k="$K" 'NR < p && $0 ~ k' "$W/calls.log" | wc -l)" -ge 2 ] \
+  && ok "the TASK ran the script: the kubeconfig was fetched again before it (lab 26, F1)" || bad "kubeconfig fetches before the presync: $(grep -n "$K" "$W/calls.log" | tr '\n' ' ')"
+EXTRA=PRESYNC_RC=3 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+p2="$(line_of "$W/calls.log" "$PSA")"; a="$(line_of "$W/calls.log" '^cluster-apps-ref.sh')"
+[ "$rc" = 0 ] && [ "$(calls "$PSA")" = 1 ] && [ -n "$p2" ] && [ "$p2" -lt "$a" ] && ok "APPROVE=auto and a difference: it is applied, before the apps ref, and the run goes on" || bad "exit $rc, applies $(calls "$PSA"): $(tail_of)"
+run 0 cluster-up KEY="$W/key" PROVIDER=ovh ROLE=workload APPROVE=auto; rc=$?
+grep -qx 'cnpg-presync.sh --tfvars envs/workload-ovh.tfvars' "$W/calls.log" && ok "ROLE and PROVIDER reach the script (the tfvars of this cluster)" || bad "calls: $(grep '^cnpg-presync' "$W/calls.log")"
+TTY=1 TTY_YES=2 EXTRA=PRESYNC_RC=3 run 0 cluster-up KEY="$W/key" PROVIDER=scaleway ROLE=management; rc=$?
+[ "$rc" != 0 ] && grep -q 'Enable synchronous replication on these CNPG Clusters' "$O" && grep -qF '    task cnpg-presync PROVIDER=scaleway ROLE=management APPLY=1 SCALE=1' "$O" && [ "$(calls "$PSA")" = 0 ] && [ "$(calls '^cluster-apps-ref.sh')" = 0 ] \
+  && ok "at a terminal an answer other than yes: it fails naming the command, apps ref untouched" || bad "exit $rc: $(tail_of)"
+TTY=1 EXTRA=PRESYNC_RC=3 run 0 cluster-up KEY="$W/key" PROVIDER=scaleway; rc=$?
+[ "$(calls "$PSA")" = 1 ] && grep -q 'Enable synchronous replication on these CNPG Clusters' "$O" && ok "at a terminal it asks, and applies on yes" || bad "exit $rc, applies $(calls "$PSA"): $(tail_of)"
+EXTRA=PSAPPLY_RC=1 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" != 0 ] && [ "$(calls '^cluster-apps-ref.sh')" = 0 ] && ! grep -q 'cluster-up complete' "$O" && ok "an apply that fails (timeout, break-glass printed) fails cluster-up before the apps ref" || bad "exit $rc, apps-ref calls $(calls '^cluster-apps-ref.sh')"
+for r in 1 2; do
+  EXTRA=PRESYNC_RC=$r run 0 "${UP[@]}" PROVIDER=scaleway ROLE=management; rc=$?
+  [ "$rc" != 0 ] && grep -q "cnpg-presync failed (exit $r)" "$O" && grep -qF 'task cnpg-presync PROVIDER=scaleway ROLE=management' "$O" && [ "$(calls '^cluster-apps-ref.sh')" = 0 ] \
+    && ok "exit $r ($([ "$r" = 2 ] && echo a refusal || echo a failure)): cluster-up fails, names the command to run alone, the apps ref is not reached" || bad "exit $rc: $(tail_of)"
+done
+
+echo "--- FA (lab 27): the presync and the apps ref move back to back; SCALE under APPROVE=auto; the presync is read again before the ref moves ---"
+APPLYREF='^cluster-apps-ref.sh --tfvars [^ ]* --apply'
+EXTRA=PRESYNC_RC=3 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+pa="$(grep -n "$PSA" "$W/calls.log" | head -1 | cut -d: -f1)"; ra="$(line_of "$W/calls.log" "$APPLYREF")"
+d="$(line_of "$W/calls.log" '^cluster-identity-sync.sh')"; i="$(line_of "$W/calls.log" '^infra-verify.sh')"
+between="$(sed -n "$((pa + 1)),$((ra - 1))p" "$W/calls.log" | grep -E '^(cluster-identity-sync|converge-versions|infra-verify|cluster-coredns-ha|tofu (plan|apply))' || true)"
+{ [ "$rc" = 0 ] && [ -n "$pa" ] && [ -n "$ra" ] && [ "$pa" -lt "$ra" ] && [ "$ra" -lt "$d" ] && [ -z "$between" ]; } \
+  && ok "the presync apply and the apps-ref apply are back to back: only a dry-run re-read of the presync and the kubeconfig fetch between them, the identity step after" \
+  || bad "exit $rc, presync apply at ${pa:-none}, ref apply at ${ra:-none}, identity at ${d:-none}, between: $(tr '\n' '|' <<<"$between")"
+grep -q -- '--scale --apply' "$W/calls.log" \
+  && ok "APPROVE=auto and a Cluster below 3 instances: the presync is applied with --scale (the head declares 3), not stopped" \
+  || bad "no --scale on the presync apply: $(grep '^cnpg-presync' "$W/calls.log" | tr '\n' '|')"
+{ [ "$(calls '^cluster-apps-ref.sh')" = 2 ] && [ "$(calls "$APPLYREF")" = 1 ]; } \
+  && ok "the move is done once: the later ref step is a dry run that finds it in sync" || bad "ref calls: $(grep '^cluster-apps-ref' "$W/calls.log" | tr '\n' '|')"
+# Flux, still on the old ref, undoes the presync between the apply and the ref move: it is applied again, and only then does the ref move.
+EXTRA="PRESYNC_RC=3 REVERT_N=1" run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+ra="$(line_of "$W/calls.log" "$APPLYREF")"; last_pa="$(grep -n "$PSA" "$W/calls.log" | tail -1 | cut -d: -f1)"
+{ [ "$rc" = 0 ] && [ "$(calls "$PSA")" = 2 ] && [ -n "$ra" ] && [ "$last_pa" -lt "$ra" ] && grep -q '^~ the presync was undone' "$O"; } \
+  && ok "a presync undone before the ref moved is applied again, and the ref moves after the second apply" \
+  || bad "exit $rc, presync applies $(calls "$PSA"), last apply at ${last_pa:-none}, ref at ${ra:-none}: $(tail_of)"
+EXTRA="PRESYNC_RC=3 REVERT_N=9" run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+{ [ "$rc" != 0 ] && [ "$(calls "$APPLYREF")" = 0 ] && grep -q 'apps ref was NOT moved' "$O" && ! grep -q 'cluster-up complete' "$O"; } \
+  && ok "a presync that never holds fails cluster-up with the apps ref untouched" \
+  || bad "exit $rc, ref applies $(calls "$APPLYREF"): $(tail_of)"
+EXTRA="PRESYNC_RC=3 REFAPPLY_RC=1" run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+{ [ "$rc" != 0 ] && grep -qF '    task cnpg-presync PROVIDER=scaleway ROLE=management APPLY=1 SCALE=1' "$O" \
+    && grep -qF '    task cluster-apps-ref PROVIDER=scaleway ROLE=management APPLY=1' "$O" && [ "$(calls '^infra-verify.sh')" = 0 ]; } \
+  && ok "a ref move that fails after the presync fails the run and names both commands, to be run back to back" \
+  || bad "exit $rc: $(tail_of)"
+# A typed yes answers the combined step once: the presync (scaled) and the ref move follow, then the run goes on.
+TTY=1 EXTRA=PRESYNC_RC=3 run 0 cluster-up KEY="$W/key" PROVIDER=scaleway APPROVE=ask; rc=$?
+{ [ "$rc" = 0 ] && grep -q 'then move the apps ref at once' "$O" && [ "$(calls "$APPLYREF")" = 1 ] && grep -q -- '--scale --apply' "$W/calls.log"; } \
+  && ok "at a terminal one 'yes' answers the combined step: scaled presync, then the ref move" || bad "exit $rc, ref applies $(calls "$APPLYREF"): $(tail_of)"
+# A refusal other than the instance count still fails: --scale is all auto adds.
+EXTRA=PSAPPLY_RC=2 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+{ [ "$rc" != 0 ] && [ "$(calls "$APPLYREF")" = 0 ]; } && ok "a presync refusal under APPROVE=auto (exit 2) fails the run, the ref does not move" || bad "exit $rc"
+
+echo "--- FB (lab 27): the CoreDNS shape is converged INSIDE cluster-up, before the verifier ---"
+CD='^cluster-coredns-ha.sh'
+run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+{ [ "$rc" = 0 ] && [ "$(calls "$CD")" = 1 ] && [ "$(calls "$CD --tfvars [^ ]* --apply")" = 0 ]; } \
+  && ok "in the declared shape: one dry run, nothing written, nothing asked" || bad "exit $rc, calls $(calls "$CD"): $(tail_of)"
+EXTRA=COREDNS_RC=3 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+c="$(line_of "$W/calls.log" "$CD --tfvars [^ ]* --apply")"; i="$(line_of "$W/calls.log" '^infra-verify.sh')"; a="$(line_of "$W/calls.log" '^cluster-apps-ref.sh')"
+{ [ "$rc" = 0 ] && [ -n "$c" ] && [ "$a" -lt "$c" ] && [ "$c" -lt "$i" ]; } \
+  && ok "APPROVE=auto and a difference: patched after the apps ref and BEFORE the verifier, the run ends 0" \
+  || bad "exit $rc, patch at ${c:-none}, apps ref ${a:-none}, verify ${i:-none}: $(tail_of)"
+EXTRA=COREDNS_RC=3 run 0 cluster-up KEY="$W/key" PROVIDER=ovh ROLE=workload APPROVE=auto
+grep -qx 'cluster-coredns-ha.sh --tfvars envs/workload-ovh.tfvars' "$W/calls.log" && ok "ROLE and PROVIDER reach the script (the tfvars of this cluster)" || bad "calls: $(grep '^cluster-coredns' "$W/calls.log")"
+TTY=1 EXTRA=COREDNS_RC=3 run 0 cluster-up KEY="$W/key" PROVIDER=scaleway APPROVE=ask; rc=$?
+{ [ "$(calls "$CD --tfvars [^ ]* --apply")" = 1 ] && grep -q 'Patch the CoreDNS Deployment' "$O"; } && ok "at a terminal it asks, and patches on yes" || bad "exit $rc: $(tail_of)"
+TTY=1 TTY_YES=2 EXTRA=COREDNS_RC=3 run 0 cluster-up KEY="$W/key" PROVIDER=scaleway ROLE=management APPROVE=ask; rc=$?
+{ [ "$rc" != 0 ] && [ "$(calls "$CD --tfvars [^ ]* --apply")" = 0 ] && grep -qF '    task cluster-coredns-ha PROVIDER=scaleway ROLE=management APPLY=1' "$O"; } \
+  && ok "an answer other than yes: nothing patched, the command named" || bad "exit $rc: $(tail_of)"
+EXTRA=COREDNS_RC=1 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+{ [ "$rc" != 0 ] && grep -q 'cluster-coredns-ha failed (exit 1)' "$O" && [ "$(calls '^infra-verify.sh')" = 0 ]; } \
+  && ok "a failure of the step fails cluster-up before the verifier" || bad "exit $rc"
+
+echo "--- K3 (lab 26): cluster-netcheck and cluster-security hand their script a KUBECONFIG ---"
+: >"$W/kc.log"
+run 0 cluster-netcheck PROVIDER=scaleway; rc=$?
+[ "$rc" = 0 ] && grep -qx "cluster-netcheck.sh KUBECONFIG=$C/kubeconfig" "$W/kc.log" \
+  && ok "cluster-netcheck: the script sees this cluster's kubeconfig in a shell that exported none" \
+  || bad "netcheck exit $rc, saw: $(tr '\n' ' ' <"$W/kc.log")"
+: >"$W/kc.log"
+EXTRA=KUBECONFIG=/elsewhere/other-cluster run 0 cluster-netcheck PROVIDER=scaleway; rc=$?
+grep -qx "cluster-netcheck.sh KUBECONFIG=$C/kubeconfig" "$W/kc.log" \
+  && ok "cluster-netcheck: an exported KUBECONFIG of another cluster is not followed" || bad "netcheck followed the caller: $(tr '\n' ' ' <"$W/kc.log")"
+: >"$W/kc.log"
+run 0 cluster-security; rc=$?
+[ "$rc" = 0 ] && grep -qx "cluster-security-tests.sh KUBECONFIG=$W/infrastructure/opentofu/cluster/kubeconfig" "$W/kc.log" \
+  && ok "cluster-security: KUBECONFIG defaults to this checkout's cluster" || bad "security exit $rc, saw: $(tr '\n' ' ' <"$W/kc.log")"
+: >"$W/kc.log"
+EXTRA=KUBECONFIG=/elsewhere/other-cluster run 0 cluster-security; rc=$?
+grep -qx "cluster-security-tests.sh KUBECONFIG=/elsewhere/other-cluster" "$W/kc.log" \
+  && ok "cluster-security: the caller's own KUBECONFIG wins" || bad "security overrode the caller: $(tr '\n' ' ' <"$W/kc.log")"
+
+
+echo "--- apps ref: a live ref that differs from git_ref is moved or the run fails, never green over it (infra #408) ---"
+AR='^cluster-apps-ref.sh'
+run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+c="$(line_of "$W/calls.log" '^converge-versions.sh ')"; d="$(line_of "$W/calls.log" "$AR")"; i="$(line_of "$W/calls.log" '^infra-verify.sh')"
+[ "$rc" = 0 ] && [ "$(calls "$AR")" = 1 ] && [ "$(calls "$AR --tfvars [^ ]* --apply")" = 0 ] && [ -n "$d" ] && [ "$c" -lt "$d" ] && [ "$d" -lt "$i" ] \
+  && ok "in sync: one dry run, after the roll and before the verifier, nothing written" || bad "exit $rc, sync ${d:-none}"
+EXTRA=REF_RC=3 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" = 0 ] && [ "$(calls "$AR --tfvars [^ ]* --apply")" = 1 ] && ok "APPROVE=auto and a difference: the ref is moved, the run goes on" || bad "exit $rc: $(tail_of)"
+EXTRA=REF_RC=1 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" != 0 ] && ! grep -q 'cluster-up complete' "$O" && ok "a failure of the ref sync fails cluster-up" || bad "exit $rc"
+EXTRA=REF_RC=2 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" != 0 ] && ok "a refusal (exit 2) fails cluster-up" || bad "exit $rc"
+EXTRA=REF_RC=4 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" = 0 ] && [ "$(calls "$AR --tfvars [^ ]* --apply")" = 0 ] && ok "no GitRepository (exit 4): a note, not a failure" || bad "exit $rc"
+TTY=1 EXTRA=REF_RC=3 run 0 cluster-up KEY="$W/key" PROVIDER=scaleway; rc=$?
+[ "$(calls "$AR --tfvars [^ ]* --apply")" = 1 ] && grep -q 'Point the live GitRepository' "$O" && ok "at a terminal it asks, and moves on yes" || bad "exit $rc: $(tail_of)"
+run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+grep -q 'cluster-up did NOT change' "$O" && grep -q 'cluster-bootstrap-sync' "$O" && grep -q 'CAPI child' "$O" \
+  && ok "the end of cluster-up says what it did NOT change" || bad "no 'did NOT change' statement: $(tail_of)"
+
+
+echo "--- deploy_flux = false: no Flux, so no presync, no cluster-identity sync and no apps-ref move (lab 27 sitting 3, DR step 2) ---"
+# Every one of those steps is made to FAIL by the stubs, so a step that still ran would end the run non-zero.
+BREAK="PRESYNC_RC=1 IDENTITY_RC=1 REF_RC=1"
+for how in "file:ROLE=noflux" "default:ROLE=unset" "env:TF_VAR_deploy_flux=false"; do
+  name="${how%%:*}"; arg="${how#*:}"
+  if [ "$name" = env ]; then EXTRA="$BREAK $arg" run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+  else EXTRA="$BREAK" run 0 "${UP[@]}" PROVIDER=scaleway "$arg"; rc=$?; fi
+  [ "$rc" = 0 ] && grep -q '^✓ cluster-up complete' "$O" \
+    && ok "deploy_flux false ($name): cluster-up ends rc 0 with its stubs failing the Flux steps" \
+    || bad "deploy_flux false ($name): exit $rc: $(tail_of)"
+  { [ "$(calls '^cnpg-presync.sh')" = 0 ] && [ "$(calls '^cluster-identity-sync.sh')" = 0 ] && [ "$(calls '^cluster-apps-ref.sh')" = 0 ]; } \
+    && ok "deploy_flux false ($name): the presync, identity and apps-ref scripts are never called" \
+    || bad "deploy_flux false ($name): a Flux step ran: $(grep -E '^(cnpg-presync|cluster-identity-sync|cluster-apps-ref)' "$W/calls.log" | tr '\n' '|')"
+  grep -c '^~ deploy_flux is not true' "$O" | grep -qx 1 \
+    && ok "deploy_flux false ($name): one line says why the steps are skipped" \
+    || bad "deploy_flux false ($name): the skip line is missing or repeated"
+  # What does not depend on Flux stays: the CoreDNS shape (an inline manifest of Talos) and the verifier.
+  { [ "$(calls '^cluster-coredns-ha.sh')" -ge 1 ] && [ "$(calls '^infra-verify.sh ')" = 1 ]; } \
+    && ok "deploy_flux false ($name): the CoreDNS converge and the verifier still run" \
+    || bad "deploy_flux false ($name): CoreDNS or the verifier did not run: $(grep -E '^(cluster-coredns|infra-verify)' "$W/calls.log" | tr '\n' '|')"
+done
+# Control: with Flux on, the same failing stubs DO fail the run (so the cases above prove the skip, not a stub that never fails).
+EXTRA="$BREAK" run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+[ "$rc" != 0 ] && ok "control: deploy_flux true and the same failing stubs fail the run" || bad "control: exit $rc, the Flux steps did not run"
 
 
 echo

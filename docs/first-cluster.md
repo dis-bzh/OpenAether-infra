@@ -28,13 +28,18 @@ ended (seeding OpenBao, signing the PKI intermediate): [`admin-access.md`](admin
 
 ## Before you start
 
-- A Scaleway account, and the quota to run **6 instances** of the type in your
+- A Scaleway account, and the quota to run **7 instances** of the type in your
   tfvars. A new account may be capped at 1 — Console → Quotas. There is no
   preflight script for Scaleway (`preflight-quotas.py` covers OVH and Outscale
-  only), so this check is yours to make. The bastion adds one `DEV1-S`; what
+  only), so this check is yours to make. The shipped examples have 3 control planes and 4 workers; the bastion adds one `DEV1-S`; what
   each provider consumes, and whether its example meets the sizing floor:
   [`capacity.md`](capacity.md).
 - An SSH keypair you already have, or `ssh-keygen -t ed25519`.
+- About **12 GiB of free disk** in your clone (`infrastructure/opentofu/talos-image`): the image build downloads the
+  compressed raw image and decompresses it next to it, about 11.3 GiB in all (the 4.5 GB first reported in infra #405
+  was too low: three builds died on `No space left on device` after the download, at 8.5, 8.7 and 10 GB free).
+  When it has to build the image, `task cluster-up` asks before the first byte (`OA_IMAGE_MIN_FREE_GIB`, default 12, 0 turns the check off) and, when
+  the disk is short, stops and prints both figures.
 - Somewhere to keep a passphrase you cannot afford to lose: it encrypts the
   state, the kubeconfig and the talosconfig, and nothing can decrypt them
   without it.
@@ -129,7 +134,7 @@ namespaced variables above.
 `task cluster-up` checks this file before it builds anything: the SSH key exists and is
 the private half of `bastion_ssh_keys`, the tfvars file exists, the
 passphrase is set and is not the placeholder, and BOTH S3 credential pairs work
-(it creates the four buckets to find out, which is why the passphrase comes
+(it creates the buckets to find out, which is why the passphrase comes
 first). All of it runs before the image build.
 
 ## 3. The cluster file
@@ -142,7 +147,7 @@ $EDITOR management-scaleway.tfvars
 
 | field | what to put in it |
 |---|---|
-| `cluster_name` | yours. **It has a default, so no checker will tell you to change it** — and its first segment names all four cluster buckets |
+| `cluster_name` | yours. **It has a default, so no checker will tell you to change it** — and its first segment names all the cluster buckets |
 | `bucket_suffix` | **set it unless you are the original author.** S3 bucket names are unique across a whole provider, not per account — Scaleway documents them unique "in our whole platform", OVH "within OVHcloud". Without one you will collide with names somebody already took. `task bucket-suffix` prints one; pick it once, changing it later orphans every bucket you have |
 | `environment` | `dev` or `prod`, nothing else. Pick it once: it names the state bucket. `prod` needs the replica on another provider: `task cluster-up` refuses before spending when `s3_replica_endpoint` is the primary's endpoint or the same cloud (an S3 it cannot name only has to be another endpoint). A cluster name that already has a state object is only warned before spending, then `task cluster-up` fails at its verify step; that includes one torn down by `task cluster-down`, which keeps the state bucket. `dev` may share the primary's store |
 | `admin_ip` | `curl -s ifconfig.me` as a `/32`. It is both the SSH allow-list and the apiserver LB ACL |
@@ -189,7 +194,7 @@ harness refuses a blind apply therefore needs the owner's explicit permission fo
 owner's, not the repository's. Copy the `deploy_flux = true` and `deploy_app_lb = true` lines of the example: without them the cluster
 is infrastructure only (the verifier reports flux-system as red by design).
 
-In order it creates the four state and artifact buckets (the credential check
+In order it creates the state, artifact, logs and application-backups buckets (the credential check
 above), builds the Talos image and uploads it — **measured at 52 s on Scaleway,
 2026-08-17**, for two buckets, one snapshot and one image per zone — applies the
 infrastructure, opens one SSH tunnel per node, then applies the machine configs
@@ -233,8 +238,12 @@ balancer `active` and 3 backends. The support request covering it is closed. One
 Net from before the fix still refuses deletion on a dependency no read returns;
 only the provider can clear that, and a second request is open for it.
 
-Six buckets exist afterwards: state and artifacts, each with a `-backup` twin,
-plus the image and its import area.
+Nine buckets exist afterwards: state, artifacts and application backups (restic,
+Longhorn, the CNPG archive), each with a `-backup` twin, plus Loki's logs bucket,
+the image and its import area. The application-backups twin is the second copy of
+the CNPG archive, and it exists with the default `backup_immutability = off` too
+(before 0.4.0 it did not, and `cnpg-store-replicate` failed with `NoSuchBucket` every
+15 minutes); `task cluster-verify` fails when it is missing.
 
 Re-running resumes. So does an edit that adds a worker: `task cluster-up` creates the
 machine, opens the tunnels, then configures only the new node
@@ -245,6 +254,8 @@ node of a bootstrapped cluster, because OpenTofu would destroy the highest-index
 data volumes with no drain and no etcd leave (`scripts/internal/refuse-node-deletes.sh`). Removing nodes is a pair of
 commands of its own, `task cluster-shrink-plan` then `task cluster-shrink`, measured on all three
 clouds: [`upgrade.md`](upgrade.md#removing-nodes).
+
+Be aware that the machine is created before any question is asked: without `APPROVE=auto`, `cluster-up` still builds and configures the new node first and only then shows the plan (a 0.3.x design, see [`upgrade.md`](upgrade.md#adding-nodes-cluster-up-creates-the-machine-before-it-asks-a-03x-design-unchanged)).
 
 ### Residual risk: the maintenance-mode apply
 

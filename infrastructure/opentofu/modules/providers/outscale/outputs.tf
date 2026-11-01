@@ -18,6 +18,11 @@ output "control_plane_zones" {
   value       = outscale_vm.control_plane[*].placement_subregion_name
 }
 
+output "worker_zones" {
+  description = "Subregion of each worker VM, in worker_private_ips order"
+  value       = outscale_vm.worker[*].placement_subregion_name
+}
+
 # Load Balancer DNS names (Outscale LBs expose a DNS name, not a raw IP)
 output "k8s_lb_ip" {
   description = "DNS name of the Kubernetes API LB (6443)"
@@ -96,4 +101,19 @@ output "inter_node_rules" {
       "${upper(r.rules[0].ip_protocol)} ${r.rules[0].from_port_range == -1 ? "-" : (r.rules[0].from_port_range == r.rules[0].to_port_range ? tostring(r.rules[0].from_port_range) : "${r.rules[0].from_port_range}-${r.rules[0].to_port_range}")}"
     ])
   }
+}
+
+# Test-only: the health check of the app LB; null = no app LB.
+output "app_lb_health_check" {
+  description = "Health check of the app LB, for tests (null = no app LB)"
+  value = one([
+    for a in outscale_load_balancer_attributes.app : {
+      check_interval      = a.health_check[0].check_interval
+      timeout             = a.health_check[0].timeout
+      healthy_threshold   = a.health_check[0].healthy_threshold
+      unhealthy_threshold = a.health_check[0].unhealthy_threshold
+      port                = a.health_check[0].port
+      protocol            = a.health_check[0].protocol
+    }
+  ])
 }

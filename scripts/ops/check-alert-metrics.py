@@ -58,6 +58,7 @@ HEALTHY_WHEN_EMPTY = {
     "kube_job_failed": "emitted only for a failed Job",
     "kubelet_volume_stats_available_bytes": "emitted only for CSI-mounted volumes (none with local-path)",
     "kubelet_volume_stats_capacity_bytes": "emitted only for CSI-mounted volumes (none with local-path)",
+    "loki_discarded_samples_total": "emitted only once Loki has discarded a sample (lab 19: no series on a healthy cluster)",
 }
 
 # PromQL/MetricsQL functions and keywords that look like metric names.

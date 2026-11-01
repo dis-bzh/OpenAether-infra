@@ -33,7 +33,7 @@ planes / workers, D = entries in `worker_storage.disks`.
 | | Scaleway | OVH | Outscale | Proxmox |
 |---|---|---|---|---|
 | Instances | CP+W + bastion `DEV1-S` (2 vCPU / 2 GB) | CP+W + bastion `b3-8` (2 vCPU / 8 GB) | CP+W + bastion `tinav5.c2r2p2` (2 vCPU / 2 GB) | CP+W; + bastion (1 vCPU / 1 GiB / 10 GiB) only with `enable_bastion` |
-| Node system disk | 50 GB `sbs_volume` each (`scw_root_volume_size_gb`; at least 40 with `deploy_flux`, enforced) | the flavour's disk (at least 50 GB; `check` warns below 40) | the OMI's (~11-12 GiB): set `outscale_root_volume_size_gb = 50` (`check` warns) | `root_disk_gb` (50 GiB) each (`check` warns below 40) |
+| Node system disk | 50 GB `sbs_volume` each (`scw_root_volume_size_gb`; at least 40 with `deploy_flux`, enforced) | the flavour's disk (at least 50 GB; `check` warns below 40) | the OMI's (~11-12 GiB): set `outscale_root_volume_size_gb = 50` (`check` warns); type `io1` 1500 IOPS by default (`outscale_root_volume_type`, `outscale_root_volume_iops`) | `root_disk_gb` (50 GiB) each (`check` warns below 40) |
 | Data volumes | W × D | W × D | W × D | W × D, on `datastore_id` |
 | Public IPs | 3: bastion, public gateway, API LB | 2 floating: bastion, API LB | 2: bastion, NAT | none — `host_public_ip` is yours |
 | Load balancers | 1 | 1 (Octavia) | 1 (LBU) | none — Talos VIP |
@@ -44,6 +44,8 @@ planes / workers, D = entries in `worker_storage.disks`.
 `k8s_lb_mode = "vip"` (OVH; experimental on Scaleway) swaps the API LB and its
 IP for a private address.
 
+**Known limitation (Scaleway): two clusters cannot coexist in one project.** The cluster subnet is pinned in the module (`scw_cluster_subnet = "172.16.0.0/22"`, `modules/providers/scw/network.tf`, so that the mesh rule of `security.tf` cannot drift from it, #79) and is not a variable. Both private networks land in the project's default VPC, and a second cluster fails at its network with `subnet_overlaps_in_vpc` (lab 27 sitting 3, building a scratch cluster for the etcd restore next to the main one; the scratch cluster had to be built after the main one was torn down). Use one Scaleway project per cluster, or tear down the first; the addressing was not changed. Making the CIDR a variable also means the node firewall, the ACL ranges and the tests that carry `172.16.0.0/22` follow it: that is a change of its own, not made here. OVH (`10.0.0.0/24`) and Outscale pin their addresses in the same way; whether two clusters can coexist there depends on the network each one creates and was not tested.
+
 ## The shipped examples
 
 Totals include the bastion. `preflight-quotas` checks instances, vCPU and RAM,
@@ -52,10 +54,10 @@ IPs, LBs or security groups.
 
 | Example | Nodes × type (vCPU / RAM) | Inst. | vCPU | RAM | Meets the floor? | `task preflight-quotas PROVIDER=… --` |
 |---|---|---|---|---|---|---|
-| `management-`, `failover-scaleway` | 3+3 × `POP2-4C-16G` (4 / 16 GB) | 7 | 26 | 98 GB | Yes; rollable, see the arithmetic below | no Scaleway backend |
-| `workload-scaleway` | 3+3 × `POP2-4C-16G` | 7 | 26 | 98 GB | Yes | no Scaleway backend |
-| `management-`, `failover-ovh` | 3+3 × `c3-8` (4 / 8 GB) | 7 | 26 | 56 GB | Yes; rollable, see the arithmetic below | `--add-vms 7 --add-cores 26 --add-ram-gb 56` |
-| `workload-ovh` | 3+3 × `c3-8` | 7 | 26 | 56 GB | Yes | `--add-vms 7 --add-cores 26 --add-ram-gb 56` |
+| `management-`, `failover-scaleway` | 3+4 × `POP2-4C-16G` (4 / 16 GB) | 8 | 30 | 114 GB | Yes; rollable, see the arithmetic below | no Scaleway backend |
+| `workload-scaleway` | 3+4 × `POP2-4C-16G` | 8 | 30 | 114 GB | Yes | no Scaleway backend |
+| `management-`, `failover-ovh` | 3+4 × `c3-8` (4 / 8 GB) | 8 | 30 | 64 GB | Yes; rollable, see the arithmetic below | `--add-vms 8 --add-cores 30 --add-ram-gb 64` |
+| `workload-ovh` | 3+4 × `c3-8` | 8 | 30 | 64 GB | Yes | `--add-vms 8 --add-cores 30 --add-ram-gb 64` |
 | `management-`, `failover-outscale` | 3+2 × `tinav5.c2r4p1` (2 / 4 GB) | 6 | 12 | 22 GB | **No, on purpose** — see below | `--add-vms 6 --add-cores 12 --add-ram-gb 22` |
 | `workload-outscale` | 3+3 × `tinav5.c2r4p1` | 7 | 14 | 26 GB | **No, on purpose** | `--add-vms 7 --add-cores 14 --add-ram-gb 26` |
 | `*-proxmox` | 1+1 × 4 vCPU / 8 GiB, 20 GiB disk | 2 | 8 | 16 GiB | Type yes; one worker cannot be drained without downtime | host capacity, not a quota |
@@ -80,7 +82,7 @@ Also against the examples:
 
 ## Can the cluster lose a worker, and be rolled? (infra #378)
 
-`cluster-roll` refuses to start when the CPU requests of all workers, each as a percentage of its own node, add up to more than
+`cluster-roll` refuses to start when the CPU requests (and, since lab 27 part B, F-SHRINKMEM, the memory requests: `worker_memory_requests`, the same bound; `cluster-shrink-plan` too) of all workers, each as a percentage of its own node, add up to more than
 (workers - 1) x 100%: one node's worth of requests must fit on the others (`worker_cpu_requests` / `preflight_roll`,
 `scripts/lib/roll-gates.sh`). **Measured** in lab 16 with the full application stack on a management cluster, requests as % of a
 worker's allocatable CPU:
@@ -95,15 +97,81 @@ Arithmetic (derived from those numbers, taking a worker's allocatable as about i
 total, on 3 vCPU the 239% is about 7.2 vCPU, so requests are roughly 6.3 vCPU of fixed deployments plus 0.3 vCPU of DaemonSets per
 worker (an estimate from two points, not a measurement of each). With n workers of 4 vCPU the gate needs 6.3 + 0.3n <= 4(n - 1):
 n = 3 gives 7.2 against 8 (about 90% of the limit, 180% against 200%); n = 4 gives 7.5 against 12. The examples for Scaleway and OVH
-therefore ship **3 workers**. The margin at 3 is thin: a heavier app set can break it, and the gate says so before anything is touched.
+therefore shipped 3 workers until 0.4.0 (they ship **4** now, see below: the measured load of the full platform needs it). The margin at 3 is thin: a heavier app set can break it, and the gate says so before anything is touched.
 This is the CPU gate only: replicas with a required spread (three OpenBao pods, for instance) stay short while a worker is out, and
 the cluster-wide behaviour of losing a node under load belongs to 0.4.0 (resilience), not to this table.
 
-Outscale: no shape fits the default 20 vCPU quota and passes the gate. 3 workers of 3 vCPU fail (above), and 4 workers of 3 vCPU need
+**0.4.0 (M4): derived first, then measured (lab 21).** The high-availability work adds about 345 m of CPU requests to the platform (a second Kyverno admission controller, CNPG
+operator, ESO controller and webhook, metrics-server and Zitadel login, and a second Alertmanager). The derivation (6.3 vCPU fixed + 0.345 + 0.3 per worker) gave 7.55 vCPU on 3 workers
+(margin 0.45 of 8) and 7.85 on 4. **Lab 21 measured** (Scaleway, 4 x `POP2-4C-16G`, the full platform and three small probes): 9095 m = 228% of one worker right after Flux converged,
+223-224% later (53/43/70/57% per worker), and `cluster-roll`'s own survey printed `223% requested, 300% available without one worker`. The derivation under-counted by about 1.2 vCPU.
+Consequences: on 3 workers the measured load (about 9 vCPU) is above the 8 vCPU the gate leaves, so **3 workers would be refused**; the owner's decision of 2026-10-21 to ship
+**4 workers of 4 vCPU** on Scaleway and OVH is the minimum for the full platform, not a margin. 4 workers pass at 74-76% of the gate's limit (about 2.9 vCPU to spare). The Deployments
+and StatefulSets that the application repository renders request 3005 m (`python3 scripts/check-ha.py`, budget 3300 m); the rest is DaemonSets, operators and Jobs, which no render shows.
+`task failure-domain-check` applies the same arithmetic to the loss of a whole zone, and there four workers do not help the worst case: they spread 2 + 1 + 1 over three zones, so
+losing the zone with two of them leaves two workers (200%) for 224% of requests, about 1 vCPU short; the check says so, and lab 21 lost that zone for 10 minutes (twice): nothing
+stopped, but pods stayed Pending until the zone returned. Five workers (2 + 2 + 1: losing two leaves 300%) or six would hold on the arithmetic (see the lab 21 results for what a fifth
+worker did), as would about 12% fewer requests. Which of these the examples should ship was decided on 2026-10-21 (below).
+
+**0.4.0 (owner rule of 2026-10-22, no acknowledged commit lost): one more database instance.** Both CNPG databases now replicate synchronously (OpenAether-apps `docs/resilience.md`, "Data classes"), and `grafana-db` goes from 2 to 3 instances so that losing one replica does not block writes.
+The added pod requests 100 m of CPU (50 m instance + 50 m Barman Cloud sidecar), 384 Mi of memory and 5 Gi of `local-path` storage. The application repository's audit (`python3 scripts/check-ha.py`) did not count CNPG pods before (they are not Deployments): it now prints them, 600 m for six instances (500 m before), next to the unchanged 3015 m of Deployments and StatefulSets.
+Derived from lab 21's measurement (9095 m = 228% of a worker, so a worker is about 3990 m): +100 m is about +2.5 points, so the 4-worker examples request about 226-231% (lab 21/22: 224-228%) against 300%, **75-77% of the gate's limit, still passing** (was 74-76%); the 5-worker profile about 246-250% of 400%. The budget of the application audit does not move (3300 m for Deployments and StatefulSets), the CNPG pods get their own (600 m). The two-worker zone is **not** helped: 200% against about 228-231% leaves about 1.1-1.2 vCPU of requests unplaceable (was about 1.0), same verdict as below. 3 workers stay refused. Nothing here was measured after the change; the next lab reads the real figure with `cluster-roll`'s survey.
+
+### What the shipped 4 workers survive, and what they do not (decision of 2026-10-21, infra #389)
+
+The Scaleway and OVH examples ship **4 workers**, placed round-robin over three zones, so 2 + 1 + 1. Said plainly:
+
+| Loss | Survives? | Why (measured load: 223-228% of a worker, about 9 vCPU, lab 21) |
+|---|---|---|
+| One worker (a drain, a reboot, a crash) | **Yes** | 3 workers = 300% for 224% requested; `cluster-roll` passes at 74-76% of its limit |
+| A zone holding one worker (either of the two) | **Yes** | 3 workers stay, 300% for 224% |
+| **The zone holding two workers** | **No** | 2 workers stay = 200% for 224%: about 1 vCPU of requests cannot be placed and pods stay Pending until the zone returns (lab 21 lost that zone for 10 minutes, twice: nothing stopped, pods stayed Pending until the zone returned). `task failure-domain-check` reports it as a refused loss |
+
+Control planes are not affected: three of them in three zones keep an etcd quorum through any one zone.
+
+### Profile "5 workers zone-HA" (2 + 2 + 1)
+
+Set `workers = 5` in the management example of Scaleway or OVH (a commented block in each `envs/management-*.tfvars.example` says so); nothing else changes.
+The modules place workers round-robin over the zone list (`element(zones, index)`), so five land 2 + 2 + 1 and **any one zone** can be lost: the least
+favourable loss removes two workers and leaves three (300%). The load grows by about 0.7 vCPU per added worker (DaemonSets; lab 21 had derived 0.3), so
+five workers request 243-247% of a worker (measured in lab 22 with the full platform and the lab's probes; four workers: 224-228%), well inside 300%.
+
+`task failure-domain-check PROVIDER=<scaleway|ovh>` (read-only, needs the deployed state) is the expected verdict:
+
+| Workers | Zones | `If <zone> is lost` | Verdict |
+|---|---|---|---|
+| 4 (shipped) | 2 + 1 + 1 | the zone with two: `workers: 2 stay, but the workers request 224% of a node and 2 hold 200%` | exit 1 for that zone; the other two zones pass |
+| 5 | 2 + 2 + 1 | `workers: 3 of 5 stay, requests 246% fit in 300%` for the two-worker zones; 4 of 5 for the other | exit 0, every loss survivable |
+
+Lab 23 (grafana-db at 3 instances, the audit sink and the receivers on the same 5-worker shape): `requests 249% fit in 300%` for the two-worker zones (lab 22: 246%); with the three database profiles of the lab added (an `ha`, a `standard` and a `light`: 1.1 + 0.6 + 0.1 vCPU of requests) **294%**, still under the gate. The check also names a customer database that would lose its data: it flagged the single-instance `light` profile for the loss of its zone.
+
+**Lab 27 (Scaleway, 5 workers 2 + 2 + 1): the opt-in forge and three database examples do not fit a zone loss.** With the Forgejo brick on and the three profile examples (`ha`, `standard`, `light`) running, `task failure-domain-check` printed `workers: 3 stay, but the workers request 313% of a node and 3 hold 300%: pods stay Pending` for fr-par-1 and for fr-par-2, the two zones with two workers. That is **313% requested against the 300% that three workers hold** (13 points: roughly half a vCPU of requests that cannot be placed, the pods Pending until the zone returns, the same shape as the 4-worker case above). The forge itself is derived at +400 m of CPU requests (about +10 points of a worker, docs/forgejo in the apps repository), on top of the 294% of lab 23 with the three profiles; the 313% is what the check read on the cluster, the split between the forge and the rest is not measured. What a zone loss leaves on this shape: every zone passes the arithmetic WITHOUT the forge (294%), the two two-worker zones fail WITH it. Choices, none shipped by default: turn the forge off, drop a profile example, or run six workers (2 + 2 + 2: a zone loss leaves 400%). The brick is opt-in because of this kind of cost; the default install is unchanged.
+
+The script test `scripts/dev/test-failure-domain-check.sh` runs both shapes against stub `tofu` and `kubectl`. That proves the arithmetic of the check; the shape itself was drilled in lab 22 (Scaleway): each of the two zones holding two workers was powered off
+for 10 minutes with the control plane in it, no pod stayed Pending for lack of CPU (the Pending ones were DaemonSets of the lost nodes and pods with a local volume there),
+HTTP and `/readyz` held; a database primary inside the lost zone costs about 2 minutes of writes (`resilience.md`). Cost: one more instance and 4 vCPU (and the matching quota) per cloud. Outscale is
+not covered (its examples are below the floor, see above).
+
+Outscale (the examples are unchanged and stay within the 20 vCPU quota): no shape fits the default 20 vCPU quota and passes the gate. 3 workers of 3 vCPU fail (above), and 4 workers of 3 vCPU need
 3 + 4 nodes x 3 + 2 (bastion) = 23 vCPU. The smallest passing shape on the arithmetic is 3+3 `tinav5.c4r8p2` (4 vCPU / 8 GB): 26 vCPU with
-the bastion, so a quota raise comes first. It has not been run on Outscale. The 6 GB nodes of lab 16 also fell into an IO and memory
-cascade after one backup and restore and one drained reboot (#376); the root volume is gp2 (type not configurable here), and an `io1 3000`
-change made by hand did not stop it. The example now sets `outscale_root_volume_size_gb = 50` rather than leaving it commented.
+the bastion (thin, see the 0.4.0 paragraph above), and the 3 + 4 shape of the other clouds is 30 vCPU, so a quota raise comes first. Neither has been run on Outscale. The 6 GB nodes of lab 16 also fell into an IO and memory
+cascade after one backup and restore and one drained reboot (#376); the root volume was gp2 (type not configurable then), and an `io1 3000`
+change made by hand did not stop it. The example now sets `outscale_root_volume_size_gb = 50` rather than leaving it commented. The type is a variable since lab 27 part C (below).
+
+## Minimum supported shape per provider, and the Outscale quota (lab 27 part C, E3)
+
+The platform (the apps repository at its default) asks about **9 vCPU of requests** (8.7 measured in lab 27 part C on 3 CP + 3 W of 3 vCPU: the workers sat at 97 to 99 % of their allocatable CPU). A drain, a `cluster-roll` or a node loss needs the workers MINUS ONE to hold that, or pods stay Pending (12 did, among them a Gateway pod and the places a database failover needs). So the supported shape, on every cloud, is:
+
+| Provider | Supported shape with the platform | vCPU with the bastion | Note |
+|---|---|---|---|
+| Scaleway | 3 CP + 4 W of `POP2-4C-16G` (the examples) | 30 | rollable, see the arithmetic above |
+| OVH | 3 CP + 4 W of `c3-8` (4 vCPU / 8 GB) (the examples) | 30 | rollable, see the arithmetic above |
+| Outscale | 3 CP + 4 W of `tinav5.c4r8p2` (4 vCPU / 8 GB) | 30 | **needs a quota raise first** (30 vCPU / 64 GB, 8 VMs) |
+| Proxmox | 3 CP + 4 W, 4 vCPU / 8 GB at least | yours | |
+
+**What the default Outscale quota allows (measured, lab 27 part C: 20 vCPU, 10 VMs, 20 public IPs, 100 volumes, 20 load balancers).** A bare cluster (Cilium only) fits. 3 CP + 3 W of `tinav5.c3r8p2` (3 vCPU / 8 GB) plus the bastion (2 vCPU) is exactly 20 vCPU, 7 VMs: it installs, `cluster-verify` passes, 41 Kustomizations were Ready 20 min after `cluster-up`, and a hard node loss kept every acknowledged commit, but it is NOT a supported shape: no drain completes without Pending pods, `cluster-roll` refuses (its 200 % rule cannot pass), nothing can be replaced (a spare node does not fit the quota), no second cluster fits (no scratch restore, no Talos roll rehearsal), and a node loss took 924 s to return to a whole cluster (OVH: 155 s). Nothing in the code hides this: a `check` (`outscale_platform_shape`) warns at plan time when `deploy_flux` is on and the workers minus one hold less than 9 vCPU, and the examples say so in their comments. Ask the quota first; do not run the platform on the default quota and expect the failure drills to pass.
+
+**Outscale root volume type (E3).** `gp2` gives 3 IOPS per GiB: the 50 GB root was **150 IOPS**, and containerd, the kubelet and the Longhorn rebuilds starved (`CRI DeadlineExceeded`, a worker NotReady twice in one sitting). `outscale_root_volume_type` is now a variable, default **`io1`** with `outscale_root_volume_iops = 1500` (ten times more; the API allows up to 300 IOPS per GiB and 13000 in all, a `check` warns on the pair). `gp2` keeps the old behaviour (pin it in the tfvars to keep it); `standard` is magnetic and not recommended. Effects, none of them measured: io1 is billed for the volume AND the provisioned IOPS, so each node costs more than before (read the Outscale price list for your region: 7 to 10 nodes at 1500 IOPS is the figure to compute); the volume quota is unchanged (one root volume per node); the change reaches NEW nodes only (a running VM keeps its volume: `ignore_changes`), so an existing cluster needs `task cluster-roll` to benefit. **UNPROVEN on a cluster**: that the API accepts an io1 root for the Talos OMI as mapped here, and that 1500 IOPS removes the starvation (a lab 16 manual `io1 3000` on 6 GB nodes did not stop that cascade, which also had a memory cause). The next Outscale lab must prove both before the default is trusted.
 
 ## System disk and the full application stack (all providers)
 
@@ -119,7 +187,7 @@ chart upgrade pulls before the old one is garbage-collected (the kubelet starts 
 |---|---|---|---|
 | Scaleway | `scw_root_volume_size_gb` | 50 | a validation refuses less than 40 with `deploy_flux = true` (20 stays valid without it) |
 | OVH | the flavour (`flavor_name`) | `b3-8` / `c3-8`: 50 GB | a `check` warns when the flavour's disk, read from the account, is below 40 GB |
-| Outscale | `outscale_root_volume_size_gb` (BSU root of the VM) | null = the OMI's own size, the raw Talos image (~11-12 GiB), **not enough** | a `check` warns with `deploy_flux` until it is 40 or more; applies to nodes created afterwards |
+| Outscale | `outscale_root_volume_size_gb` (BSU root of the VM; type: `outscale_root_volume_type`, default io1 / 1500 IOPS) | null = the OMI's own size, the raw Talos image (~11-12 GiB), **not enough** | a `check` warns with `deploy_flux` until it is 40 or more; applies to nodes created afterwards |
 | Proxmox | `root_disk_gb` in `node_distribution` | 50 GiB | a `check` warns below 40 |
 
 Raising Scaleway's value on a running cluster is an in-place resize of the `sbs_volume` (lab 12: `cluster-up` plan "10 to change", no node

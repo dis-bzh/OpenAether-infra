@@ -5,9 +5,13 @@
 # convention as cluster/backup.tf): tfstate and artifacts, each with a -backup
 # replica, plus Loki's own logs bucket (no replica; seed-openbao.sh points Loki at it).
 #
-# backup_immutability (tfvars, default off = nothing below changes): versioned | governance | compliance also creates
-# the application-backups bucket pair and turns on versioning, noncurrent-version expiry and, for governance/compliance,
-# an object lock with a default retention on the buckets that hold copies and logs. Read back, never assumed.
+# The application-backups pair (restic, Longhorn and the CNPG archive on the primary; its -backup twin is the second copy of
+# the CNPG archive, which cnpg-store-replicate writes) is created in EVERY mode: without the twin that job fails with
+# NoSuchBucket every 15 minutes (infra #391).
+#
+# backup_immutability (tfvars, default off = no versioning, no lock, nothing protected): versioned | governance | compliance
+# turns on versioning, noncurrent-version expiry and, for governance/compliance, an object lock with a default retention on
+# the buckets that hold copies and logs. Read back, never assumed.
 # A refusal by the provider is a loud warning (exit 1 with OA_BUCKET_PROTECTION_STRICT=1).
 #
 # Only the STATE PRIMARY must exist before `tofu init` (the S3 backend does not
@@ -22,6 +26,7 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/bucket-protection.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/audit-sink.sh"
 
 TFVARS="${1:?usage: ensure-buckets.sh <cluster.tfvars> [--preflight]}"
 case "${2:-}" in
@@ -46,6 +51,10 @@ PU="$(provider_pu "$PROVIDER")" || { echo "✗ could not detect provider from no
   echo "✗ could not read cluster_name/cluster_role/environment from $TFVARS"; exit 1; }
 [ -n "$PRIMARY_EP" ] && [ -n "$REPLICA_EP" ] || {
   echo "✗ could not read s3_primary_endpoint/s3_replica_endpoint from $TFVARS"; exit 1; }
+
+# The audit sink (infra #318, docs/audit-sink.md) is checked BEFORE anything is created or spent: a sink that is not where its
+# tfvars say it is, or a COMPLIANCE lock nobody opted into, stops the run here.
+oa_audit_sink_load "$TFVARS" || exit 1
 
 PROJECT="$(oa_project "$CLUSTER" "$(tfv "$TFVARS" bucket_suffix)")"
 PRIMARY_AK="$(s3_cred "$PROVIDER" primary ak)"
@@ -195,6 +204,17 @@ else
   exit 1
 fi
 
+# --- Application backups (restic, Longhorn, CNPG) ------------------------------
+#
+# The seed and the apps need the pair, and it used to be created by hand, or only under backup_immutability: a default install
+# then had no replica twin, and cnpg-store-replicate failed with NoSuchBucket every 15 minutes (infra #391, lab 28B). Created in
+# every mode; "lock" asks for object lock only when backup_immutability is governance or compliance (LOCKING), so with off
+# these are plain buckets, as the state and logs buckets are.
+ensure_bucket "$BACKUPS_PRIMARY" "$PRIMARY_EP" "$PRIMARY_REGION" "$PRIMARY_AK" "$PRIMARY_SK" lock ||
+  echo "  ⚠ ${BACKUPS_PRIMARY} not ready: restic, Longhorn and CNPG have no destination"
+ensure_bucket "${BACKUPS_PRIMARY}-backup" "$REPLICA_EP" "$REPLICA_REGION" "$BACKUP_AK" "$BACKUP_SK" lock ||
+  echo "  ⚠ ${BACKUPS_PRIMARY}-backup not ready: the second copy of the application backups has no destination (cluster-verify reports it)"
+
 # --- Protection (backup_immutability) -----------------------------------------
 #
 # Opt-in. A versioned bucket turns a delete into a marker; an object lock keeps the version itself until the retention
@@ -206,11 +226,6 @@ protect() { # name endpoint region ak sk lock|nolock
 }
 if [ "$IMMUT" != off ]; then
   echo "▶ Protecting the buckets that hold copies (backup_immutability = ${IMMUT}, ${RETENTION} days)"
-  # Application backups (restic, Longhorn, CNPG): the seed and the apps need them, and they used to be created by hand.
-  ensure_bucket "$BACKUPS_PRIMARY" "$PRIMARY_EP" "$PRIMARY_REGION" "$PRIMARY_AK" "$PRIMARY_SK" lock ||
-    echo "  ⚠ ${BACKUPS_PRIMARY} not ready: restic, Longhorn and CNPG have no destination"
-  ensure_bucket "${BACKUPS_PRIMARY}-backup" "$REPLICA_EP" "$REPLICA_REGION" "$BACKUP_AK" "$BACKUP_SK" lock ||
-    echo "  ⚠ ${BACKUPS_PRIMARY}-backup not ready: the second copy of the application backups has no destination"
   protect "$STATE_PRIMARY"             "$PRIMARY_EP" "$PRIMARY_REGION" "$PRIMARY_AK" "$PRIMARY_SK" nolock
   protect "$ARTIFACT_PRIMARY"          "$PRIMARY_EP" "$PRIMARY_REGION" "$PRIMARY_AK" "$PRIMARY_SK" nolock
   protect "$BACKUPS_PRIMARY"           "$PRIMARY_EP" "$PRIMARY_REGION" "$PRIMARY_AK" "$PRIMARY_SK" lock
@@ -226,6 +241,36 @@ if [ "$IMMUT" != off ]; then
   fi
 elif [ "$ENVN" = prod ]; then
   echo "  ~ backup_immutability = off: nothing here stops a stolen S3 key from deleting the copies (docs/backup-policy.md, section 3)"
+fi
+
+# --- Audit sink (audit_sink_placement) ------------------------------------------------------------------------------------
+#
+# Class A, zero loss: unlike every bucket above, a sink bucket that cannot be created WITH its object lock, or whose lock mode and
+# retention cannot be read back as asked, is a FAILURE, not a warning. A log copy that is not locked is a copy the attacker
+# it is meant for can delete. The keys that open it are those of the cloud that HOLDS it (as for the replica store).
+if [ "$AS_PLACEMENT" != off ]; then
+  AUDIT_BUCKET="$(oa_audit_bucket "$PROJECT" "$PROVIDER" "$ENVN")"
+  AS_FAIL=()
+  echo "▶ Audit sink (${AS_PLACEMENT}, object lock ${AS_MODE} ${AS_DAYS} days)"
+  for n in 1 2; do
+    v="AS_EP$n"; as_ep="${!v}"; v="AS_RG$n"; as_rg="${!v}"; v="AS_KIND$n"; as_kind="${!v}"
+    [ -n "$as_ep" ] || continue
+    as_ak="$(oa_audit_sink_operator_cred "$PROVIDER" "$as_ep" ak)"; as_sk="$(oa_audit_sink_operator_cred "$PROVIDER" "$as_ep" sk)"
+    if [ -z "$as_ak" ] || [ -z "$as_sk" ]; then
+      echo "✗ no S3 credentials in scope for the audit sink ${as_ep} (the keys of the cloud that HOLDS it: see docs/audit-sink.md)" >&2
+      AS_FAIL+=("${AUDIT_BUCKET}@${as_ep}"); continue
+    fi
+    LOCKING=yes   # create_bucket reads it: a sink bucket is ALWAYS created with object lock, whatever backup_immutability says
+    if ! ensure_bucket "$AUDIT_BUCKET" "$as_ep" "$as_rg" "$as_ak" "$as_sk" lock; then AS_FAIL+=("${AUDIT_BUCKET}@${as_ep}"); continue; fi
+    oa_protect_bucket "$AUDIT_BUCKET" "$as_ep" "$as_rg" "$as_ak" "$as_sk" "$(tr '[:upper:]' '[:lower:]' <<<"$AS_MODE")" "$AS_DAYS" lock ||
+      AS_FAIL+=("${AUDIT_BUCKET}@${as_ep}")
+    echo "    ${as_kind}: ${as_ep} (${as_rg})"
+  done
+  if [ "${#AS_FAIL[@]}" -gt 0 ]; then
+    echo "✗ audit sink NOT ready: ${AS_FAIL[*]}. Class A means no sink is better than a sink that is not locked: nothing was loosened;" >&2
+    echo "  fix the cause above (the provider refused, or the keys do not open that store) and run this again." >&2
+    exit 1
+  fi
 fi
 
 echo "✓ buckets ready"

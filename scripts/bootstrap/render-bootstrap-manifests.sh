@@ -240,6 +240,12 @@ else
       --set 'hubble.export.static.fieldMask={time,verdict,drop_reason_desc,IP,l4,source.namespace,source.labels,destination.namespace,destination.labels,traffic_direction,node_name}'
     )
   fi
+  # The OPERATOR runs 2 replicas (0.4.0 critical-path audit; it ran 1 and the owner believed it was replicated): it garbage-collects
+  # identities and CiliumNodes and serves the Gateway/Ingress/LB-IPAM controllers, so one pod on a lost node left them down for the
+  # 5 minute toleration. The chart's REQUIRED hostname anti-affinity stays (the pods are hostNetwork: two on one node would fight
+  # for the same ports), a zone preference and a one-disruption PodDisruptionBudget are added; the leader election makes the
+  # second pod a hot standby. Cost: no CPU or memory request is set by the chart (nothing added to the capacity gate), the
+  # second pod's own use is small (UNVERIFIED, read it at the next lab). The LOCAL mode below stays at 1 (one Docker node).
   helm template cilium cilium/cilium \
     --version "${CILIUM_VERSION}" \
     --namespace kube-system \
@@ -258,7 +264,10 @@ else
     "${HUBBLE_ARGS[@]}" \
     --set prometheus.enabled=true \
     --set operator.prometheus.enabled=true \
-    --set operator.replicas=1 \
+    --set operator.replicas=2 \
+    --set operator.podDisruptionBudget.enabled=true \
+    --set operator.podDisruptionBudget.maxUnavailable=1 \
+    --set-json 'operator.topologySpreadConstraints=[{"maxSkew":1,"topologyKey":"topology.kubernetes.io/zone","whenUnsatisfiable":"ScheduleAnyway","labelSelector":{"matchLabels":{"io.cilium/app":"operator"}}}]' \
     --set encryption.enabled=true \
     --set encryption.type=wireguard \
     --set securityContext.capabilities.ciliumAgent="{CHOWN,KILL,NET_ADMIN,NET_RAW,IPC_LOCK,SYS_ADMIN,SYS_RESOURCE,DAC_OVERRIDE,FOWNER,SETGID,SETUID}" \

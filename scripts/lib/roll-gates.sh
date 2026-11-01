@@ -365,7 +365,21 @@ finish_roll() {
   local rc=$? stopped=$STOP_REQUESTED
   KCTL+=(--request-timeout="${RESTORE_REQUEST_TIMEOUT:-10s}")
   trap '' INT TERM
-  ( cnpg_maintenance false ) || warn "the CNPG/Flux restore did not complete"
+  # RETRIED until the apiserver reads it back as restored. After a node is destroyed the API load balancer still sends a share
+  # of the calls to it, so the one attempt this used to make timed out (lab 27, F-STOCK: "context deadline exceeded") and left
+  # Flux suspended and every budget gone, for an operator to find. Every attempt is idempotent; the count and the wait are bounded.
+  local try=1 tries="${RESTORE_TRIES:-6}"
+  while :; do
+    ( cnpg_maintenance false ) || warn "the CNPG/Flux restore did not complete (attempt ${try} of ${tries})"
+    # A subshell: cnpg_installed dies on an unanswered CRD lookup, and that must read as "not restored yet", not end the trap.
+    ( cnpg_unrestored ) >/dev/null 2>&1 && break
+    [[ $? -ne 2 ]] || break
+    (( try < tries )) || break
+    try=$((try + 1))
+    trap 'warn "interrupted: the restore is NOT verified; check the Flux Kustomizations and the CNPG budgets by hand"; exit 130' INT TERM
+    sleep "${RESTORE_RETRY_WAIT:-15}"
+    trap '' INT TERM
+  done
   trap 'warn "interrupted: the restore is NOT verified; check the Flux Kustomizations and the CNPG budgets by hand"; exit 130' INT TERM
   if assert_restored; then
     if [[ $rc -ne 0 ]]; then :
@@ -650,17 +664,21 @@ wait_pdb_headroom() { # <node_name>
   read -rp "Drain ${node} anyway? [y/N] " a; [[ "$a" == [yY] ]] || die "aborted by operator"
 }
 
-# Every worker's CPU requests, "<node> <percent>" per line, out of the Allocated
+# Every worker's requests of one resource (cpu or memory), "<node> <percent>" per line, out of the Allocated
 # resources table `kubectl describe node` prints. The percentage is of that
 # node's OWN allocatable, so the sum below only means anything while the workers
 # share a flavour — which is how every provider module here builds them.
 # Non-zero return = the description failed; no worker is a different answer.
-worker_cpu_requests() {
+worker_requests() { # <cpu|memory>
   local out
   out="$("${KCTL[@]}" describe nodes -l '!node-role.kubernetes.io/control-plane' 2>/dev/null)" || return 1
-  awk '/^Name:/            { n = $2 }
-       /^  cpu +[0-9]/     { p = $3; gsub(/[()%]/, "", p); print n, p }' <<<"$out"
+  awk -v r="$1" '/^Name:/ { n = $2 }
+       $0 ~ ("^  " r " +[0-9]") { p = $3; gsub(/[()%]/, "", p); print n, p }' <<<"$out"
 }
+worker_cpu_requests() { worker_requests cpu; }
+# Memory is the second half of the question: three 8 GB workers took the CPU of a fourth and not its memory, and the evacuated
+# pods stayed Pending ("Insufficient memory") after a shrink the CPU check had passed (lab 27 part B, F-SHRINKMEM).
+worker_memory_requests() { worker_requests memory; }
 
 # ==============================================================================
 # Pre-roll survey — everything knowable before the first node is touched
@@ -676,7 +694,7 @@ worker_cpu_requests() {
 # surveying earlier would report `<cluster>-primary` at zero and refuse a roll
 # that is fine.
 preflight_roll() {
-  local fatal=0 cap nodes=0 total=0 room node pct short ns name state sel pending
+  local fatal=0 cap nodes=0 total=0 room node pct short ns name state sel pending mnodes mtotal
   hr
   info "Pre-roll survey: capacity, budgets, databases — all of it, once."
 
@@ -716,6 +734,28 @@ preflight_roll() {
       fi
     else
       ok "capacity: ${total}% requested, ${room}% available without one worker"
+    fi
+    # Memory, the same bound. Not asked of a lone worker (said above), and a table without memory lines is said, not fatal: a
+    # description that answered CPU answers memory too, and refusing a roll over a missing line would be a guess.
+    if [[ $nodes -gt 1 ]]; then
+      mnodes=0; mtotal=0
+      while read -r node pct; do
+        [[ -n "$node" && "$pct" =~ ^[0-9]+$ ]] || continue
+        info "  ${node}: ${pct}% of memory requested"
+        mnodes=$((mnodes + 1)); mtotal=$((mtotal + pct))
+      done < <(worker_memory_requests)
+      if [[ $mnodes -eq 0 ]]; then
+        warn "capacity: the workers report no memory requests - only the CPU was checked."
+      elif [[ $mtotal -gt $(( (mnodes - 1) * 100 )) ]]; then
+        warn "capacity: the ${mnodes} workers request ${mtotal}% of memory, and any ${mnodes} minus one of them hold $(( (mnodes - 1) * 100 ))%: the pods of the node drained stay Pending (Insufficient memory)."
+        if [[ "${SCOPE:-all}" == cp ]]; then
+          warn "capacity: not fatal for --cp-only, for the reason given for the CPU above."
+        else
+          fatal=1
+        fi
+      else
+        ok "capacity: ${mtotal}% of memory requested, $(( (mnodes - 1) * 100 ))% available without one worker"
+      fi
     fi
   fi
 
@@ -816,6 +856,80 @@ wait_rwx_clear() { # <node_name>
   done
 }
 
+# --- A node that is already dead (task cluster-replace-node) ------------------------------------------------------
+# A drain cannot move pods off a machine that does not answer, and the roll's pre-flight demands every node Ready. For a
+# dead node the questions are different: can the SURVIVORS carry on while it is rebuilt, and is exactly one node down?
+# Fatal: another node NotReady, or (control plane) fewer healthy etcd members than a quorum without this one. Not fatal,
+# only printed: the CPU requests, because the pods of the dead node are already Pending somewhere or nowhere, and the
+# replacement is what gives them room back.
+dead_node_survey() { # <cp|worker> <index> <node_name>
+  local t="$1" idx="$2" node="$3" fatal=0 raw others k ep ip healthy=0 need cap name pct total=0 nodes=0 mnodes mtotal
+  hr
+  info "Survey before replacing the dead node ${node}: the survivors, once."
+  if ! raw="$("${KCTL[@]}" get nodes --no-headers 2>/dev/null)" || [[ -z "$raw" ]]; then
+    die "the Kubernetes API did not answer - refusing to replace a node blind."
+  fi
+  others="$(awk -v n="$node" '$1 != n && $2 !~ /^Ready/ {printf "%s ", $1}' <<<"$raw")"
+  if [[ -n "$others" ]]; then
+    warn "another node is not Ready: ${others}- one node at a time; fix or replace that one first, or this is a zone loss (task failure-domain-check)."
+    fatal=1
+  else
+    ok "every other node is Ready"
+  fi
+  if [[ "$t" == cp ]]; then
+    for k in "${!CP_IPS[@]}"; do
+      [[ "$k" == "$idx" ]] && continue
+      ep="$(talos_ep cp "$k")"; ip="${CP_IPS[$k]}"
+      talosctl -e "$ep" -n "$ip" service etcd 2>/dev/null | grep -qE 'HEALTH[[:space:]]+OK' && healthy=$((healthy + 1))
+    done
+    need=$(( ${#CP_IPS[@]} / 2 + 1 ))
+    if (( healthy >= need )); then
+      ok "etcd: ${healthy} healthy member(s) besides ${node}, quorum is ${need}"
+    else
+      warn "etcd: only ${healthy} healthy member(s) besides ${node}, quorum is ${need}. Replacing a member without a quorum cannot work: this is the etcd disaster-recovery case (task dr-restore-plan), not a replacement."
+      fatal=1
+    fi
+  fi
+  if cap="$(worker_cpu_requests)" && [[ -n "$cap" ]]; then
+    while read -r name pct; do
+      [[ "$pct" =~ ^[0-9]+$ ]] || continue
+      info "  ${name}: ${pct}% of CPU requested"
+      nodes=$((nodes + 1)); total=$((total + pct))
+    done <<<"$cap"
+    if (( nodes > 1 && total > (nodes - 1) * 100 )); then
+      warn "capacity: the ${nodes} workers request ${total}% and ${nodes} minus one hold $(( (nodes - 1) * 100 ))%: pods of the dead node stay Pending until its replacement is Ready (docs/capacity.md)."
+    fi
+  fi
+  mnodes=0; mtotal=0
+  while read -r name pct; do
+    [[ "$pct" =~ ^[0-9]+$ ]] || continue
+    mnodes=$((mnodes + 1)); mtotal=$((mtotal + pct))
+  done < <(worker_memory_requests 2>/dev/null)
+  if (( mnodes > 1 && mtotal > (mnodes - 1) * 100 )); then
+    warn "capacity: the ${mnodes} workers request ${mtotal}% of memory and ${mnodes} minus one hold $(( (mnodes - 1) * 100 ))%: pods of the dead node stay Pending (Insufficient memory) until its replacement is Ready (docs/capacity.md)."
+  fi
+  (( fatal == 0 )) || die "the survey found blocking conditions, listed above. Nothing was changed."
+  ok "Survey clean - ${node} is the only node down"
+}
+
+# Cordon what cannot be drained; the Node object is deleted separately (delete_dead_node_object), AFTER the etcd member of a
+# control plane is gone.
+cordon_dead() { # <node_name>
+  "${KCTL[@]}" cordon "$1" >/dev/null 2>&1 || warn "could not cordon ${1} (it may already be gone) - continuing"
+}
+
+# Deleting the Node object of a machine that is gone frees its pods at once (the pod garbage collector removes pods bound to
+# a node that no longer exists) instead of after the 5 minute toleration. The new machine registers under the same name.
+# A pod on a local-path volume stays Pending until then: its data was on the dead disk.
+delete_dead_node_object() { # <node_name>
+  if "${KCTL[@]}" get node "$1" >/dev/null 2>&1; then
+    "${KCTL[@]}" delete node "$1" --wait=false >/dev/null \
+      && ok "Node object ${1} deleted - its pods are freed" || warn "could not delete the Node object ${1}"
+  else
+    ok "Node object ${1} already gone"
+  fi
+}
+
 cordon_drain() { # <node_name>
   local node="$1"
   # RE-ASSERT, once per node. cnpg_maintenance ran once for the whole roll, and a
@@ -912,6 +1026,81 @@ etcd_remove_member() { # <node_name> <node_ip> <exclude_index>
     || die "etcd remove-member ${mid} failed — STOP (manual: talosctl -n <healthy-cp> etcd remove-member ${mid})"
 }
 
+# --- stop a control plane gracefully BEFORE it is rolled or replaced -------------------------------------------------
+#
+# Lab 27 sitting 3 (Scaleway, 3 CP + 5 W, ONE lab): at every control-plane replacement of the shipped path 4 or 5 of the
+# 5 workers stopped renewing their Lease for 46-91 s, and healthy workers went NotReady. A cordon + drain, then a graceful
+# `talosctl shutdown`, then the same replacement gave stalls of 8-9 s and 0 flaps in 2 of 2 replacements, at the price of
+# about 4 more minutes per control plane (676-699 s against 434-491 s). docs/resilience.md, "Control-plane flap".
+#
+# Gates, all of which must hold or the stop is SKIPPED (a warning, and the replacement goes on by its current path, which
+# has its own etcd-peer check): at least 3 control planes in the state, EVERY one of them with a healthy etcd, the node
+# itself answering, a healthy peer to drive etcd afterwards. A stop never makes a cluster that is not whole smaller.
+#
+# A failure of the stop never ends the run and never leaves anything behind that the replacement does not already
+# handle: the node was cordoned and drained by cordon_drain before this is called, it stays so exactly as in a replacement
+# without the stop, and the caller's later steps (etcd member removal, the two applies, uncordon) are unchanged. If the
+# shutdown is refused the node is untouched; if it does not stop in time it is on its way to be destroyed anyway.
+GRACEFUL_STOP_TIMEOUT="${GRACEFUL_STOP_TIMEOUT:-300}"   # seconds to wait for the node to stop answering
+GRACEFUL_STOP_POLL="${GRACEFUL_STOP_POLL:-5}"
+
+# Prints why the stop must not happen and returns 1; returns 0 when every gate holds.
+cp_graceful_stop_refusal() { # <index>
+  local idx="$1" total="${#CP_IPS[@]}" k ep ip healthy=0
+  if (( total < 3 )); then
+    echo "only ${total} control plane(s) in the state: with fewer than 3 there is no quorum to protect and nothing for the workers to fall back on"
+    return 1
+  fi
+  for k in "${!CP_IPS[@]}"; do
+    ep="$(talos_ep cp "$k")"; ip="${CP_IPS[$k]}"
+    if talosctl -e "$ep" -n "$ip" service etcd 2>/dev/null | grep -qE 'HEALTH[[:space:]]+OK'; then
+      healthy=$((healthy + 1))
+    elif [[ "$k" == "$idx" ]]; then
+      echo "the node itself does not report a healthy etcd, so it is not the live control plane this stop is for"
+      return 1
+    fi
+  done
+  if (( healthy < total )); then
+    echo "only ${healthy} of ${total} control planes report a healthy etcd: stopping one more would leave no margin on etcd quorum"
+    return 1
+  fi
+  return 0
+}
+
+# Shut the (already cordoned and drained) control plane down with Talos' own graceful shutdown and wait until it stops
+# answering. Always returns 0: see above.
+stop_cp_gracefully() { # <node_name> <node_ip> <index>
+  local node="$1" node_ip="$2" idx="$3" ep reason deadline gone=0 peer pep
+  ep="$(talos_ep cp "$idx")"
+  if ! reason="$(cp_graceful_stop_refusal "$idx")"; then
+    warn "graceful stop of ${node} SKIPPED: ${reason}. The replacement goes on by its current path (workers may flap while it runs)."
+    return 0
+  fi
+  peer="$(healthy_peer_cp "$idx")" || { warn "graceful stop of ${node} SKIPPED: no healthy peer control plane answers. Continuing by the current path."; return 0; }
+  info "Stopping ${node} gracefully (talosctl shutdown): its apiserver closes its connections, so the workers re-dial at once instead of after 46 s…"
+  # --force: the node was drained above; Talos's own drain is all-or-nothing and would refuse on a PDB we already judged.
+  # --wait=false: the client cannot watch a node that goes away through an SSH tunnel; the wait below asks the endpoint.
+  if ! talosctl shutdown -e "$ep" -n "$node_ip" --force --wait=false >/dev/null 2>&1; then
+    warn "talosctl shutdown was refused for ${node}: the node is untouched. Continuing by the current path (it stays cordoned until the replacement ends)."
+    return 0
+  fi
+  deadline=$(( SECONDS + GRACEFUL_STOP_TIMEOUT ))
+  while (( SECONDS < deadline )); do
+    # Stopped = the TLS handshake fails on the node's endpoint while a peer's still answers (tunnels are up).
+    if ! oa_talos_endpoint_ok "${ep%%:*}" "${ep##*:}" && [[ -n "$peer" ]]; then
+      read -r pep _ <<<"$peer"
+      if oa_talos_endpoint_ok "${pep%%:*}" "${pep##*:}"; then gone=1; break; fi
+    fi
+    sleep "$GRACEFUL_STOP_POLL"
+  done
+  if (( gone == 1 )); then
+    ok "${node} stopped"
+  else
+    warn "${node} still answers ${GRACEFUL_STOP_TIMEOUT}s after the shutdown order (or no peer answers to prove the tunnels are up). Continuing: the next steps destroy it anyway; it stays cordoned until the replacement ends."
+  fi
+  return 0
+}
+
 # etcd must report all CP members present AND healthy before we touch the next CP.
 # Queries each CP in turn until one answers — robust to the CP currently rebooting
 # (talosctl -e <tunnel> connects, -n <real-ip> is the node identity apid validates).
@@ -993,6 +1182,61 @@ wait_etcd_healthy() { # <expected_members>
         ok "etcd ${want}/${want} healthy (via cp-${k})"; return 0
       fi
     done
+    sleep "$POLL"
+  done
+  return 1
+}
+
+# The API blip of a control-plane roll (#42): etcd 3/3 and a Ready node do not say that THIS node's kube-apiserver
+# serves. The load balancer checks TCP 6443 only, so it sends requests to a control plane whose apiserver is not ready
+# for up to 75 s (5 checks x 15 s); the next control plane must not be taken down before the one just rebooted serves,
+# or two apiservers are out together. These gates ask the cluster, not the node: the kube-apiserver static pod's own
+# Ready condition (its readinessProbe is /readyz) and /readyz through the kubeconfig's endpoint, N polls in a row.
+apiserver_pod_state() { # <node_name> → ready | notready | absent | unknown
+  local r
+  if r="$("${KCTL[@]}" -n kube-system get pod "kube-apiserver-$1" \
+          -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>&1)"; then
+    [[ "$r" == True ]] && echo ready || echo notready
+    return 0
+  fi
+  case "$r" in
+    *NotFound* | *"not found"*) echo absent ;;
+    *) echo unknown ;;   # an unanswered question is not an absent pod
+  esac
+}
+
+wait_apiserver_ready() { # <node_name> — the apiserver of this control plane serves, API_STABLE_POLLS polls in a row
+  local node="$1" need="${API_STABLE_POLLS:-3}" got=0 deadline=$(( SECONDS + ${API_TIMEOUT:-300} )) st
+  info "Waiting for kube-apiserver on ${node} to serve (${need} Ready polls in a row)…"
+  while (( SECONDS < deadline )); do
+    st="$(apiserver_pod_state "$node")"
+    if [[ "$st" == ready ]] && "${KCTL[@]}" get --raw=/readyz >/dev/null 2>&1; then
+      got=$(( got + 1 ))
+      if (( got >= need )); then ok "kube-apiserver on ${node} serves"; return 0; fi
+    else
+      got=0
+    fi
+    sleep "$POLL"
+  done
+  return 1
+}
+
+wait_apiservers_all_ready() { # <expected_control_planes> — before a control plane is touched, every apiserver serves
+  local want="$1" need="${API_STABLE_POLLS:-3}" got=0 deadline=$(( SECONDS + ${API_TIMEOUT:-300} )) raw n
+  info "Waiting for ${want}/${want} kube-apiservers to serve…"
+  while (( SECONDS < deadline )); do
+    if raw="$("${KCTL[@]}" -n kube-system get pods -o json 2>/dev/null)"; then
+      n="$(jq -r '[.items[] | select(.metadata.name | startswith("kube-apiserver-"))
+                   | select(any(.status.conditions[]?; .type == "Ready" and .status == "True"))] | length' <<<"$raw" 2>/dev/null)" || n=0
+    else
+      n=0
+    fi
+    if [[ "${n:-0}" == "$want" ]]; then
+      got=$(( got + 1 ))
+      if (( got >= need )); then ok "${want}/${want} kube-apiservers serve"; return 0; fi
+    else
+      got=0
+    fi
     sleep "$POLL"
   done
   return 1
@@ -1086,6 +1330,49 @@ node_targets() { # <tf_t> <index>
     t == "worker" && $0 ~ ("\\.worker_data\\[\"w" i "-d[0-9]+\"\\]$") \
       && $0 !~ /(scaleway_block_volume|openstack_blockstorage_volume_v3|outscale_volume)\./ { print }
   '
+}
+
+# The load balancer members that carry a worker's ADDRESS, for the providers that build them from the instance (OVH: the
+# Octavia members http[i] and https[i], address = the instance's access_ip_v4). A replaced instance gets a new private address
+# there, and a member's address cannot change in place, so the members are replaced with the node: two more resources in the
+# config plan (lab 27 part B, F-OVHREPL: "destroys 4 resources (at most 2 expected)"). Other providers attach by instance id or
+# keep the address, and have none. A control plane's members hang on its port, which a replacement keeps.
+node_lb_members() { # <tf_t> <index>
+  [[ "$1" == worker ]] || return 0
+  tofu state list 2>/dev/null | grep -F "module.${MOD}[0]." | awk -v i="$2" '
+    $0 ~ ("\\.openstack_lb_member_v2\\.(http|https)\\[" i "\\]$") { print }
+  '
+}
+
+# The address the state holds for a node's instance after an apply of it; empty when that provider's instance resource has no
+# access_ip_v4 (every provider but OpenStack), which reads as "the address did not move".
+instance_address() { # <state address of the instance>
+  tofu state show -no-color "$1" 2>/dev/null \
+    | sed -nE 's/^[[:space:]]*access_ip_v4[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' | head -1
+}
+
+# A targeted apply leaves the ROOT outputs stale, and the tunnel script and the next plan's node address read them (the shrink does
+# the same, shrink-nodes.sh refresh_outputs). A refresh-only apply writes them from what the provider reports and changes nothing.
+refresh_state_outputs() { # needs TFVARS
+  local d pf rc=0
+  d="$(mktemp -d)"; pf="${d}/refresh.tfplan"
+  if tofu plan -refresh-only -out="$pf" -input=false -no-color -var-file="$TFVARS" -var talos_bootstrap=true \
+       -var skip_health_check=true >/dev/null 2>&1; then
+    tofu apply "$pf" >/dev/null 2>&1 || rc=1
+  else rc=1; fi
+  rm -rf "$d"; return "$rc"
+}
+
+# How many of these state addresses tofu holds as TAINTED: a create that failed halfway, e.g. a provider out of stock for the
+# instance type after the old VM was destroyed (lab 27, F-STOCK). `tofu state show` opens with "# <address>: (tainted)".
+# The next plan then deletes that leftover as well as the resource it was asked to replace, which the destroy guard counts.
+tainted_count() { # <state address>...
+  local a first n=0
+  for a in "$@"; do
+    first="$(tofu state show -no-color "$a" 2>/dev/null | sed -n 1p)" || first=""
+    [[ "$first" == *"(tainted)"* ]] && n=$((n + 1))
+  done
+  echo "$n"
 }
 
 # Node-scoped resources (cp/worker, by name) of any node but <t> <i> that a plan
