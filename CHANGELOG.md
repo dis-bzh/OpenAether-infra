@@ -14,8 +14,32 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ## [Unreleased]
 
-Bug fixes, documentation corrections and safety nets after 0.3.1, for the next release (a 0.3.2 patch was prepared and abandoned: there is no 0.3.2 tag, and `git_ref` still pins
-OpenAether-apps `refs/tags/0.3.1`). No new scope. Rung reached by the lines below: **mocked** (self-tests and doc checks); the infra items were not observed on a cloud. Lab 18 (Scaleway,
+## [0.4.0] — 2026-11-01
+
+0.4.0 is the **resilience release**. It pairs with OpenAether-apps 0.4.0, which must be tagged first: the `git_ref` default and the twelve `envs/*.tfvars.example` now pin OpenAether-apps `refs/tags/0.4.0` (they pinned `refs/tags/0.3.2`), and the tftest assertion on the rendered GitRepository follows. What it adds:
+
+- Losing a node, a control plane or a zone, and its rebuild: drills with pass criteria and measured figures (`docs/resilience.md`); the failure limit through a provider load balancer is 15 s by the owner's decision.
+- Backups complete, replicated and verified: the application-backups replica bucket exists in every mode and `cluster-verify` fails when it is missing (I16); restore tests; one ordered disaster-recovery chain, data verified 68 min 3 s after the declared disaster in lab 28B (target 8 h; not unattended, see the DR entries).
+- No acknowledged data loss as a rule: CNPG synchronous replication, with a tested path to move existing databases from the 0.3.x spec (`docs/upgrade.md`).
+- Every pinned thing has a declared pin, a converging command and a verify check (infra #408); the default Talos pin goes from 1.14.2 to 1.14.4; signed release tags with a check; an opt-in second sink outside the cluster for the audit log (class A).
+
+**Upgrade path: 0.3.x to 0.4.0 only** (previous minor, the policy before 1.0.0), by the steps of `docs/upgrade.md`, "From 0.3.x to 0.4.0": lab 27 moved a cluster from 0.3.2 to the 0.4.0 head, lab 28B (Scaleway, 3 control planes + 5 workers) did it in two `cluster-up` invocations (a run stopped at the Talos tunnels is re-run with the same command, I13).
+
+**Not proven, or waiting for quota (stated, not hidden):**
+
+- Every Outscale row (E1, E2, E3, E4b, E6, R2, R3, G11b) waits for the quota increase and was not run at the final heads.
+- The `union()` form of the apps alerts `CnpgBackupFailed` and `CnpgBackupStale` is covered by engine unit tests only, not read on a real store.
+- The residual pooler exposure (a pod started or a cache expired in the first ~100 s of an outage) was sampled in 6 drills only.
+- I5 (OVH hard reboot at 90 s) is mocked and OVH-only.
+- The scheduled `backup-verify` run was not read (the manual run passed).
+- G10e, E4, the DR chain and the move were proven on earlier heads (since then only docs, the I16 fix, the pooler parameter and the two alert rules changed).
+- A production-style OpenBao share restore needs the owner's recovery keys (the development bootstrap is proven).
+- G1 in ONE invocation waits for 0.4.1 (the tunnel port fix).
+- 14 rows of the release gate are WORSE against the baseline; none is hidden, they are listed in the lab results.
+
+The entries below are those of this release, each with the rung it reached.
+
+Entries of the first part of the cycle (bug fixes, documentation corrections and safety nets after 0.3.1). No new scope there. Rung reached by the lines below: **mocked** (self-tests and doc checks); the infra items were not observed on a cloud. Lab 18 (Scaleway,
 infra 7e367d9 / apps 75e464f, on branches) ran a nominal `cluster-up` in 9 min 07 s with `cluster-verify` at 15 passed, 0 failed; it did not exercise #293 or #360. It does not fix the two
 infra issues the series set out to look at: #42 (the API unreachable for seconds during a control-plane roll) and #375 (the OVH hard-reboot window) stay open for 0.4.0, see below.
 Not a compliance claim. The apps-side results (#134 partial, #143, #144) are in the OpenAether-apps CHANGELOG.
@@ -258,10 +282,21 @@ Rung: **mocked/static** (`tofu test`, a rendered-manifest test, a fake `kubectl`
 - The step `verify` of `dr-restore-plan` passed when the restore test Job only skipped (four SKIPs, exit 0). It needs a PASS line and no SKIP.
 - `dr-restore-plan --scenario etcd` gave `talosctl` the talosconfig endpoint as the node: behind a bastion that is a tunnel (`127.0.0.1:52000`) and the call ended "invalid target". The node is `--control-plane-ip` (or the talosconfig's first node); the chain refuses a tunnel as the node.
 - After an etcd restore the Cilium agents kept the old watch and no backend for the API Service, and about twenty controllers (Flux, CNPG, cert-manager) crash-looped until the agents were restarted; the etcd check restarts the agents and operator once the API and the nodes are back.
+- **Documentation (EN and FR, second pass on lab 19):** `docs/backup-policy` says exactly what is not client-side encrypted: the CNPG WAL and base backups, and their copy on the replica store (same bytes, SSE-S3 requested; header read back on OVH objects in lab 19); the restic datasets are. The scheduled etcd snapshot now finds the control planes itself through the Kubernetes API (apps #150, OpenAether-apps CHANGELOG); the Talos API access feature of this repository is unchanged, and its endpoint `talos.default` is not relied on. Not proven on a cluster yet. Open: apps #149.
+
+## [0.3.2] — 2026-10-22
+
+0.3.2 is a **security patch** of 0.3.1. It pairs with OpenAether-apps 0.3.2, which carries the actual change (Zitadel v4.19.5 against three HIGH account-takeover advisories, a generated login session
+cookie secret, wait4x 3.7.2, dated VEX waivers and an issue when the image scan fails: see its CHANGELOG). On this side the release only moves the pin: the `git_ref` default and the twelve
+`envs/*.tfvars.example` now point at OpenAether-apps `refs/tags/0.3.2` (they pointed at `refs/tags/0.3.1`), so apps 0.3.2 must be tagged first, and the tftest assertion on the rendered GitRepository
+follows. Nothing in the infrastructure is patched for these advisories; the infra image scan was green. The fixes below were merged on main after 0.3.1 and ship in this release. Bug fixes, documentation
+corrections and safety nets, no new scope. Rung reached by the lines below: **mocked** (self-tests and doc checks); the infra items were not observed on a cloud. Lab 18 (Scaleway,
+infra 7e367d9 / apps 75e464f, on branches) ran a nominal `cluster-up` in 9 min 07 s with `cluster-verify` at 15 passed, 0 failed; it did not exercise #293 or #360. It does not fix the two
+infra issues the series set out to look at: #42 (the API unreachable for seconds during a control-plane roll) and #375 (the OVH hard-reboot window) stay open for 0.4.0, see below.
+Not a compliance claim. The apps-side results (#134 partial, #143, #144) are in the OpenAether-apps CHANGELOG.
 
 ### Fixed
 
-- **Documentation (EN and FR, second pass on lab 19):** `docs/backup-policy` says exactly what is not client-side encrypted: the CNPG WAL and base backups, and their copy on the replica store (same bytes, SSE-S3 requested; header read back on OVH objects in lab 19); the restic datasets are. The scheduled etcd snapshot now finds the control planes itself through the Kubernetes API (apps #150, OpenAether-apps CHANGELOG); the Talos API access feature of this repository is unchanged, and its endpoint `talos.default` is not relied on. Not proven on a cluster yet. Open: apps #149.
 - **The repository settings check no longer goes red on a cancelled, unexpanded matrix run** (#293): `check-required-checks.sh` skips a check run whose name still contains a literal
   `${{` AND whose conclusion is `cancelled` (what editing a PR body while CI runs leaves behind). A successful run of that name and a cancelled plain unrequired one still fail. Three
   self-test cases, the first red without the change. Rung: mocked.
