@@ -43,7 +43,10 @@ variable "backup_immutability" {
     What scripts/internal/ensure-buckets.sh does to the buckets that hold copies and logs (state and artifact replicas,
     application backups and their replica, Loki's logs), read back from the store afterwards:
 
-      off         (default) nothing: a deployed cluster changes in no way.
+      off         (default) no lock, no versioning, no expiry: plain buckets. The application-backups pair (primary and
+                  replica twin) is created in EVERY mode, because without the twin the second copy of the CNPG archive
+                  does not exist (I16, infra #391); a cluster deployed with off gets the two empty buckets on its next
+                  cluster-up and is otherwise unchanged.
       versioned   versioning plus expiry of non-current versions after backup_retention_days; a delete leaves a version.
       governance  versioned, plus an object lock with that default retention (a key with the bypass permission can
                   still remove a version).
