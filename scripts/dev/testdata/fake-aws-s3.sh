@@ -20,7 +20,7 @@ if [ "$kind" = s3 ]; then
 else
   op="$1"; shift; bucket=""
 fi
-cfg="" key="" vid="" lockflag=0
+cfg="" key="" vid="" lockflag=0 ep=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --bucket) bucket="$2"; shift 2 ;;
@@ -32,11 +32,13 @@ while [ $# -gt 0 ]; do
     --object-lock-enabled-for-bucket) lockflag=1; shift ;;
     --key) key="$2"; shift 2 ;;
     --version-id) vid="$2"; shift 2 ;;
-    --max-keys | --endpoint-url | --region | --output | --prefix | --query) shift 2 ;;
+    --endpoint-url) ep="$2"; shift 2 ;;
+    --max-keys | --region | --output | --prefix | --query) shift 2 ;;
     *) shift ;;
   esac
 done
 echo "$ak $op $bucket" >>"$FAKE_S3/calls.log"
+echo "$op $bucket $ep" >>"$FAKE_S3/endpoints.log"   # which endpoint each call went to (a test of two stores reads it)
 B="$FAKE_S3/buckets/$bucket"
 fail() { echo "An error occurred ($1) when calling the ${op} operation: ${2:-}" >&2; exit 254; }
 

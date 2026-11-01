@@ -18,9 +18,10 @@ def check(cond, msg):
 
 
 blind, expected = cam.classify([("kube_job_failed", ["OpenBaoBootstrapJobFailed"]), ("node_foo_total", ["NodeFoo"]),
-                                ("kubelet_volume_stats_capacity_bytes", ["PersistentVolumeFillingUp"])])
+                                ("kubelet_volume_stats_capacity_bytes", ["PersistentVolumeFillingUp"]),
+                                ("loki_discarded_samples_total", ["LokiDiscardingLogs"])])
 check([m[0] for m in blind] == ["node_foo_total"], f"a metric nobody produces stays blind ({[m[0] for m in blind]})")
-check(sorted(m[0] for m in expected) == ["kube_job_failed", "kubelet_volume_stats_capacity_bytes"], "kube_job_failed and the volume stats are expected-empty")
+check(sorted(m[0] for m in expected) == ["kube_job_failed", "kubelet_volume_stats_capacity_bytes", "loki_discarded_samples_total"], "kube_job_failed, the volume stats and Loki's discard counter are expected-empty")
 check(all(cam.HEALTHY_WHEN_EMPTY[k] for k in cam.HEALTHY_WHEN_EMPTY), "every allow-listed name carries its reason")
 check(cam.metric_names('kube_job_failed{condition="true"} > 0') == {"kube_job_failed"}, "metric_names still reads the rule expression")
 sys.exit(1 if fails else 0)

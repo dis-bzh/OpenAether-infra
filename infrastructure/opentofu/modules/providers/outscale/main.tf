@@ -44,15 +44,16 @@ resource "outscale_vm" "control_plane" {
   }
   vm_type = var.instance_type
 
-  # Root volume size: null keeps the OMI's own (the raw Talos image, ~11-12 GiB), which the full application
+  # Root volume type and IOPS (lab 27 part C, E3: gp2 50 GB = 150 IOPS starved containerd and the kubelet). Root volume size: null keeps the OMI's own (the raw Talos image, ~11-12 GiB), which the full application
   # stack does not fit. block_device_mappings is in ignore_changes, so this reaches NEW nodes only.
   dynamic "block_device_mappings" {
-    for_each = var.root_volume_size_gb == null ? [] : [var.root_volume_size_gb]
+    for_each = var.root_volume_size_gb == null && var.root_volume_type == "gp2" ? [] : [var.root_volume_size_gb]
     content {
       device_name = "/dev/sda1"
       bsu {
         volume_size           = block_device_mappings.value
-        volume_type           = "gp2"
+        volume_type           = var.root_volume_type
+        iops                  = var.root_volume_type == "io1" ? var.root_volume_iops : null
         delete_on_vm_deletion = true
       }
     }
@@ -92,15 +93,16 @@ resource "outscale_vm" "worker" {
   }
   vm_type = var.instance_type
 
-  # Root volume size: null keeps the OMI's own (the raw Talos image, ~11-12 GiB), which the full application
+  # Root volume type and IOPS (lab 27 part C, E3: gp2 50 GB = 150 IOPS starved containerd and the kubelet). Root volume size: null keeps the OMI's own (the raw Talos image, ~11-12 GiB), which the full application
   # stack does not fit. block_device_mappings is in ignore_changes, so this reaches NEW nodes only.
   dynamic "block_device_mappings" {
-    for_each = var.root_volume_size_gb == null ? [] : [var.root_volume_size_gb]
+    for_each = var.root_volume_size_gb == null && var.root_volume_type == "gp2" ? [] : [var.root_volume_size_gb]
     content {
       device_name = "/dev/sda1"
       bsu {
         volume_size           = block_device_mappings.value
-        volume_type           = "gp2"
+        volume_type           = var.root_volume_type
+        iops                  = var.root_volume_type == "io1" ? var.root_volume_iops : null
         delete_on_vm_deletion = true
       }
     }

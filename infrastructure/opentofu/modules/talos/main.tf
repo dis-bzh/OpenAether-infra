@@ -126,7 +126,36 @@ locals {
     },
   ] : []
 
-  inline_manifests = concat(local.base_manifests, local.flux_manifests)
+  # OpenAether's CoreDNS replaces the Talos-owned one (infra #388), so DNS survives the loss of a node. Replicas
+  # = min(3, nodes): a one-node lab has one, a 3 + 4 cluster has three. minDomains equals it, so a replica created
+  # before the other nodes registered waits for a different node instead of sharing one.
+  coredns_replicas = min(3, var.control_plane_count + var.worker_count)
+  # The zone term (lab 28, I2): required when the nodes sit in three or more zones AND every node carries its zone label (a node
+  # without one has no topology key, so a required rule would never place a pod on it); a preference otherwise. The replicas are
+  # then min(3, nodes) = 3, and minDomains equals them, as for the nodes. cluster-coredns-ha.sh applies the same rule to a live cluster.
+  coredns_node_zones = concat(
+    [for i in range(var.control_plane_count) : try(var.node_zones.control_plane[i], "")],
+    [for i in range(var.worker_count) : try(var.node_zones.worker[i], "")],
+  )
+  coredns_zone_hard = length(distinct(compact(local.coredns_node_zones))) >= 3 && !contains(local.coredns_node_zones, "")
+  coredns_manifests = var.coredns_ha ? [{
+    name = "coredns"
+    contents = templatefile("${path.module}/coredns.yaml.tftpl", {
+      replicas         = local.coredns_replicas
+      min_domains      = local.coredns_replicas
+      zone_hard        = local.coredns_zone_hard
+      zone_when        = local.coredns_zone_hard ? "DoNotSchedule" : "ScheduleAnyway"
+      zone_min_domains = local.coredns_replicas
+      image_tag        = var.coredns_image_tag
+    })
+  }] : []
+  # Talos then neither creates nor upgrades kube-system/coredns: the inline manifest does (infra #388). Off renders
+  # nothing, so the generated configs stay byte-identical.
+  coredns_cluster_patch = var.coredns_ha ? { coreDNS = { disabled = true } } : {}
+  # Folded into machine_config_version so an existing cluster actually gets a change.
+  coredns_signature = var.coredns_ha ? sha256(local.coredns_manifests[0].contents) : ""
+
+  inline_manifests = concat(local.base_manifests, local.coredns_manifests, local.flux_manifests)
 }
 
 # ==============================================================================
@@ -194,6 +223,24 @@ locals {
       encryption = local.worker_volume_encryption
     })
   ]
+}
+
+# ==============================================================================
+# Talos API access from Kubernetes, for the scheduled etcd snapshot. A pod in an allowed namespace that owns a talos.dev
+# ServiceAccount object gets a Secret holding a talosconfig limited to the roles it asked for; only `os:etcd:backup` is allowed
+# here (the snapshot, nothing else), only on the control planes (the controller runs there), only for the listed namespaces.
+# ==============================================================================
+
+locals {
+  talos_api_access_features = length(var.talos_api_access_namespaces) == 0 ? {} : {
+    kubernetesTalosAPIAccess = {
+      enabled                     = true
+      allowedRoles                = ["os:etcd:backup"]
+      allowedKubernetesNamespaces = sort(var.talos_api_access_namespaces)
+    }
+  }
+  # Folded into machine_config_version so an existing cluster actually gets a change.
+  talos_api_access_signature = length(var.talos_api_access_namespaces) == 0 ? "" : sha256(jsonencode(local.talos_api_access_features))
 }
 
 # ==============================================================================
@@ -266,10 +313,26 @@ locals {
   ) : {}
   baseline_sysctls = merge(local.baseline_sysctls_set, local.nb.sysctls_extra)
 
+  # Failure detection (lab 26, D2/H1): how long the kube-controller-manager waits for a node's heartbeat before it marks the
+  # node NotReady (default 50 s), and the kubelet heartbeat that goes with it. Unset (0), nothing is rendered and the configs
+  # stay byte-identical. The kubelet renews its Lease every nodeLeaseDurationSeconds / 4 (kubelet source, KEP-0009) and posts
+  # its status every nodeStatusUpdateFrequency, so with the grace period G the node gets 4 chances to be heard when the lease
+  # duration is G and the status frequency is G / 4. Above 40 s the Kubernetes defaults (lease 40 s = a renewal every 10 s,
+  # status every 10 s) already leave 4 or more chances, so only the controller manager is told.
+  nfd_grace   = var.node_monitor_grace_period_seconds
+  nfd_cluster = local.nfd_grace > 0 ? { controllerManager = { extraArgs = { "node-monitor-grace-period" = "${local.nfd_grace}s" } } } : {}
+  # Two conditionals of one type each, merged: a single one with a number and a string in it is unified to map(string), and
+  # the kubelet would be sent nodeLeaseDurationSeconds: "20" (a string for an int32).
+  nfd_kubelet_lease  = local.nfd_grace > 0 && local.nfd_grace < 40 ? { nodeLeaseDurationSeconds = local.nfd_grace } : {}
+  nfd_kubelet_status = local.nfd_grace > 0 && local.nfd_grace < 40 ? { nodeStatusUpdateFrequency = "${floor(local.nfd_grace / 4)}s" } : {}
+  nfd_kubelet        = merge(local.nfd_kubelet_lease, local.nfd_kubelet_status)
+  nfd_signature      = local.nfd_grace > 0 ? sha256(jsonencode([local.nfd_cluster, local.nfd_kubelet])) : ""
+
   # kubelet extraConfig shared by every role; the worker seccomp flag is separate (CPs have it already).
   baseline_kubelet_extra = merge(
     local.nb.pod_pids_limit > 0 ? { podPidsLimit = local.nb.pod_pids_limit } : {},
     local.nb.kubelet_server_tls ? { serverTLSBootstrap = true } : {},
+    local.nfd_kubelet,
   )
   baseline_kubelet_worker = merge(
     local.nb.worker_default_seccomp ? { defaultRuntimeSeccompProfileEnabled = true } : {},
@@ -279,6 +342,21 @@ locals {
 
   baseline_machine_common = length(local.baseline_sysctls) > 0 ? { sysctls = local.baseline_sysctls } : {}
   baseline_machine_worker = merge(local.baseline_machine_common, length(local.baseline_kubelet_worker) > 0 ? { kubelet = local.baseline_kubelet_worker } : {})
+
+  # The failure domain of each node, as a label (0.4.0 M4). One map per node; empty when unknown, so a provider that
+  # reports nothing changes nothing.
+  cp_zone_labels = [for i in range(var.control_plane_count) :
+    try(var.node_zones.control_plane[i], "") == "" ? {} : { nodeLabels = { "topology.kubernetes.io/zone" = var.node_zones.control_plane[i] } }
+  ]
+  worker_zone_labels = [for i in range(var.worker_count) :
+    try(var.node_zones.worker[i], "") == "" ? {} : { nodeLabels = { "topology.kubernetes.io/zone" = var.node_zones.worker[i] } }
+  ]
+  # The signature must NOT depend on how many workers there are: `task cluster-shrink-plan` lowers `workers` and refuses
+  # any plan that also replaces the machine config of the nodes that stay (lab 27, F-SHRINK: a hash over the worker label
+  # list changed with its length). A node's zone never changes in place (the provider puts node i in a fixed zone), so what
+  # has to reach an existing cluster is "worker labels are now rendered": the control-plane labels (their count is fixed)
+  # plus whether any worker is labelled. A worker added later is a create, which applies its own config.
+  node_zones_signature = length(compact(concat(try(var.node_zones.control_plane, []), try(var.node_zones.worker, [])))) == 0 ? "" : sha256(jsonencode([local.cp_zone_labels, length(compact(try(var.node_zones.worker, []))) > 0]))
 
   # Folded into machine_config_version so an existing cluster actually gets a change.
   node_baseline_signature = length(local.baseline_machine_common) + length(local.baseline_kubelet_cp) + length(local.baseline_machine_worker) == 0 ? "" : sha256(jsonencode([local.baseline_machine_common, local.baseline_kubelet_cp, local.baseline_machine_worker]))
@@ -409,7 +487,7 @@ data "talos_machine_configuration" "control_plane" {
               enabled = true
               port    = 7445
             }
-          }, local.container_features)
+          }, local.container_features, local.talos_api_access_features)
           # Disk encryption at rest (LUKS2). Safe in container mode — Talos ignores
           # it when no block device is present.
           systemDiskEncryption = {
@@ -444,7 +522,8 @@ data "talos_machine_configuration" "control_plane" {
         },
         local.apiserver_vip_network_patch,
         local.node_log_machine_patch,
-        local.baseline_machine_common
+        local.baseline_machine_common,
+        local.cp_zone_labels[count.index]
       )
       cluster = merge(
         {
@@ -474,6 +553,8 @@ data "talos_machine_configuration" "control_plane" {
             }
           }
         },
+        local.coredns_cluster_patch,
+        local.nfd_cluster,
         local.apiserver_vip_certsans
       )
     }),
@@ -576,7 +657,8 @@ data "talos_machine_configuration" "worker" {
           }
         },
         local.node_log_machine_patch,
-        local.baseline_machine_worker
+        local.baseline_machine_worker,
+        local.worker_zone_labels[count.index]
       )
       cluster = {
         network = {
@@ -644,6 +726,11 @@ resource "terraform_data" "talos_port_ready_cp" {
     environment = {
       ENDPOINT = local.cp_endpoints[count.index]
       NODE     = var.control_plane_ips[count.index]
+      # An ACTIVE instance whose Talos never answers (OVH, infra #371): the guard asks for the hard reboot itself. Off unless set.
+      RECOVER_PROVIDER = var.port_ready_recovery.provider
+      RECOVER_AFTER    = tostring(var.port_ready_recovery.after_seconds)
+      RECOVER_NAME     = "${var.cluster_name}-cp-${count.index}"
+      RECOVER_CMD      = abspath("${path.module}/../../../../scripts/ops/node-provider.py")
     }
   }
 }
@@ -659,6 +746,11 @@ resource "terraform_data" "talos_port_ready_worker" {
     environment = {
       ENDPOINT = local.worker_endpoints[count.index]
       NODE     = var.worker_ips[count.index]
+      # An ACTIVE instance whose Talos never answers (OVH, infra #371): the guard asks for the hard reboot itself. Off unless set.
+      RECOVER_PROVIDER = var.port_ready_recovery.provider
+      RECOVER_AFTER    = tostring(var.port_ready_recovery.after_seconds)
+      RECOVER_NAME     = "${var.cluster_name}-worker-${count.index}"
+      RECOVER_CMD      = abspath("${path.module}/../../../../scripts/ops/node-provider.py")
     }
   }
 }
@@ -668,7 +760,7 @@ resource "terraform_data" "talos_port_ready_worker" {
 # by the two `replace_triggered_by` below. See the comment on them.
 resource "terraform_data" "machine_config_version" {
   count = local.do_apply ? 1 : 0
-  input = "${var.talos_version}/${var.kubernetes_version}${local.resolver_tail == "" ? "" : "/${sha256(local.resolver_tail)}"}${local.node_log_signature == "" ? "" : "/${local.node_log_signature}"}${local.node_baseline_signature == "" ? "" : "/${local.node_baseline_signature}"}"
+  input = "${var.talos_version}/${var.kubernetes_version}${local.resolver_tail == "" ? "" : "/${sha256(local.resolver_tail)}"}${local.node_log_signature == "" ? "" : "/${local.node_log_signature}"}${local.node_baseline_signature == "" ? "" : "/${local.node_baseline_signature}"}${local.talos_api_access_signature == "" ? "" : "/${local.talos_api_access_signature}"}${local.node_zones_signature == "" ? "" : "/${local.node_zones_signature}"}${local.coredns_signature == "" ? "" : "/${local.coredns_signature}"}${local.nfd_signature == "" ? "" : "/${local.nfd_signature}"}"
 }
 
 resource "talos_machine_configuration_apply" "control_plane" {

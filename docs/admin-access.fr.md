@@ -90,7 +90,7 @@ et il lit `OA_SLACK_WEBHOOK_URL` / `OA_DEADMANSSWITCH_URL` (des placeholders son
 avec un avertissement, s'ils manquent). Les buckets doivent **préexister** (restic ne les
 crée pas), sur des providers différents en production : le bucket des backups applicatifs
 `s3-<projet>-<provider>-backups-<env>` et son jumeau `-backup` ; le script annonce le premier.
-Avec `backup_immutability` dans le tfvars, `ensure-buckets.sh` crée aussi cette paire (et versionne ou verrouille les buckets : `backup-policy.fr.md`, section 3).
+`ensure-buckets.sh` crée cette paire dans tous les modes, `backup_immutability = off` compris (avec lui positionné, il versionne ou verrouille aussi les buckets : `backup-policy.fr.md`, section 3), et `task cluster-verify` échoue si le jumeau `-backup` manque.
 
 Il est **create-only** : chaque secret est écrit avec `cas=0`, donc un re-run ne peut en
 écraser aucun (une valeur changée n'échoue pas, elle casse ce qui tient l'ancienne). Son
@@ -170,7 +170,7 @@ pas d'authentification et n'est pas dans la kustomization par défaut).
 Gateway, sans filtre de source : chaque route répond alors à quiconque pose son en-tête Host, et la connexion propre à la route est sa seule protection
 (le registre est `OpenAether-apps/docs/public-exposure.md` ; le tableau du filtrage est [`network.fr.md`](network.fr.md), section 6). Désactivé par défaut.
 
-**Filtre de source optionnel, `app_lb_allowed_cidrs`** (une liste de CIDR IPv4, vide = pas de filtre = ce que faisait un cluster avant son existence). Renseignez-la dans les tfvars et lancez le `tofu plan` habituel :
+**Filtre de source optionnel, `app_lb_allowed_cidrs`** (une liste de CIDR IPv4, vide = pas de filtre = ce que faisait un cluster avant son existence ; chez Outscale c'est une règle `0.0.0.0/0` explicite sur 80 et 443, car un groupe de sécurité n'admet rien de ce qui n'est pas listé : jusqu'à la 0.4.0-rc1, le load balancer Outscale était fermé à tous quand la liste était vide, labo 27 partie C). Renseignez-la dans les tfvars et lancez le `tofu plan` habituel :
 le plan doit montrer une **mise à jour en place** des frontaux Scaleway / listeners OVH (ou de nouvelles règles Outscale) et aucun `must be replaced` : un load balancer remplacé change l'IP publique.
 La liste doit contenir tous les clients publics à conserver (un bureau, un runner CI, une sonde de disponibilité) ; l'adresse de sortie du cluster est ajoutée pour vous, car les pods joignent
 `https://zitadel.openaether.local` par le load balancer. Déployez par étapes : vide, puis `["0.0.0.0/0"]` (mécanisme actif, encore ouvert : le plan montre la mise à jour en place),

@@ -11,6 +11,7 @@ this contract to be consumed by the Talos module and the root `main.tf`.
 | `worker_private_ips` | `list(string)` | Private IPs of worker nodes |
 | `k8s_lb_ip` | `string` | Public IP of the Kubernetes API Load Balancer (port 6443) |
 | `bastion_ip` | `string` | Public IP of the bastion host (SSH jump server) |
+| `worker_zones` | `list(string)` | Failure domain of each worker, one per node, in the order of `worker_private_ips`, same rule as `control_plane_zones`. Read by `task failure-domain-check` and, as the `topology.kubernetes.io/zone` label of the node, by the zone alert. |
 | `control_plane_zones` | `list(string)` | Failure domain of each control plane (zone, AZ, subregion or hypervisor host), one per node, in the order of `control_plane_private_ips`. A module that cannot spread reports the one domain it uses, never a list built from an input it ignores. |
 
 ## Optional Outputs

@@ -47,6 +47,10 @@ case "$*" in
   "-n foundation-vault create token openaether-admin"*) printf 'jwt-STUB-TOKEN'; exit 0 ;;
   "-n foundation-vault exec -i openbao-0 -- sh -c "*)
     IFS= read -r jwt; printf 'stdin-jwt:%s\n' "$jwt" >>"$STUB_LOG"
+    case "$*" in
+      *" sh audit/sink restic_password") [ -f "$STUB_CL/sink" ] && { cat "$STUB_CL/sink"; exit 0; }; exit 1 ;;
+      *" sh audit/sink-secondary restic_password") exit 1 ;;
+    esac
     cat "$STUB_CL/restic"; exit 0 ;;
   "-n foundation-vault create configmap openbao-escrow-ack "*) printf 'CONFIGMAP %s\n' "$*"; exit 0 ;;
   "apply -f -") printf 'APPLIED:%s\n' "$(cat)" >>"$STUB_LOG"; exit 0 ;;
@@ -134,6 +138,28 @@ GNUPGHOME="$SB/gnupg-none" run attest --from "$E" --key-file "$SB/wrong.raw"
 [ "$RC" -ne 0 ] && grep -q 'MISMATCH' <<<"$OUT" && ! grep -q 'APPLIED' "$STUB_LOG" && ok "a wrong reconstructed key is a MISMATCH and attests nothing" || bad "wrong key-file: rc=$RC $OUT"
 xxd -p -c 64 "$KEY_RAW" >"$SB/hex.txt" 2>/dev/null && { GNUPGHOME="$SB/gnupg-none" run verify --from "$E" --key-file "$SB/hex.txt"
   [ "$RC" -ne 0 ] && grep -q MISMATCH <<<"$OUT" && ok "a HEX key file is a MISMATCH (decode it first, as the README says)" || bad "hex key file: rc=$RC $OUT"; }
+
+echo "=== the audit sink password (infra #318) ==="
+run export --out "$SB/e0" -r alice@example.invalid -r bob@example.invalid
+[ "$RC" = 0 ] && [ ! -e "$SB/e0/audit-sink-password.gpg" ] && ! jq -e 'has("audit_sink_password_sha256")' "$SB/e0/escrow-receipt.json" >/dev/null && ok "no sink seeded: no sink file, no sink field in the receipt (unchanged)" || bad "sink artefacts without a sink: $OUT"
+SINKPW='s1nk-PASSWORD-fixture-0123456789abcdefghijklmnopqrstuv'; printf '%s' "$SINKPW" >"$CL/sink"
+run export --out "$SB/e3" -r alice@example.invalid -r bob@example.invalid
+[ "$RC" = 0 ] && [ -s "$SB/e3/audit-sink-password.gpg" ] && ok "a seeded sink: its password is escrowed in its own file" || bad "sink export: rc=$RC $OUT"
+[ "$(GNUPGHOME="$SB/gnupg-bob" gpg --quiet --decrypt "$SB/e3/audit-sink-password.gpg" 2>/dev/null)" = "$SINKPW" ] && ok "…and bob opens it" || bad "sink password does not open"
+[ "$(jq -r '.audit_sink_password_sha256["audit/sink"]' "$SB/e3/escrow-receipt.json")" = "$(printf '%s' "$SINKPW" | sha)" ] && ok "…with its hash in the receipt" || bad "receipt: $(cat "$SB/e3/escrow-receipt.json")"
+[ "$(jq -r '.files["audit-sink-password.gpg"] | length' "$SB/e3/escrow-receipt.json")" = 64 ] && ok "…and the file hash" || bad "file hash"
+grep -qF "$SINKPW" "$STUB_LOG" && bad "the sink password reached a kubectl call" || ok "the sink password is on no command line"
+grep -qF "$SINKPW" <<<"$OUT" && bad "the sink password was printed" || ok "…nor in the output"
+run verify --from "$SB/e3"
+[ "$RC" = 0 ] && grep -q 'audit sink password (audit/sink): escrow opens, same as the live' <<<"$OUT" && ok "verify compares it with the live secret" || bad "verify: rc=$RC $OUT"
+printf 'ROTATED-sink-password-0123456789abcdefghijklmnopqrst' >"$CL/sink"
+run verify --from "$SB/e3"
+[ "$RC" -ne 0 ] && grep -q 'secret/audit/sink changed since the escrow' <<<"$OUT" && ok "a sink password rotated since the escrow is a mismatch" || bad "rotated sink: rc=$RC $OUT"
+printf 'tampered' >"$SB/e3/audit-sink-password.gpg"
+printf '%s' "$SINKPW" >"$CL/sink"
+run verify --from "$SB/e3"
+[ "$RC" -ne 0 ] && ok "a damaged sink file is never attested" || bad "damaged sink file passed"
+rm -f "$CL/sink"
 
 echo "=== what must not be attested ==="
 cp "$CL/seal_b64" "$CL/seal_b64.orig"; head -c 32 /dev/urandom | base64 -w0 >"$CL/seal_b64"

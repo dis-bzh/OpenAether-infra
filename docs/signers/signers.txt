@@ -1,0 +1,5 @@
+# Signer table in machine-readable form (docs/signed-commits.md is the human one). One full fingerprint per line,
+# upper case, then a free label. check-release-tag.sh reads it; the public keys are the .asc files next to it.
+# The maintainer's own key is NOT here yet: the owner gives the fingerprint, nobody invents one.
+1D5895FDC14F5BAD6D1B170B5CA26229559044A2 release-vps
+968479A1AFF927E37D1A566BB5690EEEBB952194 github-web-flow

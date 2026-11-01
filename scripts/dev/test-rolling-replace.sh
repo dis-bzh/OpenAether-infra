@@ -79,7 +79,7 @@ CNPG_TIMEOUT=600
 PDB_TIMEOUT=600
 PRELUDE
 )"
-eval "$(extract 'cnpg_pod_state,cnpg_deadlocked,cnpg_installed,cnpg_pending,pdb_short,worker_cpu_requests,preflight_roll')"
+eval "$(extract 'cnpg_pod_state,cnpg_deadlocked,cnpg_installed,cnpg_pending,pdb_short,worker_requests,worker_cpu_requests,worker_memory_requests,preflight_roll')"
 
 # --- the upgrade-confirmation gate -------------------------------------------
 # Extracted separately because it talks to talosctl, not kubectl, and needs its
@@ -173,6 +173,10 @@ NO_CRD='get crd clusters.postgresql.cnpg.io\t1\tError from server (NotFound)\n'
 
 CAP_OK='describe nodes\t0\tName: w1%%  cpu 1440m (72%)  2 (100%)%%Name: w2%%  cpu 940m (47%)  2 (100%)%%Name: w3%%  cpu 540m (27%)  2 (100%)\n'
 CAP_FULL='describe nodes\t0\tName: w1%%  cpu 1560m (78%)  2 (100%)%%Name: w2%%  cpu 1980m (99%)  2 (100%)%%Name: w3%%  cpu 2000m (100%)  2 (100%)\n'
+# The shipped 4 x 4 vCPU shape with the full platform, as lab 21 MEASURED it (docs/capacity.md): 53/43/70/57% = 223% of one worker,
+# against the 300% that three workers can take. The same load (about 9 vCPU) on 3 workers is 75% each = 225% against 200%: refused.
+CAP_4W='describe nodes\t0\tName: w1%%  cpu 2120m (53%)  4 (100%)%%Name: w2%%  cpu 1720m (43%)  4 (100%)%%Name: w3%%  cpu 2800m (70%)  4 (100%)%%Name: w4%%  cpu 2280m (57%)  4 (100%)\n'
+CAP_3W_SAME_LOAD='describe nodes\t0\tName: w1%%  cpu 3000m (75%)  4 (100%)%%Name: w2%%  cpu 3000m (75%)  4 (100%)%%Name: w3%%  cpu 3000m (75%)  4 (100%)\n'
 CAP_ONE='describe nodes\t0\tName: w1%%  cpu 900m (45%)  2 (100%)\n'
 CAP_FAIL='describe nodes\t1\tThe connection to the server was refused\n'
 
@@ -235,6 +239,16 @@ survey "$HEALTHY"
   && ok "a cluster that can lose a worker passes, and says by how much" \
   || bad "healthy cluster refused (rc ${RC}): ${OUT}"
 
+survey "${CRD}${CAP_4W}${PDB_BYDESIGN}${DB_WHOLE}"
+[ "$RC" = 0 ] && saw "223% requested, 300% available" \
+  && ok "4 workers of 4 vCPU with the full platform, as measured in lab 21, pass the capacity gate with 77 points to spare" \
+  || bad "the shipped 4-worker shape was refused (rc ${RC}): ${OUT}"
+
+survey "${CRD}${CAP_3W_SAME_LOAD}${PDB_BYDESIGN}${DB_WHOLE}"
+[ "$RC" = 1 ] && saw "3 workers request 225%" \
+  && ok "the same load on 3 workers (225% against 200%) is refused before the first node: why the examples ship 4" \
+  || bad "the 3-worker shape was allowed with the full platform's load (rc ${RC})"
+
 survey "${CRD}${CAP_FULL}${PDB_BYDESIGN}${DB_WHOLE}"
 [ "$RC" = 1 ] && saw "3 workers request 277%" \
   && ok "78/99/100% is refused before the first node, not after 2100s" \
@@ -283,6 +297,37 @@ survey "${CRD}${CAP_FAIL}${PDB_BYDESIGN}${DB_WHOLE}"
   && ok "an unanswered node description is fatal, and never claims capacity" \
   || bad "an apiserver error read as 'there is room' (rc ${RC})"
 
+# Memory (lab 27 part B, F-SHRINKMEM): the shipped 4 x 8 GB workers at the lab's figures. CPU alone said "272% requested, 300%
+# available" and let a shrink through whose evacuated pods then stayed Pending, "Insufficient memory", on three workers at 98%.
+MEM_TABLE() { # <cpu%> <mem%>... — a describe table with both rows, the way kubectl prints them (with the Capacity block above)
+  local c="$1" i=0 out="describe nodes\t0\t"; shift
+  for m in "$@"; do
+    i=$((i + 1))
+    out+="Name: w${i}%%Capacity:%%  cpu:  4%%  memory:  8Gi%%Allocated resources:%%  cpu  1 (${c}%)  4 (100%)%%  memory  2Gi (${m}%)  4Gi (50%)%%  ephemeral-storage  0 (0%)  0 (0%)%%"
+  done
+  printf '%s\\n' "$out"
+}
+plan "$(MEM_TABLE 40 70 60 50 75)"
+[ "$(worker_memory_requests | tr '\n' ' ')" = "w1 70 w2 60 w3 50 w4 75 " ] && [ "$(worker_cpu_requests | tr '\n' ' ')" = "w1 40 w2 40 w3 40 w4 40 " ] \
+  && ok "memory and CPU are read from their own rows, not from the Capacity block or each other" \
+  || bad "parsed memory '$(worker_memory_requests | tr '\n' ' ')', cpu '$(worker_cpu_requests | tr '\n' ' ')'"
+survey "${CRD}$(MEM_TABLE 40 70 60 50 75)${PDB_BYDESIGN}${DB_WHOLE}"
+[ "$RC" = 0 ] && saw "160% requested, 300% available" && saw "255% of memory requested, 300% available" \
+  && ok "memory that the workers left can hold passes, and the survey says by how much" \
+  || bad "a cluster with room in memory was refused (rc ${RC}): ${OUT}"
+survey "${CRD}$(MEM_TABLE 40 98 98 98 40)${PDB_BYDESIGN}${DB_WHOLE}"
+[ "$RC" = 1 ] && saw "request 334% of memory" && saw "Insufficient memory" && saw "160% requested, 300% available" \
+  && ok "CPU at 160% but memory at 334% against 300% is refused before the first node, and says memory" \
+  || bad "the memory shortage was let through, or not named (rc ${RC}): ${OUT}"
+SCOPE=cp survey "${CRD}$(MEM_TABLE 40 98 98 98 40)${PDB_BYDESIGN}${DB_WHOLE}"
+[ "$RC" = 0 ] && saw "not fatal for --cp-only" \
+  && ok "…and a --cp-only roll, which drains no worker, is warned and not blocked" \
+  || bad "--cp-only was blocked on worker memory (rc ${RC}): ${OUT}"
+survey "$HEALTHY"
+[ "$RC" = 0 ] && saw "report no memory requests" \
+  && ok "a table without memory rows is said and does not block (the CPU was checked)" \
+  || bad "a table without memory rows changed the verdict (rc ${RC}): ${OUT}"
+
 echo
 echo "--- everything at once: all findings, then exactly one death ---"
 
@@ -305,8 +350,8 @@ SUT="$STUB_DIR/roll-all.sh"
 cat "${RR_FILES[@]}" >"$SUT"
 lineno() { grep -n "$1" "$SUT" | head -1 | cut -d: -f1; }
 # Last match: the first is the per-node re-assert in cordon_drain, not the main block.
-L_MAINT="$(grep -n '^  cnpg_maintenance true$' "$SUT" | tail -1 | cut -d: -f1)"
-L_PRE="$(lineno '^  preflight_roll$')"
+L_MAINT="$(grep -n '^ *cnpg_maintenance true$' "$SUT" | tail -1 | cut -d: -f1)"
+L_PRE="$(lineno '^ *preflight_roll$')"
 L_ROLL="$(lineno 'replace_node worker')"
 [ "$(grep -c '^  *preflight_roll$' "$SUT")" = 1 ] \
   && ok "the survey is called exactly once" || bad "expected one call site"
@@ -683,6 +728,7 @@ from() { [ -n "${1:-}" ] && [ "$n" -ge "$1" ]; }                    # knob set a
 clusters() { for c in ${FK_CLUSTERS-foundation-databases/zitadel-db}; do echo "${c%/*} ${c#*/}"; done; }
 case "$*" in
   "get crd clusters.postgresql.cnpg.io")
+    count crds; [ "$n" -gt "${FK_CRD_FAIL_FIRST:-0}" ] || refuse 'Unable to connect to the server: context deadline exceeded'
     [ "${FK_CNPG:-1}" = 1 ] || refuse 'Error from server (NotFound)' ;;
   "get clusters.postgresql.cnpg.io -A -o jsonpath="*fluxcd*)   # owner labels
     count owners; from "${FK_OWNERS_FAIL_FROM:-}" && refuse 'connection refused'
@@ -732,7 +778,7 @@ fk_reset() {
   FK_STATE="$FK/state"; export FK_STATE; rm -rf "$FK_STATE"; mkdir -p "$FK_STATE"
   echo true >"$FK_STATE/susp.cnpg"; echo true >"$FK_STATE/susp.platform"
   echo false >"$FK_STATE/pdb"; : >"$FK_STATE/calls"; : >"$FK_STATE/bounded"
-  for c in lists owners parents; do echo 0 >"$FK_STATE/$c"; done
+  for c in lists owners parents crds; do echo 0 >"$FK_STATE/$c"; done
   echo "${FK_OPERATOR_DELAY:-0}" >"$FK_STATE/delay"
 }
 # Run in a subshell by the caller: the harness's own ok/die/sleep must not be the
@@ -744,7 +790,7 @@ fk_body() { # <the roll's own exit status>
   info() { :; }; die() { printf '✗ %s\n' "$*" >&2; exit 1; }
   [ -n "${FK_REALSLEEP:-}" ] || sleep() { SECONDS=$((SECONDS + $1)); }   # a clock the roll's own waits move
   STOP_REQUESTED=0
-  RESTORE_TIMEOUT="${FK_TIMEOUT:-10}" RESTORE_POLL="${FK_POLL:-5}"
+  RESTORE_TIMEOUT="${FK_TIMEOUT:-10}" RESTORE_POLL="${FK_POLL:-5}" RESTORE_RETRY_WAIT="${FK_RETRY_WAIT:-15}" RESTORE_TRIES="${FK_TRIES:-6}"
   trap "${FK_TRAP:-finish_roll}" EXIT; eval "${FK_CMD:-:}"; exit "$1"
 }
 fk_run() { fk_reset; OUT="$( ( fk_body "$1" ) 2>&1 )"; RC=$?; }
@@ -797,11 +843,25 @@ FK_PATCH_FAIL=flux-system/platform FK_TRAP='cnpg_maintenance false' fk_run 0
   && ok "control: the old exit path leaves the root suspended and exits 0" \
   || bad "control: the fake does not reproduce the old defect (rc ${RC})"
 
-FK_LIST_FAIL_ONCE=1 fk_run 0
-[ "$RC" = 1 ] && saw "flux-system/cnpg is still suspended" && saw "flux-system/platform is still suspended" \
-  && saw "foundation-databases/zitadel-db-primary is missing" \
-  && ok "an apiserver blip at exit: the restore dies, and the check still names all three leftovers" \
-  || bad "a blip at exit hid what was left (rc ${RC}): ${OUT}"
+# Lab 27 (F-STOCK): the roll died after the VM was destroyed, with two control planes left and the API load balancer still
+# sending a share of the calls to the dead one; the one restore attempt hit "context deadline exceeded" and Flux stayed
+# suspended and every budget stayed gone for the 71 minutes the operator needed. The restore is retried until it is read back.
+FK_LIST_FAIL_ONCE=1 fk_run 1
+[ "$RC" = 1 ] && saw "restored" && [ "$(fk susp.cnpg)" = false ] && [ "$(fk susp.platform)" = false ] && [ "$(fk pdb)" = true ] && [ -e "$FK_STATE/budget" ] \
+  && ok "an apiserver blip at exit: the restore is retried, the roll's own failure status is kept (rc 1)" \
+  || bad "a blip at exit left the maintenance state in place (rc ${RC}): ${OUT}"
+FK_CRD_FAIL_FIRST=2 fk_run 1
+[ "$RC" = 1 ] && saw "restored" && [ "$(fk susp.cnpg)" = false ] && [ "$(fk susp.platform)" = false ] && [ -e "$FK_STATE/budget" ] \
+  && ok "an apiserver that does not answer the first two calls (the CRD lookup): still restored, on a later attempt" \
+  || bad "a CRD lookup that timed out twice left Flux suspended (rc ${RC}): ${OUT}"
+FK_CRD_FAIL_FIRST=2 fk_run 0
+[ "$RC" = 0 ] && saw "Rolling replacement complete" \
+  && ok "…and a roll that succeeded but needed a retry at exit still ends complete" \
+  || bad "a retried restore changed a clean roll's verdict (rc ${RC}): ${OUT}"
+FK_DOWN=1 fk_run 0
+[ "$RC" = 1 ] && saw "cannot tell whether the CNPG CRD exists" && ! saw "Rolling replacement complete" && [ "$(grep -c 'restore did not complete' <<<"$OUT")" = 6 ] \
+  && ok "an apiserver that never comes back: six bounded attempts, then exit 1 with the check's own words, never complete" \
+  || bad "a dead apiserver at exit was retried the wrong number of times or read as restored (rc ${RC}): ${OUT}"
 
 FK_OPERATOR=0 fk_run 0
 [ "$RC" = 1 ] && saw "foundation-databases/zitadel-db-primary is missing" && ! saw "still suspended" \
@@ -872,12 +932,12 @@ FK_CLUSTERS= fk_run 0
   && ok "the CRD installed and no cluster yet: nothing to check, exit 0" \
   || bad "an operator with no database was refused (rc ${RC}): ${OUT}"
 
-# The bound is the clock's, not a count of sleeps, and a problem is said once.
-FK_DOWN=1 FK_SLOW=2 FK_TIMEOUT=2 FK_POLL=1 fk_run 0; N="$(wc -l <"$FK_STATE/calls")"
-[ "$RC" = 1 ] && [ "$N" -le 2 ] \
+# The bound is the clock's, not a count of sleeps, and a problem is said once. (3 reads: the restore, the retry loop's check, the wait.)
+FK_TRIES=1 FK_DOWN=1 FK_SLOW=2 FK_TIMEOUT=2 FK_POLL=1 fk_run 0; N="$(wc -l <"$FK_STATE/calls")"
+[ "$RC" = 1 ] && [ "$N" -le 3 ] \
   && ok "an apiserver that hangs: the wait ends on the clock (${N} reads, not one per sleep)" \
   || bad "the wait counted sleeps, not seconds (rc ${RC}, ${N} reads): ${OUT}"
-FK_DOWN=1 fk_run 0
+FK_TRIES=1 FK_DOWN=1 fk_run 0
 # Twice: the restore's own die, then the final warning. Fewer drops the reason
 # from the warning, more repeats it per poll.
 [ "$RC" = 1 ] && [ "$(grep -c 'cannot tell whether' <<<"$OUT")" = 2 ] \
@@ -939,7 +999,7 @@ L_TRAP="$(lineno '^  trap finish_roll EXIT$')"
 # Every scenario above overrides the timeout and poll, and the request timeout is
 # only checked for being there: pin the defaults the CHANGELOG and docs quote.
 RR_EXIT="$(extract 'assert_restored,finish_roll' | grep -vE '^[[:space:]]*#')"
-for d in 'RESTORE_TIMEOUT:-120}' 'RESTORE_POLL:-5}' 'RESTORE_REQUEST_TIMEOUT:-10s}'; do
+for d in 'RESTORE_TIMEOUT:-120}' 'RESTORE_POLL:-5}' 'RESTORE_REQUEST_TIMEOUT:-10s}' 'RESTORE_TRIES:-6}' 'RESTORE_RETRY_WAIT:-15}'; do
   grep -qF -- "$d" <<<"$RR_EXIT" && ok "the default is pinned: \${$d" || bad "the default \${$d is not in the exit path"
 done
 
@@ -994,6 +1054,81 @@ for c in 'ovh|openstack_compute_volume_attach_v2|openstack_blockstorage_volume_v
     && ok "$m: worker 0's server and BOTH its attach/link resources are targeted, not worker 1's, 10's or the volumes" \
     || bad "$m: node_targets worker 0 returned '${got//$'\n'/ }'"
 done
+
+echo
+echo "=== a replacement that stopped after the destroy leaves a tainted server (lab 27, F-STOCK) ==="
+tc() { # <tainted address, or none> <address>... — tainted_count against a fake `tofu state show`
+  (
+    T="$1"; shift
+    tofu() { [ "$1 $2" = "state show" ] || return 99; local a="${*: -1}"; if [ "$a" = "$T" ]; then printf '# %s: (tainted)\nresource "x" "y" {}\n' "$a"; else printf '# %s:\nresource "x" "y" {}\n' "$a"; fi; }
+    eval "$(extract tainted_count)"
+    tainted_count "$@"
+  )
+}
+SRV='module.scw[0].scaleway_instance_server.control_plane[2]'; NIC='module.scw[0].scaleway_instance_private_nic.control_plane[2]'
+[ "$(tc "$SRV" "$NIC" "$SRV")" = 1 ] && [ "$(tc none "$NIC" "$SRV")" = 0 ] \
+  && ok "tainted_count reads the '(tainted)' header of tofu state show: one tainted server, none when clean" \
+  || bad "tainted_count: '$(tc "$SRV" "$NIC" "$SRV")' / '$(tc none "$NIC" "$SRV")'"
+# A variable, not a pipe: with pipefail, `grep -q` ending the read early kills `extract` with SIGPIPE and the pipeline reads as a miss
+# (CI, once replace_node grew past the pipe buffer).
+RN_T="$(extract replace_node)"
+grep -q 'saved_plan_apply "${node_name}-config" "$t" "$i" "$(( cfg_max + tainted ))" "" check' <<<"$RN_T" \
+  && ok "the pre-flight config plan allows the tainted leftovers it will replace, so the re-run is not refused" \
+  || bad "the pre-flight config plan still counts a tainted server as 'more than one resource'"
+
+echo
+echo "=== a worker whose address follows its instance (OVH Octavia members, lab 27 part B, F-OVHREPL) ==="
+lm() { # <tf_t> <index> <state> — node_lb_members against a fake `tofu state list`
+  (
+    MOD=ovh; STATE="$3"
+    tofu() { printf '%s\n' "$STATE"; }
+    eval "$(extract node_lb_members)"
+    node_lb_members "$1" "$2"
+  )
+}
+LB_STATE="$(printf '%s\n' \
+  'module.ovh[0].openstack_compute_instance_v2.worker[1]' \
+  'module.ovh[0].openstack_lb_member_v2.http[0]' 'module.ovh[0].openstack_lb_member_v2.http[1]' 'module.ovh[0].openstack_lb_member_v2.http[10]' \
+  'module.ovh[0].openstack_lb_member_v2.https[0]' 'module.ovh[0].openstack_lb_member_v2.https[1]' \
+  'module.ovh[0].openstack_lb_member_v2.k8s_api[1]' 'module.other[0].openstack_lb_member_v2.http[1]')"
+[ "$(lm worker 1 "$LB_STATE")" = "$(printf '%s\n' 'module.ovh[0].openstack_lb_member_v2.http[1]' 'module.ovh[0].openstack_lb_member_v2.https[1]')" ] \
+  && ok "worker 1's two Octavia members are found, not worker 0's or 10's, not a control plane's k8s_api member" \
+  || bad "node_lb_members worker 1 returned '$(lm worker 1 "$LB_STATE" | tr '\n' ' ')'"
+[ -z "$(lm cp 1 "$LB_STATE")" ] && [ -z "$(lm worker 1 'module.ovh[0].openstack_compute_instance_v2.worker[1]')" ] \
+  && ok "a control plane has none, and a cluster without the app load balancer has none" \
+  || bad "node_lb_members invented a member"
+
+ia() { # <state show output> — instance_address against a fake `tofu state show`
+  ( SHOWN="$1"; tofu() { printf '%b' "$SHOWN"; }; eval "$(extract instance_address)"; instance_address module.ovh[0].x.worker[1] )
+}
+[ "$(ia '# x:\nresource "x" "y" {\n    access_ip_v4        = "10.0.1.23"\n    access_ip_v6        = ""\n}\n')" = 10.0.1.23 ] \
+  && [ -z "$(ia '# x:\nresource "x" "y" {\n    id = "abc"\n}\n')" ] \
+  && ok "instance_address reads access_ip_v4 from the state, and says nothing where the provider has none" \
+  || bad "instance_address: '$(ia '    access_ip_v4        = "10.0.1.23"\n')'"
+
+# The plan the lab refused: the config, its port guard and the two members, 4 deletes, with the bound the members add.
+OVH_CFG="$(plan_of "$(rc_ 'module.talos.talos_machine_configuration_apply.worker[1]' worker 1 '["delete","create"]')" \
+  "$(rc_ 'module.talos.terraform_data.talos_port_ready_worker[1]' talos_port_ready_worker 1 '["delete","create"]')" \
+  "$(rc_ 'module.ovh[0].openstack_lb_member_v2.http[1]' http 1 '["delete","create"]')" \
+  "$(rc_ 'module.ovh[0].openstack_lb_member_v2.https[1]' https 1 '["delete","create"]')")"
+spa "$OVH_CFG" 4 worker 1 check
+[ "$RC" = 0 ] && ok "the config plan with the two members passes with the bound the members add (4), and is not seen as another node's change" \
+  || bad "the OVH config plan was refused with the members counted (rc ${RC}): ${OUT}"
+spa "$OVH_CFG" 2 worker 1 check
+[ "$RC" -ne 0 ] && grep -q 'destroys 4 resources (at most 2 expected)' <<<"$OUT" \
+  && ok "…and is still refused when the bound does not count them (the guard itself is untouched)" \
+  || bad "the bound was not enforced (rc ${RC}): ${OUT}"
+
+RN="$(extract replace_node)"
+grep -q 'node_lb_members "\$tf_t" "\$i"' <<<"$RN" && grep -q 'cfg_max=\$((cfg_max + 1))' <<<"$RN" \
+  && ok "replace_node names the node's members in the config targets and adds them to the bound" \
+  || bad "replace_node does not count the load balancer members"
+awk '/saved_plan_apply "\$\{node_name\}-instance" .*"\$\{#infra_targets/ {a++} a==2 && /apply "\$\{infra_targets/ {i=NR}
+     /instance_address "\$inst_addr"/ {n=NR} /refresh_state_outputs/ {r=NR} /talos-tunnels.sh" open/ {t=NR}
+     /saved_plan_apply "\$\{node_name\}-config" "\$t" "\$i" "\$cfg_max"/ {c=NR}
+     END{exit !(i && n > i && r > n && t > r && c > t)}' <<<"$RN" \
+  && ok "after the instance apply and before the config apply: read the new address, refresh the outputs, open the tunnels again" \
+  || bad "the address/tunnel refresh is not between the instance apply and the config apply"
 
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 # A floor, not just a verdict: `FAIL -eq 0` is also true when the harness died

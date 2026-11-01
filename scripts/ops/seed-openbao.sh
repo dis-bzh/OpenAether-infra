@@ -24,6 +24,8 @@ ROLE="${2:-management}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source=../lib/common.sh
 source "$ROOT/scripts/lib/common.sh"   # oa_project / oa_backup_bucket
+# shellcheck source=../lib/audit-sink.sh
+source "$ROOT/scripts/lib/audit-sink.sh"   # the audit sink (infra #318), off by default
 CLUSTER="$ROOT/infrastructure/opentofu/cluster"
 TFVARS="${OA_ENVS_DIR:-$CLUSTER/envs}/${ROLE}-${PROVIDER}.tfvars"   # OA_ENVS_DIR: a test sandbox
 NS=foundation-vault
@@ -99,6 +101,34 @@ if [ -n "${OA_BACKUP_REPLICA_S3_ACCESS_KEY_ID:-}" ] || [ -n "${OA_BACKUP_REPLICA
   RBAK="$OA_BACKUP_REPLICA_S3_ACCESS_KEY_ID"; RBSK="$OA_BACKUP_REPLICA_S3_SECRET_ACCESS_KEY"; RBKEYS="dedicated"
 fi
 
+# The audit sink (audit_sink_placement, infra #318, docs/audit-sink.md): one document per sink, with its own S3 pair (the operator's
+# OA_AUDIT_SINK_S3_* / OA_AUDIT_SINK_SECONDARY_S3_*, else the keys of the cloud that holds it, said loudly) and a repository
+# password generated HERE, never printed and never on a command line, and distinct from the backups' (a compromised shipper must
+# not open them). Create-only like everything else: a re-run never rotates it. escrow-openbao.sh export puts it in the escrow.
+oa_audit_sink_load "$TFVARS" || exit 1
+SINK_ENV=(); SINK_DOCS=""; SINK_KEYS=(); SINK_PATHS=()
+if [ "$AS_PLACEMENT" != off ]; then
+  AUDIT_BUCKET="$(oa_audit_bucket "$PROJECT" "$PROVIDER" "$(tfvar environment)")"
+  for n in 1 2; do
+    v="AS_EP$n"; sep="${!v}"; v="AS_RG$n"; srg="${!v}"
+    [ -n "$sep" ] || continue
+    if [ "$n" = 1 ]; then spath=audit/sink; spre=OA_AUDIT_SINK_S3; else spath=audit/sink-secondary; spre=OA_AUDIT_SINK_SECONDARY_S3; fi
+    v="${spre}_ACCESS_KEY_ID"; sak="${!v:-}"; v="${spre}_SECRET_ACCESS_KEY"; ssk="${!v:-}"; skeys=dedicated
+    if [ -n "$sak" ] || [ -n "$ssk" ]; then
+      [ -n "$sak" ] && [ -n "$ssk" ] || fail "${spre}_ACCESS_KEY_ID and ${spre}_SECRET_ACCESS_KEY go together: set both or neither"
+    else
+      sak="$(oa_audit_sink_operator_cred "$PROVIDER" "$sep" ak || true)"; ssk="$(oa_audit_sink_operator_cred "$PROVIDER" "$sep" sk || true)"; skeys=shared
+      [ -n "$sak" ] && [ -n "$ssk" ] || fail "no S3 credentials in scope for the audit sink $sep (the keys of the cloud that holds it, or ${spre}_*)"
+    fi
+    spw="$(head -c 192 /dev/urandom | base64 -w0 | tr -dc 'A-Za-z0-9' | head -c 48 || true)"
+    [ "${#spw}" -eq 48 ] || fail "could not generate the sink repository password"
+    SINK_ENV+=("SINK${n}_EP=$sep" "SINK${n}_RG=$srg" "SINK${n}_B=$AUDIT_BUCKET" "SINK${n}_PF=$AS_PREFIX" "SINK${n}_AK=$sak" "SINK${n}_SK=$ssk" "SINK${n}_PW=$spw" "SINK${n}_LM=$AS_MODE")
+    SINK_DOCS+="
+    doc ${spath} endpoint=SINK${n}_EP region=SINK${n}_RG bucket=SINK${n}_B prefix=SINK${n}_PF access_key=SINK${n}_AK secret_key=SINK${n}_SK restic_password=SINK${n}_PW lock_mode=SINK${n}_LM"
+    SINK_PATHS+=("$spath"); SINK_KEYS+=("$skeys")
+  done
+fi
+
 # Alerting endpoints are real in production and arbitrary on a throwaway cluster. Say which of the two happened.
 SLACK_URL="${OA_SLACK_WEBHOOK_URL:-}"
 DMS_URL="${OA_DEADMANSSWITCH_URL:-}"
@@ -124,12 +154,13 @@ PAYLOAD="$(
   EP2="$REPLICA_EP" B2="${BUCKET}-backup" A2="$RBAK" S2="$RBSK" \
   B3="$LOGS_BUCKET" A3="$LAK" S3="$LSK" \
   SL="$SLACK_URL" DM="$DMS_URL" \
+  env ${SINK_ENV[@]+"${SINK_ENV[@]}"} \
   bash -c "$(declare -f doc)
     doc backup/s3-primary endpoint=EP1 bucket=B1 access_key=A1 secret_key=S1
     doc backup/s3-replica endpoint=EP2 bucket=B2 access_key=A2 secret_key=S2
     doc observability/loki-s3 endpoint=EP1 bucket=B3 accessKey=A3 secretKey=S3
     doc observability/alertmanager-slack webhook-url=SL
-    doc observability/alertmanager-deadmansswitch url=DM"
+    doc observability/alertmanager-deadmansswitch url=DM${SINK_DOCS}"
 )"
 EXPECTED="$(printf '%s\n' "$PAYLOAD" | grep -c .)"
 
@@ -221,6 +252,23 @@ report_backup_keys() { # <secret path> <what it feeds> <shared|dedicated> <bucke
 }
 report_backup_keys backup/s3-primary "restic, Longhorn and CNPG" "$BKEYS" "$BUCKET" OA_BACKUP_S3 "the operator's keys for the primary store"
 report_backup_keys backup/s3-replica "the second copy" "$RBKEYS" "${BUCKET}-backup" OA_BACKUP_REPLICA_S3 "the keys the replica store was opened with"
+# The audit sink: said from OpenBao's answers, like the lines above.
+for i in "${!SINK_PATHS[@]}"; do
+  p="${SINK_PATHS[$i]}"
+  if grep -q "^+ $p\$" <<<"$OUT"; then
+    if [ "${SINK_KEYS[$i]}" = shared ]; then
+      echo "⚠ $p holds the keys of the cloud that holds the sink (OA_AUDIT_SINK_*S3_* not set): inside the cluster they reach every bucket of that"
+      echo "  account and may delete in all of them. Give the shipper a pair limited to ${AUDIT_BUCKET} with no delete right"
+      echo "  (scripts/ops/backup-key-recipe.sh ${TFVARS} audit-sink$([ "$i" = 1 ] && echo -secondary))."
+    else
+      echo "  $p got the key pair you gave and bucket ${AUDIT_BUCKET}."
+    fi
+    echo "  Its repository password was generated in this run and is on no screen: run scripts/ops/escrow-openbao.sh export now, or the sink is"
+    echo "  unreadable the day OpenBao is lost (docs/audit-sink.md, section 4)."
+  elif grep -q "^= $p\$" <<<"$OUT"; then
+    echo "⚠ $p already existed and was left alone: the endpoint, bucket and keys you set were not applied. Replace the entry by hand (docs/admin-access.md, section 3)."
+  fi
+done
 [ $((WROTE + KEPT)) -eq "$EXPECTED" ] || fail "expected $EXPECTED answers from OpenBao, got $((WROTE + KEPT)): $(tr '\n' ' ' <<<"$OUT" | cut -c1-300)"
 
 # ExternalSecrets refresh hourly. Nudge them, or the cluster spends up to an hour looking broken for secrets that are

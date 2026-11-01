@@ -647,6 +647,23 @@ run "verify_scw_root_volume_small_allowed_without_flux" {
   }
 }
 
+# Lab 27 part C, E3: the Outscale root volume type is a variable (the validation of the root variable lives next to the size one).
+run "root_type_must_be_known" {
+  command = plan
+  variables {
+    outscale_root_volume_type = "io2"
+  }
+  expect_failures = [var.outscale_root_volume_type]
+}
+
+run "root_iops_range" {
+  command = plan
+  variables {
+    outscale_root_volume_iops = 20000
+  }
+  expect_failures = [var.outscale_root_volume_iops]
+}
+
 run "verify_outscale_root_volume_range" {
   command = plan
 

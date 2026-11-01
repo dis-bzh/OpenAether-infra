@@ -23,6 +23,8 @@
 #
 # Usage: test-cluster-checks.sh          (STRICT_DEFECTS=1, STRICT_SKIPS=1, RUN_TIMEOUT=<s>)
 set -uo pipefail
+# Hermetic: the real talos-image.sh asks for ~12 GiB of free disk before a build (E5); this test is not about the disk of the machine it runs on.
+export OA_IMAGE_MIN_FREE_GIB=0
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 STUB_DIR="$(mktemp -d)"

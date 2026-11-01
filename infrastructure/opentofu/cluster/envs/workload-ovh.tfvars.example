@@ -28,7 +28,7 @@ deploy_app_lb   = true
 node_distribution = {
   ovh = {
     control_planes     = 3
-    workers            = 3
+    workers            = 4 # 4 workers of 4 vCPU keep `cluster-roll` passable with the full platform, docs/capacity.md
     region             = "EU-WEST-PAR"
     # c3-8 (4 vCPU / 8 GB), not b3-8 (2 vCPU): measured 2026-08-15, three b3-8
     # workers sit at ~99% of CPU requests with the platform on them, so no node
@@ -72,7 +72,7 @@ bastion_ssh_keys = {
 git_repo_url     = "https://github.com/dis-bzh/OpenAether-apps.git"
 # Pin the platform: a commit on a branch would otherwise reach a running
 # cluster within the reconcile interval. refs/heads/<branch> to test.
-git_ref          = "refs/tags/0.3.2"
+git_ref          = "refs/tags/0.4.0"
 
 # --- Backup / DR object stores (OVH S3-compatible Object Storage) -------------
 # Derived buckets (you don't set them) — parts come from this file,

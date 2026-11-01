@@ -29,13 +29,19 @@ signer l'intermédiaire de la PKI) : [`admin-access.fr.md`](admin-access.fr.md).
 
 ## Avant de commencer
 
-- Un compte Scaleway, et le quota pour **6 instances** du type indiqué dans ton
+- Un compte Scaleway, et le quota pour **7 instances** du type indiqué dans ton
   tfvars. Un compte neuf peut être plafonné à 1 — Console → Quotas. Il n'existe
   pas de script de préflight pour Scaleway (`preflight-quotas.py` ne couvre
-  qu'OVH et Outscale) : cette vérification est à ta charge. Le bastion ajoute
+  qu'OVH et Outscale) : cette vérification est à ta charge. Les exemples livrés ont 3 control planes et 4 workers ; le bastion ajoute
   un `DEV1-S` ; ce que consomme chaque provider, et si son exemple atteint le
   plancher de dimensionnement : [`capacity.fr.md`](capacity.fr.md).
 - Une paire de clés SSH que tu possèdes déjà, ou `ssh-keygen -t ed25519`.
+- Environ **12 Gio d'espace disque libre** dans ton clone (`infrastructure/opentofu/talos-image`) : la construction
+  de l'image télécharge l'image brute compressée et la décompresse à côté, environ 11,3 Gio en tout (les 4,5 Go
+  annoncés d'abord dans infra #405 étaient trop bas : trois constructions sont mortes sur `No space left on device`
+  après le téléchargement, à 8,5, 8,7 et 10 Go libres). Quand il doit construire l'image, `task cluster-up` demande avant le premier octet
+  (`OA_IMAGE_MIN_FREE_GIB`, 12 par défaut, 0 coupe le contrôle) et, si le disque manque, s'arrête en affichant les
+  deux chiffres.
 - De quoi conserver une passphrase que tu ne peux pas te permettre de perdre :
   elle chiffre l'état, le kubeconfig et le talosconfig, et rien ne les déchiffre
   sans elle.
@@ -132,7 +138,7 @@ variables préfixées ci-dessus.
 `task cluster-up` vérifie ce fichier avant de construire quoi que ce soit : la clé SSH
 existe et est bien la moitié privée de `bastion_ssh_keys`, le fichier tfvars
 existe, la passphrase est définie et n'est pas le texte d'exemple, et les DEUX
-paires d'identifiants S3 fonctionnent (il crée les quatre buckets pour le
+paires d'identifiants S3 fonctionnent (il crée les buckets pour le
 savoir, d'où la passphrase vérifiée d'abord). Tout cela tourne avant la
 construction de l'image.
 
@@ -146,7 +152,7 @@ $EDITOR management-scaleway.tfvars
 
 | champ | ce qu'il faut y mettre |
 |---|---|
-| `cluster_name` | le tien. **Il a une valeur par défaut, donc aucun contrôle ne te dira de le changer** — et son premier segment nomme les quatre buckets du cluster |
+| `cluster_name` | le tien. **Il a une valeur par défaut, donc aucun contrôle ne te dira de le changer** — et son premier segment nomme tous les buckets du cluster |
 | `bucket_suffix` | **à renseigner sauf si tu es l'auteur d'origine.** Les noms de bucket S3 sont uniques à l'échelle d'un fournisseur entier, pas d'un compte — Scaleway les documente uniques « in our whole platform », OVH « within OVHcloud ». Sans lui tu entreras en collision avec des noms déjà pris. `task bucket-suffix` en imprime un ; choisis-le une fois, le changer ensuite orpheline tous tes buckets |
 | `environment` | `dev` ou `prod`, rien d'autre. Choisis-le une fois : il nomme le bucket d'état. `prod` exige le réplica chez un autre provider : `task cluster-up` refuse avant de dépenser si `s3_replica_endpoint` est l'endpoint du primaire ou le même cloud (un S3 qu'il ne sait pas nommer doit seulement être un autre endpoint). Un nom de cluster qui a déjà un objet d'état est seulement averti avant la dépense, puis `task cluster-up` échoue à son étape de vérification ; y compris un cluster détruit par `task cluster-down`, qui garde le bucket d'état. `dev` peut partager le magasin du primaire |
 | `admin_ip` | `curl -s ifconfig.me` en `/32`. C'est à la fois la liste d'autorisation SSH et l'ACL du LB apiserver |
@@ -193,7 +199,7 @@ l'environnement refuse une application à l'aveugle a donc besoin de l'autorisat
 cette décision est celle du propriétaire, pas du dépôt. Recopie les lignes `deploy_flux = true` et `deploy_app_lb = true` de l'exemple : sans
 elles le cluster n'a que l'infrastructure (le vérificateur signale flux-system en rouge, par conception).
 
-Dans l'ordre, il crée les quatre buckets d'état et d'artefacts (le contrôle des
+Dans l'ordre, il crée les buckets d'état, d'artefacts, de journaux et de sauvegardes applicatives (le contrôle des
 identifiants ci-dessus), construit l'image Talos et la téléverse — **mesuré à
 52 s sur Scaleway le 2026-08-17**, pour deux buckets, un snapshot et une image
 par zone — applique l'infrastructure, ouvre un tunnel SSH par nœud, puis applique
@@ -239,8 +245,12 @@ Un Net d'avant le correctif refuse encore la suppression, sur une dépendance
 qu'aucune lecture ne renvoie ; seul le fournisseur peut la lever, et une seconde
 demande est ouverte pour cela.
 
-Six buckets existent ensuite : l'état et les artefacts, chacun avec son jumeau
-`-backup`, plus l'image et sa zone d'import.
+Neuf buckets existent ensuite : l'état, les artefacts et les sauvegardes applicatives
+(restic, Longhorn, l'archive CNPG), chacun avec son jumeau `-backup`, plus le bucket de
+journaux de Loki, l'image et sa zone d'import. Le jumeau des sauvegardes applicatives est la
+seconde copie de l'archive CNPG, et il existe aussi avec le `backup_immutability = off` par
+défaut (avant la 0.4.0 il manquait, et `cnpg-store-replicate` échouait avec `NoSuchBucket`
+toutes les 15 minutes) ; `task cluster-verify` échoue s'il manque.
 
 Relancer reprend où ça s'est arrêté. Ajouter un worker aussi : `task cluster-up` crée la
 machine, ouvre les tunnels, puis configure seulement le nouveau nœud
@@ -251,6 +261,8 @@ supprime un nœud d'un cluster déjà amorcé, car OpenTofu détruirait la machi
 haut et ses volumes de données sans drain ni sortie d'etcd (`scripts/internal/refuse-node-deletes.sh`). Retirer des
 nœuds a ses deux commandes, `task cluster-shrink-plan` puis `task cluster-shrink`, mesurées sur les trois
 clouds : [`upgrade.fr.md`](upgrade.fr.md#retirer-des-nœuds).
+
+À savoir : la machine est créée avant toute question : sans `APPROVE=auto`, `cluster-up` construit et configure d'abord le nouveau nœud et ne montre le plan qu'ensuite (conception 0.3.x, voir [`upgrade.fr.md`](upgrade.fr.md#ajouter-des-nœuds--cluster-up-crée-la-machine-avant-de-poser-la-question-conception-03x-inchangée)).
 
 ### Risque résiduel : l'application en mode maintenance
 
