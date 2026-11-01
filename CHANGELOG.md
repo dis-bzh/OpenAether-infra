@@ -14,6 +14,15 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ## [Unreleased]
 
+### Changed
+
+- **OpenTofu 1.13.1 → 1.13.2** (Cléa #91, probed green in a bare container, released 2026-10-21): the five `tofu_version` pins of `ci.yml`, the one of `real-cloud-regression.yml` and `TOFU_VERSION`
+  in `scripts/setup.sh`, kept equal. Left out: plumber v0.7.17 and feint v0.14.0 (too young or not probed).
+  Rung: mocked.
+- **tflint v0.64.0 → v0.65.0** (Cléa #91, probed green in a bare container, released 2026-10-22): `scripts/internal/install-tflint.sh`, the single pin `task lint` installs it from. Rung: mocked.
+- **commitizen 4.19.2 → 4.19.3** (Cléa #91, probed green in a bare container, released 2026-10-24): `ci.yml`, the `pip install` of the commit-message check. Rung: mocked.
+- **flux-schema 0.16.0 → 0.17.0** (Cléa #91, probed green in a bare container, released 2026-10-23): `ci.yml` and `scripts/setup.sh`. Rung: mocked.
+
 ## [0.4.0] — 2026-11-01
 
 0.4.0 is the **resilience release**. It pairs with OpenAether-apps 0.4.0, which must be tagged first: the `git_ref` default and the twelve `envs/*.tfvars.example` now pin OpenAether-apps `refs/tags/0.4.0` (they pinned `refs/tags/0.3.2`), and the tftest assertion on the rendered GitRepository follows. What it adds:
