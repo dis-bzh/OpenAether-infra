@@ -40,7 +40,7 @@ FLUX_VERSION="2.9.6"
 # pin as ci.yml's lint job, installed through `flux plugin install`, which
 # does its own checksum verification (fluxcd/flux2 RFC 0013).
 # renovate: datasource=github-releases depName=fluxcd/flux-schema extractVersion=^v(?<version>.*)$
-FLUX_SCHEMA_VERSION="0.16.0"
+FLUX_SCHEMA_VERSION="0.17.0"
 # renovate: datasource=github-releases depName=helm/helm extractVersion=^v(?<version>.*)$
 HELM_VERSION="4.3.1"
 # Five more, pinned so Cléa compares a version instead of "whatever is newest today".

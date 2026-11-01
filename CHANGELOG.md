@@ -26,6 +26,7 @@ in git. 0.1.0 is the first entry describing something proven.
   Rung: mocked.
 - **tflint v0.64.0 → v0.65.0** (Cléa #91, probed green in a bare container, released 2026-10-22): `scripts/internal/install-tflint.sh`, the single pin `task lint` installs it from. Rung: mocked.
 - **commitizen 4.19.2 → 4.19.3** (Cléa #91, probed green in a bare container, released 2026-10-24): `ci.yml`, the `pip install` of the commit-message check. Rung: mocked.
+- **flux-schema 0.16.0 → 0.17.0** (Cléa #91, probed green in a bare container, released 2026-10-23): `ci.yml` and `scripts/setup.sh`. Rung: mocked.
 
 ### Fixed
 
