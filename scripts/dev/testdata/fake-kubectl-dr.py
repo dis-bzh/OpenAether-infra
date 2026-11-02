@@ -6,6 +6,8 @@ FAKE_*     failure injections: FAKE_FAIL_SECRET=1 (the seal key Secret is refuse
            broken), FAKE_APPLY_STALE=1 (Flux never gives the Clusters the new archive name), FAKE_BACKUP_FAIL=1 (the base backup of the new archive
            fails), FAKE_NO_ARCHIVING=1 (ContinuousArchiving stays False), FAKE_VERIFY_FAIL=1 (the restore test of the rebuilt cluster fails), FAKE_NODES=n (nodes of the cluster),
            FAKE_KS_SLOW=n (a Kustomization is NotReady for the first n polls)
+           FAKE_CRON_PRUNE=1 (the CronJob history limit prunes the Jobs made from it that still carry its owner reference), FAKE_JOB_GONE=<job> (that Job is
+           NotFound), FAKE_JOB_PATCH_FAIL=1 (patching a Job is refused)
            Grafana: a pg_restore into grafana-db after the Kustomization observability was resumed fails with the three dependency errors of lab 28B
 Secrets are never written to calls.log: stdin is summarised (a length), --from-file contents are not copied there.
 """
@@ -190,13 +192,42 @@ if "exec" in a and "psql" in a:
     out("".join(f"{i}\t{t}\t{s}\n" for i, t, s in rows))
 if "get backups.postgresql.cnpg.io" in A:
     out("failed" if os.environ.get("FAKE_BACKUP_FAIL") else "completed")
-if "create job --from=cronjob/cnpg-store-replicate" in A:
+def jobs():
+    return get_json(f("jobs.json")) if os.path.exists(f("jobs.json")) else {}
+
+
+if "create job --from=cronjob/" in A:
+    j = jobs()
+    j[a[-1]] = {"owned": True}  # a Job made from a CronJob is owned by it, and its history limit prunes the finished ones
+    put_json(f("jobs.json"), j)
     sys.exit(0)
+if a[:4] == ["-n", "foundation-databases", "patch", "job"]:
+    if os.environ.get("FAKE_JOB_PATCH_FAIL"):
+        sys.stderr.write("Error from server (Forbidden): jobs.batch is forbidden\n")
+        sys.exit(1)
+    j = jobs()
+    if "ownerReferences" in A and a[4] in j:
+        j[a[4]]["owned"] = False
+    put_json(f("jobs.json"), j)
+    sys.exit(0)
+if "delete job" in A:
+    j = jobs()
+    for n in a[a.index("job") + 1:]:
+        j.pop(n, None)
+    put_json(f("jobs.json"), j)
+    sys.exit(0)
+if a[:5] == ["-n", "foundation-databases", "get", "job", "dr-replicate"] or a[:5] == ["-n", "foundation-databases", "get", "job", "dr-check"]:
+    j = jobs()
+    # FAKE_CRON_PRUNE=1: the next scheduled run of the CronJob has finished and pruned every Job it still owns (lab 28B, infra #427);
+    # FAKE_JOB_GONE=<job>: somebody deleted that Job
+    if a[4] not in j or os.environ.get("FAKE_JOB_GONE") == a[4] or (os.environ.get("FAKE_CRON_PRUNE") and j[a[4]]["owned"]):
+        j.pop(a[4], None)
+        put_json(f("jobs.json"), j)
+        sys.stderr.write('Error from server (NotFound): jobs.batch "' + a[4] + '" not found\n')
+        sys.exit(1)
 if "get job dr-replicate" in A:
     out("1")
-if "delete backups.postgresql.cnpg.io" in A or "delete job" in A or "delete clusters.postgresql.cnpg.io" in A:
-    sys.exit(0)
-if "create job --from=cronjob/cnpg-recovery-restore-test" in A:
+if "delete backups.postgresql.cnpg.io" in A or "delete clusters.postgresql.cnpg.io" in A:
     sys.exit(0)
 if "logs job/dr-check" in A:
     if os.environ.get("FAKE_VERIFY_SKIP"):

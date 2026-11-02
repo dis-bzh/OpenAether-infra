@@ -233,7 +233,8 @@ show_dbs() {
 show_identity() { say "  \$ kubectl -n flux-system patch kustomization <identity*, observability, then the rest> --type merge -p '{\"spec\":{\"suspend\":false}}'"; say "  check: no Kustomization is NotReady within 30 minutes"; }
 show_verify() {
   say "  \$ $TASK cluster-verify PROVIDER=$PROVIDER ROLE=$ROLE"
-  say "  \$ kubectl -n foundation-databases create job --from=cronjob/cnpg-recovery-restore-test dr-check ; wait for it"
+  say "  \$ kubectl -n foundation-databases create job --from=cronjob/cnpg-store-replicate dr-replicate ; the same for cnpg-recovery-restore-test (dr-check)"
+  say "    each Job is patched to drop the CronJob's owner reference (its history limit would prune it), then waited for"
   say "  check: both pass (the rebuilt cluster restores its own backups); then log in to each UI by hand and re-seed what lives outside OpenBao"
 }
 show_etcd-fetch() { say "  \$ restic -r $(repo etcd) restore latest --host etcd --target $WORK/etcd"; say "  check: a file of the snapshot exists, a bolt database (size is a multiple of 4096, or 4096n + 32 with a sha256 trailer)"; }
@@ -587,7 +588,28 @@ wait_for() { # <tries> <command...>
 }
 backup_done() { [ "$(K -n foundation-databases get backups.postgresql.cnpg.io "dr-base-$1" -o jsonpath='{.status.phase}' 2>/dev/null)" = completed ]; }
 archiving_true() { [ "$(K -n foundation-databases get clusters.postgresql.cnpg.io "$1" -o 'jsonpath={.status.conditions[?(@.type=="ContinuousArchiving")].status}' 2>/dev/null)" = True ]; }
-replicate_done() { [ "$(K -n foundation-databases get job dr-replicate -o jsonpath='{.status.succeeded}' 2>/dev/null)" = 1 ]; }
+# A Job made with `kubectl create job --from=cronjob/...` is owned by the CronJob, and the CronJob deletes the finished Jobs beyond its history
+# limit (successfulJobsHistoryLimit 1): the next scheduled run removed dr-replicate while the step still waited for it, 900 s of "NotFound"
+# (lab 28B, infra #427). The chain's own Jobs belong to nobody; the null removes the field whether it is there or not.
+job_from_cronjob() { # <cronjob> <job>
+  K -n foundation-databases create job --from="cronjob/$1" "$2" >/dev/null
+  K -n foundation-databases patch job "$2" --type merge -p '{"metadata":{"ownerReferences":null}}' >/dev/null \
+    || echo "  (warning: could not remove the owner reference of the Job $2: the CronJob may prune it)" >&2
+}
+job_succeeded() { # <job>: 0 Complete, 3 NotFound (gone), 1 anything else (running, failed, the API did not answer)
+  local o
+  o="$(K -n foundation-databases get job "$1" -o jsonpath='{.status.succeeded}' 2>&1)" || { grep -q NotFound <<<"$o" && return 3; return 1; }
+  [ "$o" = 1 ]
+}
+wait_job() { # <job>: 0 Complete, 3 gone (read once, not waited on), 1 not Complete within the bound
+  local r
+  for _ in $(seq 1 "${OA_DR_WAIT_TRIES:-90}"); do
+    job_succeeded "$1" && r=0 || r=$?
+    [ "$r" -eq 1 ] || return "$r"
+    sleep "${OA_DR_POLL:-10}"
+  done
+  return 1
+}
 backup_manifest() {
   python3 - "$1" <<'PY'
 import json, sys
@@ -611,18 +633,23 @@ prove_new_archive() {
     wait_for "${OA_DR_WAIT_TRIES:-90}" archiving_true "$c" || { echo "$c: ContinuousArchiving is not True"; return 1; }
   done
   K -n foundation-databases delete job dr-replicate --ignore-not-found >/dev/null
-  K -n foundation-databases create job --from=cronjob/cnpg-store-replicate dr-replicate >/dev/null
-  wait_for "${OA_DR_WAIT_TRIES:-90}" replicate_done || { echo "the copy of the new archive to the replica store (job dr-replicate) did not complete"; return 1; }
+  job_from_cronjob cnpg-store-replicate dr-replicate
+  local r; wait_job dr-replicate && r=0 || r=$?
+  [ "$r" -ne 3 ] || { echo "the Job dr-replicate is gone (NotFound) before it was seen Complete: something deleted it, so the copy of the new archive to the replica store is unproven (list the replica store, or run --only verify again)"; return 1; }
+  [ "$r" -eq 0 ] || { echo "the copy of the new archive to the replica store (job dr-replicate) did not complete"; return 1; }
 }
 run_verify() {
   ( cd "$ROOT" && $TASK cluster-verify PROVIDER="$PROVIDER" ROLE="$ROLE" )
   prove_new_archive || return 1
   K -n foundation-databases delete job dr-check --ignore-not-found >/dev/null
-  K -n foundation-databases create job --from=cronjob/cnpg-recovery-restore-test dr-check >/dev/null
+  job_from_cronjob cnpg-recovery-restore-test dr-check
 }
 check_verify() {
+  local r
   for _ in $(seq 1 "${OA_DR_WAIT_TRIES:-90}"); do
-    if [ "$(K -n foundation-databases get job dr-check -o jsonpath='{.status.succeeded}' 2>/dev/null)" = 1 ]; then
+    job_succeeded dr-check && r=0 || r=$?
+    [ "$r" -ne 3 ] || { echo "the Job dr-check is gone (NotFound) before it was seen Complete: something deleted it, run --only verify again"; return 1; }
+    if [ "$r" -eq 0 ]; then
       # A Job that skipped every combination also "succeeds" (lab 20: the application role could not read the canary, four SKIPs, exit 0).
       local out; out="$(K -n foundation-databases logs job/dr-check --all-containers 2>/dev/null || true)"
       grep -q '^PASS ' <<<"$out" && ! grep -q '^SKIP ' <<<"$out" && return 0

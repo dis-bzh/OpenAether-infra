@@ -238,6 +238,14 @@ new; FAKE_VERIFY_SKIP=1 run "${ALL[@]}" --execute --confirm oa-test --only verif
 chk "a restore test that only skipped does not pass the verify step" "[ $RC = 1 ] && grep -q 'without proving anything' '$TMP/stderr' '$TMP/stdout'"
 new; FAKE_VERIFY_FAIL=1 run "${ALL[@]}" --execute --confirm oa-test --only verify
 chk "a failing restore test on the rebuilt cluster fails the last step" "[ $RC = 1 ] && grep -q 'restore test of the rebuilt cluster failed' '$TMP/stdout'"
+new; FAKE_CRON_PRUNE=1 run "${ALL[@]}" --execute --confirm oa-test --only verify
+chk "the chain's own Jobs lose the CronJob's owner reference, so its history limit cannot prune them (lab 28B, infra #427)" "[ $RC = 0 ] && calls | grep -q 'patch job dr-replicate .*ownerReferences' && calls | grep -q 'patch job dr-check .*ownerReferences'"
+new; FAKE_JOB_GONE=dr-replicate run "${ALL[@]}" --execute --confirm oa-test --only verify
+chk "a copy Job that is gone fails the step at once and says so (NotFound is read once, not waited on for 900 s)" "[ $RC = 1 ] && grep -q 'dr-replicate is gone (NotFound)' '$TMP/stdout' && [ \"\$(calls | grep -c 'get job dr-replicate')\" = 1 ]"
+new; FAKE_JOB_GONE=dr-check run "${ALL[@]}" --execute --confirm oa-test --only verify
+chk "...and so does a restore-test Job that is gone" "[ $RC = 1 ] && grep -q 'dr-check is gone (NotFound)' '$TMP/stdout' && [ \"\$(calls | grep -c 'get job dr-check .*succeeded')\" = 1 ]"
+new; FAKE_JOB_PATCH_FAIL=1 run "${ALL[@]}" --execute --confirm oa-test --only verify
+chk "a refused patch is a warning, not a stop: the Job may still be pruned, which the NotFound read above then names" "[ $RC = 0 ] && grep -q 'could not remove the owner reference of the Job dr-replicate' '$TMP/stderr'"
 
 new; mkdir -p "$OUTD/work"; printf 'cnpg\nidentity\nobservability\n' >"$OUTD/work/held.txt"; FAKE_KS_SLOW=4 run "${ALL[@]}" --execute --confirm oa-test --only identity
 chk "the identity step waits for the DAG twice as long as the other waits (30 min of the 15): observability converges in it since #426" "[ $RC = 0 ]"
