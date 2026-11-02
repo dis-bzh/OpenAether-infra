@@ -941,8 +941,53 @@ delete_dead_node_object() { # <node_name>
   fi
 }
 
+# The pods of <node> that a drain has to move or refuse, one "<ns>/<pod>\t<terminating 0|1>\t<controlled 0|1>" per line.
+# Non-zero when the apiserver did not answer. It sorts the way kubectl drain sorts: finished pods are removed without a word,
+# DaemonSet pods are left alone (--ignore-daemonsets), static (mirror) pods are skipped, and every other pod needs a CONTROLLER
+# (an ownerReference with controller: true) or the drain refuses it at once ("cannot delete Pods that declare no controller").
+# The same API call as rwx_node_residue, which every roll makes on real nodes after its drain.
+drainable_pods() { # <node_name>
+  local out
+  out="$("${KCTL[@]}" get pods -A --field-selector "spec.nodeName=$1" -o json 2>/dev/null)" || return 1
+  jq -r '.items[]
+         | select(.status.phase != "Succeeded" and .status.phase != "Failed")
+         | select((.metadata.annotations // {}) | has("kubernetes.io/config.mirror") | not)
+         | ((.metadata.ownerReferences // []) | map(select(.controller == true))) as $ctl
+         | select(($ctl | map(.kind) | index("DaemonSet")) | not)
+         | "\(.metadata.namespace)/\(.metadata.name)\t\(if .metadata.deletionTimestamp then 1 else 0 end)\t\(if ($ctl | length) > 0 then 1 else 0 end)"' <<<"$out"
+}
+
+# infra #402 (lab 25, D6): bare pods (no controller) on a control plane: kubectl printed "cannot delete Pods that declare no
+# controller" at once and the roll still ended in "could not be drained (timeout 900s)". Whatever the roll waited on, the answer
+# is knowable before it waits on anything: read the pods first, name the bare ones, and refuse in seconds.
+# Unattended it refuses; attended it asks, like the budgets gate does, so an operator who accepts losing a bare pod still can
+# (the drain then refuses it and asks again, as before). A list that cannot be read only warns: kubectl drain is the judge, and
+# this is an early answer, not a gate that lets anything through.
+refuse_bare_pods() { # <node_name>
+  local node="$1" pods bare="" id ctl a
+  if ! pods="$(drainable_pods "$node")"; then
+    warn "could not list the pods of ${node} to look for pods without a controller - the drain below is the judge."
+    return 0
+  fi
+  while IFS=$'\t' read -r id _ ctl; do
+    [[ -n "$id" && "$ctl" == 0 ]] && bare+="    ${id}"$'\n'
+  done <<<"$pods"
+  [[ -n "$bare" ]] || return 0
+  warn "pods without a controller on ${node} - kubectl drain refuses them at once (\"cannot delete Pods that declare no controller\"):"
+  printf '%s' "$bare" >&2
+  if [[ ${ASSUME_YES:-0} -eq 1 ]]; then
+    die "refusing to drain ${node}: it carries pods that nothing would recreate (a test pod, kubectl run), and a drain cannot move them.
+  Nothing was changed on ${node}. Delete them, or put them under a Deployment, then re-run this same command."
+  fi
+  read -rp "Drain ${node} anyway (kubectl will refuse these pods)? [y/N] " a || a=n
+  [[ "$a" == [yY] ]] || die "aborted by operator"
+}
+
 cordon_drain() { # <node_name>
   local node="$1"
+  # FIRST, before the CNPG waits, the budgets wait and the cordon: bare pods are read from the pods, not guessed from kubectl's
+  # words, and answered in seconds (infra #402).
+  refuse_bare_pods "$node"
   # RE-ASSERT, once per node. cnpg_maintenance ran once for the whole roll, and a
   # roll is forty minutes that reboots every worker: on Scaleway 2026-08-16 the
   # budgets were confirmed gone, worker-0 rebooted, CNPG rebuilt the instances it
@@ -992,8 +1037,8 @@ cordon_drain() { # <node_name>
       # full 900s with no eviction error to show for it.
       worker_cpu_requests >&2 || true
       die "${node} could not be drained (timeout ${DRAIN_TIMEOUT}) — refusing to reboot it under workloads that would not move.
-  0. kubectl refused at once: \"cannot delete Pods that declare no controller\" (a bare pod, e.g. left by a test or
-     kubectl run) is named in kubectl's message above; delete it, or move it under a Deployment, and re-run.
+  0. A pod without a controller (a bare pod, e.g. left by a test or kubectl run) is refused by kubectl at once and is named
+     before the drain starts, since infra #402; delete it, or move it under a Deployment, and re-run.
   1. Capacity: the CPU requests above are per worker. If the others are near
      100%, the evicted pods cannot be rescheduled, so their budgets never
      recover. A rolling upgrade needs one node's worth of spare capacity.

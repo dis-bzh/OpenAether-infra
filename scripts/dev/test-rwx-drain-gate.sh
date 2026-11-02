@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # The RWX gate of cordon_drain (apps #124): a node that still holds a Longhorn share-manager pod, or a pod
-# mounting an RWX volume, must not be rebooted. Offline: the functions are extracted from roll-gates.sh and
+# mounting an RWX volume, must not be rebooted. Also the way the drain used to wait its whole timeout for
+# nothing when a bare pod blocks it (infra #402). Offline: the functions are extracted from roll-gates.sh and
 # run against a stub kubectl that answers from JSON files. SUT overrides the file under test (mutants).
 set -uo pipefail
 
@@ -33,15 +34,19 @@ extract() { awk -v fns="$1" '
 KCTL=(kubectl); ASSUME_YES=1; DRAIN_TIMEOUT=10s; RWX_CLEAR_TIMEOUT=2; RWX_POLL=1; SECONDS=0
 info() { :; }; warn() { echo "warn: $*" >&2; }; die() { echo "DIE: $*" >&2; exit 97; }
 # shellcheck disable=SC1090
-eval "$(extract 'rwx_node_residue,wait_rwx_clear')"
+eval "$(extract 'rwx_node_residue,wait_rwx_clear,pdb_hard,cordon_drain,drainable_pods,refuse_bare_pods')"
+# What cordon_drain does before and around the drain is other tests' business (test-rolling-replace.sh); they only leave a line
+# in the log here, so that "before anything else" can be asserted.
+cnpg_maintenance() { echo "STUB cnpg_maintenance" >>"$STUB_LOG"; }; wait_cnpg_whole() { :; }; wait_pdb_headroom() { :; }; worker_cpu_requests() { :; }
+STOP_REQUESTED=0
 
 PVS='{"items":[
  {"spec":{"csi":{"driver":"driver.longhorn.io"},"accessModes":["ReadWriteMany"],"claimRef":{"namespace":"app","name":"shared"}}},
  {"spec":{"csi":{"driver":"driver.longhorn.io"},"accessModes":["ReadWriteOnce"],"claimRef":{"namespace":"app","name":"solo"}}},
  {"spec":{"csi":{"driver":"other.csi"},"accessModes":["ReadWriteMany"],"claimRef":{"namespace":"app","name":"nfs-other"}}}]}'
-pod() { # ns name phase [labels-json] [owner-kind] [claim]
-  jq -n --arg ns "$1" --arg n "$2" --arg ph "$3" --argjson l "${4:-{\}}" --arg o "${5:-}" --arg c "${6:-}" '
-   {metadata:({namespace:$ns,name:$n,labels:$l} + (if $o!="" then {ownerReferences:[{kind:$o}]} else {} end)),
+pod() { # ns name phase [labels-json] [owner-kind] [claim] [extra-metadata-json] [controller: true|false]
+  jq -n --arg ns "$1" --arg n "$2" --arg ph "$3" --argjson l "${4:-{\}}" --arg o "${5:-}" --arg c "${6:-}" --argjson x "${7:-{\}}" --argjson ctl "${8:-true}" '
+   {metadata:({namespace:$ns,name:$n,labels:$l} + (if $o!="" then {ownerReferences:[({kind:$o} + (if $ctl then {controller:true} else {} end))]} else {} end) + $x),
     status:{phase:$ph}, spec:{volumes:(if $c!="" then [{persistentVolumeClaim:{claimName:$c}}] else [] end)}}'; }
 mkpods() { jq -s '{items:.}'; }
 run() { RC=0; OUT="$(rwx_node_residue n1 2>&1)" || RC=$?; }
@@ -83,6 +88,33 @@ RC=0; OUT="$(wait_rwx_clear n1 2>&1)" || RC=$?
 echo '{"items":[]}' >"$TMP/pods.json"
 RC=0; wait_rwx_clear n1 >/dev/null 2>&1 || RC=$?
 [ $RC -eq 0 ] && ok "wait_rwx_clear returns 0 on an empty node" || bad "empty wait rc=$RC"
+
+# 8 a bare pod (infra #402): kubectl drain refuses it at once ("cannot delete Pods that declare no controller"), yet the roll
+# waited 900 s (lab 25). The pods of the node are read BEFORE the CNPG waits, the cordon and the drain, and the refusal names them.
+drain_run() { : >"$TMP/log"; RC=0; OUT="$( ( set -euo pipefail; ok() { :; }; cordon_drain n1 ) 2>&1 )" || RC=$?; }
+mirror='{"annotations":{"kubernetes.io/config.mirror":"abc"}}'
+{ pod app web Running '{}' ReplicaSet; pod kube-system cilium Running '{}' DaemonSet; pod kube-system etcd-n1 Running '{}' "" "" "$mirror"
+  pod app done Succeeded; pod app zlw-1 Running; pod app zlw-2 Pending; pod app owned Running '{}' Foo "" '{}' false; } | mkpods >"$TMP/pods.json"
+ASSUME_YES=1; drain_run
+{ [ $RC -eq 97 ] && grep -q 'app/zlw-1' <<<"$OUT" && grep -q 'app/zlw-2' <<<"$OUT" && grep -q 'app/owned' <<<"$OUT" \
+  && ! grep -qE 'app/(web|done)|cilium|etcd-n1' <<<"$OUT"; } \
+  && ok "unattended, bare pods (no controller) are refused and named; controlled, DaemonSet, mirror and finished pods are not" || bad "bare pods: rc=$RC $OUT"
+{ ! grep -qE 'STUB cnpg_maintenance|cordon|drain n1' "$TMP/log"; } \
+  && ok "…before the CNPG waits, the cordon and the drain: nothing was touched" || bad "the refusal came late: $(cat "$TMP/log")"
+{ pod app web Running '{}' ReplicaSet; pod kube-system cilium Running '{}' DaemonSet; pod app done Succeeded; } | mkpods >"$TMP/pods.json"
+drain_run
+{ [ $RC -eq 0 ] && grep -q 'drain n1' "$TMP/log"; } && ok "no bare pod: the drain goes ahead as before" || bad "refused without a bare pod: rc=$RC $OUT"
+{ pod app zlw-1 Running; } | mkpods >"$TMP/pods.json"; ASSUME_YES=0
+RC=0; : >"$TMP/log"; OUT="$( ( set -euo pipefail; ok() { :; }; cordon_drain n1 ) 2>&1 <<<n )" || RC=$?
+{ [ $RC -eq 97 ] && grep -q 'app/zlw-1' <<<"$OUT" && grep -q 'aborted by operator' <<<"$OUT" && ! grep -q 'cordon' "$TMP/log"; } \
+  && ok "attended, the operator is asked first and \"n\" stops before the cordon" || bad "attended, n: rc=$RC $OUT"
+RC=0; : >"$TMP/log"; OUT="$( ( set -euo pipefail; ok() { :; }; cordon_drain n1 ) 2>&1 <<<y )" || RC=$?
+{ [ $RC -eq 97 ] || [ $RC -eq 0 ]; } && grep -q 'drain n1' "$TMP/log" \
+  && ok "attended, \"y\" goes on to the drain, whose own answer decides (the old behaviour is kept)" || bad "attended, y: rc=$RC $OUT"
+ASSUME_YES=1
+rm -f "$TMP/pods.json"; drain_run
+{ grep -q 'could not list the pods of n1' <<<"$OUT" && grep -q 'drain n1' "$TMP/log"; } \
+  && ok "an unanswered pod list does not stop a drain kubectl can judge itself (it only warns); the drain still runs" || bad "unanswered list: rc=$RC $OUT"
 
 # 7 wiring: cordon_drain calls the gate AFTER the drain, uncordons on failure, and the doc names the issue
 body="$(extract cordon_drain)"

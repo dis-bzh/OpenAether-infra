@@ -415,6 +415,12 @@ Rung: observed on ONE cluster (OVH, lab 28, 3 control planes + 6 workers, 2026-1
 
 **For 0.4.1** (code, not in 0.4.0): extend the RWX check of `cluster-roll` so that it also runs BEFORE the drain on a worker, names the volumes and fails in seconds instead of after 900 s; a plain `kubectl drain` of the node of a `light` database stays blocked by its budget (above), but `cluster-roll` turns that budget off and does not stop for it: when the roll goes through, a `light` database is lost, not blocked (next section).
 
+### A pod without a controller is refused in seconds, not after the drain timeout (lab 25, D6)
+
+Rung: observed on ONE cluster (Scaleway, lab 25, 3 control planes + 4 or 5 workers, on a `--cp-only` roll); the code is mocked offline and UNVERIFIED on a cluster (the lab drill was not run). Not a compliance claim.
+
+Bare writer pods (no controller) sat on a control plane of lab 25: `kubectl drain` printed "cannot delete Pods that declare no controller" at once, yet the roll stalled 900 s and then ended in "could not be drained". Why the roll waited is NOT established (the refusal of `kubectl` is immediate; the waits that come before the drain, on the CNPG clusters and on the budgets, are the candidates, and the message prints the drain timeout whatever really ran out). So the answer no longer depends on it: since 0.4.1 `cordon_drain` reads the pods of the node FIRST, before the CNPG waits, the budgets wait, the cordon and the drain, lists those that `kubectl drain` would refuse (kubectl's own rule: no owner reference with `controller: true`; DaemonSet pods, static pods and finished pods are not counted) and **refuses at once, naming them, with the node untouched** when the roll is unattended (`--yes`, `APPROVE=auto`); attended, it asks "Drain … anyway?" and, on yes, goes on as before (the drain then refuses them, and the old question follows). A pod list that cannot be read only warns: `kubectl drain` stays the judge. Delete the pods (or put them under a Deployment) and run the same command again.
+
 ### A node replace destroys the data of a single-instance database (`light` profile; lab 28B, I17)
 
 Rung: observed on ONE cluster (Scaleway, lab 28B, 3 control planes + 6 workers, 2026-10-30); the warning in the roll is for 0.4.1, with no date. Not a compliance claim.

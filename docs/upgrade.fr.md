@@ -431,6 +431,12 @@ Pas encore prouvé sur un cluster : qu'un nœud drainé redémarre ensuite en 1,
 
 **Pour la 0.4.1** (code, pas dans la 0.4.0) : étendre le contrôle RWX de `cluster-roll` pour qu'il s'exécute aussi AVANT le drain sur un worker, nomme les volumes et échoue en quelques secondes au lieu de 900 s ; un simple `kubectl drain` du nœud d'une base `light` reste bloqué par son budget (ci-dessus), mais `cluster-roll` coupe ce budget et ne s'arrête pas pour elle : quand le roll passe, une base `light` est perdue et non bloquée (section suivante).
 
+### Un pod sans contrôleur est refusé en quelques secondes, pas après le délai du drain (labo 25, D6)
+
+Échelon : observé sur UN cluster (Scaleway, labo 25, 3 plans de contrôle + 4 ou 5 workers, lors d'un roll `--cp-only`) ; le code est testé hors ligne avec des simulations et NON VÉRIFIÉ sur un cluster (l'exercice en labo n'a pas été fait). Pas une déclaration de conformité.
+
+Des pods d'écriture nus (sans contrôleur) se trouvaient sur un plan de contrôle du labo 25 : `kubectl drain` a affiché « cannot delete Pods that declare no controller » aussitôt, et pourtant le roll est resté bloqué 900 s avant de finir sur « could not be drained ». Pourquoi le roll a attendu n'est PAS établi (le refus de `kubectl` est immédiat ; les attentes qui précèdent le drain, sur les clusters CNPG et sur les budgets, sont les candidates, et le message affiche le délai du drain quoi qu'il ait vraiment expiré). La réponse ne dépend donc plus de cela : depuis la 0.4.1 `cordon_drain` lit d'ABORD les pods du nœud, avant les attentes CNPG, l'attente des budgets, le cordon et le drain, liste ceux que `kubectl drain` refuserait (la règle de kubectl : aucune référence de propriétaire avec `controller: true` ; les pods de DaemonSet, les pods statiques et les pods terminés ne comptent pas) et **refuse aussitôt, en les nommant, sans avoir touché au nœud** quand le roll est non interactif (`--yes`, `APPROVE=auto`) ; en mode interactif il demande « Drain … anyway? » et, si oui, continue comme avant (le drain les refuse alors, et l'ancienne question suit). Une liste de pods illisible ne fait qu'avertir : `kubectl drain` reste le juge. Supprimer les pods (ou les placer sous un Deployment) puis relancer la même commande.
+
 ### Un remplacement de nœud détruit les données d'une base à instance unique (profil `light` ; labo 28B, I17)
 
 Échelon : observé sur UN cluster (Scaleway, labo 28B, 3 plans de contrôle + 6 workers, 2026-10-30) ; l'avertissement dans le roll est pour la 0.4.1, sans date. Pas une déclaration de conformité.
