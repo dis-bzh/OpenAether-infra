@@ -313,20 +313,33 @@ oa_pinned_version() {
 
 # --- Is this operator-typed secret plausibly random? A heuristic, never a proof. ----
 # Length alone passes 32 copies of one word. Prints one reason per line (nothing when the
-# value looks fine). Hex output (`openssl rand -hex`) has at most 16 distinct characters,
-# so it gets a lower bar than base64. Usage: oa_passphrase_problems <value>
+# value looks fine). Hex output (`openssl rand -hex`) has at most 16 distinct characters, so it
+# gets a lower bar than base64, and rules chance trips too often on 64 hex characters (infra #416):
+# a run of six identical characters turns up in about 1 draw in 18,000 and "abcdef" or "123456" inside
+# in about 1 in 140,000 (computed; 400,000 simulated draws flagged 19 and 30). For a hex value a run must
+# reach ten (about 8e-10 per draw) and a common word must START it (about 1.2e-7) or occur twice (about 1e-11):
+# a typed shape (0123456789abcdef0123...), not a chance one. The distinct-character and repeated-block rules are
+# the same for hex. What hex no longer flags: ONE "abcdef" or "123456" inside, or a run of six to nine.
+# Usage: oa_passphrase_problems <value>
 oa_passphrase_problems() {
-  local p="$1" lower distinct w
+  local p="$1" lower distinct w stripped hex=0 maxrun=6 runword=six
   lower="${p,,}"
   [ "${#p}" -ge 32 ] || echo "shorter than 32 characters"
   distinct="$(printf '%s' "$p" | grep -o . | sort -u | wc -l)"
   if [[ "$p" =~ ^[0-9a-fA-F]+$ ]]; then
+    hex=1; maxrun=10; runword=ten
     [ "$distinct" -ge 10 ] || echo "only $distinct distinct characters for a hex string"
   else
     [ "$distinct" -ge 20 ] || echo "only $distinct distinct characters (a random base64 string has about 40)"
   fi
   for w in change-me changeme password passphrase qwerty azerty 123456 abcdef example; do
-    case "$lower" in *"$w"*) echo "contains the common word '$w'"; break ;; esac
+    if [ "$hex" -eq 1 ]; then
+      stripped="${lower//"$w"/}"   # the value without the word: the length lost says how many times it occurs
+      case "$lower" in "$w"*) echo "starts with the common word '$w'"; break ;; esac
+      [ $((${#lower} - ${#stripped})) -ge $((2 * ${#w})) ] && { echo "repeats the common word '$w'"; break; }
+    else
+      case "$lower" in *"$w"*) echo "contains the common word '$w'"; break ;; esac
+    fi
   done
   # Pure bash: BSD/ugrep builds of grep do not all take back-references.
   local n="${#p}" u k i rep run=1
@@ -337,7 +350,7 @@ oa_passphrase_problems() {
   done
   for ((i = 1; i < n; i++)); do
     if [ "${p:i:1}" = "${p:i-1:1}" ]; then run=$((run + 1)); else run=1; fi
-    [ "$run" -ge 6 ] && { echo "has a run of six identical characters"; break; }
+    [ "$run" -ge "$maxrun" ] && { echo "has a run of $runword identical characters"; break; }
   done
   return 0
 }

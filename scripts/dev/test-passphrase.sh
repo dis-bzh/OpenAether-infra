@@ -14,12 +14,23 @@ CHK="$ROOT/scripts/internal/check-passphrase.sh"; GEN="$ROOT/scripts/ops/gen-pas
 
 echo "=== what the documented generators produce is never flagged ==="
 flagged=0
+# A flagged draw is printed with its value and its rules, so a rare red names its own cause (infra #416). The value is a
+# test draw, never used as a secret.
+draw_check() { # label value
+  local why; why="$(oa_passphrase_problems "$2")"
+  [ -z "$why" ] && return 0
+  flagged=$((flagged + 1))
+  printf '    flagged %s draw: %s -> %s\n' "$1" "$2" "$(paste -sd ';' <<<"$why")"
+}
 for _ in $(seq 40); do
-  [ -z "$(oa_passphrase_problems "$("$GEN")")" ] || flagged=$((flagged + 1))
-  [ -z "$(oa_passphrase_problems "$(openssl rand -base64 48)")" ] || flagged=$((flagged + 1))
-  [ -z "$(oa_passphrase_problems "$(openssl rand -hex 32)")" ] || flagged=$((flagged + 1))
+  draw_check gen-passphrase "$("$GEN")"
+  draw_check base64-48 "$(openssl rand -base64 48)"
+  draw_check hex-32 "$(openssl rand -hex 32)"
 done
-[ "$flagged" = 0 ] && ok "120 generated values (gen-passphrase.sh, base64 48, hex 32): none flagged" || bad "$flagged generated values were flagged"
+[ "$flagged" = 0 ] && ok "120 generated values (gen-passphrase.sh, base64 48, hex 32): none flagged" || bad "$flagged generated values were flagged (listed above)"
+out="$(draw_check forced "$(printf 'a%.0s' $(seq 40))")"
+{ grep -q 'forced draw: a\{40\} ->' <<<"$out" && grep -q 'one block repeated' <<<"$out"; } \
+  && ok "a flagged draw is printed with its value and the rule that flagged it" || bad "draw_check output: ${out:-nothing}"
 out="$("$GEN")"
 { [ "$(wc -l <<<"$out")" = 1 ] && [ "${#out}" = 64 ]; } && ok "gen-passphrase.sh prints one line of 64 characters (48 random bytes)" || bad "gen output: ${#out} chars"
 # A fixed value: a random hex-16 has fewer than 10 distinct characters about once in 10^4 draws and the heuristic then
@@ -38,6 +49,28 @@ want "a dictionary phrase (few distinct characters)" "correct-horse-battery-stap
 want "one block repeated" "Xk9#mP2\$vL8@nQ4!Xk9#mP2\$vL8@nQ4!" "one block repeated"
 want "a run of one character" "Xk9#mP2\$vL8@nQ4!wR7&tY5*uI3^oEEEEEE6%" "run of six"
 want "hex with too few distinct characters" "ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12" "hex string"
+
+echo "=== a random hex draw is not flagged for what chance puts in it, a typed shape still is (infra #416) ==="
+# 64 hex characters from `openssl rand -hex 32` carry a run of six identical characters about once in 18,000 draws
+# and "abcdef" or "123456" somewhere about once in 140,000 (computed; two simulations of 400,000 draws flagged 19 and 30): those are not
+# weaknesses of a random value. Hex keeps the guard in a form chance does not trip: a run of ten (about 8e-10 per
+# draw), a word only at the start (about 1.2e-7) or twice, plus the distinct-character and repeated-block rules.
+hex_tail="1c7a9b3d5f2e8c4a6071b9d3f5e7a2c4b6d8091a3f"
+accept() { # label value: a random-looking hex value has to pass
+  local got; got="$(oa_passphrase_problems "$2")"
+  [ -z "$got" ] && ok "$1" || bad "$1 — flagged: $(paste -sd ';' <<<"$got")"
+}
+accept "hex with a run of six identical characters inside is accepted" "3f9a7c1e5b2d8046eeeeee$hex_tail"
+accept "hex with 'abcdef' inside is accepted" "3f9a7c1e5b2d8046abcdef$hex_tail"
+accept "hex with '123456' inside is accepted" "3f9a7c1e5b2d8046123456$hex_tail"
+accept "hex with an uppercase 'ABCDEF' inside is accepted" "3F9A7C1E5B2D8046ABCDEF$hex_tail"
+want "hex with a run of ten is still flagged" "3f9a7c1e5b2d8046eeeeeeeeee$hex_tail" "run of ten"
+want "hex that starts with 'abcdef' is still flagged" "abcdef9a7c1e5b2d8046$hex_tail" "common word 'abcdef'"
+want "hex that starts with '123456' is still flagged" "1234563f9a7c1e5b2d80$hex_tail" "common word '123456'"
+want "hex that carries 'abcdef' twice is still flagged" "3f9a7c1eabcdef2d8046${hex_tail}abcdef" "repeats the common word 'abcdef'"
+want "the lazy hex 0123456789abcdef0123456789abcdef0123 is still flagged" "0123456789abcdef0123456789abcdef0123" "common word"
+want "a non-hex value with 'abcdef' inside is still flagged" "Xk9#mP2\$vL8@nQ4!abcdefwR7&tY5*uI3^oE" "common word 'abcdef'"
+want "a non-hex value with a run of six is still flagged" "Xk9#mP2\$vL8@nQ4!wR7&tY5*uI3^oE111111" "run of six"
 
 echo "=== modes ==="
 WEAK="correct-horse-battery-staple-32chars"; GOOD="$("$GEN")"
