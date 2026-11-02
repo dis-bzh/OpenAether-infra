@@ -23,6 +23,10 @@ in git. 0.1.0 is the first entry describing something proven.
 - **commitizen 4.19.2 → 4.19.3** (Cléa #91, probed green in a bare container, released 2026-10-24): `ci.yml`, the `pip install` of the commit-message check. Rung: mocked.
 - **flux-schema 0.16.0 → 0.17.0** (Cléa #91, probed green in a bare container, released 2026-10-23): `ci.yml` and `scripts/setup.sh`. Rung: mocked.
 
+### Fixed
+
+- **Talos tunnels retry a port that is busy only as someone's source port** (infra #422, closes the CI flake #431). `talos-tunnels.sh` respawns, alone, a tunnel whose ssh died on "Address already in use" with nothing listening there (lab 28B: the host's own 1 Hz probe held `:52100`), up to 3 times after 4 s (`OA_TUNNEL_BIND_RETRIES`, `OA_TUNNEL_BIND_PAUSE`); any other failure is reported at once, and a port still busy after the retries is named with the `ip_local_reserved_ports` way out. `test-talos-tunnels.sh` now holds a port the way the host did (and picks its own port block by a bind, not `nc -z`). Rung: mocked; UNVERIFIED on a cluster.
+
 ## [0.4.0] — 2026-11-01
 
 0.4.0 is the **resilience release**. It pairs with OpenAether-apps 0.4.0, which must be tagged first: the `git_ref` default and the twelve `envs/*.tfvars.example` now pin OpenAether-apps `refs/tags/0.4.0` (they pinned `refs/tags/0.3.2`), and the tftest assertion on the rendered GitRepository follows. What it adds:

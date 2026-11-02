@@ -245,6 +245,8 @@ the CNPG archive, and it exists with the default `backup_immutability = off` too
 (before 0.4.0 it did not, and `cnpg-store-replicate` failed with `NoSuchBucket` every
 15 minutes); `task cluster-verify` fails when it is missing.
 
+A Talos tunnel port that a busy workstation holds for a moment ("Address already in use" with nothing listening) is retried by itself since 0.4.1; if one stays busy the script names the way out (`net.ipv4.ip_local_reserved_ports` for the tunnel block, or another `TALOS_TUNNEL_OFFSET`), see [`upgrade.md`](upgrade.md).
+
 Re-running resumes. So does an edit that adds a worker: `task cluster-up` creates the
 machine, opens the tunnels, then configures only the new node
 (`scripts/bootstrap/grow-nodes.sh`), measured on Scaleway going from 3 to 6 workers.
