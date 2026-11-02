@@ -10,6 +10,8 @@ FAKE_*     failure injections: FAKE_FAIL_SECRET=1 (the seal key Secret is refuse
            NotFound), FAKE_JOB_PATCH_FAIL=1 (patching a Job is refused)
            FAKE_BAO_NOLEADER=<pod> (that OpenBao standby knows no active node until its pod is deleted), FAKE_BAO_STUCK=1 (...not even then),
            FAKE_BAO_NOANSWER=<pod> (that pod does not answer exec)
+           FAKE_CILIUM=stuck|stuck-forever|slow (the Cilium rollout does not finish: an agent stuck Terminating, which a force-delete frees / which is
+           replaced by one that does not come up / no pod Terminating at all)
            Grafana: a pg_restore into grafana-db after the Kustomization observability was resumed fails with the three dependency errors of lab 28B
 Secrets are never written to calls.log: stdin is summarised (a length), --from-file contents are not copied there.
 """
@@ -153,6 +155,19 @@ if a[:2] == ["get", "externalsecret"]:
     out("ns es True\n" * 3)
 if "get ds cilium" in A:
     out("daemonset.apps/cilium\n")
+# FAKE_CILIUM=stuck: one agent pod is Terminating until it is force-deleted, the rollout cannot finish before; stuck-forever: the replacement does not come up
+# either; slow: the rollout does not finish and no pod is Terminating (lab 28B, infra #428)
+cilium = os.environ.get("FAKE_CILIUM", "")
+forced = os.path.exists(f("cilium-forced"))
+if a[:3] == ["-n", "kube-system", "delete"] and "pod" in a:
+    put(f("cilium-forced"), a[a.index("pod") + 1] + "\n", "a")
+    sys.exit(0)
+if "get pods -l k8s-app=cilium" in A:
+    rows = "cilium-aaaaa 1/1 Running 0 9m\n" + ("cilium-bbbbb 1/1 Terminating 0 9m\n" if cilium.startswith("stuck") and not forced else "")
+    out(rows)
+if "rollout status ds/cilium" in A and (cilium == "slow" or cilium == "stuck-forever" or (cilium == "stuck" and not forced)):
+    sys.stderr.write("error: timed out waiting for the condition\n")
+    sys.exit(1)
 if "rollout" in A:
     sys.exit(0)
 if "get cluster " in A + " ":  # the bare name is the CAPI Cluster on a management cluster (lab 20): nothing is there

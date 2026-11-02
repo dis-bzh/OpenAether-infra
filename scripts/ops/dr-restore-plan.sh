@@ -242,7 +242,11 @@ show_etcd-recover() {
   say "  \$ talosctl --talosconfig $TCFG -n <control-plane IP, --control-plane-ip> -e <talosconfig endpoint> bootstrap --recover-from=<snapshot> [--recover-skip-hash-check]"
   say "  note: the node must have no etcd data (wiped or new); this REPLACES the etcd of the cluster and drops everything written since the snapshot"
 }
-show_etcd-check() { say "  \$ talosctl etcd members ; kubectl get nodes ; kubectl -n flux-system get kustomization"; say "  check: 3 members (or the control plane count), nodes Ready"; }
+show_etcd-check() {
+  say "  \$ talosctl etcd members ; kubectl get nodes ; kubectl -n flux-system get kustomization"
+  say "  \$ kubectl -n kube-system rollout restart ds/cilium deploy/cilium-operator ; rollout status ds/cilium --timeout=300s (an agent stuck Terminating is force-deleted once, then the wait is repeated once)"
+  say "  check: 3 members (or the control plane count), nodes Ready, the Cilium agents rolled. NOT scripted (docs/disaster-recovery.md, the hand steps): a node whose pods stay unreachable, controllers that crash-loop"
+}
 
 # ── run_<id>: execute ──────────────────────────────────────────────────────────────────────────────────────────────────────
 HELD="$WORK/held.txt"
@@ -724,6 +728,22 @@ run_etcd-recover() {
 }
 check_etcd-recover() { :; }
 run_etcd-check() { :; }
+# Restart the Cilium agents and the operator and wait for the agents. In lab 28B the rollout waited its whole 300 s on ONE agent stuck
+# Terminating (a worker), and a person force-deleted the pod (infra #428). After the first bound the agent pods that are Terminating are
+# force-deleted ONCE and the wait is repeated ONCE; nothing else is touched (a slow rollout with no Terminating pod fails as before). The
+# node whose datapath stays dead after that (its pods unreachable from the others) is a reboot, by hand: docs/disaster-recovery.md.
+cilium_restart() {
+  local stuck p
+  K -n kube-system rollout restart ds/cilium deploy/cilium-operator >/dev/null || return 1
+  K -n kube-system rollout status ds/cilium --timeout=300s >/dev/null 2>&1 && return 0
+  stuck="$(K -n kube-system get pods -l k8s-app=cilium --no-headers 2>/dev/null | awk '$3 == "Terminating" { print $1 }')"
+  [ -n "$stuck" ] || return 1
+  for p in $stuck; do
+    say "  (the Cilium agent $p is stuck Terminating after 300 s: force-deleted once)"
+    K -n kube-system delete pod "$p" --grace-period=0 --force >/dev/null 2>&1 || true
+  done
+  K -n kube-system rollout status ds/cilium --timeout=300s >/dev/null 2>&1
+}
 check_etcd-check() {
   for _ in $(seq 1 "${OA_DR_WAIT_TRIES:-90}"); do
     if K get --raw=/readyz >/dev/null 2>&1 && [ "$(K get nodes --no-headers 2>/dev/null | awk '$2 !~ /^Ready/' | wc -l)" -eq 0 ]; then
@@ -731,7 +751,7 @@ check_etcd-check() {
       # and about twenty controllers (Flux, CNPG, cert-manager) crash-looped until the agents were restarted.
       if K -n kube-system get ds cilium >/dev/null 2>&1; then
         say "  (restarting the Cilium agents and operator: their watches predate the restored revision)"
-        K -n kube-system rollout restart ds/cilium deploy/cilium-operator >/dev/null && K -n kube-system rollout status ds/cilium --timeout=300s >/dev/null || { echo "the Cilium agents did not come back"; return 1; }
+        cilium_restart || { echo "the Cilium agents did not come back (docs/disaster-recovery.md, \"In-place etcd restore: the hand steps\")"; return 1; }
       fi
       return 0
     fi

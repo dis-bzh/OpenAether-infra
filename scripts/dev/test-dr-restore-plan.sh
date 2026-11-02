@@ -293,6 +293,13 @@ chk "a tunnel endpoint is refused as the node: the address of the control plane 
 new; FAKE_ETCD_SIZE=8224 FAKE_TALOS_ENDPOINT=127.0.0.1:52000 run "${ALL[@]}" --scenario etcd --execute --confirm oa-test --control-plane-ip 172.16.0.3
 chk "behind a tunnel the node is the given address and the endpoint stays the tunnel" "[ $RC = 0 ] && calls | grep -q 'talosctl.* -n 172.16.0.3 -e 127.0.0.1:52000 bootstrap --recover-from='"
 chk "after the etcd restore the Cilium agents and operator are restarted (their watches predate the restored revision)" "calls | grep -q 'rollout restart ds/cilium deploy/cilium-operator'"
+chk "...and when the rollout finishes nothing is force-deleted" "[ \"\$(calls | grep -c 'rollout status ds/cilium --timeout=300s')\" = 1 ] && ! calls | grep -q 'delete pod cilium'"
+new; FAKE_ETCD_SIZE=8224 FAKE_CILIUM=stuck run "${ALL[@]}" --scenario etcd --execute --confirm oa-test
+chk "a Cilium agent stuck Terminating (lab 28B) is force-deleted once after the first 300 s, the wait is repeated once, and the step passes (infra #428)" "[ $RC = 0 ] && [ \"\$(calls | grep -c 'delete pod cilium-bbbbb --grace-period=0 --force')\" = 1 ] && [ \"\$(calls | grep -c 'rollout status ds/cilium --timeout=300s')\" = 2 ] && grep -q 'cilium-bbbbb is stuck Terminating' '$TMP/stdout'"
+new; FAKE_ETCD_SIZE=8224 FAKE_CILIUM=stuck-forever run "${ALL[@]}" --scenario etcd --execute --confirm oa-test
+chk "...but only once: an agent that does not come back after that stops the chain, naming the recipe" "[ $RC = 1 ] && [ \"\$(calls | grep -c 'delete pod cilium')\" = 1 ] && grep -q 'did not come back' '$TMP/stdout' && grep -q 'disaster-recovery.md' '$TMP/stdout'"
+new; FAKE_ETCD_SIZE=8224 FAKE_CILIUM=slow run "${ALL[@]}" --scenario etcd --execute --confirm oa-test
+chk "a rollout that is merely slow (no pod Terminating) fails after the bound and deletes nothing" "[ $RC = 1 ] && ! calls | grep -q 'delete pod' && grep -q 'did not come back' '$TMP/stdout'"
 new; FAKE_ETCD_SIZE=1000 run "${ALL[@]}" --scenario etcd --execute --confirm oa-test
 chk "a file that is not a bolt database stops the chain before talosctl is called" "[ $RC = 1 ] && ! calls | grep -q 'talosctl.*bootstrap'"
 
