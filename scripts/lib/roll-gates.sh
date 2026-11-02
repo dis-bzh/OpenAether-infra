@@ -811,6 +811,9 @@ preflight_roll() {
 # unmount is still "on the node", so this gate looks at what is left.
 RWX_CLEAR_TIMEOUT="${RWX_CLEAR_TIMEOUT:-300}"   # seconds
 RWX_POLL="${RWX_POLL:-5}"
+# The drain's stall watch (infra #417, drain_watched below). 0 turns the watch off: the plain foreground drain, as before.
+DRAIN_STALL_AFTER="${DRAIN_STALL_AFTER:-120}"   # seconds the pods of the node must stay the same, none terminating, behind a budget
+DRAIN_STALL_POLL="${DRAIN_STALL_POLL:-10}"      # seconds between two readings of the node's pods
 
 # "<ns>/<pod>\t<why>" per line: what still sits on <node> that an RWX volume
 # ties to it. Dies when it cannot ask: an unanswered query is not an empty list.
@@ -983,6 +986,85 @@ refuse_bare_pods() { # <node_name>
   [[ "$a" == [yY] ]] || die "aborted by operator"
 }
 
+# The pods of <node> that sit behind a budget allowing nothing, one "<ns>/<pod>  behind  <ns>/<budget> (<healthy>/<expected>)" per
+# line. Only the pods the drain still has (the second argument is drainable_pods' answer: a DaemonSet pod, a static pod or a
+# finished pod covered by a budget is not something the drain waits on). The caller has already seen that none of them is
+# terminating (a pod being evicted is the drain at work, however long its grace period), so a pod listed here is one whose eviction
+# is being refused. Reads the budgets with pdb_hard, which already leaves out the ones that are short of a pod (those wait for the
+# pod to come back) and tells nothing about by-design zeros elsewhere in the cluster.
+# Non-zero when the budgets could not be read.
+drain_stall_blockers() { # <node_name> <drainable_pods lines>
+  local node="$1" remaining="$2" hard ns name state sel names p id live=$'\n'
+  hard="$(pdb_hard)" || return 1
+  while IFS=$'\t' read -r id _; do [[ -n "$id" ]] && live+="${id}"$'\n'; done <<<"$remaining"
+  while IFS=$'\t' read -r ns name state sel; do
+    [[ -n "$ns" && -n "$name" && -n "$sel" ]] || continue
+    names="$("${KCTL[@]}" -n "$ns" get pods -l "$sel" --field-selector "spec.nodeName=${node}" \
+      -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)" || continue
+    for p in $names; do
+      [[ "$live" == *$'\n'"${ns}/${p}"$'\n'* ]] || continue
+      printf '%s/%s  behind  %s/%s (%s)\n' "$ns" "$p" "$ns" "$name" "$state"
+    done
+  done <<<"$hard"
+}
+
+# infra #417 (lab 28, I3): a worker with an attached RWX share-manager (or the only instance of a single-instance database) kept
+# the drain waiting its whole timeout, then refused: rc 201 after 1,026 s, no damage. Waiting does not help, and nothing tells
+# in advance which node does that: the RWX gate exists because the drain is the cure on a node that holds a share-manager and
+# works, so a prediction would refuse rolls that go through today. The drain is WATCHED instead. It runs in the background and
+# the pods of the node are read every DRAIN_STALL_POLL seconds; it is stopped, and reported as failed, when for
+# DRAIN_STALL_AFTER seconds (a) the same pods remain, (b) none of them is terminating, and (c) a budget that allows nothing
+# covers one of them (drain_stall_blockers). A drain that evicts pods, or whose pods are winding down, or that waits on nothing a
+# budget forbids, is left to kubectl and its own timeout, exactly as before. The reason is left in DRAIN_WHY.
+# What stopping costs: nothing the timeout did not cost. The caller takes the failure path of a drain that failed (budgets and
+# Flux are restored by the EXIT trap, the node is uncordoned, the blockers and the volumes are named) after DRAIN_STALL_AFTER
+# seconds instead of DRAIN_TIMEOUT. UNVERIFIED on a cluster: the window is set above the planned drains measured (database gap
+# 10.6-16.6 s, lab 28 O4), and DRAIN_STALL_AFTER=0 restores the plain drain.
+# The watch asks every DRAIN_TICK seconds (a fifth of a second) whether kubectl has ended, so a drain that works is noticed at once.
+DRAIN_WHY=""
+drain_watched() { # <node_name> → kubectl's status, or 1 when this function stopped it
+  local node="$1" after="${DRAIN_STALL_AFTER:-120}" poll="${DRAIN_STALL_POLL:-10}" tick="${DRAIN_TICK:-0.2}" pid cur sig prev="" changed_at next idle blockers residue
+  DRAIN_WHY=""
+  if (( after <= 0 )); then
+    "${KCTL[@]}" drain "$node" --ignore-daemonsets --delete-emptydir-data --timeout="$DRAIN_TIMEOUT"
+    return
+  fi
+  "${KCTL[@]}" drain "$node" --ignore-daemonsets --delete-emptydir-data --timeout="$DRAIN_TIMEOUT" &
+  pid=$!
+  changed_at=$SECONDS; next=$((SECONDS + poll))
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep "$tick" 2>/dev/null || sleep 1
+    # A background command ignores Ctrl+C, where the foreground drain used to die of it: the interrupt is read here, and takes
+    # the same road (the drain ends in failure, the caller gives the node back).
+    if (( ${STOP_REQUESTED:-0} )); then
+      kill "$pid" 2>/dev/null; { wait "$pid"; } 2>/dev/null || true
+      DRAIN_WHY="interrupted"; return 1
+    fi
+    (( SECONDS >= next )) || continue
+    next=$((SECONDS + poll))
+    cur="$(drainable_pods "$node")" || continue          # not answered: no information, neither progress nor stall
+    sig="$(sort <<<"$cur")"
+    if [[ "$sig" != "$prev" ]]; then prev="$sig"; changed_at=$SECONDS; continue; fi
+    idle=$((SECONDS - changed_at))
+    (( idle >= after )) || continue
+    [[ -n "$sig" ]] || continue
+    grep -q "$(printf '\t1\t')" <<<"$sig" && continue    # a pod is terminating: the drain is working
+    blockers="$(drain_stall_blockers "$node" "$sig")" || continue
+    [[ -n "$blockers" ]] || continue
+    warn "the drain of ${node} makes no progress: for ${idle}s the same $(grep -c . <<<"$sig") pod(s) remain, none is terminating, and a budget that allows 0 disruptions covers:"
+    sed 's/^/    /' <<<"$blockers" >&2
+    residue="$(rwx_node_residue "$node" 2>/dev/null)" || residue=""
+    if [[ -n "$residue" ]]; then
+      warn "  and the node still hosts Longhorn RWX volumes (their instance-manager budget stays while a volume is attached here):"
+      sed 's/^/    /' <<<"$residue" >&2
+    fi
+    kill "$pid" 2>/dev/null; { wait "$pid"; } 2>/dev/null || true
+    DRAIN_WHY="stalled: no progress for ${idle}s, see above"
+    return 1
+  done
+  { wait "$pid"; }
+}
+
 cordon_drain() { # <node_name>
   local node="$1"
   # FIRST, before the CNPG waits, the budgets wait and the cordon: bare pods are read from the pods, not guessed from kubectl's
@@ -1000,9 +1082,8 @@ cordon_drain() { # <node_name>
   wait_pdb_headroom "$node"
   info "Cordon + drain ${node}…"
   "${KCTL[@]}" cordon "$node" || die "cordon failed for ${node}"
-  if ! "${KCTL[@]}" drain "$node" \
-        --ignore-daemonsets --delete-emptydir-data --timeout="$DRAIN_TIMEOUT"; then
-    warn "drain did not complete (kubectl's own reason is printed just above; the timeout is ${DRAIN_TIMEOUT}); some pods may be stuck (PDBs?) or refused (a pod without a controller)."
+  if ! drain_watched "$node"; then
+    warn "drain did not complete (kubectl's own reason is printed just above; ${DRAIN_WHY:-the timeout is ${DRAIN_TIMEOUT}}); some pods may be stuck (PDBs?) or refused (a pod without a controller)."
     # Name them instead of asking. Every one of these forbids its last disruption
     # while missing nothing, so it is the drain's answer, and "(PDBs?)" made the
     # operator go and find by hand what the cluster already knew.
@@ -1036,7 +1117,7 @@ cordon_drain() { # <node_name>
       # nowhere to go, its budget never recovered, and the drain waited out its
       # full 900s with no eviction error to show for it.
       worker_cpu_requests >&2 || true
-      die "${node} could not be drained (timeout ${DRAIN_TIMEOUT}) — refusing to reboot it under workloads that would not move.
+      die "${node} could not be drained (${DRAIN_WHY:-timeout ${DRAIN_TIMEOUT}}) — refusing to reboot it under workloads that would not move.
   0. A pod without a controller (a bare pod, e.g. left by a test or kubectl run) is refused by kubectl at once and is named
      before the drain starts, since infra #402; delete it, or move it under a Deployment, and re-run.
   1. Capacity: the CPU requests above are per worker. If the others are near

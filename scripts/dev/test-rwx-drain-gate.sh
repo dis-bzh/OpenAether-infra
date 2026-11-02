@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # The RWX gate of cordon_drain (apps #124): a node that still holds a Longhorn share-manager pod, or a pod
-# mounting an RWX volume, must not be rebooted. Also the way the drain used to wait its whole timeout for
-# nothing when a bare pod blocks it (infra #402). Offline: the functions are extracted from roll-gates.sh and
-# run against a stub kubectl that answers from JSON files. SUT overrides the file under test (mutants).
+# mounting an RWX volume, must not be rebooted. Also the two ways the drain used to wait its whole timeout for
+# nothing: a bare pod (infra #402) and a stall against a budget that allows nothing (infra #417). Offline: the
+# functions are extracted from roll-gates.sh and run against a stub kubectl that answers from JSON files.
+# SUT overrides the file under test (mutants).
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -18,13 +19,35 @@ cat >"$TMP/bin/kubectl" <<'STUB'
 echo "$*" >>"$STUB_LOG"
 case "$*" in
   *"get persistentvolumes "*)   [ -f "$STUB_PV" ] && cat "$STUB_PV" || exit 1 ;;
+  *"get pods -l "*)
+    # the pods of the node that carry the first label of the selector, as the apiserver answers a label selector
+    argv="$*"; sel="${argv#*-l }"; sel="${sel%% *}"; k="${sel%%=*}"; v="${sel#*=}"; v="${v%%,*}"
+    f="${STUB_SEQ:+$STUB_SEQ/last.json}"; f="${f:-$STUB_PODS}"
+    jq -r --arg k "$k" --arg v "$v" '[.items[] | select(.metadata.labels[$k] == $v) | .metadata.name] | join(" ")' "$f" ;;
+  *"get pods -A --field-selector"*"-o json"*)
+    # STUB_SEQ (a directory) answers the n-th read with n.json, else last.json: the pods of a drain as it goes.
+    if [ -n "${STUB_SEQ:-}" ]; then
+      n=$(($(cat "$STUB_SEQ/n" 2>/dev/null || echo 0) + 1)); echo "$n" >"$STUB_SEQ/n"
+      [ "$n" -ge "${STUB_DONE_AT:-99999}" ] && : >"$STUB_SEQ/done"
+      # once the drain has ended, the node answers with after.json (empty): what a node that drained cleanly looks like
+      f="$STUB_SEQ/$n.json"; [ -f "$f" ] || f="$STUB_SEQ/last.json"
+      [ "$n" -gt "${STUB_DONE_AT:-99999}" ] && f="$STUB_SEQ/after.json"; cat "$f"
+    else [ -f "$STUB_PODS" ] && cat "$STUB_PODS" || exit 1; fi ;;
   *"get pods "*) [ -f "$STUB_PODS" ] && cat "$STUB_PODS" || exit 1 ;;
-  *drain*)       exit "${STUB_DRAIN_RC:-0}" ;;
+  *"get pdb "*)  [ -f "$STUB_PDB" ] && cat "$STUB_PDB" || exit 1 ;;
+  *drain*)
+    # A drain that goes on until STUB_SEQ/done exists (or 5 s), and says when it ended by itself.
+    if [ -n "${STUB_SEQ:-}" ]; then
+      for _ in $(seq 100); do [ -f "$STUB_SEQ/done" ] && break; /bin/sleep 0.05; done
+      : >"$STUB_SEQ/drain-ended"
+    fi
+    [ -n "${STUB_DRAIN_SLEEP:-}" ] && /bin/sleep "$STUB_DRAIN_SLEEP"
+    exit "${STUB_DRAIN_RC:-0}" ;;
   *) exit 0 ;;
 esac
 STUB
 chmod +x "$TMP/bin/kubectl"
-export PATH="$TMP/bin:$PATH" STUB_LOG="$TMP/log" STUB_PV="$TMP/pv.json" STUB_PODS="$TMP/pods.json"
+export PATH="$TMP/bin:$PATH" STUB_LOG="$TMP/log" STUB_PV="$TMP/pv.json" STUB_PODS="$TMP/pods.json" STUB_PDB="$TMP/pdb.json"
 
 extract() { awk -v fns="$1" '
   BEGIN { n = split(fns, a, ","); for (i = 1; i <= n; i++) want[a[i]] = 1 }
@@ -34,7 +57,7 @@ extract() { awk -v fns="$1" '
 KCTL=(kubectl); ASSUME_YES=1; DRAIN_TIMEOUT=10s; RWX_CLEAR_TIMEOUT=2; RWX_POLL=1; SECONDS=0
 info() { :; }; warn() { echo "warn: $*" >&2; }; die() { echo "DIE: $*" >&2; exit 97; }
 # shellcheck disable=SC1090
-eval "$(extract 'rwx_node_residue,wait_rwx_clear,pdb_hard,cordon_drain,drainable_pods,refuse_bare_pods')"
+eval "$(extract 'rwx_node_residue,wait_rwx_clear,pdb_hard,cordon_drain,drainable_pods,refuse_bare_pods,drain_watched,drain_stall_blockers')"
 # What cordon_drain does before and around the drain is other tests' business (test-rolling-replace.sh); they only leave a line
 # in the log here, so that "before anything else" can be asserted.
 cnpg_maintenance() { echo "STUB cnpg_maintenance" >>"$STUB_LOG"; }; wait_cnpg_whole() { :; }; wait_pdb_headroom() { :; }; worker_cpu_requests() { :; }
@@ -89,6 +112,10 @@ echo '{"items":[]}' >"$TMP/pods.json"
 RC=0; wait_rwx_clear n1 >/dev/null 2>&1 || RC=$?
 [ $RC -eq 0 ] && ok "wait_rwx_clear returns 0 on an empty node" || bad "empty wait rc=$RC"
 
+# The drain's watch asks every DRAIN_TICK seconds whether kubectl ended; here the clock is a fake one, moved by `sleep` itself, so
+# a stall of 120 s is judged in a few hundred milliseconds. (The watch of a real drain sleeps a fifth of a second per tick.)
+DRAIN_TICK=1
+sleep() { SECONDS=$((SECONDS + ${1%%.*})); command sleep 0.03; }
 # 8 a bare pod (infra #402): kubectl drain refuses it at once ("cannot delete Pods that declare no controller"), yet the roll
 # waited 900 s (lab 25). The pods of the node are read BEFORE the CNPG waits, the cordon and the drain, and the refusal names them.
 drain_run() { : >"$TMP/log"; RC=0; OUT="$( ( set -euo pipefail; ok() { :; }; cordon_drain n1 ) 2>&1 )" || RC=$?; }
@@ -116,9 +143,67 @@ rm -f "$TMP/pods.json"; drain_run
 { grep -q 'could not list the pods of n1' <<<"$OUT" && grep -q 'drain n1' "$TMP/log"; } \
   && ok "an unanswered pod list does not stop a drain kubectl can judge itself (it only warns); the drain still runs" || bad "unanswered list: rc=$RC $OUT"
 
+# 9 a stall (infra #417): a worker with an attached RWX share-manager waited its whole 900 s and was then refused (lab 28, I3).
+# The drain runs in the background and the pods of the node are watched: the drain is stopped when the same pods stay, none is
+# terminating and a budget that allows 0 covers one of them. A clock that moves 1 s per tick, so the test does not wait.
+DRAIN_STALL_AFTER=6; DRAIN_STALL_POLL=2; DRAIN_TIMEOUT=900s
+im_l='{"longhorn.io/component":"instance-manager"}'; sm_l='{"longhorn.io/component":"share-manager"}'
+pdb() { jq -n --arg ns "$1" --arg n "$2" --argjson l "$3" '{metadata:{namespace:$ns,name:$n},spec:{selector:{matchLabels:$l}},status:{disruptionsAllowed:0,expectedPods:1,currentHealthy:1}}'; }
+seq_reset() { rm -rf "$TMP/seq"; mkdir -p "$TMP/seq"; export STUB_SEQ="$TMP/seq"; STUB_DONE_AT=99999; export STUB_DONE_AT; echo '{"items":[]}' >"$TMP/seq/after.json"; }
+seq_off() { unset STUB_SEQ STUB_DONE_AT; }
+{ pod longhorn-system instance-manager-n1 Running "$im_l" ReplicaSet; pod longhorn-system share-manager-pvc-1 Running "$sm_l" ReplicaSet; } | mkpods >"$TMP/seq_last.json"
+pdb longhorn-system instance-manager-n1 "$im_l" | jq -s '{items:.}' >"$TMP/pdb.json"
+
+seq_reset; cp "$TMP/seq_last.json" "$TMP/seq/last.json"; drain_run
+{ [ $RC -eq 97 ] && grep -q 'makes no progress' <<<"$OUT" && grep -q 'longhorn-system/instance-manager-n1' <<<"$OUT" \
+  && grep -q 'share-manager-pvc-1' <<<"$OUT" && grep -q 'uncordon n1' "$TMP/log" && [ ! -f "$TMP/seq/drain-ended" ]; } \
+  && ok "the same pods, none terminating, a budget allowing 0 on one: stopped after 6 s, the budget and the share-manager named, node uncordoned, drain killed" \
+  || bad "stall not detected: rc=$RC $OUT"
+[ "$(cat "$TMP/seq/n" 2>/dev/null || echo 99)" -lt 15 ] && ok "…and it took a handful of reads (not a drain of 900 s)" || bad "reads: $(cat "$TMP/seq/n")"
+
+# the same pods, but the budget covers none of them: a slow drain, not a refused one. Left to kubectl and its own timeout.
+pdb longhorn-system other "{\"app\":\"other\"}" | jq -s '{items:.}' >"$TMP/pdb.json"
+seq_reset; cp "$TMP/seq_last.json" "$TMP/seq/last.json"; STUB_DONE_AT=7; drain_run
+{ [ $RC -eq 0 ] && [ -f "$TMP/seq/drain-ended" ]; } && ok "no budget covers a remaining pod: not a stall, the drain is left to finish" || bad "false stall without a covering budget: rc=$RC $OUT"
+
+# a DaemonSet pod stays on every node for ever, and a budget may cover it: the drain does not wait on it.
+{ pod longhorn-system instance-manager-n1 Running "$im_l" DaemonSet; pod app web Running '{}' ReplicaSet; } | mkpods >"$TMP/seq_ds.json"
+pdb longhorn-system instance-manager-n1 "$im_l" | jq -s '{items:.}' >"$TMP/pdb.json"
+seq_reset; cp "$TMP/seq_ds.json" "$TMP/seq/last.json"; STUB_DONE_AT=7; drain_run
+{ [ $RC -eq 0 ] && [ -f "$TMP/seq/drain-ended" ]; } && ok "a DaemonSet pod behind a budget is not something the drain waits on: no stall" || bad "stalled on a DaemonSet pod: rc=$RC $OUT"
+
+# a pod of the node is terminating (a long grace period): the drain is working, even with another pod behind a budget.
+pdb longhorn-system instance-manager-n1 "$im_l" | jq -s '{items:.}' >"$TMP/pdb.json"
+seq_reset; { pod longhorn-system instance-manager-n1 Running "$im_l" ReplicaSet; pod longhorn-system share-manager-pvc-1 Running "$sm_l" ReplicaSet "" '{"deletionTimestamp":"2026-11-02T10:00:00Z"}'; } | mkpods >"$TMP/seq/last.json"
+STUB_DONE_AT=7; drain_run
+{ [ $RC -eq 0 ] && [ -f "$TMP/seq/drain-ended" ]; } && ok "a pod that is terminating means the drain is working: no stall, even with another pod behind a budget" || bad "stopped a drain that was terminating a pod: rc=$RC $OUT"
+
+# progress resets the clock: a pod leaves at the 4th read, so the 6 s of silence would only complete after the drain ended.
+seq_reset; cp "$TMP/seq_last.json" "$TMP/seq/last.json"
+for i in 1 2 3; do { pod longhorn-system instance-manager-n1 Running "$im_l" ReplicaSet; pod longhorn-system share-manager-pvc-1 Running "$sm_l" ReplicaSet; pod app web Running '{}' ReplicaSet; } | mkpods >"$TMP/seq/$i.json"; done
+STUB_DONE_AT=5; drain_run
+{ [ $RC -eq 0 ] && [ -f "$TMP/seq/drain-ended" ]; } && ok "a pod leaving the node restarts the 6 s: a drain that progresses is never stopped" || bad "stopped a drain that was progressing: rc=$RC $OUT"
+
+# an interrupt (Ctrl+C during the drain) ends it and takes the failure path, as the foreground drain's death used to.
+seq_reset; cp "$TMP/seq_last.json" "$TMP/seq/last.json"; STOP_REQUESTED=1; drain_run; STOP_REQUESTED=0
+{ [ $RC -eq 97 ] && grep -q 'interrupted' <<<"$OUT" && grep -q 'uncordon n1' "$TMP/log" && [ ! -f "$TMP/seq/drain-ended" ]; } \
+  && ok "an interrupt kills the drain and refuses, node uncordoned" || bad "interrupt: rc=$RC $OUT"
+
+# kubectl's own answer is unchanged: a refusal at once is a refusal, with the timeout named, and DRAIN_STALL_AFTER=0 is the old foreground drain.
+seq_off; { pod app web Running '{}' ReplicaSet; } | mkpods >"$TMP/pods.json"; export STUB_DRAIN_RC=1; drain_run
+{ [ $RC -eq 97 ] && grep -q 'could not be drained (timeout 900s)' <<<"$OUT" && grep -q 'uncordon n1' "$TMP/log"; } \
+  && ok "a drain that fails by itself still ends in the old refusal, with the node uncordoned" || bad "plain failure: rc=$RC $OUT"
+export STUB_DRAIN_RC=0 STUB_DRAIN_SLEEP=0.4; DRAIN_STALL_AFTER=0; { pod app web Running '{}' ReplicaSet; } | mkpods >"$TMP/pods.json"; drain_run
+{ [ $RC -eq 0 ] && grep -q 'drain n1' "$TMP/log" && ! grep -q 'get pdb' "$TMP/log" && [ "$(grep -c 'get pods -A' "$TMP/log")" = 2 ]; } \
+  && ok "DRAIN_STALL_AFTER=0 switches the watch off: the plain drain, no reading of the pods or the budgets while it runs" || bad "watch not off: rc=$RC reads=$(grep -c 'get pods -A' "$TMP/log") $OUT"
+DRAIN_STALL_AFTER=6; drain_run
+[ "$(grep -c 'get pods -A' "$TMP/log")" -gt 2 ] && ok "…while the watch on does read them (the check above can tell the two apart)" || bad "the watch did not read: $(grep -c 'get pods -A' "$TMP/log")"
+unset STUB_DRAIN_SLEEP
+DRAIN_STALL_AFTER=120; unset -f sleep; unset STUB_DRAIN_RC
+
 # 7 wiring: cordon_drain calls the gate AFTER the drain, uncordons on failure, and the doc names the issue
 body="$(extract cordon_drain)"
-awk '/drain "\$node"/ {d=NR} /wait_rwx_clear "\$node"/ {w=NR} END {exit !(d && w && d < w)}' <<<"$body" \
+awk '/drain_watched "\$node"/ {d=NR} /wait_rwx_clear "\$node"/ {w=NR} END {exit !(d && w && d < w)}' <<<"$body" \
   && ok "cordon_drain waits for RWX residue after the drain" || bad "cordon_drain does not call wait_rwx_clear after the drain"
 awk '/wait_rwx_clear/ {f=1} f && /uncordon/ {u=1} END {exit !u}' <<<"$body" \
   && ok "a node that keeps RWX residue is uncordoned before the refusal" || bad "no uncordon on the RWX refusal"
