@@ -63,6 +63,7 @@ case "\$(basename "\$0") \$*" in
       exit 0
     fi
     [ -n "\${PSAPPLY_RC:-}" ] && exit 3; exit "\${PRESYNC_RC:-0}" ;;
+  grow-nodes.sh*--plan-only*) exit "\${GROW_RC:-0}" ;;
   cluster-coredns-ha.sh*--apply*) : >"$W/coredns.applied"; exit "\${COREDNS_APPLY_RC:-0}" ;;
   cluster-coredns-ha.sh*) [ -e "$W/coredns.applied" ] && exit 0; exit "\${COREDNS_RC:-0}" ;;
   cluster-apps-ref.sh*--apply*) exit "\${REFAPPLY_RC:-0}" ;;
@@ -87,12 +88,14 @@ for e in management-scaleway workload-ovh; do printf 'cluster_name = "fixture"\n
 printf 'cluster_name = "fixture"\ndeploy_flux = false\n' >"$C/envs/noflux-scaleway.tfvars"
 printf 'cluster_name = "fixture"\n' >"$C/envs/unset-scaleway.tfvars"
 : >"$W/key"
+# What the rung receipt would record: the Taskfile's defer calls this script with the target, the provider and the rc.
+printf 'import sys\nopen("%s/receipts.log", "a").write(" ".join(sys.argv[1:]) + "\\n")\n' "$W" >"$W/scripts/dev/rung-receipt.py"
 
 O="$W/out"
 run() { # PCHK=<mode> sets OA_PASSPHRASE_CHECK; <verifier rc> <task args...> — combined output in $O, calls in calls.log; EXTRA="NAME=value [NAME=value]" sets env vars, last, so it overrides the defaults; TTY=1 gives it a terminal that answers "yes" to every question
   local rc="$1"; shift
   local -a xtra=(); [ -n "${EXTRA:-}" ] && read -ra xtra <<<"$EXTRA"
-  : >"$W/calls.log"; rm -f "$W/presync.applied" "$W/presync.undone" "$W/presync.args" "$W/coredns.applied"
+  : >"$W/calls.log"; : >"$W/receipts.log"; rm -f "$W/presync.applied" "$W/presync.undone" "$W/presync.args" "$W/coredns.applied"
   local cmd=(env -i PATH="$W/bin:$PATH" HOME="$W" VERIFY_RC="$rc" NO_COLOR=1
       TF_VAR_encryption_passphrase=fixture-passphrase-of-at-least-32-characters
       SCW_ACCESS_KEY=scw-access-key SCW_SECRET_KEY=scw-secret-key
@@ -494,6 +497,46 @@ done
 EXTRA="$BREAK" run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
 [ "$rc" != 0 ] && ok "control: deploy_flux true and the same failing stubs fail the run" || bad "control: exit $rc, the Flux steps did not run"
 
+
+echo "--- PLAN_ONLY=1: the journey as far as the plan, nothing created and nothing applied (infra #412) ---"
+# The default flow does not move: the build and the grow are called as before, and the journey records its receipt.
+run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+{ [ "$rc" = 0 ] && grep -qx 'talos-image.sh scaleway v0.0.0-fixture --ensure' "$W/calls.log" && grep -qx 'grow-nodes.sh management scaleway' "$W/calls.log" \
+  && ! grep -q -- '--plan-only' "$W/calls.log" && grep -q '^record cluster-up scaleway ' "$W/receipts.log"; } \
+  && ok "(control) without PLAN_ONLY the build and the grow get no flag, the journey completes and records its receipt" \
+  || bad "control, exit $rc: $(grep -E '^(talos-image|grow-nodes)' "$W/calls.log" | tr '\n' '|') receipts: $(tr '\n' '|' <"$W/receipts.log")"
+run 0 "${UP[@]}" PROVIDER=scaleway PLAN_ONLY=1; rc=$?
+PO_LATE='^(tofu apply|adopt-bootstrap|cnpg-presync|cluster-identity-sync|cluster-apps-ref|cluster-coredns-ha|infra-verify|talos-tunnels)'
+{ [ "$rc" = 0 ] && grep -q '^✓ plan only: nothing was created' "$O" && ! grep -q '^✓ cluster-up complete' "$O"; } \
+  && ok "exit 0, says 'plan only: nothing was created', never the success line of a finished journey" || bad "PLAN_ONLY exit $rc: $(tail_of)"
+{ grep -qx 'talos-image.sh scaleway v0.0.0-fixture --ensure --plan-only' "$W/calls.log" && [ "$(calls '^talos-image.sh')" = 1 ]; } \
+  && ok "the image is PLANNED (--ensure --plan-only), once: a missing one is reported, not built" || bad "image calls: $(grep '^talos-image' "$W/calls.log" | tr '\n' '|')"
+{ grep -qx 'grow-nodes.sh management scaleway --plan-only' "$W/calls.log" && [ "$(calls '^grow-nodes.sh')" = 1 ]; } \
+  && ok "the grow step only says what it would create (--plan-only), once" || bad "grow calls: $(grep '^grow-nodes' "$W/calls.log" | tr '\n' '|')"
+{ [ "$(calls '^tofu plan -out=up-')" = 1 ] && [ "$(calls '^refuse-node-deletes.sh up-')" = 1 ]; } \
+  && ok "the phase-1 plan is made and shown, and the node-delete guard judges it, as before the question" || bad "plan/guard: $(grep -E '^(tofu plan|refuse)' "$W/calls.log" | tr '\n' '|')"
+{ [ "$(calls "$PO_LATE")" = 0 ] && [ "$(calls '^tofu plan -out=phase2-')" = 0 ] && [ "$(calls '^talos-image.sh .*--retain')" = 0 ]; } \
+  && ok "no apply, no tunnel, no phase 2, no roll, no presync, no verify, no retention" || bad "something past the plan ran: $(grep -E "$PO_LATE|phase2-|--retain" "$W/calls.log" | tr '\n' '|')"
+{ [ "$(calls '^converge-versions.sh')" = 1 ] && grep -q '^converge-versions.sh .*--check$' "$W/calls.log"; } \
+  && ok "the version check (--check) still runs, the roll does not" || bad "converge-versions: $(grep '^converge' "$W/calls.log" | tr '\n' '|')"
+! grep -q '^record cluster-up' "$W/receipts.log" \
+  && ok "no rung receipt for cluster-up: a plan is not a journey that ran" || bad "a plan-only run recorded a cluster-up receipt: $(tr '\n' '|' <"$W/receipts.log")"
+run 0 cluster-up KEY="$W/key" APPROVE=ask PROVIDER=scaleway PLAN_ONLY=true; rc=$?
+{ [ "$rc" = 0 ] && grep -q '^✓ plan only' "$O" && ! grep -q '^✗ no terminal' "$O"; } \
+  && ok "PLAN_ONLY=true works without a terminal and asks nothing, whatever APPROVE says" || bad "PLAN_ONLY=true APPROVE=ask exit $rc: $(tail_of)"
+# The grow step would act: the full plan can wait a quarter of an hour on the health of nodes that have no configuration yet, so it is not run.
+EXTRA=GROW_RC=3 run 0 "${UP[@]}" PROVIDER=scaleway PLAN_ONLY=1; rc=$?
+{ [ "$rc" = 0 ] && [ "$(calls '^tofu plan -out=up-')" = 0 ] && [ "$(calls "$PO_LATE")" = 0 ] && grep -q '^✓ plan only: nothing was created' "$O" \
+  && grep -q '^~ the phase-1 plan is not run' "$O" && ! ls "$C"/up-*.tfplan "$C"/.plan-only-grow-* >/dev/null 2>&1; } \
+  && ok "when the grow WOULD create or configure nodes: exit 0, the root plan is not run, and it says why; no plan file or marker left" \
+  || bad "plan-only with a pending grow, exit $rc: $(tail_of); files: $(ls -a "$C" | tr '\n' ' ')"
+# An exported PLAN_ONLY never turns a bare image build into a plan.
+run 0 image-build PROVIDER=scaleway PLAN_ONLY=1; rc=$?
+{ [ "$rc" = 0 ] && grep -qx 'talos-image.sh scaleway v0.0.0-fixture' "$W/calls.log"; } \
+  && ok "task image-build with PLAN_ONLY=1 but no ENSURE: the build is called as always" || bad "image-build PLAN_ONLY=1, exit $rc: $(grep '^talos-image' "$W/calls.log")"
+EXTRA=PLAN_ONLY=0 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+{ [ "$rc" = 0 ] && grep -q '^✓ cluster-up complete' "$O" && ! grep -q -- '--plan-only' "$W/calls.log"; } \
+  && ok "PLAN_ONLY=0 is not an arming: the whole journey runs" || bad "PLAN_ONLY=0 exit $rc: $(tail_of)"
 
 echo "--- preflight-quotas: Scaleway is named as not checked, not answered with a usage error (infra #429) ---"
 run 0 -x preflight-quotas PROVIDER=scaleway; rc=$?

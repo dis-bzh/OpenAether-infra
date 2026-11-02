@@ -10,10 +10,12 @@
 # TF_VAR_encryption_passphrase.
 #
 # Usage:
-#   ./scripts/bootstrap/talos-image.sh <provider> [talos_version] [--ensure|--list|--prune|--retain|--import-snapshot <id>]
+#   ./scripts/bootstrap/talos-image.sh <provider> [talos_version] [--ensure [--plan-only]|--list|--prune|--retain|--import-snapshot <id>]
 #   task image-build PROVIDER=ovh [VERSION=v1.13.4] [ENSURE=1|LIST=1|PRUNE=1|RETAIN=1]
 #
 # --ensure: idempotence gate for `task cluster-up`: plan first, apply only on a real change.
+# --plan-only (with --ensure only; `task cluster-up PLAN_ONLY=1`, infra #412): the same plan and the same refusals ahead of the spend, then it
+#   stops: a missing or changed image is reported as "would be built" and nothing is applied. Exit 0 unless the plan or a refusal fails.
 # --list: the versions this lane holds (one state each); builds nothing and creates no bucket.
 # --prune: destroy ONE version's image set (the only way an image leaves the lane); refused while a tfvars names it.
 # --retain: keep N (the newest tfvars pin) and the highest held below it; --prune the rest, lowest first, bar what a tfvars names. No version.
@@ -21,11 +23,12 @@
 # One mode per run, and one run at a time per checkout: runs share a .terraform data dir.
 set -euo pipefail
 
-MODE=build ENSURE=false SNAP="" NMODES=0
+MODE=build ENSURE=false PLAN_ONLY=false SNAP="" NMODES=0
 ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --ensure) ENSURE=true ;;
+    --plan-only) PLAN_ONLY=true ;;
     --list)   MODE=list;  NMODES=$((NMODES + 1)) ;;
     --prune)  MODE=prune; NMODES=$((NMODES + 1)) ;;
     --retain) MODE=retain; NMODES=$((NMODES + 1)) ;;
@@ -39,6 +42,7 @@ done
 # Exclusive on purpose: with the last flag winning, `--list --prune` would destroy.
 [ "$NMODES" -le 1 ] || { echo "✗ --list, --prune, --retain and --import-snapshot are exclusive: one per run" >&2; exit 1; }
 [ "$ENSURE" = false ] || [ "$MODE" = build ] || { echo "✗ --ensure only goes with a build" >&2; exit 1; }
+[ "$PLAN_ONLY" = false ] || [ "$ENSURE" = true ] || { echo "✗ --plan-only only goes with --ensure: a bare build is interactive and has no plan to stop at" >&2; exit 1; }
 # A version here would read as "retain around it": it ranks what the lane holds, whatever any pin says.
 [ "$MODE" != retain ] || [ -z "${ARGS[1]:-}" ] || { echo "✗ --retain takes no version: it ranks the versions the lane holds" >&2; exit 1; }
 
@@ -466,7 +470,13 @@ if [ "$ENSURE" = true ]; then
   tofu plan -detailed-exitcode -out="$PLAN" "${APPLY_VARS[@]}" || PLAN_EXIT=$?
   case "$PLAN_EXIT" in
     0) echo "✓ image already up to date — skipping apply" ;;
-    2) refuse_taken_omi; disk_preflight; tofu apply "$PLAN" ;;
+    2) refuse_taken_omi; disk_preflight
+       # The refusals above are the ones the real build would meet, so a plan-only run says them before the approval.
+       if [ "$PLAN_ONLY" = true ]; then
+         echo "~ plan only: the image ${VERSION} on ${TGT} is missing or differs from its plan: it WOULD be built (and was NOT)."
+         exit 0
+       fi
+       tofu apply "$PLAN" ;;
     *)
       echo "✗ tofu plan failed (exit ${PLAN_EXIT})"
       exit 1

@@ -23,6 +23,10 @@ in git. 0.1.0 is the first entry describing something proven.
 - **commitizen 4.19.2 → 4.19.3** (Cléa #91, probed green in a bare container, released 2026-10-24): `ci.yml`, the `pip install` of the commit-message check. Rung: mocked.
 - **flux-schema 0.16.0 → 0.17.0** (Cléa #91, probed green in a bare container, released 2026-10-23): `ci.yml` and `scripts/setup.sh`. Rung: mocked.
 
+### Added
+
+- **`task cluster-up … PLAN_ONLY=1`** (infra #412): a run that only reads the plan. It ensures the state buckets and renders the manifests as in any run, plans the Talos image and reports "it WOULD be built" instead of building it (`talos-image.sh --ensure --plan-only`), lists the machines and nodes the grow step would create or configure without touching anything (`grow-nodes.sh --plan-only`, exit 3 when it would act), shows the phase-1 plan with the node-delete guard unless the grow step would act (the full plan can wait 15 minutes on nodes without a configuration), and ends rc 0 with "plan only: nothing was created". Off by default: `APPROVE=auto` and every other run get the same calls as before (asserted); no rung receipt is recorded for a plan-only run. Rung: mocked (`test-cluster-up.sh`, `test-grow-nodes.sh`, `test-talos-image.sh`, with a mutant check of each); UNVERIFIED on a cluster (drill: raise `workers` by one, run with `PLAN_ONLY=1`, compare the instance and image counts).
+
 ### Fixed
 
 - **Talos tunnels retry a port that is busy only as someone's source port** (infra #422, closes the CI flake #431). `talos-tunnels.sh` respawns, alone, a tunnel whose ssh died on "Address already in use" with nothing listening there (lab 28B: the host's own 1 Hz probe held `:52100`), up to 3 times after 4 s (`OA_TUNNEL_BIND_RETRIES`, `OA_TUNNEL_BIND_PAUSE`); any other failure is reported at once, and a port still busy after the retries is named with the `ip_local_reserved_ports` way out. `test-talos-tunnels.sh` now holds a port the way the host did (and picks its own port block by a bind, not `nc -z`). Rung: mocked; UNVERIFIED on a cluster.

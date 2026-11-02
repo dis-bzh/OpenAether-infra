@@ -227,6 +227,24 @@ OUT="$(run 1 --ensure)"; RC=$?
                 || bad "a failed plan exited 0 — cluster-up would continue on an unbuilt image"
 is "and nothing was applied" 0 "$(calls apply)"
 
+echo "--- --ensure --plan-only (cluster-up PLAN_ONLY=1, infra #412): the same plan, never the apply ---"
+OUT="$(run 2 --ensure --plan-only)"; RC=$?
+is "a missing image: the script completes" 0 "$RC"
+is "…with exactly one plan" 1 "$(calls plan)"
+is "…and NO apply: nothing is built" 0 "$(calls apply)"
+grep -q 'WOULD be built' <<<"$OUT" && ok "…and it says the image WOULD be built, and was not" || bad "plan-only said nothing of the build it skipped: $OUT"
+OUT="$(run 0 --ensure --plan-only)"; RC=$?
+{ [ "$RC" = 0 ] && [ "$(calls apply)" = 0 ] && grep -q 'already up to date' <<<"$OUT"; } \
+  && ok "an image up to date: said so, nothing applied" || bad "plan-only on an up-to-date image (rc=$RC): $OUT"
+OUT="$(run 1 --ensure --plan-only)"; RC=$?
+{ [ "$RC" -ne 0 ] && [ "$(calls apply)" = 0 ]; } && ok "a plan that fails still fails the script: plan-only does not turn a failed plan into a pass" || bad "plan-only swallowed a failed plan (rc=$RC)"
+OUT="$(OA_IMAGE_MIN_FREE_GIB=99999999 run 2 --ensure --plan-only)"; RC=$?
+{ [ "$RC" -ne 0 ] && [ "$(calls apply)" = 0 ]; } \
+  && ok "the disk refusal of the real build is kept: a build that would not fit is said before the approval" || bad "plan-only hid the disk preflight (rc=$RC): $OUT"
+OUT="$(run 2 --plan-only)"; RC=$?
+{ [ "$RC" -ne 0 ] && [ "$(calls apply)" = 0 ] && grep -q -- '--plan-only' <<<"$OUT"; } \
+  && ok "--plan-only without --ensure is refused: a bare build is interactive and has no plan to stop at" || bad "--plan-only alone was accepted (rc=$RC): $OUT"
+
 echo "--- plain \`task image-build\`: interactive, and interactive means ONE plan ---"
 OUT="$(run 2)"; RC=$?
 is "the script completes" 0 "$RC"

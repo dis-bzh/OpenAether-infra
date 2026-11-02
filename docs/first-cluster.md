@@ -178,8 +178,10 @@ phase-1 and phase-2 plans, and applies the plan it just showed you — do not re
 for `-auto-approve`, which applies a *different* plan computed at that moment.
 Once verified it also runs the image retention, where tofu asks its own yes for each
 old image it destroys. For an unattended run add `APPROVE=auto`: it answers the two
-plans and skips the retention. (To read a
-phase-1 plan on its own, save it:
+plans and skips the retention. (To read the plan with nothing created, add
+`PLAN_ONLY=1`: it stops at the phase-1 plan, see
+[`upgrade.md`](upgrade.md#adding-nodes-cluster-up-creates-the-machine-before-it-asks-a-03x-design-unchanged).
+To read a phase-1 plan on its own, save it:
 `task infra-plan ROLE=management PROVIDER=scaleway OUT=tfplan`, read it, then
 `task infra-apply PROVIDER=scaleway PLAN=tfplan`. PROVIDER is required on both —
 it used to default to Scaleway, which is the wrong cloud to guess.)
@@ -258,7 +260,7 @@ data volumes with no drain and no etcd leave (`scripts/internal/refuse-node-dele
 commands of its own, `task cluster-shrink-plan` then `task cluster-shrink`, measured on all three
 clouds: [`upgrade.md`](upgrade.md#removing-nodes).
 
-Be aware that the machine is created before any question is asked: without `APPROVE=auto`, `cluster-up` still builds and configures the new node first and only then shows the plan (a 0.3.x design, see [`upgrade.md`](upgrade.md#adding-nodes-cluster-up-creates-the-machine-before-it-asks-a-03x-design-unchanged)).
+Be aware that the machine is created before any question is asked: without `APPROVE=auto`, `cluster-up` still builds and configures the new node first and only then shows the plan (a 0.3.x design, see [`upgrade.md`](upgrade.md#adding-nodes-cluster-up-creates-the-machine-before-it-asks-a-03x-design-unchanged)); `PLAN_ONLY=1` reads the plan without creating anything (mocked only, UNVERIFIED on a cluster).
 
 ### Residual risk: the maintenance-mode apply
 

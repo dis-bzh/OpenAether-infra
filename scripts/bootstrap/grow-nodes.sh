@@ -13,12 +13,25 @@
 # Then the usual plan and apply find a cluster whose nodes are all configured.
 # A fresh cluster, or a bootstrapped one with no new node, leaves this at a no-op.
 #
-# Usage, from the cluster dir with the backend inited:  SSH_KEY=… grow-nodes.sh <role> <provider>
+# --plan-only (`task cluster-up PLAN_ONLY=1`, infra #412): runs only the READS of steps 1 and 3 (the plan of the provider module alone and
+# the state), says which machines it would create and which nodes it would configure, and changes nothing: no apply, no refresh, no
+# tunnel. Exit 3 when it WOULD act (the dry-run convention of this repository), 0 when there is nothing to grow, 1 on any failure
+# (the refusals of step 1 are given too). The full root plan is not run by it: it can wait 15 minutes on the health of nodes that have
+# no configuration yet, which is why the caller shows that plan only when this answers 0.
+#
+# Usage, from the cluster dir with the backend inited:  SSH_KEY=… grow-nodes.sh <role> <provider> [--plan-only]
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
 
-ROLE="${1:?usage: grow-nodes.sh <role> <provider>}"
-PROVIDER="${2:?usage: grow-nodes.sh <role> <provider>}"
+ROLE="${1:?usage: grow-nodes.sh <role> <provider> [--plan-only]}"
+PROVIDER="${2:?usage: grow-nodes.sh <role> <provider> [--plan-only]}"
+PLAN_ONLY=false
+case "${3:-}" in
+  "") ;;
+  --plan-only) PLAN_ONLY=true ;;
+  *) echo "✗ unknown argument: $3 (usage: grow-nodes.sh <role> <provider> [--plan-only])" >&2; exit 2 ;;
+esac
+WOULD=0 # plan-only: 1 once something would be created or configured
 TFVARS="envs/${ROLE}-${PROVIDER}.tfvars"
 case "$PROVIDER" in
   scaleway) MOD=scw ;; ovh) MOD=ovh ;; outscale) MOD=outscale ;; proxmox) MOD=proxmox ;;
@@ -49,8 +62,13 @@ if [ -n "$NEW" ]; then
   sed 's/^/    /' <<<"$NEW"
   # The plan is applied whole: a delete or a resize that rides along with the creates is not growth.
   ../../../scripts/internal/refuse-node-deletes.sh --creates-only "$D/machines.tfplan" || exit 1
-  t apply -input=false -no-color "$D/machines.tfplan" || die "creating the machines failed"
-  echo "✓ machines created"
+  if [ "$PLAN_ONLY" = true ]; then
+    echo "~ plan only: these machines WOULD be created by the grow step (and were NOT)."
+    WOULD=1
+  else
+    t apply -input=false -no-color "$D/machines.tfplan" || die "creating the machines failed"
+    echo "✓ machines created"
+  fi
 fi
 
 # --- 3. nodes that have a machine and no configuration -------------------------------
@@ -69,6 +87,15 @@ while IFS= read -r addr; do
   TARGETS+=(-target="module.talos.talos_machine_configuration_apply.${res}[${i}]")
   MISSING+=("${cls}:${i}")
 done <<<"$STATE"
+if [ "$PLAN_ONLY" = true ]; then
+  if [ "${#MISSING[@]}" -gt 0 ]; then
+    echo "~ plan only: the state holds a machine and no configuration for: ${MISSING[*]} (the grow step WOULD configure them, after refreshing the outputs and opening the tunnels; none of that was done)."
+    WOULD=1
+  fi
+  [ "$WOULD" = 0 ] && { echo "✓ plan only: no node to create or to configure."; exit 0; }
+  echo "~ plan only: nothing was created, applied or opened."
+  exit 3
+fi
 [ "${#MISSING[@]}" -gt 0 ] || exit 0
 
 # --- 2. outputs, then tunnels ---------------------------------------------------------
