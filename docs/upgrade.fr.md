@@ -96,9 +96,8 @@ Non répété sur place : l'étape Loki 6.55 -> 18, Grafana, Alloy, les CRD Gate
 
 ## De la 0.3.x à la 0.4.0 (un cluster existant)
 
-Écrit depuis la branche avant le tag 0.4.0, d'après le lab 25 (un cluster construit par infra 0.3.2 et apps 0.3.2, amené sur les branches 0.4.0) et le code. **Échelon : les commandes
-ci-dessous sont testées avec des doublures, hors ligne ; ce que le lab 25 a fait est dit comme tel. Toute étape marquée UNVERIFIED n'a pas été jouée sur un cluster.** Le lab rejouera
-0.3.2 vers 0.4.0 et corrigera cette section. Pas une affirmation de conformité.
+Écrit depuis la branche avant le tag 0.4.0, d'après le lab 25 (un cluster construit par infra 0.3.2 et apps 0.3.2, amené sur les branches 0.4.0) et le code ; le passage 0.3.2 vers 0.4.0 a ensuite été rejoué sur Scaleway au lab 28B (un seul `task cluster-up`, 39 min 13 s, voir « Déplacement et opérations sur les nœuds » dans `docs/resilience.fr.md`). **Échelon : les commandes
+ci-dessous sont testées avec des doublures, hors ligne ; ce que les labs ont fait est dit comme tel. Toute étape marquée UNVERIFIED n'a pas été jouée sur un cluster par ces labs (la 0.4.0 n'a pas rejoué le passage sur OVH ni sur Outscale).** Pas une affirmation de conformité.
 
 **Chemin de mise à niveau supporté (décision du propriétaire, 2026-10-24).** Avant la 1.0.0, la mise à niveau supportée va du mineur PRÉCÉDENT au mineur courant seulement : n-1.x.x vers n.x.x, ici 0.3.x
 vers 0.4.0. Aucun chemin depuis une version plus ancienne n'est construit ni documenté ; depuis la 0.2.x ou avant, passer par la 0.3.x d'abord, ou reconstruire.
