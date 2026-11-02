@@ -379,6 +379,14 @@ expect "renovate[bot]'s declared rung is still checked" 1 "a lower rung" "renova
 expect "a human named like the bot is not exempt" 1 "no rung declared" renovate false "$sha" "Bumps a pin."
 expect "a docs-only diff may declare nothing" 0 "docs-only" h true "$sha" "$template"
 expect "a docs-only diff's declared rung is still checked" 1 "no receipt pasted" h true "$sha" "$(body mocked)"
+# "Rung: none" is how a docs-only PR says it declares nothing (PR #432 wrote it and was refused, run 41506308694): only on a
+# diff or an author that may declare nothing, never a way round a rung, a receipt or a wrong word.
+expect "a docs-only diff writing 'Rung: none (docs-only diff)' declares nothing" 0 "docs-only" h true "$sha" "$(body 'none (docs-only diff, no code changed)')"
+expect "…and so does a bare 'None'" 0 "docs-only" h true "$sha" "$(body None)"
+expect "renovate[bot] writing 'Rung: none' declares nothing" 0 "renovate[bot]" "renovate[bot]" false "$sha" "$(body none)"
+expect "a code diff writing 'Rung: none' is still refused" 1 "no rung declared" h false "$sha" "$(body 'none (docs-only diff)')"
+expect "a docs-only diff's free text after Rung: that is not 'none' is still refused" 1 "is not one of" h true "$sha" "$(body 'docs only')"
+expect "'Rung: none' does not hide a pasted receipt" 1 "exactly one" h true "$sha" "$(body none "$DIRTY")"
 expect "a head that is not a sha is refused" 1 "not a commit sha" h false "" "$(body emulated "$GREEN")"
 
 echo

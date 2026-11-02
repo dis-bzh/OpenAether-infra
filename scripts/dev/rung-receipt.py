@@ -423,9 +423,13 @@ def q(value):
     return json.dumps(str(value)[:40])
 
 
-def rung_of(label):
+def label_word(label):
     # (?<!\s): a split tried from every space of a long run is quadratic.
-    word = re.split(r"(?<!\s)\s+[—(-]", label.lower(), maxsplit=1)[0].strip(" .`*")
+    return re.split(r"(?<!\s)\s+[—(-]", label.lower(), maxsplit=1)[0].strip(" .`*")
+
+
+def rung_of(label):
+    word = label_word(label)
     return next((r for r, text in RUNGS.items() if word in (r, text.lower())), None)
 
 
@@ -434,8 +438,11 @@ def verdict(body, head, author, docs_only):
     body, why = visible(re.sub(r"\r\n?", "\n", body))  # CRLF and a lone CR end a line too
     if why:
         return False, why
-    # The template's own "Rung:" line is empty until filled in.
-    declared = {s for m in DECLARED.finditer(body) if (s := m.group(1).strip(" \t"))}
+    # The template's own "Rung:" line is empty until filled in. "Rung: none" (with or without a reason after it, as in
+    # "none (docs-only diff)") says the same: nothing declared, which only a docs-only diff or a bot may do, below. It is
+    # no rung, so a receipt pasted beside it, or any other word, is still judged.
+    declared = {s for m in DECLARED.finditer(body)
+                if (s := m.group(1).strip(" \t")) and label_word(s) != "none"}
     lines = [s for b in BLOCK.findall(body) for s in map(str.strip, b.splitlines()) if s]
     if not declared and not lines:
         if author in BOTS:
