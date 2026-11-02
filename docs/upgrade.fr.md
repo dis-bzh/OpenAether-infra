@@ -75,6 +75,18 @@ l'apiserver est lui-même tombé sont comptés à part, en BLIND. Elle est rappo
 pas bloquante, et les chiffres réels du 2026-10-03 sont 0 échec sur Scaleway, 40 échecs et 20 aveugles
 sur 1490 sur Outscale (`docs/status.md`).
 Fonctionnement : [`cluster-upgrade.sh` § The service probe](../scripts/dev/cluster-upgrade.sh).
+Sous le refus d'ingress par défaut de la plateforme, le proxy ne peut pas atteindre le
+pod de la sonde sans une politique qui le laisse entrer (le labo 25 a affiché « 394 FAIL,
+2 BLIND sur 396 échantillons » : une politique, pas une panne ; infra #403). Le namespace
+de la sonde reçoit donc une `CiliumNetworkPolicy` pour le plan de contrôle (les entités
+`host`, `remote-node` et `kube-apiserver`, port 8080 seulement : laquelle correspond au
+trafic du proxy n'est pas établi, donc les trois), et avant le début de la mise à niveau
+on demande le pod au proxy (jusqu'à 15 essais, 2 s d'écart). S'il ne répond jamais alors
+que l'apiserver répond, l'exécution affiche `NOT MEASURING` et ne fait aucune affirmation
+sur le service, et la mise à niveau continue (toujours rapporté, pas bloquant). Un cluster
+sans le CRD de Cilium ne reçoit aucune politique. Niveau de preuve : simulé
+(`test-cluster-checks.sh`) ; la politique sur un vrai Cilium, et si les trois entités
+suffisent, est NON VÉRIFIÉ sur un cluster.
 
 ## De la 0.2.x à la 0.3.0 (la plateforme, pas Talos ni Kubernetes)
 

@@ -26,6 +26,7 @@ in git. 0.1.0 is the first entry describing something proven.
 ### Fixed
 
 - **Talos tunnels retry a port that is busy only as someone's source port** (infra #422, closes the CI flake #431). `talos-tunnels.sh` respawns, alone, a tunnel whose ssh died on "Address already in use" with nothing listening there (lab 28B: the host's own 1 Hz probe held `:52100`), up to 3 times after 4 s (`OA_TUNNEL_BIND_RETRIES`, `OA_TUNNEL_BIND_PAUSE`); any other failure is reported at once, and a port still busy after the retries is named with the `ip_local_reserved_ports` way out. `test-talos-tunnels.sh` now holds a port the way the host did (and picks its own port block by a bind, not `nc -z`). Rung: mocked; UNVERIFIED on a cluster.
+- **`cluster-upgrade`'s service probe no longer counts a policy as an outage** (infra #403, lab 25: "394 FAIL, 2 BLIND in 396 samples" under the default-deny ingress). The probe namespace gets a `CiliumNetworkPolicy` for the control plane (entities host, remote-node, kube-apiserver, port 8080; none applied without Cilium's CRD), and before the upgrade starts one request through the proxy decides whether the probe can measure: if not, it prints NOT MEASURING and makes no claim (the upgrade goes on, as the probe is reported, not gated). Rung: mocked (`test-cluster-checks.sh`); whether the policy and the three entities let the proxy in on a real Cilium is UNVERIFIED.
 
 ## [0.4.0] — 2026-11-01
 

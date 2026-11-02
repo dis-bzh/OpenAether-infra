@@ -69,6 +69,17 @@ while the apiserver is down are counted apart as BLIND. It is reported, not
 gated. Real numbers, 2026-10-03: 0 failed on Scaleway, 40 failed and 20 blind of
 1490 on Outscale (`docs/status.md`). How it works:
 [`cluster-upgrade.sh` § The service probe](../scripts/dev/cluster-upgrade.sh).
+Under the platform's default-deny ingress the proxy cannot reach the probe's pod
+unless a policy lets it in (lab 25 printed "394 FAIL, 2 BLIND in 396 samples": a
+policy, not an outage; infra #403). The probe's namespace therefore gets a
+`CiliumNetworkPolicy` for the control plane (the entities `host`, `remote-node` and
+`kube-apiserver`, port 8080 only: which one the proxy's traffic is classified as is
+not established, so all three), and before the upgrade starts the proxy is asked for
+the pod (up to 15 tries, 2 s apart). If it never answers while the apiserver does,
+the run prints `NOT MEASURING` and makes no claim about the service, and the upgrade
+goes on (still reported, not gated). A cluster without Cilium's CRD gets no policy.
+Rung: mocked (`test-cluster-checks.sh`); the policy on a real Cilium, and whether the
+three entities are enough, is UNVERIFIED on a cluster.
 
 ## From 0.2.x to 0.3.0 (the platform, not Talos or Kubernetes)
 

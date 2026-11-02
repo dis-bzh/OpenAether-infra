@@ -333,7 +333,12 @@ fi
 # workload behind a Service while its pods are drained off node after node.
 # It goes through the apiserver's service proxy, so a sample taken while the
 # apiserver is down says nothing about the Service: it is logged BLIND, not FAIL.
+# On a cluster with the platform's default-deny ingress the proxy cannot reach the pod unless a policy lets the control plane
+# in (infra #403, lab 25: "394 FAIL, 2 BLIND in 396 samples" for a Service nobody ever measured). So the namespace gets one, and
+# BEFORE the upgrade starts the proxy is asked once for the pod: if it never answers while the apiserver does, the probe says
+# NOT MEASURING and makes no claim, instead of counting a policy as an outage.
 SVC_NS=upgrade-probe
+SVC_MEASURING=1
 SVC_PATH="/api/v1/namespaces/${SVC_NS}/services/http:upgrade-probe:80/proxy/hostname"
 SVC_LOG="$(mktemp)"
 SVC_REPORTED=0
@@ -343,6 +348,10 @@ SVC_REPORTED=0
 report_svc_probe() {
   local fails blind total longest keep elapsed=$(( SECONDS - ${SVC_STARTED:-$SECONDS} ))
   SVC_REPORTED=1
+  if [ "${SVC_MEASURING:-1}" = 0 ]; then
+    echo "  service probe: NOT MEASURING (the apiserver proxy never reached the probe's pod before the upgrade started): no claim about the service is made"
+    return 0
+  fi
   # One snapshot: the probe is still appending, and four reads of a growing file
   # disagree with each other.
   keep="${ROOT}/.upgrade-probe-${PROVIDER}-${ROLE}.service.log"
@@ -426,6 +435,42 @@ EOF
 kubectl -n "$SVC_NS" rollout status deployment/upgrade-probe --timeout=180s >/dev/null ||
   fail "the service probe's pods never became ready — nothing could be measured, so nothing was upgraded"
 
+# The platform denies all ingress cluster-wide (a CiliumClusterwideNetworkPolicy), so the apiserver's proxy gets no answer from this pod
+# unless a policy lets it in. Which Cilium entity the proxy's traffic is classified as is NOT established (host, remote-node or
+# kube-apiserver, by where the apiserver runs): all three are allowed, to this pod's port only, in this namespace only, which is deleted
+# with the probe. Only where Cilium's CRD exists: an apply naming a kind that is not there would fail the whole probe.
+if kubectl get crd ciliumnetworkpolicies.cilium.io >/dev/null 2>&1; then
+  kubectl apply -f - >/dev/null <<EOF || echo "  ⚠ could not create the service probe's CiliumNetworkPolicy: under a default-deny ingress the probe will say NOT MEASURING" >&2
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata: {name: upgrade-probe-from-apiserver, namespace: ${SVC_NS}}
+spec:
+  endpointSelector: {matchLabels: {app: upgrade-probe}}
+  ingress:
+    - fromEntities: [host, remote-node, kube-apiserver]
+      toPorts: [{ports: [{port: "8080", protocol: TCP}]}]
+EOF
+fi
+
+# One request through the proxy before anything moves, retried for a minute at most (a policy takes a moment to be enforced). It decides
+# whether the loop below can measure anything: a pod the proxy cannot reach is not a Service that is down.
+svc_reachable() {
+  for _ in $(seq 1 "${UPGRADE_SVC_PRECHECK_TRIES:-15}"); do
+    kubectl get --raw="$SVC_PATH" --request-timeout=2s >/dev/null 2>&1 && return 0
+    sleep 2
+  done
+  return 1
+}
+if ! svc_reachable; then
+  SVC_MEASURING=0
+  if kubectl get --raw=/readyz --request-timeout=2s >/dev/null 2>&1; then
+    echo "  ⚠ service probe: the apiserver proxy cannot reach its pod while the apiserver answers (a NetworkPolicy? the default-deny ingress of the platform"
+    echo "    needs a CiliumNetworkPolicy for namespace ${SVC_NS}): NOT MEASURING the service. The upgrade goes on; no claim about the service will be made."
+  else
+    echo "  ⚠ service probe: the apiserver did not answer for the proxy before the upgrade started: NOT MEASURING the service. The upgrade goes on; no claim about the service will be made."
+  fi
+fi
+
 svc_probe() {
   local out
   while :; do
@@ -439,8 +484,10 @@ svc_probe() {
     sleep 1
   done >>"$SVC_LOG"
 }
-svc_probe &
-SVC_PROBE_PID=$!
+if [ "$SVC_MEASURING" = 1 ]; then
+  svc_probe &
+  SVC_PROBE_PID=$!
+fi
 SVC_STARTED=$SECONDS
 
 # --- The probe ----------------------------------------------------------------
