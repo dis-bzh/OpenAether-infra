@@ -23,6 +23,10 @@ in git. 0.1.0 is the first entry describing something proven.
 - **commitizen 4.19.2 → 4.19.3** (Cléa #91, probed green in a bare container, released 2026-10-24): `ci.yml`, the `pip install` of the commit-message check. Rung: mocked.
 - **flux-schema 0.16.0 → 0.17.0** (Cléa #91, probed green in a bare container, released 2026-10-23): `ci.yml` and `scripts/setup.sh`. Rung: mocked.
 
+### Documented (0.4.1, infra #406, #419, #424, #392, #390; rung: docs only, nothing changed in the code or a setting, no cluster touched; every figure is copied from the lab 19 to 28E results, nothing re-measured)
+
+- **What the pages say, corrected to what was established.** `backup-policy.md` and `security-architecture.md` (and the French twins): the CNPG archive's server-side encryption is requested, not shown to be applied (lab 19 read an `AES256` header on copy-job objects at OVH, lab 25 none on a WAL object of either store; UNVERIFIED, a head-object settles it). `resilience.md` (and the French twin): a new section records the lab 28 OVH figures with shape and NOMINAL/INCIDENT label, WORSE rows included; a CoreDNS tag change is not rolled out by `tofu apply`, the variable cannot be set from a tfvars and nothing compares the running tag with the declared one (the by-hand `kubectl set image` was not run in a lab); the database targets read 75 s node, 150 s zone, 30 s switchover, so the 122 s of a primary inside a lost zone is inside the zone target (not re-measured with the 30 s grace of 0.4.0); the Scaleway 13 s check is documented with its trade-off, and the page no longer calls 13 s a minimum the providers allow (true for the Outscale interval and threshold only). F-OVHREPL and F-SHRINKMEM now cite lab 28.
+
 ## [0.4.0] — 2026-11-01
 
 0.4.0 is the **resilience release**. It pairs with OpenAether-apps 0.4.0, which must be tagged first: the `git_ref` default and the twelve `envs/*.tfvars.example` now pin OpenAether-apps `refs/tags/0.4.0` (they pinned `refs/tags/0.3.2`), and the tftest assertion on the rendered GitRepository follows. What it adds:
