@@ -629,7 +629,7 @@ vérifie que le drapeau de Scaleway reste désactivé.
 
 `task cluster-roll` exige que tous les nœuds soient Ready et vide chacun avant de le toucher ; un nœud mort ne peut ni l'un ni l'autre. Utilisez `task cluster-node-state PROVIDER=… NODE=…`
 (lecture seule, nomme la commande suivante), puis `task cluster-node-recover` quand le fournisseur dit que la machine tourne, ou `task cluster-replace-node` quand elle est arrêtée, en
-erreur ou disparue. La seconde fait le même remplacement que le déploiement pour ce seul nœud (`rolling-replace.sh --dead --node=…`), après un examen des survivants et
+erreur ou disparue. La seconde fait le même remplacement que le déploiement pour ce seul nœud (`rolling-replace.sh --dead --node=…`), après un examen des survivants (l'etcd de chaque plan de contrôle survivant est lu jusqu'à trois fois, `ETCD_READ_TRIES`, donc une seule lecture en échec ne refuse plus le remplacement : infra #401, testé hors ligne ; un membre muet à chaque essai est toujours refusé et nommé) et
 avec le membre etcd retiré avant l'objet Node. Le déploiement attend aussi maintenant que le kube-apiserver de chaque plan de contrôle redémarré serve avant de continuer
 (#42). La procédure, les exercices et ce qui n'est PAS VÉRIFIÉ sont dans [`resilience.fr.md`](resilience.fr.md).
 

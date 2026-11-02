@@ -23,6 +23,10 @@ in git. 0.1.0 is the first entry describing something proven.
 - **commitizen 4.19.2 → 4.19.3** (Cléa #91, probed green in a bare container, released 2026-10-24): `ci.yml`, the `pip install` of the commit-message check. Rung: mocked.
 - **flux-schema 0.16.0 → 0.17.0** (Cléa #91, probed green in a bare container, released 2026-10-23): `ci.yml` and `scripts/setup.sh`. Rung: mocked.
 
+### Fixed (0.4.1, the roll gates found in labs 25 and 28B; rung: mocked, offline, UNVERIFIED on a cluster, entry by entry)
+
+- **`task cluster-replace-node` no longer refuses on ONE failed etcd read (infra #401, lab 25).** `dead_node_survey` counted a surviving control plane healthy on a single `talosctl service etcd` call: lab 25 (Scaleway) refused with two healthy survivors and the identical rerun passed. Each survivor is now read up to 3 times (`ETCD_READ_TRIES`, `ETCD_READ_PAUSE`, 3 s), healthy at the first `HEALTH OK`; a member silent on every try is still refused, named with its address ("no healthy answer from cp-2 (…) after 3 tries"), at most 6 s later per silent member. The refusal is not weakened for a member that is really down; the survey is more patient with a transient. Test first in `test-dead-node-roll.sh` (16 passed, 3 failed on the old code; 19 of 19 after); mutants: one try, six tries, silent members unnamed. Rung: mocked; the transient cannot be provoked on demand, so no cloud drill is planned for it.
+
 ## [0.4.0] — 2026-11-01
 
 0.4.0 is the **resilience release**. It pairs with OpenAether-apps 0.4.0, which must be tagged first: the `git_ref` default and the twelve `envs/*.tfvars.example` now pin OpenAether-apps `refs/tags/0.4.0` (they pinned `refs/tags/0.3.2`), and the tftest assertion on the rendered GitRepository follows. What it adds:

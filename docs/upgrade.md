@@ -690,7 +690,7 @@ checks that Scaleway's flag stays unset.
 
 `task cluster-roll` needs every node Ready and drains each one before it is touched; a dead node can do neither. Use `task cluster-node-state PROVIDER=… NODE=…`
 (read-only, names the next command), then `task cluster-node-recover` when the provider says the machine runs, or `task cluster-replace-node` when it is stopped, in
-error or gone. The second one runs the same replacement as the roll for that one node (`rolling-replace.sh --dead --node=…`), after a survey of the survivors and
+error or gone. The second one runs the same replacement as the roll for that one node (`rolling-replace.sh --dead --node=…`), after a survey of the survivors (each surviving control plane's etcd is read up to three times, `ETCD_READ_TRIES`, so one failed read no longer refuses the replacement: infra #401, mocked offline; a member silent on every try is still refused and named) and
 with the etcd member removed before the Node object. The roll itself now also waits for each rebooted control plane's kube-apiserver to serve before it goes on
 (#42). The procedure, the drills and what is UNVERIFIED are in [`resilience.md`](resilience.md).
 

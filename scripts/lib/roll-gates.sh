@@ -877,16 +877,27 @@ dead_node_survey() { # <cp|worker> <index> <node_name>
     ok "every other node is Ready"
   fi
   if [[ "$t" == cp ]]; then
+    # ONE failed read is not an unhealthy member (infra #401: lab 25 refused with two healthy survivors; the identical rerun
+    # passed). Each member is read up to ETCD_READ_TRIES times with ETCD_READ_PAUSE seconds between the reads, and counts as
+    # healthy on the first HEALTH OK. A member that never answers OK is still not counted, so a real loss of quorum is refused
+    # exactly as before, 2 x ETCD_READ_PAUSE seconds later per silent member; the ones that stayed silent are named.
+    local tries="${ETCD_READ_TRIES:-3}" try silent=""
     for k in "${!CP_IPS[@]}"; do
       [[ "$k" == "$idx" ]] && continue
       ep="$(talos_ep cp "$k")"; ip="${CP_IPS[$k]}"
-      talosctl -e "$ep" -n "$ip" service etcd 2>/dev/null | grep -qE 'HEALTH[[:space:]]+OK' && healthy=$((healthy + 1))
+      for ((try = 1; try <= tries; try++)); do
+        if talosctl -e "$ep" -n "$ip" service etcd 2>/dev/null | grep -qE 'HEALTH[[:space:]]+OK'; then
+          healthy=$((healthy + 1)); continue 2
+        fi
+        (( try == tries )) || sleep "${ETCD_READ_PAUSE:-3}"
+      done
+      silent+="cp-${k} (${ip}) "
     done
     need=$(( ${#CP_IPS[@]} / 2 + 1 ))
     if (( healthy >= need )); then
       ok "etcd: ${healthy} healthy member(s) besides ${node}, quorum is ${need}"
     else
-      warn "etcd: only ${healthy} healthy member(s) besides ${node}, quorum is ${need}. Replacing a member without a quorum cannot work: this is the etcd disaster-recovery case (task dr-restore-plan), not a replacement."
+      warn "etcd: only ${healthy} healthy member(s) besides ${node}, quorum is ${need}; no healthy answer from ${silent:-nobody }after ${tries} tries. Replacing a member without a quorum cannot work: this is the etcd disaster-recovery case (task dr-restore-plan), not a replacement."
       fatal=1
     fi
   fi
