@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# infra-verify.sh (infra #408): "Cilium and Flux run the pinned version" and "the apps ref Flux follows is git_ref".
+# infra-verify.sh (infra #408): "Cilium and Flux run the pinned version" and "the apps ref Flux follows is git_ref"; the
+# platform CNPG Clusters (0.4.0); the WAL archiving of the database-profile Clusters (infra #430).
 #
 # The real infra-verify.sh runs in a throwaway layout with a stub kubectl whose answers come from fixture files, against the REAL
 # committed artifacts. Every other section of the verifier is answered green or left unanswered (it counts as UNCHECKED, which
@@ -58,6 +59,10 @@ case "\$*" in
   "-n kube-system get daemonsets,deployments -o json") [ -f "$FX/cilium.unreadable" ] && exit 1; render "$FX/cilium.live" ds ;;
   *"gitrepositories.source.toolkit.fluxcd.io openaether -o json") [ -f "$FX/gr.unreadable" ] && exit 1; cat "$FX/gr.json" ;;
   *"kustomizations.kustomize.toolkit.fluxcd.io openaether-platform -o json") cat "$FX/ks.json" ;;
+  *"get clusters.postgresql.cnpg.io -A -l openaether.io/db-profile -o json")
+    [ -f "$FX/cnpg.nocrd" ] && { echo "error: the server doesn't have a resource type \"clusters\"" >&2; exit 1; }
+    [ -f "$FX/cnpgp.unreadable" ] && { echo "Unable to connect to the server" >&2; exit 1; }
+    cat "$FX/cnpgp.json" ;;
   *"get clusters.postgresql.cnpg.io -l openaether.io/managed=true -o json")
     [ -f "$FX/cnpg.nocrd" ] && { echo "error: the server doesn't have a resource type \"clusters\"" >&2; exit 1; }
     [ -f "$FX/cnpg.unreadable" ] && { echo "Unable to connect to the server" >&2; exit 1; }
@@ -87,7 +92,7 @@ mkks() { jq -nc --arg r "$1" '{spec:{postBuild:{substitute:{GIT_REF:$r}}}}' >"$F
 reset() {
   rm -rf "$FX"; mkdir -p "$FX"; cp "$W/flux.target" "$FX/flux.live"; cp "$W/cilium.target" "$FX/cilium.live"
   mkgr refs/tags/0.4.0; mkks refs/tags/0.4.0; mkdns 3 true; mkop 2
-  echo '{"items":[]}' >"$FX/cnpg.json"
+  echo '{"items":[]}' >"$FX/cnpg.json"; echo '{"items":[]}' >"$FX/cnpgp.json"
   printf 'git_ref = "refs/tags/0.4.0"\ndeploy_flux = true\ncluster_name = "c"\nenvironment = "dev"\n' >"$TFV"
   cp "$REAL_M"/{cilium.yaml,cilium-hubble-drops.yaml,flux-install.yaml} "$M/"
 }
@@ -193,6 +198,51 @@ reset; { mkcl db 3 "$SYNCB" True; mkcl app-ha 3 null False '{"openaether.io/db-p
 ! has "app-ha" && ! has "rt-x" && ok "a profile Cluster and an rt-* copy are not judged (same selection as cnpg-presync)" || bad "$(grep 'foundation-databases' "$W/out")"
 reset; mkcl db 3 null False | cnpg_fx; run local
 ! has "$CNPGH" && ok "provider local: not judged" || bad "local judged"
+
+echo "--- infra #430: the WAL archiving of the database-profile Clusters (all namespaces), red at once ---"
+PCH="The profile CNPG Clusters"
+ARCHMSG='rpc error: code = Unknown desc = unexpected failure invoking barman-cloud-wal-archive: exit status 1'
+mkpc() { # <namespace> <name> <profile> <ContinuousArchiving status|none> <age in seconds> <plugin|none> [message] — one profile Cluster
+  jq -nc --arg ns "$1" --arg n "$2" --arg p "$3" --arg a "$4" --arg c "$(date -u -d "@$(( $(date +%s) - $5 ))" +%FT%TZ)" --arg pl "$6" --arg m "${7:-}" \
+    '{metadata:{namespace:$ns, name:$n, creationTimestamp:$c, labels:{"openaether.io/managed":"true","openaether.io/db-profile":$p}},
+      spec:{instances:3, plugins:(if $pl == "plugin" then [{name:"barman-cloud.cloudnative-pg.io", isWALArchiver:true}] else [] end)},
+      status:{conditions:(if $a == "none" then [] else [{type:"ContinuousArchiving", status:$a, reason:"ContinuousArchivingFailing", message:$m}] end)}}'
+}
+pcl_fx() { jq -sc '{items: .}' >"$FX/cnpgp.json"; }
+reset; run
+! has "$PCH" && ok "no profile Cluster: the section is silent" || bad "section printed"
+reset; mkpc apps-team app-ha ha False 600 plugin "$ARCHMSG" | pcl_fx; run
+{ [ -n "$(badline 'apps-team/app-ha (profile ha): ContinuousArchiving is False')" ] && has "unexpected failure invoking barman-cloud-wal-archive: exit status 1" \
+  && has "kubectl cnpg status app-ha -n apps-team" && has "traps.md" && [ "$rc" -ne 0 ]; } \
+  && ok "a profile Cluster with ContinuousArchiving False: BAD at once, naming the Cluster and the condition message, run fails" || bad "$(grep -i 'app-ha\|profile' "$W/out")"
+reset; mkpc apps-team app-ha ha False 20 plugin "$ARCHMSG" | pcl_fx; run
+[ -n "$(badline 'apps-team/app-ha (profile ha): ContinuousArchiving is False')" ] && grep -qE 'created 2[0-9] s ago' "$W/out" && ok "False on a Cluster 20 s old is BAD too (no grace for a condition that IS False), with its age" || bad "$(grep -i 'app-ha\|profile' "$W/out")"
+reset; mkpc apps-team app-ha ha True 600 plugin | pcl_fx; run
+{ has "✓ apps-team/app-ha (profile ha): ContinuousArchiving True" && [ -z "$(badline 'app-ha')" ] && [ -z "$(unkline 'app-ha')" ]; } && ok "ContinuousArchiving True: passes" || bad "$(grep -i 'app-ha\|profile' "$W/out")"
+reset; { mkpc team-a a-ha ha True 600 plugin; mkpc team-b b-std standard False 600 plugin "$ARCHMSG"; } | pcl_fx; run
+{ has "✓ team-a/a-ha (profile ha): ContinuousArchiving True" && [ -n "$(badline 'team-b/b-std (profile standard): ContinuousArchiving is False')" ] && [ -z "$(badline 'team-a/a-ha')" ]; } \
+  && ok "two namespaces: each Cluster judged on its own, the good one stays green" || bad "$(grep -i 'a-ha\|b-std' "$W/out")"
+reset; mkpc apps-team app-ha ha none 600 plugin | pcl_fx; run
+{ [ -n "$(unkline 'apps-team/app-ha (profile ha): no ContinuousArchiving condition')" ] && ! has "✓ apps-team/app-ha" && [ "$rc" -ne 0 ]; } \
+  && ok "archiving declared and the condition still absent after the grace: UNKNOWN, not a pass" || bad "$(grep -i 'app-ha\|profile' "$W/out")"
+reset; mkpc apps-team app-ha ha none 20 plugin | pcl_fx; run
+{ has "~ apps-team/app-ha (profile ha): no ContinuousArchiving condition yet" && [ -z "$(unkline 'app-ha')" ] && [ -z "$(badline 'app-ha')" ]; } \
+  && ok "a Cluster 20 s old that has no condition yet: a warning, not a failure" || bad "$(grep -i 'app-ha\|profile' "$W/out")"
+reset; mkpc apps-team app-light light none 600 none | pcl_fx; run
+! has "app-light" && ok "a Cluster that declares no WAL archiver (light) and has no condition: nothing to judge, no line" || bad "$(grep -i 'app-light' "$W/out")"
+reset; mkpc apps-team app-light light False 600 none "$ARCHMSG" | pcl_fx; run
+[ -n "$(badline 'apps-team/app-light (profile light): ContinuousArchiving is False')" ] && ok "a condition that IS False is BAD whatever the Cluster declares" || bad "$(grep -i 'app-light' "$W/out")"
+reset; mkpc apps-team rt-abc ha False 600 plugin "$ARCHMSG" | pcl_fx; run
+! has "rt-abc" && ok "an rt-* restore-test copy is not judged (same selection as the platform loop)" || bad "$(grep -i 'rt-abc' "$W/out")"
+reset; : >"$FX/cnpgp.unreadable"; run
+[ -n "$(unkline 'could not list the profile CNPG Clusters')" ] && [ "$rc" -ne 0 ] && ok "the profile list fails (not 'no CRD'): UNKNOWN" || bad "$(grep -i 'profile' "$W/out")"
+reset; : >"$FX/cnpg.nocrd"; run
+! has "$PCH" && ! has "could not list the profile" && ok "no CNPG CRD (a pure-infra cluster): silent, not UNKNOWN" || bad "$(grep -i 'profile' "$W/out")"
+reset; mkpc apps-team app-ha ha False 600 plugin "$ARCHMSG" | pcl_fx; run local
+! has "$PCH" && ok "provider local: not judged" || bad "local judged"
+reset; { mkcl db 3 "$SYNCB" True; } | cnpg_fx; cnpg_ok; mkpc apps-team app-ha ha False 600 plugin "$ARCHMSG" | pcl_fx; run
+{ has "✓ foundation-databases/db: ContinuousArchiving True" && [ -z "$(badline 'foundation-databases/db')" ] && [ -n "$(badline 'apps-team/app-ha')" ]; } \
+  && ok "the platform lines are unchanged beside a failing profile Cluster" || bad "$(grep -i 'foundation-databases\|app-ha' "$W/out")"
 
 echo "--- K2 (lab 26): CoreDNS runs the declared replica count and spread, both directions ---"
 reset; run

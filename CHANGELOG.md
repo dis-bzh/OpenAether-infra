@@ -14,6 +14,10 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ## [Unreleased]
 
+### Fixed (0.4.1, infra #430; rung: mocked, offline, UNVERIFIED on a cluster)
+
+- **`task cluster-verify` goes red at once on a database-profile CNPG Cluster whose `ContinuousArchiving` is not True** (#430, lab 28C: a Cluster created on an archive path that still held another Cluster's WAL was invisible for its first 25 minutes, `CnpgWalArchiveFailing` being a 10 minute window plus `for: 15m`, and wedged at its first failover, 4 of 4). New section "The profile CNPG Clusters: WAL archiving" in `scripts/dev/infra-verify.sh`: every Cluster with the label `openaether.io/db-profile` in ALL namespaces (the platform loop is unchanged and still stops at `OA_CNPG_NAMESPACES`; `rt-*` copies stay out). `ContinuousArchiving` False is BAD whatever the age, naming `namespace/Cluster`, its age, the condition reason and message, and where to read; absent on a Cluster that declares a WAL archiver is a warning under 300 s of age and UNKNOWN after; a Cluster that declares none (`light`) prints nothing. No guard removed, none relaxed; no existing line changes. Not done here: the immediate alert (apps) and a unique `serverName` per Cluster incarnation (0.5.0). UNVERIFIED: the check has not been read on a real Cluster, and whether a healthy new Cluster shows False for a moment before True is not known (it would read BAD with its age).
+
 ### Changed
 
 - **OpenTofu 1.13.1 → 1.13.2** (Cléa #91, probed green in a bare container, released 2026-10-21): the five `tofu_version` pins of `ci.yml`, the one of `real-cloud-regression.yml` and `TOFU_VERSION`
