@@ -1130,6 +1130,69 @@ awk '/saved_plan_apply "\$\{node_name\}-instance" .*"\$\{#infra_targets/ {a++} a
   && ok "after the instance apply and before the config apply: read the new address, refresh the outputs, open the tunnels again" \
   || bad "the address/tunnel refresh is not between the instance apply and the config apply"
 
+echo
+echo "=== the only copy of a single-instance database (infra #425; lab 28B S5: 42,583 acknowledged commits gone) ==="
+# A replacement wipes the node's disk. A Cluster with ONE instance on a node-local volume has no other copy: it is named, and
+# asked about even unattended. Instance counts, claims and the volumes' node affinity are read from the cluster; a stub answers.
+eval "$(extract 'cnpg_sole_copies,sole_copy_gate')"
+j() { jq -c "$@"; }   # one line, no backslash: the stub prints with %b
+cl() { j -n --arg ns "$1" --arg n "$2" --argjson i "$3" '{metadata:{namespace:$ns,name:$n},spec:({storage:{size:"1Gi"}} + (if $i == null then {} else {instances:$i} end))}'; }
+cpod() { j -n --arg ns "$1" --arg c "$2" --arg claim "$3" '{metadata:{namespace:$ns,name:($c + "-1"),labels:{"cnpg.io/cluster":$c}},spec:{volumes:[{persistentVolumeClaim:{claimName:$claim}}]}}'; }
+pv_on() { j -n --arg ns "$1" --arg claim "$2" --arg node "$3" '{spec:{claimRef:{namespace:$ns,name:$claim},nodeAffinity:{required:{nodeSelectorTerms:[{matchExpressions:[{key:"kubernetes.io/hostname",operator:"In",values:[$node]}]}]}}}}'; }
+pv_free() { j -n --arg ns "$1" --arg claim "$2" '{spec:{claimRef:{namespace:$ns,name:$claim},csi:{driver:"driver.longhorn.io"}}}'; }
+items() { printf '{"items":[%s]}' "$(paste -sd, -)"; }
+LIGHT="$(cl lab27 lab27-light 1)"; HA="$(cl lab27 lab27-ha 3)"; NOINST="$(cl lab27 lab27-default null)"; LH1="$(cl lab27 lab27-lh 1)"
+SC_CLUSTERS="get clusters.postgresql.cnpg.io\t0\t$({ echo "$LIGHT"; echo "$HA"; echo "$NOINST"; echo "$LH1"; } | items)\n"
+SC_PODS="get pods -A -l cnpg.io/cluster\t0\t$({ cpod lab27 lab27-light d-light; cpod lab27 lab27-ha d-ha; cpod lab27 lab27-default d-def; cpod lab27 lab27-lh d-lh; } | items)\n"
+SC_PVS="get persistentvolumes\t0\t$({ pv_on lab27 d-light worker-3; pv_on lab27 d-ha worker-3; pv_on lab27 d-def worker-1; pv_free lab27 d-lh; } | items)\n"
+SC_PLAN="${CRD}${SC_CLUSTERS}${SC_PODS}${SC_PVS}"
+plan "$SC_PLAN"
+[ "$(cnpg_sole_copies worker-3)" = "$(printf 'lab27/lab27-light\tworker-3')" ] \
+  && ok "the Cluster with one instance whose volume is pinned to the node is named with the node; a 3-instance Cluster pinned there is not" \
+  || bad "worker-3: '$(cnpg_sole_copies worker-3)'"
+[ "$(cnpg_sole_copies worker-1)" = "$(printf 'lab27/lab27-default\tworker-1')" ] \
+  && ok "an unset spec.instances is ONE (the CNPG default): that Cluster is named too" || bad "worker-1: '$(cnpg_sole_copies worker-1)'"
+[ -z "$(cnpg_sole_copies worker-2)" ] && ok "a node that holds none of them: nothing" || bad "worker-2: '$(cnpg_sole_copies worker-2)'"
+[ "$(cnpg_sole_copies worker-1 worker-3 | wc -l)" = 2 ] && ok "several nodes at once (a whole roll): each Cluster once" || bad "two nodes: '$(cnpg_sole_copies worker-1 worker-3)'"
+{ cnpg_sole_copies worker-3 | grep -q lab27-lh; } && bad "a single-instance Cluster on a replicated (unpinned) volume was named: nothing is lost with the node" \
+  || ok "…and the one on a volume that is not pinned to a node (Longhorn) is not named: its data does not go with the disk"
+plan "$NO_CRD"; cnpg_sole_copies worker-3 >/dev/null; [ $? -eq 0 ] && [ -z "$(cnpg_sole_copies worker-3)" ] && ok "no CNPG installed: nothing to name" || bad "no CRD"
+plan "${CRD}get clusters.postgresql.cnpg.io\t1\tconnection refused\n"; cnpg_sole_copies worker-3 >/dev/null 2>&1 \
+  && bad "an unanswered Cluster list read as 'no single-instance database'" || ok "an unanswered read is a failure, never an empty answer"
+plan "${CRD}${SC_CLUSTERS}${SC_PODS}get persistentvolumes\t1\tconnection refused\n"; cnpg_sole_copies worker-3 >/dev/null 2>&1 \
+  && bad "an unanswered volume list read as 'nothing pinned'" || ok "…also for the volumes"
+
+gate() { ( "$@" ) >"$STUB_DIR/gate.out" 2>&1 <"${GATE_IN:-/dev/null}"; echo $?; }
+plan "$SC_PLAN"; ACCEPT_SOLE_COPY=(); ASSUME_YES=1
+[ "$(gate sole_copy_gate worker-3)" = 42 ] && grep -q 'lab27/lab27-light' "$STUB_DIR/gate.out" && grep -q -- '--accept-sole-copy=lab27/lab27-light' "$STUB_DIR/gate.out" \
+  && ok "unattended (--yes / APPROVE=auto) it REFUSES, names the Cluster and the exact flag that accepts the loss" || bad "unattended: $(cat "$STUB_DIR/gate.out")"
+ACCEPT_SOLE_COPY=(lab27/lab27-light)
+[ "$(gate sole_copy_gate worker-3)" = 0 ] && grep -q 'accepted' "$STUB_DIR/gate.out" \
+  && ok "with --accept-sole-copy=lab27/lab27-light it goes on, and says so" || bad "accepted: $(cat "$STUB_DIR/gate.out")"
+ACCEPT_SOLE_COPY=(lab27/other lab27-light)
+[ "$(gate sole_copy_gate worker-3)" = 42 ] && ok "another Cluster's name, or a name without its namespace, accepts nothing" || bad "a wrong acceptance passed"
+ACCEPT_SOLE_COPY=(); ASSUME_YES=0
+echo n >"$STUB_DIR/in_n"; echo y >"$STUB_DIR/in_y"
+[ "$(GATE_IN="$STUB_DIR/in_n" gate sole_copy_gate worker-3)" = 42 ] && grep -q 'aborted by operator' "$STUB_DIR/gate.out" \
+  && ok "attended, an explicit y is asked for; n refuses" || bad "attended n: $(cat "$STUB_DIR/gate.out")"
+[ "$(GATE_IN="$STUB_DIR/in_y" gate sole_copy_gate worker-3)" = 0 ] && ok "…and y goes on" || bad "attended y: $(cat "$STUB_DIR/gate.out")"
+[ "$(gate sole_copy_gate worker-3)" = 42 ] && ok "…no answer at all (no terminal) is a no" || bad "no answer passed"
+ASSUME_YES=1; [ "$(gate sole_copy_gate worker-2)" = 0 ] && ok "nothing to name: silent, rc 0, whatever the mode" || bad "clean node: $(cat "$STUB_DIR/gate.out")"
+plan "${CRD}get clusters.postgresql.cnpg.io\t1\tconnection refused\n"
+[ "$(gate sole_copy_gate worker-3)" = 42 ] && grep -q 'refusing to replace blind' "$STUB_DIR/gate.out" \
+  && ok "a read that fails refuses (it is a data-loss guard: an unanswered question is not an empty answer)" || bad "blind: $(cat "$STUB_DIR/gate.out")"
+ASSUME_YES=0; ACCEPT_SOLE_COPY=()
+
+# Wired in: replacement only (--upgrade keeps the disk), once per mode, after the survey and before the first node is touched.
+RRX="$(cat "$ROOT/scripts/ops/rolling-replace.sh")"
+grep -q -- '--accept-sole-copy=\*)' <<<"$RRX" && ok "rolling-replace.sh parses --accept-sole-copy=<namespace>/<name>" || bad "the flag is not parsed"
+awk '/^  if \[\[ \$DEAD -eq 1 \]\]; then$/ {s=1} s && /dead_node_survey/ {d=NR} s && /sole_copy_gate/ && d && !g {g=NR}
+     s && /^  else$/ {e=NR} s && /preflight_roll$/ {p=NR} s && /sole_copy_gate/ && p && !h {h=NR}
+     END {exit !(d && g > d && g < e && p > e && h > p)}' <<<"$RRX" \
+  && ok "a dead node: the gate follows the survey; a roll: it follows preflight_roll, both before any node is touched" || bad "the gate is not wired after the surveys"
+grep -B3 'sole_copy_gate' <<<"$RRX" | grep -q 'UPGRADE -eq 0' && ok "…and a roll with --upgrade (the disk is kept) is not asked" || bad "--upgrade would be asked about data it does not destroy"
+! grep -q 'sole_copy_gate' "$ROOT/scripts/ops/shrink-nodes.sh" && ok "cluster-shrink is untouched: it already refuses ANY node-local volume" || bad "shrink-nodes.sh calls the new gate"
+
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 # A floor, not just a verdict: `FAIL -eq 0` is also true when the harness died
 # before asserting anything, which is the shape this repository keeps meeting.

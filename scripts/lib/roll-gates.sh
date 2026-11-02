@@ -859,6 +859,78 @@ wait_rwx_clear() { # <node_name>
   done
 }
 
+# --- A replacement wipes the node's disk: the ONLY copy of a single-instance database goes with it (infra #425) ---------------
+#
+# Lab 28B, S5 (Scaleway): the roll of a worker replaced its machine and its local-path disk; the `light` database that lived there
+# (ONE instance, node-local volume, no backup) lost 42,583 acknowledged commits, and the cleanup that follows refused the volume
+# ("primary of record: its data was on the replaced disk"), too late. The owner's decision of 2026-10-30: `light` is outside the
+# zero-acknowledged-loss rule, and the roll must say so and ask first.
+#
+# "Only copy" is read from three facts the cluster states, none of them guessed: the Cluster declares ONE instance (spec.instances
+# unset is one, the CNPG default), a pod of that Cluster mounts a claim, and the PersistentVolume of that claim is pinned to a node
+# by its own node affinity (what a node-local class such as local-path-retain does; a replicated volume is not pinned, and its
+# data survives the node). The pinning is read as cluster-shrink's pinned_pvs reads it. A single-instance Cluster on a replicated
+# volume is therefore NOT named: nothing is lost with its node.
+# "<ns>/<cluster>\t<node>" per line, for the nodes given; nothing when CNPG is not installed; non-zero when a read failed.
+cnpg_sole_copies() { # <node_name>...
+  local clusters pods pvs nodes
+  cnpg_installed || return 0
+  clusters="$("${KCTL[@]}" get clusters.postgresql.cnpg.io -A -o json 2>/dev/null)" &&
+    pods="$("${KCTL[@]}" get pods -A -l cnpg.io/cluster -o json 2>/dev/null)" &&
+    pvs="$("${KCTL[@]}" get persistentvolumes -o json 2>/dev/null)" || return 1
+  nodes="$(printf '%s\n' "$@" | jq -R . | jq -sc .)" || return 1
+  # --slurpfile, not --argjson: the lists are far over what one argv entry may hold (lab 13).
+  jq -r --slurpfile pods <(printf '%s' "$pods") --slurpfile pvs <(printf '%s' "$pvs") --argjson nodes "$nodes" '
+    [.items[] | select((.spec.instances // 1) == 1) | "\(.metadata.namespace)/\(.metadata.name)"] as $one
+    | ($pvs[0].items
+       | map(select(.spec.claimRef != null)
+             | {claim: "\(.spec.claimRef.namespace)/\(.spec.claimRef.name)",
+                nodes: [.spec.nodeAffinity.required.nodeSelectorTerms[]?.matchExpressions[]?.values[]?]})) as $pinned
+    | [ $pods[0].items[]
+        | . as $p
+        | ($p.metadata.labels["cnpg.io/cluster"]) as $c
+        | select(("\($p.metadata.namespace)/\($c)") as $k | $one | index($k))
+        | $p.spec.volumes[]?.persistentVolumeClaim.claimName // empty
+        | "\($p.metadata.namespace)/\(.)" as $claim
+        | $pinned[] | select(.claim == $claim) | .nodes[]
+        | select(. as $n | $nodes | index($n))
+        | "\($p.metadata.namespace)/\($c)\t\(.)" ]
+    | unique | .[]' <<<"$clusters"
+}
+
+# The gate: before the first node is touched, name every Cluster whose only copy sits on a node this run is about to wipe, and
+# require an explicit yes. Unattended (--yes, APPROVE=auto) the yes is a flag, per Cluster: --accept-sole-copy=<namespace>/<name>
+# (ACCEPT_SOLE_COPY), so "do not ask me" never means "lose the data". For a REPLACEMENT only: --upgrade keeps the disk, and
+# cluster-shrink refuses any node-local volume on its own. A read that fails refuses: this is a data-loss guard, and an
+# unanswered question is not an empty answer. The answer "yes" covers the run; nothing is asked again node by node.
+sole_copy_gate() { # <node_name>... — the nodes this run will wipe
+  local found cl node a accepted todo="" hint=""
+  (( $# > 0 )) || return 0
+  found="$(cnpg_sole_copies "$@")" || die "cannot tell whether a database keeps its only copy on the node(s) to be wiped ($*) - refusing to replace blind."
+  while IFS=$'\t' read -r cl node; do
+    [[ -n "$cl" ]] || continue
+    accepted=0
+    for a in ${ACCEPT_SOLE_COPY[@]+"${ACCEPT_SOLE_COPY[@]}"}; do [[ "$a" == "$cl" ]] && accepted=1; done
+    if (( accepted )); then
+      warn "CNPG ${cl}: its only copy is on ${node}, which this run wipes - accepted by --accept-sole-copy."
+    else
+      todo+="    ${cl}  (one instance; its volume is pinned to ${node})"$'\n'
+      hint+=" --accept-sole-copy=${cl}"
+    fi
+  done <<<"$found"
+  [[ -n "$todo" ]] || return 0
+  warn "this run replaces nodes that hold the ONLY copy of these databases (a CNPG Cluster with one instance on a node-local volume):"
+  printf '%s' "$todo" >&2
+  warn "A replacement wipes the system disk of the node: that data is destroyed, not moved (lab 28B: 42,583 acknowledged commits)."
+  warn "Give each Cluster a second instance first (docs/upgrade.md, 'A node replace destroys the data of a single-instance database'), or accept the loss."
+  if [[ ${ASSUME_YES:-0} -eq 1 ]]; then
+    die "refusing to replace a node that holds the only copy of a database without your explicit yes. Nothing was changed.
+  To accept the loss of each one, by name, add to the same command (task: after the --):${hint}"
+  fi
+  read -rp "Replace anyway and DESTROY the data listed above? [y/N] " a || a=n
+  [[ "$a" == [yY] ]] || die "aborted by operator"
+}
+
 # --- A node that is already dead (task cluster-replace-node) ------------------------------------------------------
 # A drain cannot move pods off a machine that does not answer, and the roll's pre-flight demands every node Ready. For a
 # dead node the questions are different: can the SURVIVORS carry on while it is rebuilt, and is exactly one node down?

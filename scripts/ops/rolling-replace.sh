@@ -42,12 +42,16 @@
 #
 # Usage: rolling-replace.sh <provider> [--workers-only|--cp-only] [--upgrade]
 #                          [--dry-run] [--yes] [--node=NAME|--ip=ADDR [--dead]]
+#                          [--accept-sole-copy=<namespace>/<name>]...
 #   --node / --ip: act on THIS node only (by Kubernetes node name, or private address when the Node object is gone).
 #   --dead: the node does not answer (0.4.0 M4, `task cluster-replace-node`). No drain: the node is cordoned, its etcd
 #   member removed (control plane), its Node object deleted so that its pods are freed at once, then the same two
 #   applies recreate it. The survivors are checked first (etcd quorum, every other node Ready); replacement only.
 #   --upgrade: `talosctl upgrade` in place (version changes) instead of
 #   replacing the VM. Reads the target from talos_version in the tfvars.
+#   --accept-sole-copy=<namespace>/<name>: a replacement wipes the node's disk, and a CNPG Cluster with ONE instance on a node-local
+#   volume (the `light` profile) has no other copy (infra #425). The survey names such Clusters and asks; --yes does NOT answer it.
+#   Unattended, each Cluster whose loss you accept is named with this flag (repeatable). Not asked with --upgrade (the disk is kept).
 #   Needs: tofu init, AWS_* creds, open Talos tunnels, ./talosconfig + ./kubeconfig.
 # ==============================================================================
 set -euo pipefail
@@ -63,6 +67,7 @@ ASSUME_YES=0
 ONLY_NODE=""      # --node=: replace/upgrade this node only
 ONLY_IP=""        # --ip=: the same, by private address (the Node object may be gone)
 DEAD=0            # --dead: the node does not answer; see the header
+ACCEPT_SOLE_COPY=()   # --accept-sole-copy=<namespace>/<name>, repeatable: the single-instance Clusters whose loss is accepted
 UPGRADE=0         # --upgrade: in-place `talosctl upgrade`, no VM replacement
 # The role used to be the literal "management", here and in the Taskfile, while
 # `task cluster-roll` declared a ROLE variable nothing read. So `cluster-upgrade
@@ -82,6 +87,9 @@ for arg in "$@"; do
     --node=*)       ONLY_NODE="${arg#--node=}" ;;
     --ip=*)         ONLY_IP="${arg#--ip=}" ;;
     --dead)         DEAD=1 ;;
+    --accept-sole-copy=*)
+      [[ "${arg#--accept-sole-copy=}" == */* ]] || { echo "✗ --accept-sole-copy needs <namespace>/<name> (as the survey prints it): $arg" >&2; exit 2; }
+      ACCEPT_SOLE_COPY+=("${arg#--accept-sole-copy=}") ;;
     --role=*)       ROLE="${arg#--role=}" ;;
     *) echo "✗ unknown flag: $arg" >&2; exit 2 ;;
   esac
@@ -232,6 +240,18 @@ stop_here() {
   warn "stopping before the next ${1}: the cluster is consistent, and the nodes not yet"
   warn "reached are still on the previous version. Re-run to continue where this left off."
   return 0
+}
+
+# The Kubernetes names of the nodes this run replaces: the one named by --node/--ip, else every worker and control plane in scope.
+roll_node_names() {
+  local ip
+  if [[ -n "$ONLY_T" ]]; then
+    if [[ "$ONLY_T" == cp ]]; then ip="${CP_IPS[$ONLY_I]}"; else ip="${WK_IPS[$ONLY_I]}"; fi
+    k8s_node_for_ip "$ip" || { [[ -z "$ONLY_NODE" ]] || echo "$ONLY_NODE"; }
+    return 0
+  fi
+  if [[ "$SCOPE" == all || "$SCOPE" == workers ]]; then for ip in "${WK_IPS[@]}"; do k8s_node_for_ip "$ip" || true; done; fi
+  if [[ "$SCOPE" == all || "$SCOPE" == cp ]]; then for ip in "${CP_IPS[@]}"; do k8s_node_for_ip "$ip" || true; done; fi
 }
 
 replace_node() { # <type: cp|worker> <index>
@@ -660,12 +680,21 @@ if [[ $DRY_RUN -eq 0 ]]; then
   trap finish_roll EXIT
   if [[ $DEAD -eq 1 ]]; then
     # Nothing is drained, so no budget needs relaxing: the survivors are what has to be checked.
-    dead_node_survey "$ONLY_T" "$ONLY_I" "${ONLY_NODE:-$(k8s_node_for_ip "${ONLY_IP}" || echo "${ONLY_IP}")}"
+    dead_name="${ONLY_NODE:-$(k8s_node_for_ip "${ONLY_IP}" || echo "${ONLY_IP}")}"
+    dead_node_survey "$ONLY_T" "$ONLY_I" "$dead_name"
+    # The disk of a dead node is wiped like any other's, and may still hold the only copy of a database (infra #425).
+    sole_copy_gate "$dead_name"
   else
     cnpg_maintenance true
     # Now that the budgets are actually gone, ask everything else that is knowable
     # before the first node is touched — see preflight_roll.
     preflight_roll
+    # A replacement wipes each node's disk; --upgrade keeps it. A Cluster whose ONLY copy is on a node of this run is named, and
+    # --yes does not answer for it (infra #425).
+    if [[ $UPGRADE -eq 0 ]]; then
+      mapfile -t gate_nodes < <(roll_node_names)
+      sole_copy_gate "${gate_nodes[@]}"
+    fi
   fi
 fi
 
