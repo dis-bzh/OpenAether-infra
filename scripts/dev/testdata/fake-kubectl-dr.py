@@ -16,10 +16,33 @@ import sys
 D = os.environ["FAKE_DR"]
 S = os.path.join(D, "state")
 os.makedirs(S, exist_ok=True)
+
+
+# Every file is opened in a `with`: nothing is left to the garbage collector to close.
+def put(path, data, mode="w"):
+    with open(path, mode) as fh:
+        fh.write(data)
+
+
+def get(path, mode="r"):
+    with open(path, mode) as fh:
+        return fh.read()
+
+
+def put_json(path, obj):
+    with open(path, "w") as fh:
+        json.dump(obj, fh)
+
+
+def get_json(path):
+    with open(path) as fh:
+        return json.load(fh)
+
+
 a = sys.argv[1:]
 if a[:1] == ["--kubeconfig"]:
     a = a[2:]
-open(os.path.join(D, "calls.log"), "a").write(" ".join(a) + "\n")
+put(os.path.join(D, "calls.log"), " ".join(a) + "\n", "a")
 A = " ".join(a)
 
 
@@ -47,34 +70,34 @@ if a[:1] == ["apply"]:
     if body.strip().startswith("{"):
         d = json.loads(body)
         if d.get("kind") == "ConfigMap":
-            json.dump(d, open(f("cm-generation.json"), "w"))
+            put_json(f("cm-generation.json"), d)
         elif d.get("kind") == "Backup":
-            open(f("backups.jsonl"), "a").write(json.dumps(d) + "\n")
+            put(f("backups.jsonl"), json.dumps(d) + "\n", "a")
         else:
-            open(f("applied.jsonl"), "a").write(json.dumps(d) + "\n")
+            put(f("applied.jsonl"), json.dumps(d) + "\n", "a")
     sys.exit(0)
 if "create secret generic openbao-seal-key" in A:
     if os.environ.get("FAKE_FAIL_SECRET"):
         sys.stderr.write("error: refused\n")
         sys.exit(1)
     path = [x for x in a if x.startswith("--from-file=key=")][0].split("=", 2)[2]
-    open(f("sealkey"), "wb").write(open(path, "rb").read())
+    put(f("sealkey"), get(path, "rb"), "wb")
     sys.exit(0)
 if "get secret openbao-seal-key" in A:
-    out(base64.b64encode(open(f("sealkey"), "rb").read()).decode() if os.path.exists(f("sealkey")) else "")
+    out(base64.b64encode(get(f("sealkey"), "rb")).decode() if os.path.exists(f("sealkey")) else "")
 if "delete secret openbao-recovery-shares" in A:
     sys.exit(0)
 if "create secret generic openbao-recovery-shares" in A:
-    json.dump({x.split("=", 2)[1]: "x" for x in a if x.startswith("--from-file=")}, open(f("shares.json"), "w"))
+    put_json(f("shares.json"), {x.split("=", 2)[1]: "x" for x in a if x.startswith("--from-file=")})
     sys.exit(0)
 if "get secret openbao-recovery-shares" in A:
-    out({"data": json.load(open(f("shares.json")))})
+    out({"data": get_json(f("shares.json"))})
 if "get pod openbao-0" in A:
     out("Running")
 if "get job openbao-init" in A:
     out("1")
 def gen_cm():
-    return json.load(open(f("cm-generation.json"))) if os.path.exists(f("cm-generation.json")) else None
+    return get_json(f("cm-generation.json")) if os.path.exists(f("cm-generation.json")) else None
 
 
 if a[:5] == ["-n", "flux-system", "get", "configmap", "cnpg-archive-generation"]:
@@ -93,12 +116,12 @@ if a[:3] == ["-n", "flux-system", "get"] and opt("-o") == "json":
 if a[:3] == ["-n", "flux-system", "get"] and "--no-headers" in a:
     out("foundation-vault True\nplatform True\n")
 if a[:3] == ["-n", "flux-system", "patch"]:
-    open(f("patches.log"), "a").write(a[4] + " " + ("suspend" if '"suspend":true' in A else "resume") + "\n")
+    put(f("patches.log"), a[4] + " " + ("suspend" if '"suspend":true' in A else "resume") + "\n", "a")
     sys.exit(0)
 if a[:2] == ["-n", "foundation-vault"] and a[2:4] == ["exec", "-i"]:
     data = sys.stdin.buffer.read()
     first, _, rest = data.partition(b"\n")
-    open(f("restore.log"), "w").write(f"token_bytes={len(first)} snapshot_bytes={len(rest)} sha={hashlib.sha256(rest).hexdigest()[:12]}\n")
+    put(f("restore.log"), f"token_bytes={len(first)} snapshot_bytes={len(rest)} sha={hashlib.sha256(rest).hexdigest()[:12]}\n")
     sys.exit(0)
 if "exec openbao-0 -- bao status" in A:
     out('{"initialized": true, "sealed": false}')
@@ -137,7 +160,7 @@ if "exec" in a and "pg_restore" in a:
     data = sys.stdin.buffer.read()
     i = a.index("exec") + 1
     pod = a[i + 1] if a[i] == "-i" else a[i]
-    open(f("pg_restore.log"), "a").write(f"{pod} bytes={len(data)}\n")
+    put(f("pg_restore.log"), f"{pod} bytes={len(data)}\n", "a")
     if os.environ.get("FAKE_PG_RESTORE") == "inherited":
         sys.stderr.write('pg_restore: error: could not execute query: ERROR:  cannot drop inherited constraint "x_pkey" of relation "x"\npg_restore: warning: errors ignored on restore: 1\n')
         sys.exit(1)
