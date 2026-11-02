@@ -19,7 +19,9 @@
 # hostname minDomains lowered to the node count when there are fewer than 3 nodes; the zone term made a preference, without its
 # minDomains, when the zone rule above is not met: the file is the 3-node, 3-zone shape), then waits for the rollout and reads the
 # Deployment back. Idempotent: in sync, it does nothing. A rolling restart of the DNS pods happens only when the spec
-# differs (maxUnavailable of the Deployment and the budget keep two answering; lab 27: 6 s, 0 failed lookups at 1 Hz).
+# differs (maxUnavailable of the Deployment and the budget keep two answering; lab 27: 6 s, 0 failed lookups at 1 Hz). The new pods
+# can land unbalanced over the zones (the old ones are still counted while they are scheduled; lab 28B: 2, 3, 2), so after a patch it
+# names `task cluster-rebalance … APPLY=1`; inside `cluster-up` that runs right after this step.
 #
 # CoreDNS is skipped when coredns_ha = false or the Deployment is absent; the operator is skipped on its own absence (Cilium is
 # there on every provider but a cluster whose CNI was replaced by hand). Neither skip hides the other.
@@ -116,6 +118,9 @@ converge_coredns() {
   read_dep || fail "kube-system/coredns disappeared during the patch"
   in_sync || fail "after the patch CoreDNS has $have replica(s) and $hard hard spread constraint(s); declared $want"
   echo "✓ CoreDNS converged: $have replica(s), hard spread over nodes, zone spread $zone_decl."
+  # The scheduler counted the old pods while it placed the new ones, so the zones can end unbalanced (lab 28B: 2, 3, 2; infra #423).
+  echo "~ Pod placement can be unbalanced right after this rolling restart (old pods were still counted while the new ones were scheduled)."
+  echo "  Put it right: task cluster-rebalance PROVIDER=… ROLE=… APPLY=1   (cluster-up runs it right after this step)."
 }
 
 # --- Cilium operator (0.4.0 critical-path audit) --------------------------------------------------------------------------------------
