@@ -82,6 +82,49 @@ out="$("$CHECKER" "$TMP/repo" 2>&1)"; rc=$?
   bad "still failing with a cmds entry: ${out}"
 
 echo
+echo "=== a glob in the Taskfile runs every harness but the excluded ones (infra #400) ==="
+
+fixture_repo
+mkdir -p "$TMP/repo/scripts/dev"
+for n in foo bar; do printf '#!/usr/bin/env bash\necho ok\n' >"$TMP/repo/scripts/dev/test-$n.sh"; done
+# The glob names neither harness: no Taskfile line and no document, and neither is unreachable for that.
+printf 'test-scripts:\n  cmds:\n    - |\n      for t in ./scripts/dev/test-*.sh; do "$t"; done\n' >"$TMP/repo/Taskfile.yml"
+printf 'test-bar.sh  # needs a cluster\n' >"$TMP/repo/scripts/dev/exclude-from-test-scripts.txt"
+commit
+out="$("$CHECKER" "$TMP/repo" 2>&1)"; rc=$?
+[ "$rc" -ne 0 ] && grep -q 'never run.*test-bar.sh' <<<"$out" \
+  && ok "an excluded harness no cmds entry runs fails the check (rc=${rc})" \
+  || bad "an excluded harness run by nothing passed: ${out}"
+grep -q 'test-foo.sh' <<<"$out" && bad "a harness the glob runs was flagged — false positive: ${out}" \
+  || ok "a harness the glob runs needs no Taskfile line of its own"
+printf '  other:\n    cmds:\n      - ./scripts/dev/test-bar.sh\n' >>"$TMP/repo/Taskfile.yml"
+commit
+out="$("$CHECKER" "$TMP/repo" 2>&1)"; rc=$?
+[ "$rc" -eq 0 ] && ok "…and a cmds entry of another task clears it (rc=0)" || bad "excluded harness with its own task still failing: ${out}"
+
+printf 'test-gone.sh  # no such file\n' >>"$TMP/repo/scripts/dev/exclude-from-test-scripts.txt"
+commit
+out="$("$CHECKER" "$TMP/repo" 2>&1)"; rc=$?
+[ "$rc" -ne 0 ] && grep -q 'test-gone.sh' <<<"$out" && ok "an exclusion naming no file is stale and fails (rc=${rc})" \
+  || bad "a stale exclusion passed: ${out}"
+printf '# a comment line, then a blank one\n\ntest-bar.sh\n' >"$TMP/repo/scripts/dev/exclude-from-test-scripts.txt"
+commit
+out="$("$CHECKER" "$TMP/repo" 2>&1)"; rc=$?
+[ "$rc" -ne 0 ] && grep -q 'without a reason.*test-bar.sh' <<<"$out" && ok "an exclusion without a reason fails: the list stays commented" \
+  || bad "an exclusion with no reason passed (rc=${rc}): ${out}"
+printf '# a comment line, then a blank one\n\ntest-bar.sh  # needs a cluster\n' >"$TMP/repo/scripts/dev/exclude-from-test-scripts.txt"
+commit
+out="$("$CHECKER" "$TMP/repo" 2>&1)"; rc=$?
+[ "$rc" -eq 0 ] && ok "comment and blank lines of the list are skipped (rc=0)" || bad "a commented list fails: ${out}"
+
+# Take the glob away (back to a hand list): both harnesses now need their own cmds entry again.
+printf 'test-scripts:\n  cmds:\n    # for t in ./scripts/dev/test-*.sh; do "$t"; done\n' >"$TMP/repo/Taskfile.yml"
+commit
+out="$("$CHECKER" "$TMP/repo" 2>&1)"; rc=$?
+[ "$rc" -ne 0 ] && grep -q 'never run.*test-foo.sh' <<<"$out" && ok "no glob in the Taskfile: every harness needs a cmds entry again" \
+  || bad "a commented-out glob counted as running the harnesses (rc=${rc}): ${out}"
+
+echo
 echo "=== proof against reality: this repository's own tree is clean today ==="
 
 out="$("$CHECKER" 2>&1)"; rc=$?
