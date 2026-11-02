@@ -80,7 +80,7 @@ out=""; for x in "$d"*/; do [ -d "$x" ] && out="${out:+$out	}${p}$(basename "$x"
 echo "${out:-None}"
 STUB
 chmod +x "$TMP/bin/task" "$TMP/bin/restic" "$TMP/bin/talosctl" "$TMP/bin/aws"
-export PATH="$TMP/bin:$PATH" OA_DR_TASK=task OA_DR_POLL=0 OA_DR_WAIT_TRIES=3
+export PATH="$TMP/bin:$PATH" OA_DR_TASK=task OA_DR_POLL=0 OA_DR_WAIT_TRIES=3 OA_DR_STANDBY_TRIES=2
 export SCW_AWS_ACCESS_KEY_ID=AKIAEXAMPLE SCW_AWS_SECRET_ACCESS_KEY=secretvalue OVH_AWS_ACCESS_KEY_ID=ovhak OVH_AWS_SECRET_ACCESS_KEY=ovhsk
 export TF_VAR_encryption_passphrase="a-passphrase-long-enough-to-be-accepted-32+"
 SEAL="$TMP/seal.key"; head -c 32 /dev/urandom | base64 >"$SEAL"
@@ -251,6 +251,19 @@ new; mkdir -p "$OUTD/work"; printf 'cnpg\nidentity\nobservability\n' >"$OUTD/wor
 chk "the identity step waits for the DAG twice as long as the other waits (30 min of the 15): observability converges in it since #426" "[ $RC = 0 ]"
 new; mkdir -p "$OUTD/work"; printf 'cnpg\nidentity\nobservability\n' >"$OUTD/work/held.txt"; FAKE_KS_SLOW=99 run "${ALL[@]}" --execute --confirm oa-test --only identity
 chk "...and still not for ever: a Kustomization that never gets Ready fails the step" "[ $RC = 1 ] && grep -q 'Kustomizations are not Ready' '$TMP/stdout'"
+
+echo "=== OpenBao standbys after the raft restore (apps #184) ==="
+dels() { sort "$FAKE_DR/state/pods-deleted.log" 2>/dev/null | tr '\n' ' '; }
+new; run "${ALL[@]}" --execute --confirm oa-test --only openbao
+chk "every pod is asked which node is active; openbao-1 and openbao-2 are still deleted once and the pod that follows is left alone" "[ $RC = 0 ] && [ \"\$(dels)\" = 'openbao-1 openbao-2 ' ] && [ \"\$(calls | grep -o 'exec openbao-[0-2] -- bao read -format=json sys/leader' | sort -u | wc -l)\" = 3 ]"
+new; FAKE_BAO_NOLEADER=openbao-0 run "${ALL[@]}" --execute --confirm oa-test --only openbao
+chk "openbao-0, the pod where the restore ran, stays a standby with no active node: it is restarted once and the step passes (lab 28B)" "[ $RC = 0 ] && [ \"\$(dels)\" = 'openbao-0 openbao-1 openbao-2 ' ] && grep -q 'openbao-0 answers but knows no active node' '$TMP/stdout'"
+new; FAKE_BAO_NOLEADER=openbao-2 FAKE_BAO_STUCK=1 run "${ALL[@]}" --execute --confirm oa-test --only openbao
+chk "a standby that still knows no active node after its one restart stops the chain, naming the pod and the way on" "[ $RC = 1 ] && [ \"\$(dels)\" = 'openbao-1 openbao-2 openbao-2 ' ] && grep -q 'openbao-2 still knows no active node after a restart' '$TMP/stdout' && grep -q -- '--from-step shares' '$TMP/stdout'"
+new; FAKE_BAO_NOANSWER=openbao-1 run "${ALL[@]}" --execute --confirm oa-test --only openbao
+chk "a pod that gives no readable answer is a warning, not a stop and not a second restart (the unreadable form must not stop a chain that worked in 0.4.0)" "[ $RC = 0 ] && [ \"\$(dels)\" = 'openbao-1 openbao-2 ' ] && grep -q 'openbao-1 gave no readable answer' '$TMP/stdout'"
+new; OA_DR_NO_STANDBY_FIX=1 FAKE_BAO_NOLEADER=openbao-0 run "${ALL[@]}" --execute --confirm oa-test --only openbao
+chk "OA_DR_NO_STANDBY_FIX=1 still switches the whole standby handling off: no pod deleted, no pod asked" "[ $RC = 0 ] && [ -z \"\$(dels)\" ] && ! calls | grep -q 'sys/leader'"
 
 echo "=== subsets and the other sources ==="
 new; mkdir -p "$OUTD/work"; printf 'cnpg\nidentity\n' >"$OUTD/work/held.txt"

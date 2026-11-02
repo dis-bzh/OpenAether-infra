@@ -209,7 +209,7 @@ show_generation() {
 show_openbao() {
   say "  \$ restic -r $(repo openbao) restore latest --host openbao --target $WORK/openbao      # password from --restic-password-file"
   say "  \$ kubectl -n foundation-vault exec -i openbao-0 -- sh -c 'read token; … bao operator raft snapshot restore -force /tmp/dr.snap'   # token and snapshot on stdin"
-  say "  check: bao status says initialised and unsealed; standbys follow (openbao-1 and openbao-2 are deleted once if they do not)"
+  say "  check: bao status says initialised and unsealed; openbao-1 and openbao-2 are deleted once, then each of the three pods must know the active node (bao read sys/leader), else it is restarted once"
 }
 show_shares() {
   say "  \$ kubectl -n foundation-vault delete secret openbao-recovery-shares ; kubectl -n foundation-vault create secret generic openbao-recovery-shares --from-file=share-N=<dir>/openbao-share-N.b64 …"
@@ -424,13 +424,51 @@ run_openbao() {
   { printf '%s\n' "$(cat "$BAOTOK")"; cat "$snap"; } | K -n foundation-vault exec -i openbao-0 -- sh -c \
     'IFS= read -r BAO_TOKEN; export BAO_TOKEN; cat > /tmp/dr.snap && bao operator raft snapshot restore -force /tmp/dr.snap; rc=$?; rm -f /tmp/dr.snap; exit $rc'
 }
+# After a raft restore a standby can stay without an active node ("local node not active but active cluster node not found", logins answered 500
+# for 25+ minutes) until its pod is restarted. In lab 28B it was openbao-0, the pod where the restore ran, which the step never touched
+# (apps #184). Every pod is asked which node it believes is active (sys/leader answers without a token); one that answers and knows none
+# after the bound is restarted once. UNVERIFIED on a cluster: the JSON of `bao read -format=json sys/leader` is read as the API documents it.
+OPENBAO_PODS=(openbao-0 openbao-1 openbao-2)
+bao_leader() { # <pod>: the active node address the pod knows (nothing when it knows none); rc 1 when it gave no readable answer
+  local j
+  j="$(K -n foundation-vault exec "$1" -- bao read -format=json sys/leader 2>/dev/null)" || return 1
+  grep -q '"ha_enabled"' <<<"$j" || return 1
+  sed -nE '/"leader_address"/{s/.*"leader_address": *"([^"]*)".*/\1/p;q}' <<<"$j"
+}
+follow_leader() { # <pod>: 0 it knows the active node, 1 it answers but knows none within the bound, 2 it gave no readable answer
+  local answered=0 a
+  for _ in $(seq 1 "${OA_DR_STANDBY_TRIES:-18}"); do
+    if a="$(bao_leader "$1")"; then
+      answered=1
+      [ -z "$a" ] || return 0
+    fi
+    sleep "${OA_DR_POLL:-10}"
+  done
+  [ "$answered" = 1 ] && return 1 || return 2
+}
+standbys_follow() {
+  local pod r
+  for pod in "${OPENBAO_PODS[@]}"; do
+    follow_leader "$pod" && r=0 || r=$?
+    if [ "$r" -eq 1 ]; then
+      say "  ($pod answers but knows no active node: restarted once)"
+      K -n foundation-vault delete pod "$pod" --ignore-not-found >/dev/null 2>&1 || true
+      follow_leader "$pod" && r=0 || r=$?
+      [ "$r" -ne 1 ] || { echo "$pod still knows no active node after a restart (bao read sys/leader; its log says 'active cluster node not found'): fix it by hand, then resume with --from-step shares"; return 1; }
+    fi
+    [ "$r" -ne 2 ] || say "  (WARNING: $pod gave no readable answer from bao read sys/leader within the bound; not restarted again: look at it)"
+  done
+}
 check_openbao() {
   local st
   for _ in $(seq 1 "${OA_DR_WAIT_TRIES:-90}"); do
     st="$(K -n foundation-vault exec openbao-0 -- bao status -format=json 2>/dev/null || true)"
     if grep -q '"initialized": *true' <<<"$st" && grep -q '"sealed": *false' <<<"$st"; then
-      # standbys that do not follow the restored leader: delete them once (the PVCs stay)
-      [ "${OA_DR_NO_STANDBY_FIX:-0}" = 1 ] || K -n foundation-vault delete pod openbao-1 openbao-2 --ignore-not-found >/dev/null 2>&1 || true
+      [ "${OA_DR_NO_STANDBY_FIX:-0}" = 1 ] && return 0
+      # standbys that do not follow the restored leader: delete them once (the PVCs stay), as in labs 20, 27 and 28B ...
+      K -n foundation-vault delete pod openbao-1 openbao-2 --ignore-not-found >/dev/null 2>&1 || true
+      # ... then ask all three, the pod where the restore ran included, which node is active
+      standbys_follow || return 1
       return 0
     fi
     sleep "${OA_DR_POLL:-10}"

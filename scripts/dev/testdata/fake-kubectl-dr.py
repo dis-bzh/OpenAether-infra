@@ -8,6 +8,8 @@ FAKE_*     failure injections: FAKE_FAIL_SECRET=1 (the seal key Secret is refuse
            FAKE_KS_SLOW=n (a Kustomization is NotReady for the first n polls)
            FAKE_CRON_PRUNE=1 (the CronJob history limit prunes the Jobs made from it that still carry its owner reference), FAKE_JOB_GONE=<job> (that Job is
            NotFound), FAKE_JOB_PATCH_FAIL=1 (patching a Job is refused)
+           FAKE_BAO_NOLEADER=<pod> (that OpenBao standby knows no active node until its pod is deleted), FAKE_BAO_STUCK=1 (...not even then),
+           FAKE_BAO_NOANSWER=<pod> (that pod does not answer exec)
            Grafana: a pg_restore into grafana-db after the Kustomization observability was resumed fails with the three dependency errors of lab 28B
 Secrets are never written to calls.log: stdin is summarised (a length), --from-file contents are not copied there.
 """
@@ -132,7 +134,21 @@ if a[:2] == ["-n", "foundation-vault"] and a[2:4] == ["exec", "-i"]:
 if "exec openbao-0 -- bao status" in A:
     out('{"initialized": true, "sealed": false}')
 if a[:3] == ["-n", "foundation-vault", "delete"] and "pod" in a:
+    for n in a[a.index("pod") + 1:]:
+        if n.startswith("openbao-"):
+            put(f("pods-deleted.log"), n + "\n", "a")
     sys.exit(0)
+if a[:3] == ["-n", "foundation-vault", "exec"] and a[3:4] and a[3].startswith("openbao-") and "sys/leader" in A:
+    pod = a[3]
+    if os.environ.get("FAKE_BAO_NOANSWER") == pod:
+        sys.stderr.write("error: unable to upgrade connection: container not found\n")
+        sys.exit(1)
+    deleted = get(f("pods-deleted.log")).split() if os.path.exists(f("pods-deleted.log")) else []
+    # FAKE_BAO_NOLEADER=<pod>: that standby knows no active node until it is restarted (FAKE_BAO_STUCK=1: not even then; lab 28B, apps #184)
+    none = os.environ.get("FAKE_BAO_NOLEADER") == pod and (pod not in deleted or os.environ.get("FAKE_BAO_STUCK"))
+    leader = "" if none else "https://openbao-1.openbao-internal.foundation-vault.svc:8200"
+    out(json.dumps({"request_id": "", "lease_id": "", "lease_duration": 0, "renewable": False, "warnings": None,
+                    "data": {"ha_enabled": True, "is_self": False, "leader_address": leader, "leader_cluster_address": leader.replace("8200", "8201")}}, indent=2))
 if a[:2] == ["get", "externalsecret"]:
     out("ns es True\n" * 3)
 if "get ds cilium" in A:
