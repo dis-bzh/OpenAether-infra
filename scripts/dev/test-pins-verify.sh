@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # infra-verify.sh (infra #408): "Cilium and Flux run the pinned version" and "the apps ref Flux follows is git_ref"; the
-# platform CNPG Clusters (0.4.0); the WAL archiving of the database-profile Clusters (infra #430).
+# platform CNPG Clusters (0.4.0); the WAL archiving of the database-profile Clusters (infra #430); the cluster-identity
+# ConfigMap against the rendered map (infra #409).
 #
 # The real infra-verify.sh runs in a throwaway layout with a stub kubectl whose answers come from fixture files, against the REAL
 # committed artifacts. Every other section of the verifier is answered green or left unanswered (it counts as UNCHECKED, which
@@ -35,6 +36,11 @@ cat >"$W/stub" <<STUB
 #!/usr/bin/env bash
 n="\$(basename "\$0")"
 [ "\$n" = sleep ] && exit 0
+# tofu answers one question: the rendered cluster-identity map (infra #409); every other tofu call fails, as with no state.
+if [ "\$n" = tofu ]; then
+  [ "\$*" = "output -json cluster_identity" ] && [ ! -f "$FX/identity.unreadable" ] && [ -f "$FX/identity.want" ] && { cat "$FX/identity.want"; exit 0; }
+  exit 1
+fi
 [ "\$n" = kubectl ] || exit 1
 render() {
   while read -r _ n t; do
@@ -63,6 +69,10 @@ case "\$*" in
     [ -f "$FX/cnpg.nocrd" ] && { echo "error: the server doesn't have a resource type \"clusters\"" >&2; exit 1; }
     [ -f "$FX/cnpgp.unreadable" ] && { echo "Unable to connect to the server" >&2; exit 1; }
     cat "$FX/cnpgp.json" ;;
+  *"get configmap cluster-identity -o json")
+    [ -f "$FX/cm.missing" ] && { echo 'Error from server (NotFound): configmaps "cluster-identity" not found' >&2; exit 1; }
+    [ -f "$FX/cm.unreadable" ] && { echo "Unable to connect to the server" >&2; exit 1; }
+    cat "$FX/cm.json" ;;
   *"get clusters.postgresql.cnpg.io -l openaether.io/managed=true -o json")
     [ -f "$FX/cnpg.nocrd" ] && { echo "error: the server doesn't have a resource type \"clusters\"" >&2; exit 1; }
     [ -f "$FX/cnpg.unreadable" ] && { echo "Unable to connect to the server" >&2; exit 1; }
@@ -82,17 +92,20 @@ case "\$*" in
   *) exit 1 ;;
 esac
 STUB
-chmod +x "$W/stub"; for t in kubectl sleep; do ln -s "$W/stub" "$W/bin/$t"; done
+chmod +x "$W/stub"; for t in kubectl sleep tofu; do ln -s "$W/stub" "$W/bin/$t"; done
 
 mkdns() { # <replicas> <hard hostname spread: true|false> — the Deployment kube-system/coredns as the apiserver returns it
   jq -nc --argjson r "$1" --argjson h "$2" '{spec:{replicas:$r,template:{spec:(if $h then {topologySpreadConstraints:[{topologyKey:"kubernetes.io/hostname",whenUnsatisfiable:"DoNotSchedule",maxSkew:1}]} else {} end)}}}' >"$FX/coredns.json"; }
 mkop() { jq -nc --argjson r "$1" '{spec:{replicas:$r}}' >"$FX/operator.json"; }
 mkgr() { jq -nc --arg r "$1" '{spec:{ref:{name:$r}}}' >"$FX/gr.json"; }
 mkks() { jq -nc --arg r "$1" '{spec:{postBuild:{substitute:{GIT_REF:$r}}}}' >"$FX/ks.json"; }
+IDMAP='{"CLUSTER_NAME":"c-dev-stub","BACKUP_S3_BUCKET":"bkt-marker-7f3a","BACKUP_S3_ENDPOINT":"https://s3.example.invalid"}'
+mkid() { jq -nc --argjson d "$1" '{metadata:{name:"cluster-identity",namespace:"flux-system"},data:$d}' >"$FX/cm.json"; }   # <live data json>
 reset() {
   rm -rf "$FX"; mkdir -p "$FX"; cp "$W/flux.target" "$FX/flux.live"; cp "$W/cilium.target" "$FX/cilium.live"
   mkgr refs/tags/0.4.0; mkks refs/tags/0.4.0; mkdns 3 true; mkop 2
   echo '{"items":[]}' >"$FX/cnpg.json"; echo '{"items":[]}' >"$FX/cnpgp.json"
+  printf '%s' "$IDMAP" >"$FX/identity.want"; mkid "$IDMAP"
   printf 'git_ref = "refs/tags/0.4.0"\ndeploy_flux = true\ncluster_name = "c"\nenvironment = "dev"\n' >"$TFV"
   cp "$REAL_M"/{cilium.yaml,cilium-hubble-drops.yaml,flux-install.yaml} "$M/"
 }
@@ -243,6 +256,36 @@ reset; mkpc apps-team app-ha ha False 600 plugin "$ARCHMSG" | pcl_fx; run local
 reset; { mkcl db 3 "$SYNCB" True; } | cnpg_fx; cnpg_ok; mkpc apps-team app-ha ha False 600 plugin "$ARCHMSG" | pcl_fx; run
 { has "✓ foundation-databases/db: ContinuousArchiving True" && [ -z "$(badline 'foundation-databases/db')" ] && [ -n "$(badline 'apps-team/app-ha')" ]; } \
   && ok "the platform lines are unchanged beside a failing profile Cluster" || bad "$(grep -i 'foundation-databases\|app-ha' "$W/out")"
+
+echo "--- infra #409: the cluster-identity ConfigMap holds what the config renders ---"
+IDH="The cluster-identity ConfigMap"
+IDFIX="task cluster-identity-sync PROVIDER=stub ROLE=management APPLY=1"
+reset; run
+has "✓ the cluster-identity ConfigMap holds the 3 keys the config renders" && ok "in sync: passes" || bad "$(grep -i 'identity' "$W/out")"
+reset; mkid '{"CLUSTER_NAME":"c-dev-stub","BACKUP_S3_ENDPOINT":"https://s3.example.invalid"}'; run
+{ [ -n "$(badline 'the cluster-identity ConfigMap differs from the config: 1 key(s) missing or different (BACKUP_S3_BUCKET)')" ] && has "$IDFIX" && [ "$rc" -ne 0 ]; } \
+  && ok "a rendered key missing on the cluster (an older release's ConfigMap): BAD, naming the key and the command, run fails" || bad "$(grep -i 'identity' "$W/out")"
+reset; mkid '{"CLUSTER_NAME":"c-dev-stub","BACKUP_S3_BUCKET":"OTHER","BACKUP_S3_ENDPOINT":"https://s3.example.invalid"}'; run
+{ [ -n "$(badline '1 key(s) missing or different (BACKUP_S3_BUCKET)')" ] && ! has "OTHER" && ! has "bkt-marker-7f3a"; } \
+  && ok "a value that differs: BAD, and no value is printed (keys only)" || bad "$(grep -i 'identity' "$W/out")"
+reset; mkid '{"CLUSTER_NAME":"c-dev-stub","BACKUP_S3_BUCKET":"bkt-marker-7f3a","BACKUP_S3_ENDPOINT":"https://s3.example.invalid","LOCAL_ONLY":"keep"}'; run
+{ has "✓ the cluster-identity ConfigMap holds the 3 keys" && [ -z "$(badline 'cluster-identity')" ]; } \
+  && ok "a key the config does not render is not judged (the sync leaves it alone too)" || bad "$(grep -i 'identity' "$W/out")"
+reset; mkid '{}'; run
+[ -n "$(badline '3 key(s) missing or different (BACKUP_S3_BUCKET, BACKUP_S3_ENDPOINT, CLUSTER_NAME)')" ] && ok "an empty ConfigMap: all three keys named, sorted" || bad "$(grep -i 'identity' "$W/out")"
+reset; : >"$FX/cm.missing"; run
+{ [ -n "$(badline 'the cluster-identity ConfigMap does not exist although deploy_flux = true')" ] && has "docs/upgrade.md" && [ "$rc" -ne 0 ]; } \
+  && ok "no ConfigMap although Flux is on: BAD, with the pointer" || bad "$(grep -i 'identity' "$W/out")"
+reset; : >"$FX/cm.unreadable"; run
+{ [ -n "$(unkline 'could not read the ConfigMap cluster-identity')" ] && ! has "✓ the cluster-identity ConfigMap"; } && ok "the ConfigMap cannot be read: UNKNOWN, not a pass" || bad "$(grep -i 'identity' "$W/out")"
+reset; : >"$FX/identity.unreadable"; run
+{ [ -n "$(unkline 'could not read the cluster_identity output from the state')" ] && ! has "✓ the cluster-identity ConfigMap"; } && ok "the rendered map cannot be read: UNKNOWN" || bad "$(grep -i 'identity' "$W/out")"
+reset; printf '{}' >"$FX/identity.want"; run
+[ -n "$(unkline 'renders an empty cluster_identity although deploy_flux is true')" ] && ok "an empty rendered map with deploy_flux true: UNKNOWN (state and config disagree)" || bad "$(grep -i 'identity' "$W/out")"
+reset; printf 'git_ref = "refs/tags/0.4.0"\n' >"$TFV"; mkid '{}'; run
+! has "$IDH" && ok "deploy_flux not true: the identity ConfigMap is not asked for" || bad "identity checked without deploy_flux"
+reset; mkid '{}'; run local
+! has "$IDH" && ok "provider local: not judged" || bad "local judged"
 
 echo "--- K2 (lab 26): CoreDNS runs the declared replica count and spread, both directions ---"
 reset; run

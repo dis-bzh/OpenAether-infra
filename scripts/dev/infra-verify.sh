@@ -447,6 +447,35 @@ else
 fi
 fi
 
+# The cluster-identity ConfigMap (infra #409): the bucket, endpoint and host names the apps content reads through postBuild.substituteFrom.
+# It is an object of the Talos inline manifest flux-bootstrap, which Talos never rewrites once it exists, so a key a newer release renders
+# reaches a running cluster only through `task cluster-identity-sync` (docs/upgrade.md). Until 0.4.1 only the dry run inside `cluster-up`
+# looked. Compared with `tofu output cluster_identity`, the map the bootstrap template renders: a rendered key that is missing or has another
+# value is BAD (sorted key NAMES, never values), a key the config does not render is NOT judged (the sync leaves it alone, so a verify
+# that demanded its removal could never be satisfied by the converging command). Only when the config asks for Flux.
+if [ "$PROVIDER" != local ] && [ "$WANT_FLUX" = true ]; then
+info "The cluster-identity ConfigMap holds the values the config renders"
+IDFIX="task cluster-identity-sync PROVIDER=${PROVIDER} ROLE=${ROLE} APPLY=1"
+if ! WANT_ID="$(cd "$CLUSTER_DIR" && timeout 60 tofu output -json cluster_identity 2>/dev/null)" \
+   || ! jq -e 'type == "object" and all(.[]; type == "string")' <<<"$WANT_ID" >/dev/null 2>&1; then
+  unk "could not read the cluster_identity output from the state — the cluster-identity ConfigMap is UNCHECKED"
+elif [ "$(jq 'length' <<<"$WANT_ID")" -eq 0 ]; then
+  unk "the state renders an empty cluster_identity although deploy_flux is true (the state and the config disagree) — the cluster-identity ConfigMap is UNCHECKED"
+elif ! LIVE_ID="$(K -n "$FLUX_NS" get configmap cluster-identity -o json 2>&1)"; then
+  case "$LIVE_ID" in
+    *NotFound*|*"not found"*) bad "the cluster-identity ConfigMap does not exist although deploy_flux = true: the Flux bootstrap manifest has not been applied on this cluster (docs/upgrade.md, 'Why a plain task cluster-up is not enough')" ;;
+    *) unk "could not read the ConfigMap cluster-identity — its keys are UNCHECKED" ;;
+  esac
+else
+  ID_KEYS="$(jq -r --argjson live "$LIVE_ID" '($live.data // {}) as $h | to_entries | sort_by(.key)[] | . as $e | select((($h | has($e.key)) | not) or $h[$e.key] != $e.value) | $e.key' <<<"$WANT_ID" 2>/dev/null)"
+  if [ -z "$ID_KEYS" ]; then
+    ok "the cluster-identity ConfigMap holds the $(jq 'length' <<<"$WANT_ID") keys the config renders"
+  else
+    bad "the cluster-identity ConfigMap differs from the config: $(wc -l <<<"$ID_KEYS") key(s) missing or different ($(paste -sd, - <<<"$ID_KEYS" | sed 's/,/, /g')). The apps that read them stay NotReady. Write them: ${IDFIX}"
+  fi
+fi
+fi
+
 # --- The platform CNPG Clusters run the 0.4.0 synchronous replication and archive (study LAB-B2) ----------------------------
 #
 # Declared: the block spec.postgresql.synchronous = any / 1 / required / failoverQuorum (the 0.4.0 content). Converged by
