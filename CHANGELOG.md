@@ -23,6 +23,10 @@ in git. 0.1.0 is the first entry describing something proven.
 - **commitizen 4.19.2 → 4.19.3** (Cléa #91, probed green in a bare container, released 2026-10-24): `ci.yml`, the `pip install` of the commit-message check. Rung: mocked.
 - **flux-schema 0.16.0 → 0.17.0** (Cléa #91, probed green in a bare container, released 2026-10-23): `ci.yml` and `scripts/setup.sh`. Rung: mocked.
 
+### Fixed (0.4.1, the disaster-recovery chain: infra #426, #427, #428 and apps #184; rung: mocked against a stateful kubectl double, UNVERIFIED on a cluster until the next drill)
+
+- **`dr-restore-plan` no longer stops at `dbs` on a Grafana that initialised its schema first (infra #426, lab 28B finding I18).** `resume` unsuspended everything but `identity*`, so Grafana (Kustomization `observability`) created its tables in the empty `grafana-db` and `pg_restore --clean` ended rc 1 on three dependency errors (the data was right). `observability` now waits with `identity*` until the databases are loaded (`LATE_RE`), so the load goes into a pristine database; `load_dump` still tolerates only `cannot drop inherited constraint` (no error class was added, a real error still stops the chain). The `identity` step waits 30 minutes for the DAG instead of 15 (its documented target), because the convergence of `observability` moved into it: the cost in chain time is not measured (UNVERIFIED, read it in the next DR drill). `docs/disaster-recovery.md` (+ fr) updated.
+
 ## [0.4.0] — 2026-11-01
 
 0.4.0 is the **resilience release**. It pairs with OpenAether-apps 0.4.0, which must be tagged first: the `git_ref` default and the twelve `envs/*.tfvars.example` now pin OpenAether-apps `refs/tags/0.4.0` (they pinned `refs/tags/0.3.2`), and the tftest assertion on the rendered GitRepository follows. What it adds:

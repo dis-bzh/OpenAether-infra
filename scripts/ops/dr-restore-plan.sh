@@ -111,9 +111,9 @@ declare -A TITLE=(
   [generation]="New CNPG archive generation: the rebuilt clusters must not archive into the dead clusters' WAL path (ConfigMap cnpg-archive-generation)"
   [openbao]="OpenBao raft snapshot: restic restore from the ${STORE} store, then bao operator raft snapshot restore"
   [shares]="The source cluster's recovery shares back"
-  [resume]="Resume the held Kustomizations except identity; External Secrets rebuilds every Secret from the restored OpenBao"
+  [resume]="Resume the held Kustomizations except identity* and observability (Grafana); External Secrets rebuilds every Secret from the restored OpenBao"
   [dbs]="Databases: restore into the empty Clusters (${DBSRC}${PITR:+ to $PITR})"
-  [identity]="Resume identity and the rest; wait for the whole DAG"
+  [identity]="Resume identity and observability (Grafana), now that the databases are loaded; wait for the whole DAG"
   [verify]="Verify: cluster-verify, a base backup of the new archive and its copy to the replica store, a restore test on the rebuilt cluster"
   [etcd-fetch]="etcd snapshot: restic restore of the newest one from the ${STORE} store"
   [etcd-recover]="talosctl bootstrap --recover-from on the control plane that lost its etcd"
@@ -216,8 +216,9 @@ show_shares() {
   say "  check: the Secret holds as many shares as the directory"
 }
 show_resume() {
-  say "  \$ kubectl -n flux-system patch kustomization <the held ones except identity*> --type merge -p '{\"spec\":{\"suspend\":false}}'"
+  say "  \$ kubectl -n flux-system patch kustomization <the held ones except identity* and observability (Grafana)> --type merge -p '{\"spec\":{\"suspend\":false}}'"
   say "  check: every ExternalSecret is Ready (the Secrets, the restic password and zitadel-masterkey included) within 15 minutes"
+  say "  note: identity* (Zitadel) and observability (Grafana) stay held until the databases are loaded: Grafana creates its schema in an empty database and pg_restore --clean then fails on it (lab 28B)"
 }
 show_dbs() {
   if [ "$DBSRC" = pitr ]; then
@@ -229,7 +230,7 @@ show_dbs() {
   fi
   say "  check: the canary chain of each restored database is intact and its newest row is dated; the scratch Clusters are removed"
 }
-show_identity() { say "  \$ kubectl -n flux-system patch kustomization <identity*, then the rest> --type merge -p '{\"spec\":{\"suspend\":false}}'"; say "  check: no Kustomization is NotReady within 30 minutes"; }
+show_identity() { say "  \$ kubectl -n flux-system patch kustomization <identity*, observability, then the rest> --type merge -p '{\"spec\":{\"suspend\":false}}'"; say "  check: no Kustomization is NotReady within 30 minutes"; }
 show_verify() {
   say "  \$ $TASK cluster-verify PROVIDER=$PROVIDER ROLE=$ROLE"
   say "  \$ kubectl -n foundation-databases create job --from=cronjob/cnpg-recovery-restore-test dr-check ; wait for it"
@@ -455,9 +456,13 @@ check_shares() {
   [ "$want" -gt 0 ] && [ "$want" = "$have" ] || { echo "the Secret $sec holds $have shares, the directory $want"; return 1; }
 }
 
-resume_list() { # held names; $1 = only|except identity
+# What stays held until the databases are loaded (step dbs): identity* (Zitadel needs its database and masterkey) and observability, which
+# carries Grafana. Grafana creates its schema in an empty grafana-db; pg_restore --clean then meets objects that exist and ends rc 1 (lab 28B,
+# infra #426), so the load goes into a pristine database. The sub-Kustomizations observability-* depend on observability and wait for it.
+LATE_RE='^(identity|observability$)'
+resume_list() { # held names; $1 = only|except the late group
   [ -s "$HELD" ] || { echo "no held list at $HELD (step hold did not run in this work directory)" >&2; return 1; }
-  if [ "$1" = except ]; then grep -v '^identity' "$HELD" || true; else grep '^identity' "$HELD" || true; fi
+  if [ "$1" = except ]; then grep -Ev "$LATE_RE" "$HELD" || true; else grep -E "$LATE_RE" "$HELD" || true; fi
 }
 unsuspend() { local n; while read -r n; do [ -z "$n" ] || K -n flux-system patch kustomization "$n" --type merge -p '{"spec":{"suspend":false}}' >/dev/null; done; }
 run_resume() { resume_list except | unsuspend; }
@@ -564,7 +569,8 @@ check_dbs() {
 run_identity() { resume_list only | unsuspend; }
 check_identity() {
   local bad
-  for _ in $(seq 1 "${OA_DR_WAIT_TRIES:-90}"); do
+  # twice the usual wait (30 min, the step's target): observability, held until the databases were loaded, converges in this step (#426)
+  for _ in $(seq 1 $((${OA_DR_WAIT_TRIES:-90} * 2))); do
     bad="$(K -n flux-system get kustomization --no-headers 2>/dev/null | awk '$0 !~ /True/' | wc -l)"
     [ "$bad" -eq 0 ] && return 0
     sleep "${OA_DR_POLL:-10}"

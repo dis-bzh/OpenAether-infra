@@ -119,6 +119,7 @@ chk "it says it is a dry-run and that nothing ran" "grep -q 'MODE: DRY-RUN' '$TM
 chk "nothing was run: no stub was called, no directory created" "[ ! -s '$FAKE_DR/calls.log' ] && [ ! -e '$OUTD' ]"
 chk "the targets and the RTO are stated, with the RPO of each data set" "grep -q '480 min RTO' '$TMP/stdout' && grep -q 'RPO' '$TMP/stdout'"
 chk "the report table has every step as dry-run" "[ \"\$(grep -c ' dry-run ' '$TMP/stdout')\" = 12 ]"
+chk "the dry-run says Grafana (observability) waits for the databases like identity does (infra #426)" "grep -q 'except identity\* and observability' '$TMP/stdout'"
 run "${ALL[@]}" --from replica
 chk "--from replica reads the -backup bucket on the replica endpoint with the replica store's keys" "grep -q 's3:https://s3.gra.io.cloud.ovh.net/s3-oa-zz-scaleway-backups-prod-backup/oa-test-prod-scaleway/openbao' '$TMP/stdout'"
 
@@ -142,7 +143,9 @@ chk "the steps ran in the documented order" "order 'task restore-artifacts' 'tas
 chk "the seal key Secret is created before Flux is switched on (the second cluster-up)" "[ \"\$(calls | grep -n 'create secret generic openbao-seal-key' | cut -d: -f1)\" -lt \"\$(calls | grep -n 'task cluster-up' | tail -1 | cut -d: -f1)\" ]"
 chk "deploy_flux is true afterwards, and the previous file is kept next to it" "grep -q '^deploy_flux = true' '$OA_ENVS_DIR/management-scaleway.tfvars' && grep -q '^deploy_flux = false' '$OA_ENVS_DIR/management-scaleway.tfvars.dr-bak'"
 chk "the held list excludes foundation-vault and what it needs, and includes identity" "! grep -qE '^(foundation-vault|namespaces|platform)\$' '$OUTD/work/held.txt' && grep -q '^identity\$' '$OUTD/work/held.txt' && grep -q '^cnpg\$' '$OUTD/work/held.txt'"
-chk "everything held is suspended first, identity is resumed last" "head -n \$(wc -l <'$OUTD/work/held.txt') '$FAKE_DR/state/patches.log' | grep -q suspend && tail -n 2 '$FAKE_DR/state/patches.log' | grep -q '^identity'"
+chk "everything held is suspended first, identity and observability are resumed last" "head -n \$(wc -l <'$OUTD/work/held.txt') '$FAKE_DR/state/patches.log' | grep -q suspend && [ \"\$(tail -n 3 '$FAKE_DR/state/patches.log' | grep -cE '^(identity|identity-gateway|observability) resume')\" = 3 ]"
+chk "Grafana (observability) is not resumed before the last pg_restore: the load goes into a pristine grafana-db (infra #426)" "calls | awk '/pg_restore/ { exit } /patch kustomization observability .*false/ { bad = 1 } END { exit bad }'"
+chk "...it is resumed after the load and before the verify" "order 'pg_restore' 'patch kustomization observability .*false' 'task cluster-verify'"
 chk "the OpenBao restore received a token and the snapshot on stdin (3000 bytes)" "grep -q 'snapshot_bytes=3000' '$FAKE_DR/state/restore.log' && grep -q 'token_bytes=2[0-9]' '$FAKE_DR/state/restore.log'"
 chk "the source's three shares are back" "grep -c 'share-' '$FAKE_DR/state/shares.json' | grep -q 1 && python3 -c \"import json; assert len(json.load(open('$FAKE_DR/state/shares.json')))==3\""
 chk "both databases are recovered into a scratch Cluster from the ${STORE:-primary} ObjectStore, which never archives" "python3 - '$FAKE_DR/state/applied.jsonl' <<'PY'
@@ -235,6 +238,11 @@ new; FAKE_VERIFY_SKIP=1 run "${ALL[@]}" --execute --confirm oa-test --only verif
 chk "a restore test that only skipped does not pass the verify step" "[ $RC = 1 ] && grep -q 'without proving anything' '$TMP/stderr' '$TMP/stdout'"
 new; FAKE_VERIFY_FAIL=1 run "${ALL[@]}" --execute --confirm oa-test --only verify
 chk "a failing restore test on the rebuilt cluster fails the last step" "[ $RC = 1 ] && grep -q 'restore test of the rebuilt cluster failed' '$TMP/stdout'"
+
+new; mkdir -p "$OUTD/work"; printf 'cnpg\nidentity\nobservability\n' >"$OUTD/work/held.txt"; FAKE_KS_SLOW=4 run "${ALL[@]}" --execute --confirm oa-test --only identity
+chk "the identity step waits for the DAG twice as long as the other waits (30 min of the 15): observability converges in it since #426" "[ $RC = 0 ]"
+new; mkdir -p "$OUTD/work"; printf 'cnpg\nidentity\nobservability\n' >"$OUTD/work/held.txt"; FAKE_KS_SLOW=99 run "${ALL[@]}" --execute --confirm oa-test --only identity
+chk "...and still not for ever: a Kustomization that never gets Ready fails the step" "[ $RC = 1 ] && grep -q 'Kustomizations are not Ready' '$TMP/stdout'"
 
 echo "=== subsets and the other sources ==="
 new; mkdir -p "$OUTD/work"; printf 'cnpg\nidentity\n' >"$OUTD/work/held.txt"

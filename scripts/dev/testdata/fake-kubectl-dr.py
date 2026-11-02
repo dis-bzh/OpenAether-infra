@@ -4,7 +4,9 @@
 FAKE_DR    state directory (calls.log: one line of argv per call, no stdin; state/ holds what the chain created)
 FAKE_*     failure injections: FAKE_FAIL_SECRET=1 (the seal key Secret is refused), FAKE_BROKEN_CHAIN=1 (the restored canary chain is
            broken), FAKE_APPLY_STALE=1 (Flux never gives the Clusters the new archive name), FAKE_BACKUP_FAIL=1 (the base backup of the new archive
-           fails), FAKE_NO_ARCHIVING=1 (ContinuousArchiving stays False), FAKE_VERIFY_FAIL=1 (the restore test of the rebuilt cluster fails), FAKE_NODES=n (nodes of the cluster)
+           fails), FAKE_NO_ARCHIVING=1 (ContinuousArchiving stays False), FAKE_VERIFY_FAIL=1 (the restore test of the rebuilt cluster fails), FAKE_NODES=n (nodes of the cluster),
+           FAKE_KS_SLOW=n (a Kustomization is NotReady for the first n polls)
+           Grafana: a pg_restore into grafana-db after the Kustomization observability was resumed fails with the three dependency errors of lab 28B
 Secrets are never written to calls.log: stdin is summarised (a length), --from-file contents are not copied there.
 """
 import base64
@@ -114,7 +116,9 @@ if a[:3] == ["-n", "flux-system", "get"] and opt("-o") == "json":
           "cnpg": ["external-secrets-stores"], "backup-databases": ["cnpg"], "identity": ["cnpg"], "identity-gateway": ["identity"], "observability": []}
     out({"items": [{"metadata": {"name": k}, "spec": {"dependsOn": [{"name": d} for d in v]}} for k, v in ks.items()]})
 if a[:3] == ["-n", "flux-system", "get"] and "--no-headers" in a:
-    out("foundation-vault True\nplatform True\n")
+    n = int(get(f("ks-polls")) or 0) if os.path.exists(f("ks-polls")) else 0
+    put(f("ks-polls"), str(n + 1))
+    out("foundation-vault True\nplatform True\n" + ("observability False\n" if n < int(os.environ.get("FAKE_KS_SLOW", "0")) else ""))
 if a[:3] == ["-n", "flux-system", "patch"]:
     put(f("patches.log"), a[4] + " " + ("suspend" if '"suspend":true' in A else "resume") + "\n", "a")
     sys.exit(0)
@@ -161,6 +165,14 @@ if "exec" in a and "pg_restore" in a:
     i = a.index("exec") + 1
     pod = a[i + 1] if a[i] == "-i" else a[i]
     put(f("pg_restore.log"), f"{pod} bytes={len(data)}\n", "a")
+    resumed = get(f("patches.log")).splitlines() if os.path.exists(f("patches.log")) else []
+    if "-d grafana" in A and "observability resume" in resumed:
+        # Grafana was resumed before the load: it created its schema in the empty database (lab 28B, infra #426)
+        sys.stderr.write('pg_restore: error: could not execute query: ERROR:  cannot drop sequence short_url_id_seq because other objects depend on it\n'
+                         'pg_restore: error: could not execute query: ERROR:  relation "short_url_id_seq" already exists\n'
+                         'pg_restore: error: could not execute query: ERROR:  relation "short_url_pkey" already exists\n'
+                         'pg_restore: warning: errors ignored on restore: 3\n')
+        sys.exit(1)
     if os.environ.get("FAKE_PG_RESTORE") == "inherited":
         sys.stderr.write('pg_restore: error: could not execute query: ERROR:  cannot drop inherited constraint "x_pkey" of relation "x"\npg_restore: warning: errors ignored on restore: 1\n')
         sys.exit(1)
