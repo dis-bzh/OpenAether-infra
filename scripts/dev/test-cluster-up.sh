@@ -26,6 +26,7 @@ mkdir -p "$C/envs" "$C/bootstrap-manifests" "$W/scripts"/{internal,bootstrap,ops
 cp Taskfile.yml "$W/"
 cp scripts/lib/common.sh "$W/scripts/lib/"
 cp scripts/internal/resolve-s3-cred.sh scripts/internal/check-passphrase.sh "$W/scripts/internal/"
+cp scripts/ops/preflight-quotas.py "$W/scripts/ops/"
 
 # One stub behind every leaf: it logs "<name> <args>" in call order, then answers
 # what the next step reads. A plan file must exist for infra-apply to take it.
@@ -493,6 +494,17 @@ done
 EXTRA="$BREAK" run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
 [ "$rc" != 0 ] && ok "control: deploy_flux true and the same failing stubs fail the run" || bad "control: exit $rc, the Flux steps did not run"
 
+
+echo "--- preflight-quotas: Scaleway is named as not checked, not answered with a usage error (infra #429) ---"
+run 0 -x preflight-quotas PROVIDER=scaleway; rc=$?
+{ [ "$rc" = 2 ] && grep -q '^~ Scaleway quotas are NOT checked by this script' "$O" && grep -q 'Console' "$O" && ! grep -qi 'usage:\|invalid choice' "$O"; } \
+  && ok "scaleway: exit 2 (could not conclude), one line saying nothing was checked and where to look, no usage error" \
+  || bad "scaleway preflight, exit $rc: $(tail_of)"
+run 0 -x preflight-quotas PROVIDER=scaleway -- --add-vms 2; rc=$?
+{ [ "$rc" = 2 ] && grep -q 'NOT checked' "$O" && ! grep -q 'fits within the quotas' "$O"; } \
+  && ok "…and a simulation (--add-vms 2) is not answered with 'fits within the quotas'" || bad "scaleway simulation, exit $rc: $(tail_of)"
+run 0 -x preflight-quotas PROVIDER=nowhere; rc=$?
+[ "$rc" = 2 ] && grep -qi 'invalid choice' "$O" && ok "an unknown provider is still a usage error" || bad "unknown provider, exit $rc: $(tail_of)"
 
 echo
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"

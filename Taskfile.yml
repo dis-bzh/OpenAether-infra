@@ -290,7 +290,8 @@ tasks:
   preflight-quotas:
     desc: >-
       Read-only quota check on a provider BEFORE deploying. Usage: task preflight-quotas
-      PROVIDER=ovh|outscale [-- --add-vms 2 --add-cores 4 --add-ram-gb 16]
+      PROVIDER=ovh|outscale [-- --add-vms 2 --add-cores 4 --add-ram-gb 16]. PROVIDER=scaleway reads nothing: it
+      says so and ends 2 (could not conclude), so a Scaleway quota is yours to check.
     vars:
       PROVIDER: '{{.PROVIDER | default "outscale"}}'
     cmds:

@@ -54,8 +54,8 @@ script ne vérifie IP, LB ni security groups.
 
 | Exemple | Nœuds × type (vCPU / RAM) | Inst. | vCPU | RAM | Au plancher ? | `task preflight-quotas PROVIDER=… --` |
 |---|---|---|---|---|---|---|
-| `management-`, `failover-scaleway` | 3+4 × `POP2-4C-16G` (4 / 16 Go) | 8 | 30 | 114 Go | Oui ; déroulable, voir le calcul plus bas | pas de backend Scaleway |
-| `workload-scaleway` | 3+4 × `POP2-4C-16G` | 8 | 30 | 114 Go | Oui | pas de backend Scaleway |
+| `management-`, `failover-scaleway` | 3+4 × `POP2-4C-16G` (4 / 16 Go) | 8 | 30 | 114 Go | Oui ; déroulable, voir le calcul plus bas | pas de backend Scaleway : la commande le dit et ne vérifie rien (code 2) |
+| `workload-scaleway` | 3+4 × `POP2-4C-16G` | 8 | 30 | 114 Go | Oui | pas de backend Scaleway : la commande le dit et ne vérifie rien (code 2) |
 | `management-`, `failover-ovh` | 3+4 × `c3-8` (4 / 8 Go) | 8 | 30 | 64 Go | Oui ; déroulable, voir le calcul plus bas | `--add-vms 8 --add-cores 30 --add-ram-gb 64` |
 | `workload-ovh` | 3+4 × `c3-8` | 8 | 30 | 64 Go | Oui | `--add-vms 8 --add-cores 30 --add-ram-gb 64` |
 | `management-`, `failover-outscale` | 3+2 × `tinav5.c2r4p1` (2 / 4 Go) | 6 | 12 | 22 Go | **Non, volontairement** — voir plus bas | `--add-vms 6 --add-cores 12 --add-ram-gb 22` |
