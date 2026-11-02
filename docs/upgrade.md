@@ -90,9 +90,8 @@ Not rehearsed in place: the Loki 6.55 -> 18 step, Grafana, Alloy, the Gateway AP
 
 ## From 0.3.x to 0.4.0 (an existing cluster)
 
-Written from the branch before the 0.4.0 tag, from lab 25 (a cluster built by infra 0.3.2 and apps 0.3.2, moved to the 0.4.0 branches) and from the code. **Rung: the
-commands below are mocked offline; what lab 25 did is said as such. Every step marked UNVERIFIED has not been run on a cluster.** The lab will replay 0.3.2 to 0.4.0 and
-this section is to be corrected by it. Not a compliance claim.
+Written from the branch before the 0.4.0 tag, from lab 25 (a cluster built by infra 0.3.2 and apps 0.3.2, moved to the 0.4.0 branches) and from the code; the 0.3.2 to 0.4.0 move was then replayed on Scaleway in lab 28B (one `task cluster-up`, 39 min 13 s, see "Move and node operations" in `docs/resilience.md`). **Rung: the
+commands below are mocked offline; what the labs did is said as such. Every step marked UNVERIFIED was not run on a cluster by those labs (the 0.4.0 release did not replay the move on OVH or Outscale).** Not a compliance claim.
 
 **Supported upgrade path (owner decision, 2026-10-24).** Before 1.0.0 the supported upgrade is from the PREVIOUS minor to the current one only: n-1.x.x to n.x.x, here 0.3.x to 0.4.0.
 No path from an older version is built or documented; from 0.2.x or earlier, go through 0.3.x first or rebuild.
