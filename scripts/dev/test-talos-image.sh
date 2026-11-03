@@ -227,6 +227,24 @@ OUT="$(run 1 --ensure)"; RC=$?
                 || bad "a failed plan exited 0 — cluster-up would continue on an unbuilt image"
 is "and nothing was applied" 0 "$(calls apply)"
 
+echo "--- --ensure --plan-only (cluster-up PLAN_ONLY=1, infra #412): the same plan, never the apply ---"
+OUT="$(run 2 --ensure --plan-only)"; RC=$?
+is "a missing image: the script completes" 0 "$RC"
+is "…with exactly one plan" 1 "$(calls plan)"
+is "…and NO apply: nothing is built" 0 "$(calls apply)"
+grep -q 'WOULD be built' <<<"$OUT" && ok "…and it says the image WOULD be built, and was not" || bad "plan-only said nothing of the build it skipped: $OUT"
+OUT="$(run 0 --ensure --plan-only)"; RC=$?
+{ [ "$RC" = 0 ] && [ "$(calls apply)" = 0 ] && grep -q 'already up to date' <<<"$OUT"; } \
+  && ok "an image up to date: said so, nothing applied" || bad "plan-only on an up-to-date image (rc=$RC): $OUT"
+OUT="$(run 1 --ensure --plan-only)"; RC=$?
+{ [ "$RC" -ne 0 ] && [ "$(calls apply)" = 0 ]; } && ok "a plan that fails still fails the script: plan-only does not turn a failed plan into a pass" || bad "plan-only swallowed a failed plan (rc=$RC)"
+OUT="$(OA_IMAGE_MIN_FREE_GIB=99999999 run 2 --ensure --plan-only)"; RC=$?
+{ [ "$RC" -ne 0 ] && [ "$(calls apply)" = 0 ]; } \
+  && ok "the disk refusal of the real build is kept: a build that would not fit is said before the approval" || bad "plan-only hid the disk preflight (rc=$RC): $OUT"
+OUT="$(run 2 --plan-only)"; RC=$?
+{ [ "$RC" -ne 0 ] && [ "$(calls apply)" = 0 ] && grep -q -- '--plan-only' <<<"$OUT"; } \
+  && ok "--plan-only without --ensure is refused: a bare build is interactive and has no plan to stop at" || bad "--plan-only alone was accepted (rc=$RC): $OUT"
+
 echo "--- plain \`task image-build\`: interactive, and interactive means ONE plan ---"
 OUT="$(run 2)"; RC=$?
 is "the script completes" 0 "$RC"
@@ -413,6 +431,18 @@ OUT="$(VER=v1.13.9 run 2 --ensure)"; RC=$?
 { [ "$RC" -eq 0 ] && [ "$(calls 'state push')" = 0 ] && [ "$(acalls 's3 mv')" = 0 ] && [ "$(initkeys)" = "$LEG talos-image-scaleway-v1.13.9.tfstate" ]; } \
   && ok "a build of ANOTHER version leaves the legacy state where it is" || bad "another version's build moved the legacy state (rc=$RC, keys: $(initkeys))"
 grep -q 'stays its authority' <<<"$OUT" && ok "and says whose it stays" || bad "it did not say why the legacy state was left"
+
+# --plan-only (cluster-up PLAN_ONLY=1) writes nothing to the state bucket: the copy of the legacy state is a write, so it waits for a real run.
+OUT="$(run 2 --ensure --plan-only)"; RC=$?
+{ [ "$RC" -eq 0 ] && [ "$(calls 'state push')" = 0 ] && [ "$(acalls 's3 mv')" = 0 ] && [ "$(acalls 's3 rm')" = 0 ] \
+  && [ "$(initkeys)" = "$LEG" ] && [ "$(calls plan)" = 1 ] && [ "$(calls apply)" = 0 ]; } \
+  && ok "--plan-only on a lane the legacy state holds: nothing pushed, renamed or removed, and the plan reads the legacy state itself" \
+  || bad "plan-only wrote to the state bucket or planned another state (rc=$RC, keys: $(initkeys), pushes: $(calls 'state push')): ${OUT:0:300}"
+grep -q 'would be copied' <<<"$OUT" && ok "…and says the copy was left for a real run" || bad "plan-only said nothing of the copy it skipped: ${OUT:0:300}"
+is "…and the decrypted copy of the legacy state is gone" 0 "$(find "$SB/tmp" -type f | wc -l)"
+OUT="$(run 2 --ensure)"; RC=$?
+{ [ "$RC" -eq 0 ] && [ "$(calls 'state push')" = 1 ] && [ "$(acalls 's3 mv')" = 1 ]; } \
+  && ok "(control) the same run without --plan-only still copies and retires the legacy state" || bad "the migration no longer runs on a real build (rc=$RC)"
 
 OUT="$(OA_STUB_KEYS=$'talos-image.tfstate\ttalos-image-scaleway-v1.13.4.tfstate' run 2 --ensure)"
 is "an already migrated version does not read the legacy state again" "talos-image-scaleway-v1.13.4.tfstate" "$(initkeys)"

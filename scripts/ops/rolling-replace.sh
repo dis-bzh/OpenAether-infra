@@ -42,12 +42,16 @@
 #
 # Usage: rolling-replace.sh <provider> [--workers-only|--cp-only] [--upgrade]
 #                          [--dry-run] [--yes] [--node=NAME|--ip=ADDR [--dead]]
+#                          [--accept-sole-copy=<namespace>/<name>]...
 #   --node / --ip: act on THIS node only (by Kubernetes node name, or private address when the Node object is gone).
 #   --dead: the node does not answer (0.4.0 M4, `task cluster-replace-node`). No drain: the node is cordoned, its etcd
 #   member removed (control plane), its Node object deleted so that its pods are freed at once, then the same two
 #   applies recreate it. The survivors are checked first (etcd quorum, every other node Ready); replacement only.
 #   --upgrade: `talosctl upgrade` in place (version changes) instead of
 #   replacing the VM. Reads the target from talos_version in the tfvars.
+#   --accept-sole-copy=<namespace>/<name>: a replacement wipes the node's disk, and a CNPG Cluster with ONE instance on a node-local
+#   volume (the `light` profile) has no other copy (infra #425). The survey names such Clusters and asks; --yes does NOT answer it.
+#   Unattended, each Cluster whose loss you accept is named with this flag (repeatable). Not asked with --upgrade (the disk is kept).
 #   Needs: tofu init, AWS_* creds, open Talos tunnels, ./talosconfig + ./kubeconfig.
 # ==============================================================================
 set -euo pipefail
@@ -63,6 +67,7 @@ ASSUME_YES=0
 ONLY_NODE=""      # --node=: replace/upgrade this node only
 ONLY_IP=""        # --ip=: the same, by private address (the Node object may be gone)
 DEAD=0            # --dead: the node does not answer; see the header
+ACCEPT_SOLE_COPY=()   # --accept-sole-copy=<namespace>/<name>, repeatable: the single-instance Clusters whose loss is accepted
 UPGRADE=0         # --upgrade: in-place `talosctl upgrade`, no VM replacement
 # The role used to be the literal "management", here and in the Taskfile, while
 # `task cluster-roll` declared a ROLE variable nothing read. So `cluster-upgrade
@@ -82,6 +87,9 @@ for arg in "$@"; do
     --node=*)       ONLY_NODE="${arg#--node=}" ;;
     --ip=*)         ONLY_IP="${arg#--ip=}" ;;
     --dead)         DEAD=1 ;;
+    --accept-sole-copy=*)
+      [[ "${arg#--accept-sole-copy=}" == */* ]] || { echo "✗ --accept-sole-copy needs <namespace>/<name> (as the survey prints it): $arg" >&2; exit 2; }
+      ACCEPT_SOLE_COPY+=("${arg#--accept-sole-copy=}") ;;
     --role=*)       ROLE="${arg#--role=}" ;;
     *) echo "✗ unknown flag: $arg" >&2; exit 2 ;;
   esac
@@ -134,10 +142,15 @@ UPGRADE_WATCH_TIMEOUT="${UPGRADE_WATCH_TIMEOUT:-420}"
 UPGRADE_CONFIRM_TIMEOUT="${UPGRADE_CONFIRM_TIMEOUT:-120}"
 # Set by the INT/TERM trap and by an interrupted upgrade. Checked BETWEEN nodes:
 # the node in flight finishes and returns to rotation, then the run stops. Halting
-# between drain and reboot would leave the cordoned, half-upgraded node that has
-# already ruined one diagnosis.
+# between drain and reboot would leave the cordoned, half-upgraded node that has already ruined one diagnosis.
+# One exception, the drain itself: drain_watched runs kubectl drain in the background, and a signal that arrives WHILE it runs
+# kills it (a background command would ignore Ctrl+C and outlive the run), then runs this trap. The drain counts as failed and
+# takes the failure path of cordon_drain: the node is uncordoned and, unattended, the run dies with the budgets and Flux restored
+# (attended, the usual "Continue ... anyway?" is asked, as it was when the terminal killed the foreground drain). That was always
+# so for Ctrl+C; a SIGTERM sent to the script alone now does the same. A stop asked BEFORE the drain started does not end it:
+# the node in flight finishes.
 STOP_REQUESTED=0
-trap 'STOP_REQUESTED=1; printf "\n⚠ stop requested — finishing the node in flight, then stopping.\n" >&2' INT TERM
+trap 'STOP_REQUESTED=1; printf "\n⚠ stop requested — finishing the node in flight, then stopping (a drain in progress is ended and its node given back).\n" >&2' INT TERM
 ETCD_TIMEOUT="${ETCD_TIMEOUT:-300}"               # seconds
 API_TIMEOUT="${API_TIMEOUT:-300}"                 # seconds, for the kube-apiserver of a control plane to serve (#42)
 API_STABLE_POLLS="${API_STABLE_POLLS:-3}"         # consecutive Ready polls: one lucky poll between two restarts is not serving
@@ -232,6 +245,37 @@ stop_here() {
   warn "stopping before the next ${1}: the cluster is consistent, and the nodes not yet"
   warn "reached are still on the previous version. Re-run to continue where this left off."
   return 0
+}
+
+# infra #425: the nodes this run wipes, by Kubernetes name, and the question whether one of them holds the only copy of a database.
+# The names are read from the cluster, one address at a time, and an address that gives no name is NOT left out: the question
+# would then be asked about fewer nodes than the run replaces, and answered "nothing" for the one it could not name (a failed read,
+# a Node object that is gone). The run refuses, and says which address. A dead node is named by --node (the name its volumes are
+# pinned to, which an IP does not give back once the Node object is gone), else by the cluster.
+roll_sole_copy_gate() {
+  local ip name ips=() names=() unresolved=""
+  if [[ $DEAD -eq 1 ]]; then
+    name="$ONLY_NODE"
+    [[ -n "$name" ]] || name="$(k8s_node_for_ip "$ONLY_IP" || true)"
+    [[ -n "$name" ]] || die "cannot name the dead node at ${ONLY_IP}: no Node object has that address, so the volumes pinned to it cannot be looked up, and whether it held the only copy of a database cannot be told.
+  Add --node=<the name the node had> (task cluster-replace-node passes it) and run again. Nothing was changed."
+    names=("$name")
+  else
+    if [[ -n "$ONLY_T" ]]; then
+      if [[ "$ONLY_T" == cp ]]; then ips=("${CP_IPS[$ONLY_I]}"); else ips=("${WK_IPS[$ONLY_I]}"); fi
+    else
+      if [[ "$SCOPE" == all || "$SCOPE" == workers ]]; then ips+=(${WK_IPS[@]+"${WK_IPS[@]}"}); fi
+      if [[ "$SCOPE" == all || "$SCOPE" == cp ]]; then ips+=(${CP_IPS[@]+"${CP_IPS[@]}"}); fi
+    fi
+    for ip in ${ips[@]+"${ips[@]}"}; do
+      if name="$(k8s_node_for_ip "$ip")"; then names+=("$name")
+      elif [[ -n "$ONLY_T" && -n "$ONLY_NODE" ]]; then names+=("$ONLY_NODE")
+      else unresolved+=" ${ip}"; fi
+    done
+    [[ -z "$unresolved" ]] || die "cannot name the node(s) at${unresolved}: the cluster gave no name for them (a failed read, or no such node), so whether they hold the only copy of a database cannot be told.
+  Refusing to replace without the question. Check 'kubectl get nodes', then run the same command again. Nothing was changed."
+  fi
+  sole_copy_gate ${names[@]+"${names[@]}"}
 }
 
 replace_node() { # <type: cp|worker> <index>
@@ -660,12 +704,20 @@ if [[ $DRY_RUN -eq 0 ]]; then
   trap finish_roll EXIT
   if [[ $DEAD -eq 1 ]]; then
     # Nothing is drained, so no budget needs relaxing: the survivors are what has to be checked.
-    dead_node_survey "$ONLY_T" "$ONLY_I" "${ONLY_NODE:-$(k8s_node_for_ip "${ONLY_IP}" || echo "${ONLY_IP}")}"
+    dead_name="${ONLY_NODE:-$(k8s_node_for_ip "${ONLY_IP}" || echo "${ONLY_IP}")}"
+    dead_node_survey "$ONLY_T" "$ONLY_I" "$dead_name"
+    # The disk of a dead node is wiped like any other's, and may still hold the only copy of a database (infra #425).
+    roll_sole_copy_gate
   else
     cnpg_maintenance true
     # Now that the budgets are actually gone, ask everything else that is knowable
     # before the first node is touched — see preflight_roll.
     preflight_roll
+    # A replacement wipes each node's disk; --upgrade keeps it. A Cluster whose ONLY copy is on a node of this run is named, and
+    # --yes does not answer for it (infra #425).
+    if [[ $UPGRADE -eq 0 ]]; then
+      roll_sole_copy_gate
+    fi
   fi
 fi
 

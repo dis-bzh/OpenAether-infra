@@ -130,6 +130,34 @@ run STUB_STATE="$STATE3" STUB_PLAN_RC=1
 { [ "$RC" -ne 0 ] && grep -q 'could not plan the machines' <<<"$OUT" && grep -q 'boom' <<<"$OUT"; } \
   && ok "a machines plan that fails is refused with tofu's own words, never read as 'no new node'" || bad "a failed plan was swallowed (rc ${RC}): ${OUT}"
 
+echo "=== --plan-only (cluster-up PLAN_ONLY=1, infra #412): says what it would do, creates nothing ==="
+run_plan() { # <env assignments…>: the same run with the flag; sets OUT, RC
+  : >"$CALLS"; rm -f "$APPLIED"
+  OUT="$( cd "$C" && env PATH="$W/bin:$PATH" SSH_KEY=/k "$@" "$W/scripts/bootstrap/grow-nodes.sh" management scaleway --plan-only 2>&1 )"; RC=$?
+}
+run_plan STUB_STATE="$STATE3" STUB_STATE_AFTER="$STATE4" STUB_MACHINES="$(plan_of "$SRV3" "$NIC3")" STUB_CONFIG="$(plan_of "$CFG3")"
+{ [ "$RC" = 3 ] && grep -q 'worker\[3\]' <<<"$OUT" && grep -q 'plan only' <<<"$OUT" && ! grep -q '^apply' "$CALLS" \
+  && ! grep -q '^tunnels' "$CALLS" && ! grep -q 'refresh.tfplan\|config.tfplan' "$CALLS"; } \
+  && ok "a fourth worker wanted: exit 3 (it WOULD act), the machine named, the machines planned and NOTHING applied, no tunnel, no refresh" \
+  || bad "plan-only on a growth (rc ${RC}): ${OUT}; calls: $(calls | tr '\n' '|')"
+grep -q 'plan .*-target=module.scw\[0\]' "$CALLS" && ! grep -q -- '-target=module.talos' "$CALLS" \
+  && ok "…it reads the provider module alone, as the real run does (the full plan can wait 15 minutes on the cluster health)" || bad "plan-only planned more than the provider module: $(calls | tr '\n' '|')"
+run_plan STUB_STATE="$STATE3" STUB_MACHINES="$(plan_of "$SG")"
+{ [ "$RC" = 0 ] && ! grep -q '^apply' "$CALLS" && ! grep -q '^tunnels' "$CALLS"; } \
+  && ok "nothing to grow: exit 0, still nothing applied" || bad "plan-only on a steady cluster (rc ${RC}): ${OUT}"
+run_plan STUB_STATE="$STATE4" STUB_MACHINES="$(plan_of "$SG")"
+{ [ "$RC" = 3 ] && grep -q 'worker:3' <<<"$OUT" && ! grep -q '^apply' "$CALLS" && ! grep -q '^tunnels' "$CALLS"; } \
+  && ok "a machine left without a configuration by an earlier run: exit 3, named (worker:3), no tunnel opened, nothing applied" \
+  || bad "plan-only on a leftover node (rc ${RC}): ${OUT}; calls: $(calls | tr '\n' '|')"
+run_plan STUB_STATE="$STATE3" STUB_MACHINES="$(plan_of "$SRV3" "$WDEL1")"
+{ [ "$RC" = 1 ] && grep -q 'worker\[2\]' <<<"$OUT" && ! grep -q '^apply' "$CALLS"; } \
+  && ok "a growth that rides with a node delete is refused by the plan-only run too: the answer is the one the real run would give" \
+  || bad "plan-only let a delete ride along (rc ${RC}): ${OUT}"
+run_plan STUB_TB=false
+{ [ "$RC" = 0 ] && [ ! -s "$CALLS" ]; } && ok "a cluster with no bootstrap yet: exit 0, tofu never called, as without the flag" || bad "plan-only touched a fresh cluster (rc ${RC})"
+OUT="$( cd "$C" && env PATH="$W/bin:$PATH" SSH_KEY=/k "$W/scripts/bootstrap/grow-nodes.sh" management scaleway --apply-now 2>&1 )"; RC=$?
+[ "$RC" = 2 ] && ok "any other third argument is refused (exit 2), not ignored" || bad "an unknown flag was accepted (rc ${RC}): ${OUT}"
+
 echo "=== it is wired in ==="
 TF="$ROOT/Taskfile.yml"
 [ "$(grep -c 'task: _grow-nodes' "$TF")" = 1 ] && ok "cluster-up calls the _grow-nodes task once" || bad "cluster-up does not call _grow-nodes exactly once"

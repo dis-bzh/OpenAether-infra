@@ -29,9 +29,10 @@ ended (seeding OpenBao, signing the PKI intermediate): [`admin-access.md`](admin
 ## Before you start
 
 - A Scaleway account, and the quota to run **7 instances** of the type in your
-  tfvars. A new account may be capped at 1 — Console → Quotas. There is no
-  preflight script for Scaleway (`preflight-quotas.py` covers OVH and Outscale
-  only), so this check is yours to make. The shipped examples have 3 control planes and 4 workers; the bastion adds one `DEV1-S`; what
+  tfvars. A new account may be capped at 1 — Console → Quotas. Nothing reads
+  the Scaleway quota (`preflight-quotas.py` covers OVH and Outscale only;
+  `task preflight-quotas PROVIDER=scaleway` queries nothing, says so and ends 2),
+  so this check is yours to make. The shipped examples have 3 control planes and 4 workers; the bastion adds one `DEV1-S`; what
   each provider consumes, and whether its example meets the sizing floor:
   [`capacity.md`](capacity.md).
 - An SSH keypair you already have, or `ssh-keygen -t ed25519`.
@@ -177,8 +178,10 @@ phase-1 and phase-2 plans, and applies the plan it just showed you — do not re
 for `-auto-approve`, which applies a *different* plan computed at that moment.
 Once verified it also runs the image retention, where tofu asks its own yes for each
 old image it destroys. For an unattended run add `APPROVE=auto`: it answers the two
-plans and skips the retention. (To read a
-phase-1 plan on its own, save it:
+plans and skips the retention. (To read the plan with nothing created, add
+`PLAN_ONLY=1`: it stops at the phase-1 plan, and on a bootstrapped cluster that plan opens the local Talos tunnels (mocked only and UNVERIFIED on a cluster). With the Talos image missing, as on a new account, the plan cannot be read: on Scaleway, the only provider run, the run said the image WOULD be built, then ended rc 201 on the plan's "no image found", nothing created (OVH and Outscale not run); see
+[`upgrade.md`](upgrade.md#adding-nodes-cluster-up-creates-the-machine-before-it-asks-a-03x-design-unchanged).
+To read a phase-1 plan on its own, save it:
 `task infra-plan ROLE=management PROVIDER=scaleway OUT=tfplan`, read it, then
 `task infra-apply PROVIDER=scaleway PLAN=tfplan`. PROVIDER is required on both —
 it used to default to Scaleway, which is the wrong cloud to guess.)
@@ -245,6 +248,8 @@ the CNPG archive, and it exists with the default `backup_immutability = off` too
 (before 0.4.0 it did not, and `cnpg-store-replicate` failed with `NoSuchBucket` every
 15 minutes); `task cluster-verify` fails when it is missing.
 
+A Talos tunnel port that a busy workstation holds for a moment ("Address already in use" with nothing listening) is retried by itself since 0.4.1 (mocked only, UNVERIFIED on a cluster); if one stays busy the script names the way out: reserve the tunnel block with `net.ipv4.ip_local_reserved_ports` (the setting replaces the whole list, so read `/proc/sys/net/ipv4/ip_local_reserved_ports` first and append to it, and it is lost at a reboot unless it is also written in `/etc/sysctl.d/`, in the file that already sets it if there is one; if the script cannot read the list it says so and prints no replacing command), or use another `TALOS_TUNNEL_OFFSET`; see [`upgrade.md`](upgrade.md).
+
 Re-running resumes. So does an edit that adds a worker: `task cluster-up` creates the
 machine, opens the tunnels, then configures only the new node
 (`scripts/bootstrap/grow-nodes.sh`), measured on Scaleway going from 3 to 6 workers.
@@ -255,7 +260,7 @@ data volumes with no drain and no etcd leave (`scripts/internal/refuse-node-dele
 commands of its own, `task cluster-shrink-plan` then `task cluster-shrink`, measured on all three
 clouds: [`upgrade.md`](upgrade.md#removing-nodes).
 
-Be aware that the machine is created before any question is asked: without `APPROVE=auto`, `cluster-up` still builds and configures the new node first and only then shows the plan (a 0.3.x design, see [`upgrade.md`](upgrade.md#adding-nodes-cluster-up-creates-the-machine-before-it-asks-a-03x-design-unchanged)).
+Be aware that the machine is created before any question is asked: without `APPROVE=auto`, `cluster-up` still builds and configures the new node first and only then shows the plan (a 0.3.x design, see [`upgrade.md`](upgrade.md#adding-nodes-cluster-up-creates-the-machine-before-it-asks-a-03x-design-unchanged)); `PLAN_ONLY=1` reads the plan without creating anything in the cloud (on a bootstrapped cluster it opens the local Talos tunnels; mocked only, UNVERIFIED on a cluster).
 
 ### Residual risk: the maintenance-mode apply
 

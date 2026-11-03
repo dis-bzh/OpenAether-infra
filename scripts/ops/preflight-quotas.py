@@ -23,6 +23,12 @@ Usage :
 
 Scaleway is not covered: its quotas have never been a problem on this account,
 and guessing an API that cannot be verified here would be worse than nothing.
+`preflight-quotas.py scaleway` says so (exit 2, nothing queried) instead of a usage
+error, so that nobody reads a silence as a pass.
+
+Exit codes: 0 the quotas were read and fit (or nothing was simulated), 1 the
+requested topology exceeds a quota, 2 could not conclude (an unknown provider, or
+Scaleway, which is not read).
 """
 from __future__ import annotations
 
@@ -119,14 +125,27 @@ def outscale(add_vms, add_cores, add_ram_gb):
     return rows
 
 
+# What the script says for Scaleway, which it does not read (infra #429). The only figure known is what a lab ran, not a limit.
+SCALEWAY_NOT_CHECKED = (
+    "~ Scaleway quotas are NOT checked by this script: it has no Scaleway reader (the quota API is not established here), "
+    "so nothing was queried and nothing was simulated.\n"
+    "  Check them yourself before spending: Scaleway Console > Quotas (a new account can be capped far below a cluster).\n"
+    "  For scale only: lab 27B ran 3 control planes + 7 workers of POP2-4C-16G (40 vCPU, plus the bastion) on one project "
+    "without a refusal, so that project's quota was at least that; its real limit was never read.")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("provider", choices=["ovh", "outscale"])
+    ap.add_argument("provider", choices=["ovh", "outscale", "scaleway"])
     ap.add_argument("--add-vms", type=int, default=0, help="VMs added")
     ap.add_argument("--add-cores", type=int, default=0, help="vCPUs added")
     ap.add_argument("--add-ram-gb", type=int, default=0, help="RAM added, in GB")
     args = ap.parse_args()
+
+    if args.provider == "scaleway":
+        print(SCALEWAY_NOT_CHECKED)
+        return 2
 
     rows = {"ovh": ovh, "outscale": outscale}[args.provider](
         args.add_vms, args.add_cores, args.add_ram_gb)

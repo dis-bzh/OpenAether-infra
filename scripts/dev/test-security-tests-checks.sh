@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# cluster-security-tests.sh's checks on Cilium WireGuard (1.8) and the OpenBao bootstrap (4.6 development
-# share, 4.7 seal-key escrow record and its proof), run against a stub kubectl: the verdict of each line, failure cases
-# included. SUT overrides the script under test (how the mutants run).
+# cluster-security-tests.sh's checks on the VMAgent egress (1.6), Cilium WireGuard (1.8) and the OpenBao bootstrap (4.6
+# development share, 4.7 seal-key escrow record and its proof), run against a stub kubectl: the verdict of each line,
+# failure cases included. SUT overrides the script under test (how the mutants run).
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -18,6 +18,24 @@ cat >"$TMP/bin/kubectl" <<'STUB'
 #!/usr/bin/env bash
 case "$*" in
   cluster-info*) exit 0 ;;
+  *"get cnp vmagent -n services-observability"*)
+    case "${STUB_VMA:-}" in
+      notfound) echo 'Error from server (NotFound): ciliumnetworkpolicies.cilium.io "vmagent" not found' >&2; exit 1 ;;
+      error) echo 'Unable to connect to the server: TLS handshake timeout' >&2; exit 1 ;;
+    esac
+    # Only the exact queries of the script are answered: a changed jsonpath is an error, not the same answer.
+    case "$*" in
+      *"-o name") echo ciliumnetworkpolicy.cilium.io/vmagent ;;
+      *"-o jsonpath={.spec.egress[*].toEntities[*]}") printf '%s' "${STUB_VMA_ENT:-}" ;;
+      *) echo "stub: unexpected query: $*" >&2; exit 1 ;;
+    esac
+    exit 0 ;;
+  *"get helmrelease victoria-metrics-operator -n services-observability"*"-o name"*)
+    case "${STUB_VMA_HR:-absent}" in
+      present) echo helmrelease.helm.toolkit.fluxcd.io/victoria-metrics-operator; exit 0 ;;
+      error) echo 'Unable to connect to the server: TLS handshake timeout' >&2; exit 1 ;;
+      *) echo 'Error from server (NotFound): helmreleases.helm.toolkit.fluxcd.io "victoria-metrics-operator" not found' >&2; exit 1 ;;
+    esac ;;
   *"configmap cilium-config"*) [ -n "${STUB_WG_CFG+x}" ] && printf '%s' "$STUB_WG_CFG"; exit 0 ;;
   *"exec ds/cilium"*) [ "${STUB_EXEC_FAIL:-}" = 1 ] && exit 1; printf 'Cilium: Ok\n%s\n' "${STUB_WG_STATUS:-}"; exit 0 ;;
   *"secret loki-s3-credentials"*"{.data.bucket}"*) printf '%s' "${STUB_LOKI_BUCKET:-}"; exit 0 ;;
@@ -46,6 +64,40 @@ run() { OUT="$(PATH="$TMP/bin:$PATH" bash "$SUT" 2>&1 | sed -E 's/\x1b\[[0-9;]*m
 line() { grep -F "$1" <<<"$OUT" | head -1; }
 # <line prefix> <❌|✅|⏭️> — the verdict marker of the line that starts with that number
 verdict() { line "$1" | grep -q "$2"; }
+
+echo "=== 1.6 VMAgent egress is bounded to the cluster: asked of the CLUSTER ==="
+STUB_VMA_ENT='kube-apiserver cluster host remote-node' run
+verdict "1.6" "✅" && ok "a vmagent CNP with a toEntities: cluster rule passes" || bad "green case: $(line 1.6)"
+STUB_VMA_ENT='kube-apiserver' run
+verdict "1.6" "❌" && ok "no cluster entity (the scraping block gone) FAILS" || bad "no cluster entity passed: $(line 1.6)"
+STUB_VMA_ENT='kube-apiserver world' run
+verdict "1.6" "❌" && ok "world is not cluster: FAILS" || bad "world passed: $(line 1.6)"
+STUB_VMA_ENT='' run
+verdict "1.6" "❌" && ok "a CNP with no toEntities at all FAILS" || bad "empty passed: $(line 1.6)"
+STUB_VMA=notfound run
+verdict "1.6" "⏭" && ok "no vmagent CNP and no operator HelmRelease (two signals) is a skip, not a pass" || bad "NotFound: $(line 1.6)"
+STUB_VMA=notfound STUB_VMA_HR=present run
+verdict "1.6" "❌" && ok "no vmagent CNP on a cluster that runs the stack FAILS (one signal is no skip)" || bad "CNP lost, stack there: $(line 1.6)"
+STUB_VMA=notfound STUB_VMA_HR=error run
+verdict "1.6" "❌" && ok "no vmagent CNP and a HelmRelease that cannot be read FAILS (an error is not 'absent')" || bad "HR API error: $(line 1.6)"
+STUB_VMA=error run
+verdict "1.6" "❌" && ok "an API error is a FAIL, not a skip and not a pass" || bad "API error: $(line 1.6)"
+# The file this check used to read (a sibling OpenAether-apps checkout, here a decoy next to a copy of the script) must not
+# decide the verdict, whatever it says, however big it is: `grep -A60 … | grep -q …` under pipefail took SIGPIPE when the
+# match came early and the file was long (a proof lab: test 1.6 red on a correct cluster, about 1 run in 100).
+mkdir -p "$TMP/root/OpenAether-infra/scripts/ops" "$TMP/root/OpenAether-apps/apps/base/observability"
+cp "$SUT" "$TMP/root/OpenAether-infra/scripts/ops/cluster-security-tests.sh"
+DECOY="$TMP/root/OpenAether-apps/apps/base/observability/networkpolicy.yaml"
+decoy_run() { SUT="$TMP/root/OpenAether-infra/scripts/ops/cluster-security-tests.sh" run; }
+printf 'metadata:\n  name: vmagent\nspec:\n  egress:\n    - toEntities:\n        - cluster\n' >"$DECOY"
+STUB_VMA_ENT='kube-apiserver' decoy_run
+verdict "1.6" "❌" && ok "a file that says cluster does not rescue a cluster that does not" || bad "stale file decided: $(line 1.6)"
+printf 'metadata:\n  name: vmagent\nspec:\n  egress:\n    - toEntities:\n        - kube-apiserver\n' >"$DECOY"
+STUB_VMA_ENT='kube-apiserver cluster' decoy_run
+verdict "1.6" "✅" && ok "a file that lacks cluster does not fail a cluster that has it" || bad "stale file decided: $(line 1.6)"
+{ printf 'metadata:\n  name: vmagent\nspec:\n  egress:\n    - toEntities:\n        - cluster\n'; yes 'name: vmagent' | head -n 10000; } >"$DECOY"
+STUB_VMA_ENT='kube-apiserver cluster' decoy_run
+verdict "1.6" "✅" && ok "a long file, which made the old pipeline fail every time, changes nothing" || bad "long file: $(line 1.6)"
 
 echo "=== 1.8 Cilium WireGuard ==="
 STUB_WG_CFG=true STUB_WG_STATUS='Encryption:  Wireguard   [cilium_wg0 (Pubkey: x, Port: 51871, Peers: 2)]' run

@@ -174,6 +174,12 @@ grep -q '^roll ovh --workers-only --role=management --dead --node=oa-lab-worker-
   && ok_ "a stopped worker: the roll gets --dead for ONE node (--workers-only, --node, --ip, --yes)" || bad "roll args: $(grep '^roll' "$CALLS")"
 { [ "$rc" -eq 0 ] && grep -q 'Replacement of oa-lab-worker-0 done' <<<"$OUT"; } && ok_ "...and the checks after it end the run" || bad "replace did not finish (rc=$rc): $OUT"
 
+# The acknowledgement of a lost sole copy (infra #425) is the roll's flag; task cluster-replace-node reaches the roll through here.
+reset; echo oa-lab-worker-0 >"$ST/target"; echo False >"$ST/ready.oa-lab-worker-0"; echo stopped >"$ST/pstate"; : >"$ST/roll.heals"
+nr replace ovh --node=oa-lab-worker-0 --yes --accept-sole-copy=lab27/lab27-light --accept-sole-copy=lab27/other >/dev/null
+grep -q '^roll .* --accept-sole-copy=lab27/lab27-light --accept-sole-copy=lab27/other' "$CALLS" \
+  && ok_ "--accept-sole-copy=<namespace>/<name> (repeatable) is passed to the roll as given" || bad "the acknowledgement does not reach the roll: $(grep '^roll' "$CALLS")"
+
 reset; echo oa-lab-cp-1 >"$ST/target"; echo False >"$ST/ready.oa-lab-cp-1"; echo absent >"$ST/pstate"; : >"$ST/roll.heals"
 nr replace ovh --node=oa-lab-cp-1 --yes >/dev/null
 grep -q '^roll ovh --cp-only .*--dead --node=oa-lab-cp-1 --ip=10.0.0.11' "$CALLS" && ok_ "a control plane gets --cp-only" || bad "cp roll args: $(grep '^roll' "$CALLS")"

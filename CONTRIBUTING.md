@@ -53,7 +53,10 @@ unless a target that stands for the declared rung has a green receipt for the
 PR's head commit, started on a clean tree, and fails on any pasted red run at or
 below that rung. A plan alone does not stand for real cloud. After a push,
 re-run and paste again. Renovate, Dependabot and docs-only diffs may declare
-nothing; a rung they declare is checked. Which targets record, and what a
+nothing (an empty `Rung:` line, or `Rung: none (docs-only diff)`; the reason
+goes in brackets or after a dash, with a space before the bracket or the dash,
+`Rung: none — docs only`, not after a comma or a colon, nor glued to the word);
+a rung they declare is checked. Which targets record, and what a
 receipt proves and cannot: [`scripts/dev/rung-receipt.py`](scripts/dev/rung-receipt.py).
 
 The credentialed rung has no automatic CI lane: it is run by hand, by someone

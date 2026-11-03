@@ -67,6 +67,14 @@ header() {
   echo -e "${BOLD}── $1 ──${NC}"
 }
 
+# Used by 1.6 and by the mesh checks of section 2. Any other answer than "does not exist", an error included, is "not absent".
+not_found() { # <kubectl get args…> — true when the API answers that the object or its type does not exist
+  local out
+  out="$(kubectl get "$@" -o name 2>&1)" && return 1
+  case "$out" in *NotFound* | *"not found"* | *"doesn't have a resource type"* | *"no matches for kind"*) return 0 ;; esac
+  return 1
+}
+
 # ── Preflight ────────────────────────────────────────────────────────────────
 
 if ! command -v kubectl &>/dev/null; then
@@ -138,17 +146,26 @@ else
 fi
 
 # 1.6 VMAgent scraping bounded (toEntities: cluster)
-VMAgent_CNP="$BASE_DIR/observability/networkpolicy.yaml"
-if [ -f "$VMAgent_CNP" ]; then
-  # toEntities and cluster sit on separate lines in the Cilium YAML
-  if grep -A60 "name: vmagent" "$VMAgent_CNP" | grep -q "toEntities:" && \
-     grep -A60 "name: vmagent" "$VMAgent_CNP" | grep -q "cluster"; then
-    pass "1.6 VMAgent scraping bounded (toEntities: cluster)"
+# Asked of the CLUSTER, like 2.2: the object Flux applied. The file version read $REPO_ROOT/OpenAether-apps, whatever checkout
+# sits next to this one (apps 0.2.0 in a proof lab, not the ref Flux follows), so it judged nothing about the cluster, and its
+# `grep -A60 … | grep -q …` took SIGPIPE under pipefail when the match came early (red on a correct cluster: a race, measured at
+# 1 to 26 runs in 1,000 depending on load and file, every time on a long file). The answer is read into a variable and matched
+# with case: no pipe.
+if VMA_ENT="$(kubectl get cnp vmagent -n services-observability -o jsonpath='{.spec.egress[*].toEntities[*]}' 2>/dev/null)"; then
+  case " $VMA_ENT " in
+    *" cluster "*) pass "1.6 VMAgent scraping bounded (toEntities: cluster)" ;;
+    *) fail "1.6 VMAgent scraping bounded" "CNP vmagent (services-observability) has no toEntities: cluster rule on the cluster (toEntities: ${VMA_ENT:-none})" ;;
+  esac
+elif not_found cnp vmagent -n services-observability; then
+  # A skip needs two signals, as the mesh checks of section 2 do: no CNP AND no operator HelmRelease. The Namespace is declared
+  # in apps/base/namespaces, apart from the stack, so it says nothing. A cluster that runs the stack and has no CNP is a FAIL.
+  if not_found helmrelease victoria-metrics-operator -n services-observability; then
+    skip "1.6 VMAgent scraping bounded" "no CNP vmagent and no HelmRelease victoria-metrics-operator in services-observability (observability not deployed)"
   else
-    fail "1.6 VMAgent scraping bounded" "CNP VMAgent missing toEntities: cluster on scraping block"
+    fail "1.6 VMAgent scraping bounded" "CNP vmagent not found in services-observability, but the stack is there (HelmRelease victoria-metrics-operator exists or cannot be read): vmagent egress is not bounded"
   fi
 else
-  skip "1.6 VMAgent scraping bounded" "VMAgent CNP file not found"
+  fail "1.6 VMAgent scraping bounded" "cannot read CNP vmagent in services-observability"
 fi
 
 # 1.7 Fondation hors-mesh : CNP existent
@@ -192,12 +209,6 @@ header "2. ZERO-TRUST (Istio)"
 # The reduced profile (no service mesh, no Gateway) has nothing to judge here. Lab 12 (Outscale) reported 2.1, 2.2, 2.3 and 2.5
 # as failures there; they are not applicable. The mesh counts as absent only when the API SAYS so (NotFound / no such resource
 # type) for both the istio-system namespace and the istiod HelmRelease; any other answer, an error included, means "judge it".
-not_found() { # <kubectl get args…> — true when the API answers that the object or its type does not exist
-  local out
-  out="$(kubectl get "$@" -o name 2>&1)" && return 1
-  case "$out" in *NotFound* | *"not found"* | *"doesn't have a resource type"* | *"no matches for kind"*) return 0 ;; esac
-  return 1
-}
 MESH_ABSENT=0
 if not_found namespace istio-system && not_found helmrelease istiod -n foundation-service-mesh; then MESH_ABSENT=1; fi
 MESH_NA="no service mesh on this cluster (no istio-system namespace, no istiod HelmRelease): the reduced profile, not applicable"

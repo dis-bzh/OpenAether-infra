@@ -1766,6 +1766,27 @@ check("clea.toml sets min_release_age_days", isinstance(days_set, int))
 check("renovate.json5 carries the same number everywhere, so the two agree", renovate_days(cfg) is not None and agree(days_set, cfg))
 check("the default Cléa falls back to is that same number, not a third copy (unless the rule is switched off)",
       clea.DEFAULT_MIN_AGE_DAYS == days_set or days_set == 0)
+# One tool pinned in two places must arrive as ONE Renovate PR: plumber is pinned in security.yml (the action) and in
+# install-plumber.sh (the installer), `task lint` fails while they differ, and as two PRs each was red until the other
+# merged (24 red runs, 2026-10-31 to 2026-11-01). The groupName Renovate ends on is the last matching packageRule's.
+def group_of(cfg, dep):
+    known = {"matchManagers": "manager", "matchPackageNames": "name", "matchDatasources": "datasource",
+             "matchUpdateTypes": "update", "matchDepTypes": "depType"}
+    group = None
+    for r in cfg.get("packageRules", []):
+        keys = {k for k in r if k.startswith("match")}
+        if "groupName" in r and not keys <= set(known):
+            return "?"  # a matcher this does not model could change the answer: refuse to guess
+        if keys and keys <= set(known) and all(dep[known[k]] in r[k] for k in keys):
+            group = r.get("groupName", group)
+    return group
+plumber = dict(name="getplumber/plumber", update="minor")
+action = group_of(cfg, dict(plumber, manager="github-actions", datasource="github-tags", depType="action"))
+script = group_of(cfg, dict(plumber, manager="regex", datasource="github-releases", depType="regex"))
+check("the plumber action and install-plumber.sh land in ONE Renovate group (%r, %r)" % (action, script),
+      action == script and action not in (None, "?"))
+check("…and another action does not join it", group_of(cfg, dict(name="actions/checkout", update="minor", manager="github-actions",
+                                                                    datasource="github-tags", depType="action")) == "github actions")
 root = Path(os.environ["ROOT_DIR"])
 real_cfg = clea.load_config(Path(os.environ["CLEA_TOML"]))
 anchored = {a.dep for a in clea.scan_anchors(root, real_cfg["scan"]["marker"], real_cfg["scan"]["exclude"], real_cfg["scan"]["include"])[0]}

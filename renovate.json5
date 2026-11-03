@@ -86,6 +86,15 @@
       matchManagers: ["github-actions"],
       groupName: "github actions",
     },
+    // plumber is pinned twice: the action in security.yml and the installer's PLUMBER_VERSION in
+    // scripts/internal/install-plumber.sh, and `task lint` (check-version-drift.sh) fails while they differ. Two PRs
+    // (#307 and #311) were each red until the other merged: at least 24 red runs, 2026-10-31 to 2026-11-01. One
+    // group, whatever the manager, and after the "github actions" rule above so that its groupName is the one that wins.
+    {
+      description: "plumber's two pins (the security.yml action, install-plumber.sh) move together, in one PR: either alone fails `task lint`.",
+      matchPackageNames: ["getplumber/plumber"],
+      groupName: "plumber",
+    },
     {
       description: "Talos/Kubernetes gate a running cluster's control plane. Bumping is a one-node-at-a-time `task rolling-replace`, never automated — see docs/upgrade.md.",
       matchPackageNames: ["siderolabs/talos", "kubernetes/kubernetes"],

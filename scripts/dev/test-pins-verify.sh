@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# infra-verify.sh (infra #408): "Cilium and Flux run the pinned version" and "the apps ref Flux follows is git_ref".
+# infra-verify.sh (infra #408): "Cilium and Flux run the pinned version" and "the apps ref Flux follows is git_ref"; the
+# platform CNPG Clusters (0.4.0); the WAL archiving of the database-profile Clusters (infra #430); the cluster-identity
+# ConfigMap against the rendered map (infra #409).
 #
 # The real infra-verify.sh runs in a throwaway layout with a stub kubectl whose answers come from fixture files, against the REAL
 # committed artifacts. Every other section of the verifier is answered green or left unanswered (it counts as UNCHECKED, which
@@ -34,7 +36,17 @@ cat >"$W/stub" <<STUB
 #!/usr/bin/env bash
 n="\$(basename "\$0")"
 [ "\$n" = sleep ] && exit 0
+# tofu answers one question: the rendered cluster-identity map (infra #409); every other tofu call fails, as with no state.
+if [ "\$n" = tofu ]; then
+  [ "\$*" = "output -json cluster_identity" ] && [ ! -f "$FX/identity.unreadable" ] && [ -f "$FX/identity.want" ] && { cat "$FX/identity.want"; exit 0; }
+  exit 1
+fi
+# aws answers like a CLI with no credentials: the verifier's backup checks read UNCHECKED, as in CI, instead of starting the real CLI
+# (about 1 s each, twice per run: most of the cost of this file).
+if [ "\$n" = aws ]; then echo "Unable to locate credentials" >&2; exit 255; fi
 [ "\$n" = kubectl ] || exit 1
+# A kubectl that answers rc 0 but writes a warning on stderr (a deprecation notice, discovery noise): the answer on stdout is still the JSON.
+[ -f "$FX/warn.stderr" ] && echo "Warning: policy/v1beta1 PodSecurityPolicy is deprecated in v1.21+, unavailable in v1.25+" >&2
 render() {
   while read -r _ n t; do
     case "\$2" in
@@ -58,6 +70,14 @@ case "\$*" in
   "-n kube-system get daemonsets,deployments -o json") [ -f "$FX/cilium.unreadable" ] && exit 1; render "$FX/cilium.live" ds ;;
   *"gitrepositories.source.toolkit.fluxcd.io openaether -o json") [ -f "$FX/gr.unreadable" ] && exit 1; cat "$FX/gr.json" ;;
   *"kustomizations.kustomize.toolkit.fluxcd.io openaether-platform -o json") cat "$FX/ks.json" ;;
+  *"get clusters.postgresql.cnpg.io -A -l openaether.io/db-profile -o json")
+    [ -f "$FX/cnpg.nocrd" ] && { echo "error: the server doesn't have a resource type \"clusters\"" >&2; exit 1; }
+    [ -f "$FX/cnpgp.unreadable" ] && { echo "Unable to connect to the server" >&2; exit 1; }
+    cat "$FX/cnpgp.json" ;;
+  *"get configmap cluster-identity -o json")
+    [ -f "$FX/cm.missing" ] && { echo 'Error from server (NotFound): configmaps "cluster-identity" not found' >&2; exit 1; }
+    [ -f "$FX/cm.unreadable" ] && { echo "Unable to connect to the server" >&2; exit 1; }
+    cat "$FX/cm.json" ;;
   *"get clusters.postgresql.cnpg.io -l openaether.io/managed=true -o json")
     [ -f "$FX/cnpg.nocrd" ] && { echo "error: the server doesn't have a resource type \"clusters\"" >&2; exit 1; }
     [ -f "$FX/cnpg.unreadable" ] && { echo "Unable to connect to the server" >&2; exit 1; }
@@ -77,17 +97,20 @@ case "\$*" in
   *) exit 1 ;;
 esac
 STUB
-chmod +x "$W/stub"; for t in kubectl sleep; do ln -s "$W/stub" "$W/bin/$t"; done
+chmod +x "$W/stub"; for t in kubectl sleep tofu aws; do ln -s "$W/stub" "$W/bin/$t"; done
 
 mkdns() { # <replicas> <hard hostname spread: true|false> — the Deployment kube-system/coredns as the apiserver returns it
   jq -nc --argjson r "$1" --argjson h "$2" '{spec:{replicas:$r,template:{spec:(if $h then {topologySpreadConstraints:[{topologyKey:"kubernetes.io/hostname",whenUnsatisfiable:"DoNotSchedule",maxSkew:1}]} else {} end)}}}' >"$FX/coredns.json"; }
 mkop() { jq -nc --argjson r "$1" '{spec:{replicas:$r}}' >"$FX/operator.json"; }
 mkgr() { jq -nc --arg r "$1" '{spec:{ref:{name:$r}}}' >"$FX/gr.json"; }
 mkks() { jq -nc --arg r "$1" '{spec:{postBuild:{substitute:{GIT_REF:$r}}}}' >"$FX/ks.json"; }
+IDMAP='{"CLUSTER_NAME":"c-dev-stub","BACKUP_S3_BUCKET":"bkt-marker-7f3a","BACKUP_S3_ENDPOINT":"https://s3.example.invalid"}'
+mkid() { jq -nc --argjson d "$1" '{metadata:{name:"cluster-identity",namespace:"flux-system"},data:$d}' >"$FX/cm.json"; }   # <live data json>
 reset() {
   rm -rf "$FX"; mkdir -p "$FX"; cp "$W/flux.target" "$FX/flux.live"; cp "$W/cilium.target" "$FX/cilium.live"
   mkgr refs/tags/0.4.0; mkks refs/tags/0.4.0; mkdns 3 true; mkop 2
-  echo '{"items":[]}' >"$FX/cnpg.json"
+  echo '{"items":[]}' >"$FX/cnpg.json"; echo '{"items":[]}' >"$FX/cnpgp.json"
+  printf '%s' "$IDMAP" >"$FX/identity.want"; mkid "$IDMAP"
   printf 'git_ref = "refs/tags/0.4.0"\ndeploy_flux = true\ncluster_name = "c"\nenvironment = "dev"\n' >"$TFV"
   cp "$REAL_M"/{cilium.yaml,cilium-hubble-drops.yaml,flux-install.yaml} "$M/"
 }
@@ -193,6 +216,108 @@ reset; { mkcl db 3 "$SYNCB" True; mkcl app-ha 3 null False '{"openaether.io/db-p
 ! has "app-ha" && ! has "rt-x" && ok "a profile Cluster and an rt-* copy are not judged (same selection as cnpg-presync)" || bad "$(grep 'foundation-databases' "$W/out")"
 reset; mkcl db 3 null False | cnpg_fx; run local
 ! has "$CNPGH" && ok "provider local: not judged" || bad "local judged"
+
+echo "--- infra #430: the WAL archiving of the database-profile Clusters (all namespaces), red at once ---"
+PCH="The profile CNPG Clusters"
+ARCHMSG='rpc error: code = Unknown desc = unexpected failure invoking barman-cloud-wal-archive: exit status 1'
+mkpc() { # <namespace> <name> <profile> <ContinuousArchiving status|none> <age in seconds|none> <plugin|none> [message] — one profile Cluster
+  jq -nc --arg ns "$1" --arg n "$2" --arg p "$3" --arg a "$4" --arg c "$([ "$5" = none ] || date -u -d "@$(( $(date +%s) - $5 ))" +%FT%TZ)" --arg pl "$6" --arg m "${7:-}" \
+    '{metadata:{namespace:$ns, name:$n, creationTimestamp:$c, labels:{"openaether.io/managed":"true","openaether.io/db-profile":$p}},
+      spec:{instances:3, plugins:(if $pl == "plugin" then [{name:"barman-cloud.cloudnative-pg.io", isWALArchiver:true}] else [] end)},
+      status:{conditions:(if $a == "none" then [] else [{type:"ContinuousArchiving", status:$a, reason:"ContinuousArchivingFailing", message:$m}] end)}}'
+}
+pcl_fx() { jq -sc '{items: .}' >"$FX/cnpgp.json"; }
+reset; run
+! has "$PCH" && ok "no profile Cluster: the section is silent" || bad "section printed"
+reset; mkpc apps-team app-ha ha False 600 plugin "$ARCHMSG" | pcl_fx; run
+{ [ -n "$(badline 'apps-team/app-ha (profile ha): ContinuousArchiving is False')" ] && has "unexpected failure invoking barman-cloud-wal-archive: exit status 1" \
+  && has "kubectl cnpg status app-ha -n apps-team" && has "traps.md" && [ "$rc" -ne 0 ]; } \
+  && ok "a profile Cluster with ContinuousArchiving False: BAD at once, naming the Cluster and the condition message, run fails" || bad "$(grep -i 'app-ha\|profile' "$W/out")"
+reset; mkpc apps-team app-ha ha False 20 plugin "$ARCHMSG" | pcl_fx; run
+{ has "~ apps-team/app-ha (profile ha): ContinuousArchiving is False" && grep -qE 'created [0-9]+ s ago' "$W/out" && has "unexpected failure invoking barman-cloud-wal-archive" \
+  && [ -z "$(badline 'app-ha')" ] && [ -z "$(unkline 'app-ha')" ] && ! has "✓ apps-team/app-ha"; } \
+  && ok "False on a Cluster seconds old: a warning with its age and the message (a new Cluster is not archiving at second 0), never green" || bad "$(grep -i 'app-ha\|profile' "$W/out")"
+reset; { mkpc apps-team a-bad ha False none plugin "$ARCHMSG"; mkpc apps-team a-abs ha none none plugin; } | pcl_fx; run
+{ [ -n "$(badline 'apps-team/a-bad (profile ha): ContinuousArchiving is False')" ] && [ -n "$(unkline 'apps-team/a-abs (profile ha): no ContinuousArchiving condition')" ]; } \
+  && ok "an unreadable creation time never gives a grace: False is BAD, an absent condition is UNKNOWN" || bad "$(grep -i 'a-bad\|a-abs' "$W/out")"
+reset; { mkpc apps-team a-fut ha False -3600 plugin "$ARCHMSG"; mkpc apps-team b-fut ha none -3600 plugin; mkpc apps-team c-skew ha False -20 plugin "$ARCHMSG"; } | pcl_fx; run
+{ [ -n "$(badline 'apps-team/a-fut (profile ha): ContinuousArchiving is False')" ] && [ -n "$(unkline 'apps-team/b-fut (profile ha): no ContinuousArchiving condition')" ] \
+  && grep -F 'a-fut' "$W/out" | grep -qF "ahead of this machine's clock" && grep -F 'b-fut' "$W/out" | grep -qF "ahead of this machine's clock"; } \
+  && ok "a creation time far ahead of this clock (1 h): the age is unknown, so NO grace (False BAD, absent UNKNOWN), and the line says the clock is the reason" || bad "$(grep -i 'a-fut\|b-fut' "$W/out")"
+{ has "~ apps-team/c-skew (profile ha): ContinuousArchiving is False" && [ -z "$(badline 'c-skew')" ] && [ -z "$(unkline 'c-skew')" ]; } \
+  && ok "a creation time a few seconds ahead (ordinary clock skew): still a young Cluster, a warning" || bad "$(grep -i 'c-skew' "$W/out")"
+reset; mkpc apps-team app-ha ha True 600 plugin | pcl_fx; run
+{ has "✓ apps-team/app-ha (profile ha): ContinuousArchiving True" && [ -z "$(badline 'app-ha')" ] && [ -z "$(unkline 'app-ha')" ]; } && ok "ContinuousArchiving True: passes" || bad "$(grep -i 'app-ha\|profile' "$W/out")"
+reset; { mkpc team-a a-ha ha True 600 plugin; mkpc team-b b-std standard False 600 plugin "$ARCHMSG"; } | pcl_fx; run
+{ has "✓ team-a/a-ha (profile ha): ContinuousArchiving True" && [ -n "$(badline 'team-b/b-std (profile standard): ContinuousArchiving is False')" ] && [ -z "$(badline 'team-a/a-ha')" ]; } \
+  && ok "two namespaces: each Cluster judged on its own, the good one stays green" || bad "$(grep -i 'a-ha\|b-std' "$W/out")"
+reset; mkpc apps-team app-ha ha none 600 plugin | pcl_fx; run
+{ [ -n "$(unkline 'apps-team/app-ha (profile ha): no ContinuousArchiving condition')" ] && ! has "✓ apps-team/app-ha" && [ "$rc" -ne 0 ]; } \
+  && ok "archiving declared and the condition still absent after the grace: UNKNOWN, not a pass" || bad "$(grep -i 'app-ha\|profile' "$W/out")"
+reset; mkpc apps-team app-ha ha none 20 plugin | pcl_fx; run
+{ has "~ apps-team/app-ha (profile ha): no ContinuousArchiving condition yet" && [ -z "$(unkline 'app-ha')" ] && [ -z "$(badline 'app-ha')" ]; } \
+  && ok "a Cluster 20 s old that has no condition yet: a warning, not a failure" || bad "$(grep -i 'app-ha\|profile' "$W/out")"
+reset; mkpc apps-team app-light light none 600 none | pcl_fx; run
+! has "app-light" && ok "a Cluster that declares no WAL archiver (light) and has no condition: nothing to judge, no line" || bad "$(grep -i 'app-light' "$W/out")"
+reset; mkpc apps-team app-light light False 600 none "$ARCHMSG" | pcl_fx; run
+[ -n "$(badline 'apps-team/app-light (profile light): ContinuousArchiving is False')" ] && ok "a condition that IS False is BAD whatever the Cluster declares" || bad "$(grep -i 'app-light' "$W/out")"
+reset; mkpc apps-team rt-abc ha False 600 plugin "$ARCHMSG" | pcl_fx; run
+! has "rt-abc" && ok "an rt-* restore-test copy is not judged (same selection as the platform loop)" || bad "$(grep -i 'rt-abc' "$W/out")"
+reset; : >"$FX/cnpgp.unreadable"; run
+[ -n "$(unkline 'could not list the profile CNPG Clusters')" ] && [ "$rc" -ne 0 ] && ok "the profile list fails (not 'no CRD'): UNKNOWN" || bad "$(grep -i 'profile' "$W/out")"
+reset; : >"$FX/cnpg.nocrd"; run
+! has "$PCH" && ! has "could not list the profile" && ok "no CNPG CRD (a pure-infra cluster): silent, not UNKNOWN" || bad "$(grep -i 'profile' "$W/out")"
+reset; mkpc apps-team app-ha ha False 600 plugin "$ARCHMSG" | pcl_fx; run local
+! has "$PCH" && ok "provider local: not judged" || bad "local judged"
+reset; { mkcl db 3 "$SYNCB" True; } | cnpg_fx; cnpg_ok; mkpc apps-team app-ha ha False 600 plugin "$ARCHMSG" | pcl_fx; run
+{ has "✓ foundation-databases/db: ContinuousArchiving True" && [ -z "$(badline 'foundation-databases/db')" ] && [ -n "$(badline 'apps-team/app-ha')" ]; } \
+  && ok "the platform lines are unchanged beside a failing profile Cluster" || bad "$(grep -i 'foundation-databases\|app-ha' "$W/out")"
+
+echo "--- infra #409: the cluster-identity ConfigMap holds what the config renders ---"
+IDH="The cluster-identity ConfigMap"
+IDFIX="task cluster-identity-sync PROVIDER=stub ROLE=management APPLY=1"
+reset; run
+has "✓ the cluster-identity ConfigMap holds the 3 keys the config renders" && ok "in sync: passes" || bad "$(grep -i 'identity' "$W/out")"
+reset; mkid '{"CLUSTER_NAME":"c-dev-stub","BACKUP_S3_ENDPOINT":"https://s3.example.invalid"}'; run
+{ [ -n "$(badline 'the cluster-identity ConfigMap differs from the config: 1 key(s) missing or different (BACKUP_S3_BUCKET)')" ] && has "$IDFIX" && [ "$rc" -ne 0 ]; } \
+  && ok "a rendered key missing on the cluster (an older release's ConfigMap): BAD, naming the key and the command, run fails" || bad "$(grep -i 'identity' "$W/out")"
+reset; mkid '{"CLUSTER_NAME":"c-dev-stub","BACKUP_S3_BUCKET":"OTHER","BACKUP_S3_ENDPOINT":"https://s3.example.invalid"}'; run
+{ [ -n "$(badline '1 key(s) missing or different (BACKUP_S3_BUCKET)')" ] && ! has "OTHER" && ! has "bkt-marker-7f3a"; } \
+  && ok "a value that differs: BAD, and no value is printed (keys only)" || bad "$(grep -i 'identity' "$W/out")"
+reset; mkid '{"CLUSTER_NAME":"c-dev-stub","BACKUP_S3_BUCKET":"bkt-marker-7f3a","BACKUP_S3_ENDPOINT":"https://s3.example.invalid","LOCAL_ONLY":"keep"}'; run
+{ has "✓ the cluster-identity ConfigMap holds the 3 keys" && [ -z "$(badline 'cluster-identity')" ]; } \
+  && ok "a key the config does not render is not judged (the sync leaves it alone too)" || bad "$(grep -i 'identity' "$W/out")"
+reset; mkid '{}'; run
+[ -n "$(badline '3 key(s) missing or different (BACKUP_S3_BUCKET, BACKUP_S3_ENDPOINT, CLUSTER_NAME)')" ] && ok "an empty ConfigMap: all three keys named, sorted" || bad "$(grep -i 'identity' "$W/out")"
+reset; : >"$FX/cm.missing"; run
+{ [ -n "$(badline 'the cluster-identity ConfigMap does not exist although deploy_flux = true')" ] && has "docs/upgrade.md" && [ "$rc" -ne 0 ]; } \
+  && ok "no ConfigMap although Flux is on: BAD, with the pointer" || bad "$(grep -i 'identity' "$W/out")"
+reset; : >"$FX/cm.unreadable"; run
+{ [ -n "$(unkline 'could not read the ConfigMap cluster-identity')" ] && ! has "✓ the cluster-identity ConfigMap"; } && ok "the ConfigMap cannot be read: UNKNOWN, not a pass" || bad "$(grep -i 'identity' "$W/out")"
+reset; : >"$FX/identity.unreadable"; run
+{ [ -n "$(unkline 'could not read the cluster_identity output from the state')" ] && ! has "✓ the cluster-identity ConfigMap"; } && ok "the rendered map cannot be read: UNKNOWN" || bad "$(grep -i 'identity' "$W/out")"
+reset; printf '{}' >"$FX/identity.want"; run
+[ -n "$(unkline 'renders an empty cluster_identity although deploy_flux is true')" ] && ok "an empty rendered map with deploy_flux true: UNKNOWN (state and config disagree)" || bad "$(grep -i 'identity' "$W/out")"
+reset; printf 'git_ref = "refs/tags/0.4.0"\n' >"$TFV"; mkid '{}'; run
+! has "$IDH" && ok "deploy_flux not true: the identity ConfigMap is not asked for" || bad "identity checked without deploy_flux"
+reset; mkid '{}'; run local
+! has "$IDH" && ok "provider local: not judged" || bad "local judged"
+
+echo "--- infra #430 and #409: a kubectl read is JSON on stdout only (stderr noise never decides), and an unparsable answer is never green ---"
+reset; : >"$FX/warn.stderr"; mkid '{}'; mkpc apps-team app-ha ha False 600 plugin "$ARCHMSG" | pcl_fx; mkcl db 3 "$SYNCB" False | cnpg_fx; cnpg_ok; run
+{ [ -n "$(badline '3 key(s) missing or different (BACKUP_S3_BUCKET, BACKUP_S3_ENDPOINT, CLUSTER_NAME)')" ] && ! has "✓ the cluster-identity ConfigMap"; } \
+  && ok "identity: a warning on stderr with exit 0 does not turn an EMPTY ConfigMap green" || bad "$(grep -i 'identity' "$W/out")"
+[ -n "$(badline 'apps-team/app-ha (profile ha): ContinuousArchiving is False')" ] \
+  && ok "profile: a warning on stderr with exit 0 does not hide a False Cluster" || bad "$(grep -i 'app-ha\|profile' "$W/out")"
+[ -n "$(badline 'foundation-databases/db: ContinuousArchiving is False')" ] \
+  && ok "platform: a warning on stderr with exit 0 does not hide a False Cluster" || bad "$(grep -i 'foundation-databases' "$W/out")"
+reset; echo 'this is not json' >"$FX/cm.json"; echo 'nor is this' >"$FX/cnpgp.json"; echo 'nor this' >"$FX/cnpg.json"; run
+{ [ -n "$(unkline 'could not read the ConfigMap cluster-identity')" ] && ! has "✓ the cluster-identity ConfigMap"; } \
+  && ok "identity: an answer that is not JSON: UNKNOWN, not a pass" || bad "$(grep -i 'identity' "$W/out")"
+[ -n "$(unkline 'could not list the profile CNPG Clusters')" ] \
+  && ok "profile: an answer that is not JSON: UNKNOWN, not silence" || bad "$(grep -i 'profile' "$W/out")"
+[ -n "$(unkline 'could not list the CNPG Clusters of foundation-databases')" ] \
+  && ok "platform: an answer that is not JSON: UNKNOWN, not silence" || bad "$(grep -i 'foundation-databases' "$W/out")"
 
 echo "--- K2 (lab 26): CoreDNS runs the declared replica count and spread, both directions ---"
 reset; run

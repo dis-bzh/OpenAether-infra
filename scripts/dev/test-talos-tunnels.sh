@@ -17,6 +17,7 @@ TUN="$W/scripts/bootstrap/talos-tunnels.sh"
 # Does not trust the pidfile or `close`: a regression in what they can find is what this must survive. The stub
 # also ends itself after 3 minutes, for a harness that was killed before it got here.
 cleanup() {
+  local h; for h in $(cat "$W/holders" 2>/dev/null); do [[ "$(ps -o args= -p "$h" 2>/dev/null)" == *"$W/held."* ]] && kill "$h" 2>/dev/null; done
   (cd "$W/cluster" && "$TUN" close . >/dev/null 2>&1)
   local p; for p in $(awk '{ print $1 }' "$W/ident" 2>/dev/null); do
     [[ "$(ps -o args= -p "$p" 2>/dev/null)" == *"$W/bin/ssh-stub.py"* ]] && kill "$p" 2>/dev/null
@@ -93,15 +94,16 @@ STUB
 chmod +x "$W"/bin/ssh "$W"/bin/tofu; : >"$W/key"; : >"$W/key2"
 export PATH="$W/bin:$PATH" SSH_KEY="$W/key" IDENT="$W/ident" BLIND="$W/blind" BASTION_WAIT=5
 # Clear of the 50000-50199 default block, per-process (a second run cannot collide with this one), and moved on past
-# any port something else holds.
-busy() { nc -z 127.0.0.1 "$1" 2>/dev/null; }
+# any port something else holds. By a bind, as ssh does it: `nc -z` cannot see a port held as the SOURCE port of someone's
+# connection (#431), which refuses exactly like a free one.
+busy() { ! python3 -c 'import socket, sys; s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("127.0.0.1", int(sys.argv[1])))' "$1" 2>/dev/null; }
 OFF=$(( 1000 + ($$ % 40) * 200 ))
 while busy $((50000 + OFF)) || busy $((50001 + OFF)) || busy $((50100 + OFF)) || busy $((6443 + OFF)); do OFF=$((OFF + 200)); done
 export TALOS_TUNNEL_OFFSET=$OFF
 P0=$((50000 + TALOS_TUNNEL_OFFSET)); P1=$((P0 + 1)); PW=$((50100 + TALOS_TUNNEL_OFFSET)); PA=$((6443 + TALOS_TUNNEL_OFFSET))
 LOGS=("$P0" "$P1" "$PW" "$PA")
 up() { local n=0 p; for p in "${LOGS[@]}"; do nc -z 127.0.0.1 "$p" 2>/dev/null && n=$((n + 1)); done; echo "$n"; }
-log() { echo "$W/cluster/.talos-tunnel-$1.log"; }
+log() { echo "${CLD:-$W/cluster}/.talos-tunnel-$1.log"; }
 pid_of() { awk -v p="$1" '$2 == p { x = $1 } END { print x }' "$W/ident"; }
 # <pattern> in every control plane, worker and API log?
 in_all_logs() { local p; for p in "${LOGS[@]}"; do grep -q -- "$1" "$(log "$p")" 2>/dev/null || return 1; done; }
@@ -185,11 +187,16 @@ done
   && ok "two simultaneous opens: all 4 listening, every ssh's transcript is in its log, none torn" \
   || bad "concurrent opens: up=$(up) torn=${TORN}; $(cat "$(log "$P0")" 2>/dev/null)"
 
+SP1=$(grep -c ' spawn :' "$(log "$P1")")
 OUT="$(cd "$W/cluster" && STUB_FAIL_PORT="$P1 $PA" tun open . 2>&1)"; RC=$?
 { [ "$RC" = 1 ] && grep -q '2/4 tunnels up' <<<"$OUT" && grep -qE ":${P1}  .*Permission denied" <<<"$OUT" \
   && grep -qE ":${PA}  .*Permission denied" <<<"$OUT" && ! grep -qE ":(${P0}|${PW})  " <<<"$OUT"; } \
   && ok "open that finds 2/4: exits 1 and quotes the log of each failed port (the API one too), only those" \
   || bad "short open (rc ${RC}): ${OUT}"
+# Only "Address already in use" is retried (#422): a refused key is not a race, and a second try would only hide it.
+[ "$(grep -c ' spawn :' "$(log "$P1")")" = $((SP1 + 1)) ] \
+  && ok "…and a refusal other than a busy port is spawned once, not retried" \
+  || bad "a failure that is not a busy port was retried: $(grep -c ' spawn :' "$(log "$P1")") spawns, was $SP1"
 
 (cd "$W/cluster" && "$TUN" close . >/dev/null 2>&1); sleep 1
 { [ "$(up)" = 0 ] && in_all_logs 'Authenticated to stub'; } \
@@ -276,6 +283,125 @@ close_all
 OUT="$(cd "$W/cluster" && STUB_HOSTKEY="$K2" OA_BASTION_PIN_HOSTKEY=1 "$TUN" open-direct --bastion 203.0.113.10 --user ops --cps 10.0.0.11 --key "$W/key" 2>&1)"; RC=$?
 { [ "$RC" = 1 ] && [ "$(up)" = 0 ] && grep -q 'NOT the one pinned' <<<"$OUT"; } && ok "open-direct refuses a changed key too" || bad "open-direct changed key (rc ${RC}, up=$(up)): $OUT"
 rm -f "$KH"
+
+echo "=== a port held as the source port of someone's connection is retried, not given up on (#422, #431) ==="
+# Lab 28B: ssh could not bind :52100 although nothing listened on it, because the host's own 1 Hz probe used it as the
+# source port of its outgoing connection. The holder does the same to a port of the block: bound by a connected socket
+# that sets no SO_REUSEADDR, so a bind fails, `nc -z` says "refused" like a free port, and it lets go only when killed.
+# Three cases, run AT THE SAME TIME, each with a block of ports nothing has used (a port the stub served has a TIME_WAIT behind
+# it, which holds the holder's bind off for a minute) and a cluster directory of its own (its pidfile): the 4 s the script
+# gives ssh to connect and the pauses of the retries are then waited once, not three times.
+hold() { # <port>: HOLDER = a process that has taken it
+  local m="$W/held.$1"; rm -f "$m"
+  python3 - "$1" "$m" <<'PY' &
+import socket, sys, time
+lst = socket.socket(); lst.bind(("127.0.0.1", 0)); lst.listen(1)
+c = socket.socket(); c.bind(("127.0.0.1", int(sys.argv[1]))); c.connect(lst.getsockname())
+open(sys.argv[2], "w").close(); time.sleep(120)
+PY
+  HOLDER=$!; echo "$HOLDER" >>"$W/holders"
+  until [ -e "$m" ] || ! kill -0 "$HOLDER" 2>/dev/null; do sleep 0.1; done
+  [ -e "$m" ] || { bad "the holder could not take :$1"; return 1; }
+}
+count_in() { local n; n="$(awk -v re="$1" '$0 ~ re { n++ } END { print n + 0 }' "$2" 2>/dev/null)"; echo "${n:-0}"; }
+spawns() { count_in ' spawn :' "$1"; }
+release_after() { # <log> <n>: lets the port go once ssh has been told "Address already in use" n times
+  local _; for _ in $(seq 1 150); do [ "$(count_in 'Address already in use' "$1")" -ge "$2" ] && break; sleep 0.2; done
+  kill "$HOLDER"; wait "$HOLDER" 2>/dev/null
+}
+next_block() { OFF=$((OFF + 200)); while busy $((50000 + OFF)) || busy $((50001 + OFF)) || busy $((50100 + OFF)) || busy $((6443 + OFF)); do OFF=$((OFF + 200)); done; }
+# <name> <function> <offset>: the function in a subshell of its own, on that block; its verdicts are kept in a file and replayed below
+start_case() {
+  (
+    RES="$W/res.$1"; CLD="$W/cl-$1"; mkdir -p "$CLD"; export TALOS_TUNNEL_OFFSET=$3
+    ok() { printf 'ok %s\n' "${*//$'\n'/ }" >>"$RES"; }; bad() { printf 'bad %s\n' "${*//$'\n'/ }" >>"$RES"; }
+    P0=$((50000 + $3)); P1=$((P0 + 1)); PW=$((50100 + $3)); PA=$((6443 + $3)); LOGS=("$P0" "$P1" "$PW" "$PA")
+    "$2"
+  ) &
+  CASE_PIDS+=($!)
+}
+export OA_TUNNEL_BIND_PAUSE=1
+
+case_open_released() { # a busy port lets go after two refusals: ONE invocation ends rc 0
+  hold "$P0" || return
+  (cd "$CLD" && tun open . >"$CLD/out" 2>&1; echo $? >"$CLD/rc") &
+  local opener=$!
+  release_after "$(log "$P0")" 2   # lost the first try and the first retry: it goes on until the port is free
+  wait "$opener"
+  local rc pids_ok=1 pid
+  rc="$(cat "$CLD/rc" 2>/dev/null)"
+  for pid in $(awk -v ports="${LOGS[*]}" 'BEGIN { n = split(ports, a, " "); for (i = 1; i <= n; i++) s[a[i]] = 1 } $2 in s { print $1 }' "$W/ident"); do
+    grep -qx "$pid" "$CLD/.talos-tunnels.pids" || pids_ok=0
+  done
+  { [ "$rc" = 0 ] && [ "$(up)" = 4 ] && grep -q '4/4 tunnels up' "$CLD/out" && [ "$(grep -c 'tunnels up' "$CLD/out")" = 1 ] \
+    && [ "$(spawns "$(log "$P0")")" -ge 3 ] && [ "$(spawns "$(log "$P1")")" = 1 ] && [ "$(spawns "$(log "$PW")")" = 1 ] \
+    && [ "$(spawns "$(log "$PA")")" = 1 ] && grep -q ":${P0}" "$CLD/out" && [ "$pids_ok" = 1 ]; } \
+    && ok "open: :${P0} lost its bind twice, was respawned alone until the port was free, and ONE invocation ends rc 0 with 4/4 up" \
+    || bad "open with a busy port (rc ${rc:-none}, up=$(up), spawns $(spawns "$(log "$P0")")/$(spawns "$(log "$P1")"), pids ok=${pids_ok}): $(cat "$CLD/out")"
+}
+case_open_held() { # a port that never frees: the retries stop at OA_TUNNEL_BIND_RETRIES and the way out is printed
+  hold "$P0" || return
+  local out rc want
+  echo "22,8000-8010" >"$CLD/reserved"   # what the machine reserves already (OA_RESERVED_PORTS_FILE stands in for /proc/sys/net/ipv4/ip_local_reserved_ports)
+  out="$(cd "$CLD" && OA_TUNNEL_BIND_RETRIES=1 OA_RESERVED_PORTS_FILE="$CLD/reserved" tun open . 2>&1)"; rc=$?
+  { [ "$rc" = 1 ] && grep -q '3/4 tunnels up' <<<"$out" && [ "$(spawns "$(log "$P0")")" = 2 ] && [ "$(spawns "$(log "$P1")")" = 1 ] \
+    && grep -qE ":${P0}  .*Address already in use" <<<"$out"; } \
+    && ok "a port that never frees: 1 try + 1 retry (OA_TUNNEL_BIND_RETRIES), then rc 1 naming the port and its ssh's words" \
+    || bad "a port held for good (rc ${rc}, spawns $(spawns "$(log "$P0")")): ${out}"
+  # The sysctl advice: -w REPLACES the list, so what is reserved now comes first, and it is lost at a reboot.
+  want="sudo sysctl -w net.ipv4.ip_local_reserved_ports=22,8000-8010,${P0}-$((PW + 99))"
+  { grep -qF -- "$want" <<<"$out" && grep -qi 'replaces' <<<"$out" && grep -q 'reboot' <<<"$out" && grep -q '/etc/sysctl.d' <<<"$out"; } \
+    && ok "…and the advice keeps the reserved ports that are there (it does not replace them), says it does not survive a reboot, and where to keep it" \
+    || bad "the sysctl advice is missing, would replace the reserved ports or hides the reboot (wanted '${want}'): ${out}"
+  # A file of /etc/sysctl.d/ that already sets the key and is read after the new one would win at boot and drop the block.
+  { grep -q 'already sets' <<<"$out" && grep -q 'ip_local_reserved_ports /etc/sysctl.conf /etc/sysctl.d' <<<"$out"; } \
+    && ok "…and tells to change the line a sysctl file already holds, not to add another one that may be read first" \
+    || bad "the advice does not mention an existing sysctl.d setting: ${out}"
+}
+case_direct_released() { # open-direct takes the same retry
+  hold "$P0" || return
+  (cd "$CLD" && tun open-direct --bastion 203.0.113.10 --user ops --cps 10.0.0.11,10.0.0.12 --workers 10.0.0.21 --key "$W/key" \
+    >"$CLD/out" 2>&1; echo $? >"$CLD/rc") &
+  local opener=$! dlog="$CLD/.talos-tunnel-direct"
+  release_after "${dlog}-${P0}.log" 1
+  wait "$opener"
+  { [ "$(cat "$CLD/rc")" = 0 ] && grep -q '3/3 tunnels up' "$CLD/out" \
+    && [ "$(spawns "${dlog}-${P0}.log")" -ge 2 ] && [ "$(spawns "${dlog}-${PW}.log")" = 1 ]; } \
+    && ok "open-direct takes the same retry: 3/3 up in one invocation" \
+    || bad "open-direct with a busy port (rc $(cat "$CLD/rc")): $(cat "$CLD/out")"
+}
+rm -f "$W/holders"; CASE_PIDS=()
+next_block; B1=$OFF; next_block; B2=$OFF; next_block; B3=$OFF
+start_case open_released case_open_released "$B1"
+start_case open_held case_open_held "$B2"
+start_case direct_released case_direct_released "$B3"
+wait "${CASE_PIDS[@]}"
+for n in open_released open_held direct_released; do
+  [ -s "$W/res.$n" ] || bad "the case $n gave no verdict"
+  while IFS= read -r l; do if [[ "$l" == "ok "* ]]; then ok "${l#ok }"; else bad "${l#bad }"; fi; done <"$W/res.$n" 2>/dev/null
+done
+unset OA_TUNNEL_BIND_PAUSE
+for n in open_released open_held direct_released; do (cd "$W/cl-$n" && "$TUN" close . >/dev/null 2>&1); done
+
+# clash_hint on its own, for the file it cannot read (the real flow above covers a readable list): its text is cut out of the
+# script under test and called with the bind check stubbed, so it costs nothing.
+HINT_FN="$(awk '/^clash_hint\(\)/ { c = 1 } c { print } c && /^}/ { exit }' "$SUT")"
+hint() { # <reserved-ports file>: what clash_hint says for a port that stays busy
+  ( CP_BASE=50000 WK_BASE=50100; bind_clashed() { return 0; }; eval "$HINT_FN"; OA_RESERVED_PORTS_FILE="$1" clash_hint 50000 ) 2>&1
+}
+out="$(hint "$W/no-such-file")"
+# No command may be printed that replaces the list with the block alone, and the list must not be called "none" either:
+# the way out is to read it first and append.
+{ grep -q 'could not be read' <<<"$out" && grep -qF 'cat /proc/sys/net/ipv4/ip_local_reserved_ports' <<<"$out" \
+  && grep -qi 'append' <<<"$out" && grep -q 'reboot' <<<"$out" && grep -q 'already sets' <<<"$out" \
+  && ! grep -qF 'ip_local_reserved_ports=50000-' <<<"$out" && ! grep -q '(none)' <<<"$out"; } \
+  && ok "an unreadable reserved-ports file: says so and gives read-then-append, no command that replaces the list with the block alone" \
+  || bad "unreadable reserved-ports file: the advice would replace the list, calls it none, or is silent: ${out}"
+: >"$W/empty-reserved"
+out="$(hint "$W/empty-reserved")"
+{ grep -qF 'sudo sysctl -w net.ipv4.ip_local_reserved_ports=50000-50199' <<<"$out" && ! grep -q 'could not be read' <<<"$out"; } \
+  && ok "a readable but empty reserved-ports file: nothing is reserved, the block alone is the right value and is printed" \
+  || bad "an empty reserved-ports file was read as unreadable, or the block is missing: ${out}"
 
 # The Terraform side (SCC/F17): the local-exec of terraform_data.talos_tunnels hands its values over as environment
 # variables. Its real command is cut out of cluster/main.tf and run against a stub script that records argv, with values a
