@@ -10,8 +10,8 @@ FAKE_*     failure injections: FAKE_FAIL_SECRET=1 (the seal key Secret is refuse
            NotFound), FAKE_JOB_PATCH_FAIL=1 (patching a Job is refused)
            FAKE_BAO_NOLEADER=<pod> (that OpenBao standby knows no active node until its pod is deleted), FAKE_BAO_STUCK=1 (...not even then),
            FAKE_BAO_NOANSWER=<pod> (that pod does not answer exec)
-           FAKE_CILIUM=stuck|stuck-forever|slow (the Cilium rollout does not finish: an agent stuck Terminating, which a force-delete frees / which is
-           replaced by one that does not come up / no pod Terminating at all)
+           FAKE_CILIUM=stuck|stuck-forever|slow (the Cilium rollout does not finish: an agent stuck Terminating, which a force-delete frees / which
+           stays Terminating, or is replaced by another that does / no pod Terminating at all)
            Grafana: a pg_restore into grafana-db after the Kustomization observability was resumed fails with the three dependency errors of lab 28B
 Secrets are never written to calls.log: stdin is summarised (a length), --from-file contents are not copied there.
 """
@@ -65,6 +65,10 @@ def f(*p):
 
 def opt(flag):
     return a[a.index(flag) + 1] if flag in a else None
+
+
+def patched():  # "<kustomization> suspend|resume", one per patch so far
+    return get(f("patches.log")).splitlines() if os.path.exists(f("patches.log")) else []
 
 
 if "get --raw=/readyz" in A:
@@ -151,8 +155,17 @@ if a[:3] == ["-n", "foundation-vault", "exec"] and a[3:4] and a[3].startswith("o
     leader = "" if none else "https://openbao-1.openbao-internal.foundation-vault.svc:8200"
     out(json.dumps({"request_id": "", "lease_id": "", "lease_duration": 0, "renewable": False, "warnings": None,
                     "data": {"ha_enabled": True, "is_self": False, "leader_address": leader, "leader_cluster_address": leader.replace("8200", "8201")}}, indent=2))
+LATE_ES = ["grafana-admin", "grafana-db-credentials", "grafana-oidc", "loki-s3-credentials"]
 if a[:2] == ["get", "externalsecret"]:
-    out("ns es True\n" * 3)
+    rows = "ns es True\n" * 3
+    if "observability resume" in patched():  # Grafana's and Loki's ExternalSecrets are created by the Kustomization (infra #426: late)
+        mode = os.environ.get("FAKE_ES_LATE", "")
+        n = int(get(f("es-polls")) or 0) if os.path.exists(f("es-polls")) else 0
+        put(f("es-polls"), str(n + 1))
+        for name in LATE_ES:
+            ready = not ((mode == "bad" and name == "grafana-oidc") or (mode.startswith("slow:") and n < int(mode[5:])))
+            rows += f"services-observability {name} ClusterSecretStore openbao 1h " + ("SecretSynced True\n" if ready else "SecretSyncedError False\n")
+    out(rows)
 if "get ds cilium" in A:
     out("daemonset.apps/cilium\n")
 # FAKE_CILIUM=stuck: one agent pod is Terminating until it is force-deleted, the rollout cannot finish before; stuck-forever: the replacement does not come up
@@ -163,7 +176,8 @@ if a[:3] == ["-n", "kube-system", "delete"] and "pod" in a:
     put(f("cilium-forced"), a[a.index("pod") + 1] + "\n", "a")
     sys.exit(0)
 if "get pods -l k8s-app=cilium" in A:
-    rows = "cilium-aaaaa 1/1 Running 0 9m\n" + ("cilium-bbbbb 1/1 Terminating 0 9m\n" if cilium.startswith("stuck") and not forced else "")
+    stuck = cilium == "stuck-forever" or (cilium == "stuck" and not forced)  # stuck-forever: the pod is still Terminating after the force-delete
+    rows = "cilium-aaaaa 1/1 Running 0 9m\n" + ("cilium-bbbbb 1/1 Terminating 0 9m\n" if stuck else "")
     out(rows)
 if "rollout status ds/cilium" in A and (cilium == "slow" or cilium == "stuck-forever" or (cilium == "stuck" and not forced)):
     sys.stderr.write("error: timed out waiting for the condition\n")
@@ -198,8 +212,7 @@ if "exec" in a and "pg_restore" in a:
     i = a.index("exec") + 1
     pod = a[i + 1] if a[i] == "-i" else a[i]
     put(f("pg_restore.log"), f"{pod} bytes={len(data)}\n", "a")
-    resumed = get(f("patches.log")).splitlines() if os.path.exists(f("patches.log")) else []
-    if "-d grafana" in A and "observability resume" in resumed:
+    if "-d grafana" in A and "observability resume" in patched():
         # Grafana was resumed before the load: it created its schema in the empty database (lab 28B, infra #426)
         sys.stderr.write('pg_restore: error: could not execute query: ERROR:  cannot drop sequence short_url_id_seq because other objects depend on it\n'
                          'pg_restore: error: could not execute query: ERROR:  relation "short_url_id_seq" already exists\n'
@@ -228,6 +241,9 @@ def jobs():
 
 
 if "create job --from=cronjob/" in A:
+    if os.environ.get("FAKE_JOB_CREATE_FAIL") == a[-1]:
+        sys.stderr.write("Error from server (Forbidden): jobs.batch is forbidden\n")
+        sys.exit(1)
     j = jobs()
     j[a[-1]] = {"owned": True}  # a Job made from a CronJob is owned by it, and its history limit prunes the finished ones
     put_json(f("jobs.json"), j)
@@ -247,6 +263,8 @@ if "delete job" in A:
         j.pop(n, None)
     put_json(f("jobs.json"), j)
     sys.exit(0)
+if os.environ.get("FAKE_KUBECTL_WARN") and a[:4] == ["-n", "foundation-databases", "get", "job"]:
+    sys.stderr.write("Warning: the client is older than the server (a warning only: the command succeeds)\n")
 if a[:5] == ["-n", "foundation-databases", "get", "job", "dr-replicate"] or a[:5] == ["-n", "foundation-databases", "get", "job", "dr-check"]:
     j = jobs()
     # FAKE_CRON_PRUNE=1: the next scheduled run of the CronJob has finished and pruned every Job it still owns (lab 28B, infra #427);

@@ -122,7 +122,7 @@ chk "it says it is a dry-run and that nothing ran" "grep -q 'MODE: DRY-RUN' '$TM
 chk "nothing was run: no stub was called, no directory created" "[ ! -s '$FAKE_DR/calls.log' ] && [ ! -e '$OUTD' ]"
 chk "the targets and the RTO are stated, with the RPO of each data set" "grep -q '480 min RTO' '$TMP/stdout' && grep -q 'RPO' '$TMP/stdout'"
 chk "the report table has every step as dry-run" "[ \"\$(grep -c ' dry-run ' '$TMP/stdout')\" = 12 ]"
-chk "the dry-run says Grafana (observability) waits for the databases like identity does (infra #426)" "grep -q 'except identity\* and observability' '$TMP/stdout'"
+chk "the dry-run says Grafana (observability) waits for the databases like identity does, and that its ExternalSecrets are read in the identity step (infra #426)" "grep -q 'except identity\* and observability' '$TMP/stdout' && grep -q 'every ExternalSecret is Ready (those of observability exist only from here on)' '$TMP/stdout'"
 run "${ALL[@]}" --from replica
 chk "--from replica reads the -backup bucket on the replica endpoint with the replica store's keys" "grep -q 's3:https://s3.gra.io.cloud.ovh.net/s3-oa-zz-scaleway-backups-prod-backup/oa-test-prod-scaleway/openbao' '$TMP/stdout'"
 
@@ -249,11 +249,20 @@ new; FAKE_JOB_GONE=dr-check run "${ALL[@]}" --execute --confirm oa-test --only v
 chk "...and so does a restore-test Job that is gone" "[ $RC = 1 ] && grep -q 'dr-check is gone (NotFound)' '$TMP/stdout' && [ \"\$(calls | grep -c 'get job dr-check .*succeeded')\" = 1 ]"
 new; FAKE_JOB_PATCH_FAIL=1 run "${ALL[@]}" --execute --confirm oa-test --only verify
 chk "a refused patch is a warning, not a stop: the Job may still be pruned, which the NotFound read above then names" "[ $RC = 0 ] && grep -q 'could not remove the owner reference of the Job dr-replicate' '$TMP/stderr'"
+new; FAKE_KUBECTL_WARN=1 run "${ALL[@]}" --execute --confirm oa-test --only verify
+chk "a warning that kubectl prints on stderr next to a good answer does not hide the Job's success" "[ $RC = 0 ] && grep -q '✓ verify done' '$TMP/stdout'"
+new; FAKE_JOB_CREATE_FAIL=dr-replicate run "${ALL[@]}" --execute --confirm oa-test --only verify
+chk "a Job that cannot be created fails the step at once with that cause (errexit is off inside prove_new_archive), and nothing is waited for" "[ $RC = 1 ] && grep -q 'could not create the Job dr-replicate' '$TMP/stdout' '$TMP/stderr' && ! calls | grep -q 'get job dr-replicate' && ! calls | grep -q 'dr-check'"
 
 new; mkdir -p "$OUTD/work"; printf 'cnpg\nidentity\nobservability\n' >"$OUTD/work/held.txt"; FAKE_KS_SLOW=4 run "${ALL[@]}" --execute --confirm oa-test --only identity
 chk "the identity step waits for the DAG twice as long as the other waits (30 min of the 15): observability converges in it since #426" "[ $RC = 0 ]"
 new; mkdir -p "$OUTD/work"; printf 'cnpg\nidentity\nobservability\n' >"$OUTD/work/held.txt"; FAKE_KS_SLOW=99 run "${ALL[@]}" --execute --confirm oa-test --only identity
 chk "...and still not for ever: a Kustomization that never gets Ready fails the step" "[ $RC = 1 ] && grep -q 'Kustomizations are not Ready' '$TMP/stdout'"
+
+new; FAKE_ES_LATE=bad run "${ALL[@]}" --execute --confirm oa-test
+chk "an ExternalSecret of observability that never syncs is not seen by resume (it does not exist yet) but stops the identity step, and verify does not run (the coverage #426 moved)" "[ $RC = 1 ] && grep -q '✓ resume done' '$TMP/stdout' && grep -q '✗ identity FAILED' '$TMP/stdout' && grep -q '1 of 7 ExternalSecrets are not Ready' '$TMP/stdout' && ! calls | grep -q 'task cluster-verify'"
+new; mkdir -p "$OUTD/work"; printf 'cnpg\nidentity\nobservability\n' >"$OUTD/work/held.txt"; FAKE_ES_LATE=slow:4 run "${ALL[@]}" --execute --confirm oa-test --only identity
+chk "...but ExternalSecrets that are only slow to sync (NotReady for the first polls) are waited for" "[ $RC = 0 ]"
 
 echo "=== OpenBao standbys after the raft restore (apps #184) ==="
 dels() { sort "$FAKE_DR/state/pods-deleted.log" 2>/dev/null | tr '\n' ' '; }
@@ -300,7 +309,7 @@ chk "...and when the rollout finishes nothing is force-deleted" "[ \"\$(calls | 
 new; FAKE_ETCD_SIZE=8224 FAKE_CILIUM=stuck run "${ALL[@]}" --scenario etcd --execute --confirm oa-test
 chk "a Cilium agent stuck Terminating (lab 28B) is force-deleted once after the first 300 s, the wait is repeated once, and the step passes (infra #428)" "[ $RC = 0 ] && [ \"\$(calls | grep -c 'delete pod cilium-bbbbb --grace-period=0 --force')\" = 1 ] && [ \"\$(calls | grep -c 'rollout status ds/cilium --timeout=300s')\" = 2 ] && grep -q 'cilium-bbbbb is stuck Terminating' '$TMP/stdout'"
 new; FAKE_ETCD_SIZE=8224 FAKE_CILIUM=stuck-forever run "${ALL[@]}" --scenario etcd --execute --confirm oa-test
-chk "...but only once: an agent that does not come back after that stops the chain, naming the recipe" "[ $RC = 1 ] && [ \"\$(calls | grep -c 'delete pod cilium')\" = 1 ] && grep -q 'did not come back' '$TMP/stdout' && grep -q 'disaster-recovery.md' '$TMP/stdout'"
+chk "...but only once, though the pod is still listed Terminating after the force-delete: one delete, two waits, then the chain stops naming the recipe" "[ $RC = 1 ] && [ \"\$(calls | grep -c 'delete pod cilium')\" = 1 ] && [ \"\$(calls | grep -c 'rollout status ds/cilium --timeout=300s')\" = 2 ] && grep -q 'did not come back' '$TMP/stdout' && grep -q 'disaster-recovery.md' '$TMP/stdout'"
 new; FAKE_ETCD_SIZE=8224 FAKE_CILIUM=slow run "${ALL[@]}" --scenario etcd --execute --confirm oa-test
 chk "a rollout that is merely slow (no pod Terminating) fails after the bound and deletes nothing" "[ $RC = 1 ] && ! calls | grep -q 'delete pod' && grep -q 'did not come back' '$TMP/stdout'"
 new; FAKE_ETCD_SIZE=1000 run "${ALL[@]}" --scenario etcd --execute --confirm oa-test

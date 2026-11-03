@@ -113,7 +113,7 @@ declare -A TITLE=(
   [shares]="The source cluster's recovery shares back"
   [resume]="Resume the held Kustomizations except identity* and observability (Grafana); External Secrets rebuilds every Secret from the restored OpenBao"
   [dbs]="Databases: restore into the empty Clusters (${DBSRC}${PITR:+ to $PITR})"
-  [identity]="Resume identity and observability (Grafana), now that the databases are loaded; wait for the whole DAG"
+  [identity]="Resume identity and observability (Grafana), now that the databases are loaded; wait for the whole DAG and every ExternalSecret"
   [verify]="Verify: cluster-verify, a base backup of the new archive and its copy to the replica store, a restore test on the rebuilt cluster"
   [etcd-fetch]="etcd snapshot: restic restore of the newest one from the ${STORE} store"
   [etcd-recover]="talosctl bootstrap --recover-from on the control plane that lost its etcd"
@@ -230,7 +230,7 @@ show_dbs() {
   fi
   say "  check: the canary chain of each restored database is intact and its newest row is dated; the scratch Clusters are removed"
 }
-show_identity() { say "  \$ kubectl -n flux-system patch kustomization <identity*, observability, then the rest> --type merge -p '{\"spec\":{\"suspend\":false}}'"; say "  check: no Kustomization is NotReady within 30 minutes"; }
+show_identity() { say "  \$ kubectl -n flux-system patch kustomization <identity*, observability, then the rest> --type merge -p '{\"spec\":{\"suspend\":false}}'"; say "  check: no Kustomization is NotReady and every ExternalSecret is Ready (those of observability exist only from here on) within 30 minutes"; }
 show_verify() {
   say "  \$ $TASK cluster-verify PROVIDER=$PROVIDER ROLE=$ROLE"
   say "  \$ kubectl -n foundation-databases create job --from=cronjob/cnpg-store-replicate dr-replicate ; the same for cnpg-recovery-restore-test (dr-check)"
@@ -509,11 +509,14 @@ resume_list() { # held names; $1 = only|except the late group
 }
 unsuspend() { local n; while read -r n; do [ -z "$n" ] || K -n flux-system patch kustomization "$n" --type merge -p '{"spec":{"suspend":false}}' >/dev/null; done; }
 run_resume() { resume_list except | unsuspend; }
+es_state() { # "<ExternalSecrets not Ready> <ExternalSecrets in all namespaces>"
+  K get externalsecret -A --no-headers 2>/dev/null | awk '{ n++ } $0 !~ /True/ { b++ } END { print b + 0, n + 0 }'
+}
 check_resume() {
-  local bad
+  local bad all
   for _ in $(seq 1 "${OA_DR_WAIT_TRIES:-90}"); do
-    bad="$(K get externalsecret -A --no-headers 2>/dev/null | awk '$0 !~ /True/' | wc -l)"
-    [ "$bad" -eq 0 ] && [ "$(K get externalsecret -A --no-headers 2>/dev/null | wc -l)" -gt 0 ] && return 0
+    read -r bad all <<<"$(es_state)"
+    [ "$bad" -eq 0 ] && [ "$all" -gt 0 ] && return 0
     sleep "${OA_DR_POLL:-10}"
   done
   echo "$bad ExternalSecrets are not Ready"; return 1
@@ -611,14 +614,17 @@ check_dbs() {
 
 run_identity() { resume_list only | unsuspend; }
 check_identity() {
-  local bad
-  # twice the usual wait (30 min, the step's target): observability, held until the databases were loaded, converges in this step (#426)
+  local bad esbad esall
+  # Twice the usual wait (30 min, the step's target): observability, held until the databases were loaded, converges in this step (#426).
+  # Its Kustomization has wait: false, so Ready says nothing about its ExternalSecrets (Grafana's, Loki's, Alertmanager's), which did not exist
+  # when step resume checked them: they are checked here, with every other ExternalSecret.
   for _ in $(seq 1 $((${OA_DR_WAIT_TRIES:-90} * 2))); do
     bad="$(K -n flux-system get kustomization --no-headers 2>/dev/null | awk '$0 !~ /True/' | wc -l)"
-    [ "$bad" -eq 0 ] && return 0
+    read -r esbad esall <<<"$(es_state)"
+    [ "$bad" -eq 0 ] && [ "$esbad" -eq 0 ] && [ "$esall" -gt 0 ] && return 0
     sleep "${OA_DR_POLL:-10}"
   done
-  echo "$bad Kustomizations are not Ready"; return 1
+  echo "$bad Kustomizations are not Ready; $esbad of $esall ExternalSecrets are not Ready (kubectl get externalsecret -A)"; return 1
 }
 
 # The new archive generation starts empty: give it a base backup, force the segment that holds it into the archive (an idle database
@@ -633,15 +639,17 @@ archiving_true() { [ "$(K -n foundation-databases get clusters.postgresql.cnpg.i
 # A Job made with `kubectl create job --from=cronjob/...` is owned by the CronJob, and the CronJob deletes the finished Jobs beyond its history
 # limit (successfulJobsHistoryLimit 1): the next scheduled run removed dr-replicate while the step still waited for it, 900 s of "NotFound"
 # (lab 28B, infra #427). The chain's own Jobs belong to nobody; the null removes the field whether it is there or not.
-job_from_cronjob() { # <cronjob> <job>
-  K -n foundation-databases create job --from="cronjob/$1" "$2" >/dev/null
+job_from_cronjob() { # <cronjob> <job>; callers add `|| return 1` where errexit is off (prove_new_archive is called that way)
+  K -n foundation-databases create job --from="cronjob/$1" "$2" >/dev/null || { echo "could not create the Job $2 from cronjob/$1 (kubectl said no)"; return 1; }
   K -n foundation-databases patch job "$2" --type merge -p '{"metadata":{"ownerReferences":null}}' >/dev/null \
     || echo "  (warning: could not remove the owner reference of the Job $2: the CronJob may prune it)" >&2
 }
 job_succeeded() { # <job>: 0 Complete, 3 NotFound (gone), 1 anything else (running, failed, the API did not answer)
-  local o
-  o="$(K -n foundation-databases get job "$1" -o jsonpath='{.status.succeeded}' 2>&1)" || { grep -q NotFound <<<"$o" && return 3; return 1; }
-  [ "$o" = 1 ]
+  local o err="$WORK/job-get.err"
+  # stderr goes to a file of its own: on a good answer a client warning must not become part of the value, and on a failure it is what says NotFound
+  if o="$(K -n foundation-databases get job "$1" -o jsonpath='{.status.succeeded}' 2>"$err")"; then [ "$o" = 1 ]; return; fi
+  grep -q NotFound "$err" && return 3
+  return 1
 }
 wait_job() { # <job>: 0 Complete, 3 gone (read once, not waited on), 1 not Complete within the bound
   local r
@@ -675,7 +683,7 @@ prove_new_archive() {
     wait_for "${OA_DR_WAIT_TRIES:-90}" archiving_true "$c" || { echo "$c: ContinuousArchiving is not True"; return 1; }
   done
   K -n foundation-databases delete job dr-replicate --ignore-not-found >/dev/null
-  job_from_cronjob cnpg-store-replicate dr-replicate
+  job_from_cronjob cnpg-store-replicate dr-replicate || return 1
   local r; wait_job dr-replicate && r=0 || r=$?
   [ "$r" -ne 3 ] || { echo "the Job dr-replicate is gone (NotFound) before it was seen Complete: something deleted it, so the copy of the new archive to the replica store is unproven (list the replica store, or run --only verify again)"; return 1; }
   [ "$r" -eq 0 ] || { echo "the copy of the new archive to the replica store (job dr-replicate) did not complete"; return 1; }
