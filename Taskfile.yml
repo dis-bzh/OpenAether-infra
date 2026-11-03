@@ -819,7 +819,9 @@ tasks:
       CoreDNS is converged before the verify. APPROVE=auto answers the plans for you, for CI and for a shell that cannot
       be asked, and skips the retention. PLAN_ONLY=1 stops at the phase-1 plan with nothing created: the image is
       planned and not built, the grow step only says which nodes it would create, nothing is applied (it still ensures
-      the state buckets, renders the manifests and runs `tofu init`; the one-time copy of a pre-#69 image state waits
+      the state buckets, renders the manifests and runs `tofu init`, and on a bootstrapped cluster the phase-1 plan
+      opens or repairs the local Talos tunnels through the bastion, as `task plan` does: ssh processes on this machine,
+      nothing created in the cloud, closed by `task close-tunnels`; the one-time copy of a pre-#69 image state waits
       for a real run); no receipt is recorded for it.
     # PROVIDER is REQUIRED, not defaulted. Twenty targets used to fall back to
     # scaleway in silence — including destroy and down — so a command typed
@@ -855,6 +857,8 @@ tasks:
           echo "▶ PLAN_ONLY=1: this run stops at the phase-1 plan."
           echo "  No image is built, no machine is created, nothing is applied; the state buckets are still ensured"
           echo "  (the backend needs them), the manifests rendered and tofu inited, as in any run."
+          echo "  On a bootstrapped cluster the plan also opens or repairs the local Talos tunnels, as task plan does"
+          echo "  (ssh processes on this machine, nothing in the cloud)."
         if: '[ -n "{{.PLAN_ONLY_ON}}" ]'
       # Everything a later phase needs, checked BEFORE anything bills. The SSH
       # key was verified in bootstrap-phase2, which runs after `infra` — so a
@@ -993,7 +997,8 @@ tasks:
         PLANFILE="up-{{.ROLE}}-{{.PROVIDER}}.tfplan"
         if [ -n "{{.PLAN_ONLY_ON}}" ]; then
           echo "✓ plan only: nothing was created and nothing was applied"
-          echo "  (the state buckets, the rendered manifests and the saved plan apart)."
+          echo "  (the state buckets, the rendered manifests and the saved plan apart; on a bootstrapped cluster"
+          echo "  the plan also opens the local Talos tunnels: task close-tunnels closes them)."
           echo "  Run the journey for real: task cluster-up ROLE={{.ROLE}} PROVIDER={{.PROVIDER}} KEY={{.KEY}}"
           echo "  (without PLAN_ONLY)."
           exit 0

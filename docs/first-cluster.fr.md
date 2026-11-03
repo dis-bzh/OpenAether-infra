@@ -186,7 +186,7 @@ recalculé à cet instant. Une fois vérifié, il lance aussi la rétention des 
 où tofu demande son propre oui pour chaque ancienne image détruite. Pour un run non
 supervisé, ajoute `APPROVE=auto` : il répond aux deux plans et saute la rétention.
 (Pour lire le plan sans rien créer, ajoute `PLAN_ONLY=1` : il s'arrête au plan de la
-phase 1, simulé seulement et NON VÉRIFIÉ sur un cluster, voir
+phase 1, et sur un cluster déjà amorcé ce plan ouvre les tunnels Talos locaux, simulé seulement et NON VÉRIFIÉ sur un cluster, voir
 [`upgrade.fr.md`](upgrade.fr.md#ajouter-des-nœuds--cluster-up-crée-la-machine-avant-de-poser-la-question-conception-03x-inchangée).
 Pour relire à part un plan de la phase 1,
 enregistre-le : `task infra-plan ROLE=management PROVIDER=scaleway OUT=tfplan`,
@@ -268,7 +268,7 @@ haut et ses volumes de données sans drain ni sortie d'etcd (`scripts/internal/r
 nœuds a ses deux commandes, `task cluster-shrink-plan` puis `task cluster-shrink`, mesurées sur les trois
 clouds : [`upgrade.fr.md`](upgrade.fr.md#retirer-des-nœuds).
 
-À savoir : la machine est créée avant toute question : sans `APPROVE=auto`, `cluster-up` construit et configure d'abord le nouveau nœud et ne montre le plan qu'ensuite (conception 0.3.x, voir [`upgrade.fr.md`](upgrade.fr.md#ajouter-des-nœuds--cluster-up-crée-la-machine-avant-de-poser-la-question-conception-03x-inchangée)) ; `PLAN_ONLY=1` lit le plan sans rien créer (simulé seulement, NON VÉRIFIÉ sur un cluster).
+À savoir : la machine est créée avant toute question : sans `APPROVE=auto`, `cluster-up` construit et configure d'abord le nouveau nœud et ne montre le plan qu'ensuite (conception 0.3.x, voir [`upgrade.fr.md`](upgrade.fr.md#ajouter-des-nœuds--cluster-up-crée-la-machine-avant-de-poser-la-question-conception-03x-inchangée)) ; `PLAN_ONLY=1` lit le plan sans rien créer chez le fournisseur (sur un cluster déjà amorcé il ouvre les tunnels Talos locaux ; simulé seulement, NON VÉRIFIÉ sur un cluster).
 
 ### Risque résiduel : l'application en mode maintenance
 

@@ -509,6 +509,12 @@ run 0 "${UP[@]}" PROVIDER=scaleway PLAN_ONLY=1; rc=$?
 PO_LATE='^(tofu apply|adopt-bootstrap|cnpg-presync|cluster-identity-sync|cluster-apps-ref|cluster-coredns-ha|infra-verify|talos-tunnels)'
 { [ "$rc" = 0 ] && grep -q '^✓ plan only: nothing was created' "$O" && ! grep -q '^✓ cluster-up complete' "$O"; } \
   && ok "exit 0, says 'plan only: nothing was created', never the success line of a finished journey" || bad "PLAN_ONLY exit $rc: $(tail_of)"
+# The plan of a bootstrapped cluster opens the local Talos tunnels (infra-plan runs tunnel-guard): the opening and the closing
+# banner both say so, so nobody reads "nothing was created" as "nothing was touched".
+# (go-task also echoes each command of a step, as "echo ..."; only the printed lines count.)
+[ "$(grep -v 'echo "' "$O" | grep -c 'local Talos tunnels')" = 2 ] \
+  && ok "the banners at the start and at the end say that a bootstrapped cluster's plan opens the local Talos tunnels" \
+  || bad "the plan-only banners do not both name the local Talos tunnels: $(grep -v 'echo "' "$O" | grep -c 'local Talos tunnels') printed mention(s)"
 { grep -qx 'talos-image.sh scaleway v0.0.0-fixture --ensure --plan-only' "$W/calls.log" && [ "$(calls '^talos-image.sh')" = 1 ]; } \
   && ok "the image is PLANNED (--ensure --plan-only), once: a missing one is reported, not built" || bad "image calls: $(grep '^talos-image' "$W/calls.log" | tr '\n' '|')"
 { grep -qx 'grow-nodes.sh management scaleway --plan-only' "$W/calls.log" && [ "$(calls '^grow-nodes.sh')" = 1 ]; } \
