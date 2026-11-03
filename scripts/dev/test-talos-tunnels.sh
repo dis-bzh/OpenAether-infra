@@ -17,7 +17,7 @@ TUN="$W/scripts/bootstrap/talos-tunnels.sh"
 # Does not trust the pidfile or `close`: a regression in what they can find is what this must survive. The stub
 # also ends itself after 3 minutes, for a harness that was killed before it got here.
 cleanup() {
-  [ -z "${HOLDER:-}" ] || kill "$HOLDER" 2>/dev/null
+  local h; for h in $(cat "$W/holders" 2>/dev/null); do [[ "$(ps -o args= -p "$h" 2>/dev/null)" == *"$W/held."* ]] && kill "$h" 2>/dev/null; done
   (cd "$W/cluster" && "$TUN" close . >/dev/null 2>&1)
   local p; for p in $(awk '{ print $1 }' "$W/ident" 2>/dev/null); do
     [[ "$(ps -o args= -p "$p" 2>/dev/null)" == *"$W/bin/ssh-stub.py"* ]] && kill "$p" 2>/dev/null
@@ -103,7 +103,7 @@ export TALOS_TUNNEL_OFFSET=$OFF
 P0=$((50000 + TALOS_TUNNEL_OFFSET)); P1=$((P0 + 1)); PW=$((50100 + TALOS_TUNNEL_OFFSET)); PA=$((6443 + TALOS_TUNNEL_OFFSET))
 LOGS=("$P0" "$P1" "$PW" "$PA")
 up() { local n=0 p; for p in "${LOGS[@]}"; do nc -z 127.0.0.1 "$p" 2>/dev/null && n=$((n + 1)); done; echo "$n"; }
-log() { echo "$W/cluster/.talos-tunnel-$1.log"; }
+log() { echo "${CLD:-$W/cluster}/.talos-tunnel-$1.log"; }
 pid_of() { awk -v p="$1" '$2 == p { x = $1 } END { print x }' "$W/ident"; }
 # <pattern> in every control plane, worker and API log?
 in_all_logs() { local p; for p in "${LOGS[@]}"; do grep -q -- "$1" "$(log "$p")" 2>/dev/null || return 1; done; }
@@ -288,70 +288,96 @@ echo "=== a port held as the source port of someone's connection is retried, not
 # Lab 28B: ssh could not bind :52100 although nothing listened on it, because the host's own 1 Hz probe used it as the
 # source port of its outgoing connection. The holder does the same to a port of the block: bound by a connected socket
 # that sets no SO_REUSEADDR, so a bind fails, `nc -z` says "refused" like a free port, and it lets go only when killed.
-hold() { # <port>
-  rm -f "$W/held"
-  python3 - "$1" "$W/held" <<'PY' &
+# Three cases, run AT THE SAME TIME, each with a block of ports nothing has used (a port the stub served has a TIME_WAIT behind
+# it, which holds the holder's bind off for a minute) and a cluster directory of its own (its pidfile): the 4 s the script
+# gives ssh to connect and the pauses of the retries are then waited once, not three times.
+hold() { # <port>: HOLDER = a process that has taken it
+  local m="$W/held.$1"; rm -f "$m"
+  python3 - "$1" "$m" <<'PY' &
 import socket, sys, time
 lst = socket.socket(); lst.bind(("127.0.0.1", 0)); lst.listen(1)
 c = socket.socket(); c.bind(("127.0.0.1", int(sys.argv[1]))); c.connect(lst.getsockname())
 open(sys.argv[2], "w").close(); time.sleep(120)
 PY
-  HOLDER=$!
-  until [ -e "$W/held" ] || ! kill -0 "$HOLDER" 2>/dev/null; do sleep 0.1; done
-  [ -e "$W/held" ] || { bad "the holder could not take :$1"; return 1; }
-}
-release_after() { # <log> <n>: lets the port go once ssh has been told "Address already in use" n times
-  local _; for _ in $(seq 1 150); do [ "$(count_in 'Address already in use' "$1")" -ge "$2" ] && break; sleep 0.2; done
-  kill "$HOLDER"; wait "$HOLDER" 2>/dev/null; HOLDER=
+  HOLDER=$!; echo "$HOLDER" >>"$W/holders"
+  until [ -e "$m" ] || ! kill -0 "$HOLDER" 2>/dev/null; do sleep 0.1; done
+  [ -e "$m" ] || { bad "the holder could not take :$1"; return 1; }
 }
 count_in() { local n; n="$(awk -v re="$1" '$0 ~ re { n++ } END { print n + 0 }' "$2" 2>/dev/null)"; echo "${n:-0}"; }
 spawns() { count_in ' spawn :' "$1"; }
-# A block of its own for each case, that nothing has probed yet: a port the stub served has a TIME_WAIT behind it, which holds
-# a bind off for a minute, so the holder could not take it.
-fresh_block() {
-  OFF=$((OFF + 200)); while busy $((50000 + OFF)) || busy $((50001 + OFF)) || busy $((50100 + OFF)) || busy $((6443 + OFF)); do OFF=$((OFF + 200)); done
-  export TALOS_TUNNEL_OFFSET=$OFF
-  P0=$((50000 + OFF)); P1=$((P0 + 1)); PW=$((50100 + OFF)); PA=$((6443 + OFF)); LOGS=("$P0" "$P1" "$PW" "$PA")
-  close_all; rm -f "$W/cluster"/.talos-tunnel-*.log
+release_after() { # <log> <n>: lets the port go once ssh has been told "Address already in use" n times
+  local _; for _ in $(seq 1 150); do [ "$(count_in 'Address already in use' "$1")" -ge "$2" ] && break; sleep 0.2; done
+  kill "$HOLDER"; wait "$HOLDER" 2>/dev/null
+}
+next_block() { OFF=$((OFF + 200)); while busy $((50000 + OFF)) || busy $((50001 + OFF)) || busy $((50100 + OFF)) || busy $((6443 + OFF)); do OFF=$((OFF + 200)); done; }
+# <name> <function> <offset>: the function in a subshell of its own, on that block; its verdicts are kept in a file and replayed below
+start_case() {
+  (
+    RES="$W/res.$1"; CLD="$W/cl-$1"; mkdir -p "$CLD"; export TALOS_TUNNEL_OFFSET=$3
+    ok() { printf 'ok %s\n' "${*//$'\n'/ }" >>"$RES"; }; bad() { printf 'bad %s\n' "${*//$'\n'/ }" >>"$RES"; }
+    P0=$((50000 + $3)); P1=$((P0 + 1)); PW=$((50100 + $3)); PA=$((6443 + $3)); LOGS=("$P0" "$P1" "$PW" "$PA")
+    "$2"
+  ) &
+  CASE_PIDS+=($!)
 }
 export OA_TUNNEL_BIND_PAUSE=1
-fresh_block
-hold "$P0"; N6=$(wc -l <"$W/ident")
-(cd "$W/cluster" && tun open . >"$W/clash.out" 2>&1; echo $? >"$W/clash.rc") &
-OPENER=$!
-release_after "$(log "$P0")" 2   # lost the first try and the first retry: it goes on until the port is free
-wait "$OPENER"
-CL="$(cat "$W/clash.rc" 2>/dev/null)"
-PIDS_OK=1; for _pid in $(tail -n +$((N6 + 1)) "$W/ident" | awk '{ print $1 }'); do grep -qx "$_pid" "$W/cluster/.talos-tunnels.pids" || PIDS_OK=0; done
-{ [ "$CL" = 0 ] && [ "$(up)" = 4 ] && grep -q '4/4 tunnels up' "$W/clash.out" && [ "$(grep -c 'tunnels up' "$W/clash.out")" = 1 ] \
-  && [ "$(spawns "$(log "$P0")")" -ge 3 ] && [ "$(spawns "$(log "$P1")")" = 1 ] && [ "$(spawns "$(log "$PW")")" = 1 ] \
-  && [ "$(spawns "$(log "$PA")")" = 1 ] && grep -q ":${P0}" "$W/clash.out" && [ "$PIDS_OK" = 1 ]; } \
-  && ok "open: :${P0} lost its bind twice, was respawned alone until the port was free, and ONE invocation ends rc 0 with 4/4 up" \
-  || bad "open with a busy port (rc ${CL:-none}, up=$(up), spawns $(spawns "$(log "$P0")")/$(spawns "$(log "$P1")"), pids ok=${PIDS_OK}): $(cat "$W/clash.out")"
-close_all
 
-fresh_block
-hold "$P0"
-OUT="$(cd "$W/cluster" && OA_TUNNEL_BIND_RETRIES=2 tun open . 2>&1)"; RC=$?
-{ [ "$RC" = 1 ] && grep -q '3/4 tunnels up' <<<"$OUT" && [ "$(spawns "$(log "$P0")")" = 3 ] && [ "$(spawns "$(log "$P1")")" = 1 ] \
-  && grep -q "ip_local_reserved_ports" <<<"$OUT" && grep -qE ":${P0}  .*Address already in use" <<<"$OUT"; } \
-  && ok "a port that never frees: 1 try + 2 retries (OA_TUNNEL_BIND_RETRIES), then rc 1 naming the port, its ssh's words and ip_local_reserved_ports" \
-  || bad "a port held for good (rc ${RC}, spawns $(spawns "$(log "$P0")")): ${OUT}"
-kill "$HOLDER"; wait "$HOLDER" 2>/dev/null; HOLDER=
-close_all
-
-fresh_block
-hold "$P0"
-(direct >"$W/clash.out" 2>&1; echo $? >"$W/clash.rc") &
-OPENER=$!
-release_after "$W/cluster/.talos-tunnel-direct-${P0}.log" 1
-wait "$OPENER"
-{ [ "$(cat "$W/clash.rc")" = 0 ] && grep -q '3/3 tunnels up' "$W/clash.out" \
-  && [ "$(spawns "$W/cluster/.talos-tunnel-direct-${P0}.log")" -ge 2 ] && [ "$(spawns "$W/cluster/.talos-tunnel-direct-${PW}.log")" = 1 ]; } \
-  && ok "open-direct takes the same retry: 3/3 up in one invocation" \
-  || bad "open-direct with a busy port (rc $(cat "$W/clash.rc")): $(cat "$W/clash.out")"
+case_open_released() { # a busy port lets go after two refusals: ONE invocation ends rc 0
+  hold "$P0" || return
+  (cd "$CLD" && tun open . >"$CLD/out" 2>&1; echo $? >"$CLD/rc") &
+  local opener=$!
+  release_after "$(log "$P0")" 2   # lost the first try and the first retry: it goes on until the port is free
+  wait "$opener"
+  local rc pids_ok=1 pid
+  rc="$(cat "$CLD/rc" 2>/dev/null)"
+  for pid in $(awk -v ports="${LOGS[*]}" 'BEGIN { n = split(ports, a, " "); for (i = 1; i <= n; i++) s[a[i]] = 1 } $2 in s { print $1 }' "$W/ident"); do
+    grep -qx "$pid" "$CLD/.talos-tunnels.pids" || pids_ok=0
+  done
+  { [ "$rc" = 0 ] && [ "$(up)" = 4 ] && grep -q '4/4 tunnels up' "$CLD/out" && [ "$(grep -c 'tunnels up' "$CLD/out")" = 1 ] \
+    && [ "$(spawns "$(log "$P0")")" -ge 3 ] && [ "$(spawns "$(log "$P1")")" = 1 ] && [ "$(spawns "$(log "$PW")")" = 1 ] \
+    && [ "$(spawns "$(log "$PA")")" = 1 ] && grep -q ":${P0}" "$CLD/out" && [ "$pids_ok" = 1 ]; } \
+    && ok "open: :${P0} lost its bind twice, was respawned alone until the port was free, and ONE invocation ends rc 0 with 4/4 up" \
+    || bad "open with a busy port (rc ${rc:-none}, up=$(up), spawns $(spawns "$(log "$P0")")/$(spawns "$(log "$P1")"), pids ok=${pids_ok}): $(cat "$CLD/out")"
+}
+case_open_held() { # a port that never frees: the retries stop at OA_TUNNEL_BIND_RETRIES and the way out is printed
+  hold "$P0" || return
+  local out rc want
+  echo "22,8000-8010" >"$CLD/reserved"   # what the machine reserves already (OA_RESERVED_PORTS_FILE stands in for /proc/sys/net/ipv4/ip_local_reserved_ports)
+  out="$(cd "$CLD" && OA_TUNNEL_BIND_RETRIES=1 OA_RESERVED_PORTS_FILE="$CLD/reserved" tun open . 2>&1)"; rc=$?
+  { [ "$rc" = 1 ] && grep -q '3/4 tunnels up' <<<"$out" && [ "$(spawns "$(log "$P0")")" = 2 ] && [ "$(spawns "$(log "$P1")")" = 1 ] \
+    && grep -qE ":${P0}  .*Address already in use" <<<"$out"; } \
+    && ok "a port that never frees: 1 try + 1 retry (OA_TUNNEL_BIND_RETRIES), then rc 1 naming the port and its ssh's words" \
+    || bad "a port held for good (rc ${rc}, spawns $(spawns "$(log "$P0")")): ${out}"
+  # The sysctl advice: -w REPLACES the list, so what is reserved now comes first, and it is lost at a reboot.
+  want="sudo sysctl -w net.ipv4.ip_local_reserved_ports=22,8000-8010,${P0}-$((PW + 99))"
+  { grep -qF -- "$want" <<<"$out" && grep -qi 'replaces' <<<"$out" && grep -q 'reboot' <<<"$out" && grep -q '/etc/sysctl.d' <<<"$out"; } \
+    && ok "…and the advice keeps the reserved ports that are there (it does not replace them), says it does not survive a reboot, and where to keep it" \
+    || bad "the sysctl advice is missing, would replace the reserved ports or hides the reboot (wanted '${want}'): ${out}"
+}
+case_direct_released() { # open-direct takes the same retry
+  hold "$P0" || return
+  (cd "$CLD" && tun open-direct --bastion 203.0.113.10 --user ops --cps 10.0.0.11,10.0.0.12 --workers 10.0.0.21 --key "$W/key" \
+    >"$CLD/out" 2>&1; echo $? >"$CLD/rc") &
+  local opener=$! dlog="$CLD/.talos-tunnel-direct"
+  release_after "${dlog}-${P0}.log" 1
+  wait "$opener"
+  { [ "$(cat "$CLD/rc")" = 0 ] && grep -q '3/3 tunnels up' "$CLD/out" \
+    && [ "$(spawns "${dlog}-${P0}.log")" -ge 2 ] && [ "$(spawns "${dlog}-${PW}.log")" = 1 ]; } \
+    && ok "open-direct takes the same retry: 3/3 up in one invocation" \
+    || bad "open-direct with a busy port (rc $(cat "$CLD/rc")): $(cat "$CLD/out")"
+}
+rm -f "$W/holders"; CASE_PIDS=()
+next_block; B1=$OFF; next_block; B2=$OFF; next_block; B3=$OFF
+start_case open_released case_open_released "$B1"
+start_case open_held case_open_held "$B2"
+start_case direct_released case_direct_released "$B3"
+wait "${CASE_PIDS[@]}"
+for n in open_released open_held direct_released; do
+  [ -s "$W/res.$n" ] || bad "the case $n gave no verdict"
+  while IFS= read -r l; do if [[ "$l" == "ok "* ]]; then ok "${l#ok }"; else bad "${l#bad }"; fi; done <"$W/res.$n" 2>/dev/null
+done
 unset OA_TUNNEL_BIND_PAUSE
-close_all
+for n in open_released open_held direct_released; do (cd "$W/cl-$n" && "$TUN" close . >/dev/null 2>&1); done
 
 # The Terraform side (SCC/F17): the local-exec of terraform_data.talos_tunnels hands its values over as environment
 # variables. Its real command is cut out of cluster/main.tf and run against a stub script that records argv, with values a

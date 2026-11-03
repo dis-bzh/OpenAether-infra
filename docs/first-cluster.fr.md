@@ -186,7 +186,7 @@ recalculé à cet instant. Une fois vérifié, il lance aussi la rétention des 
 où tofu demande son propre oui pour chaque ancienne image détruite. Pour un run non
 supervisé, ajoute `APPROVE=auto` : il répond aux deux plans et saute la rétention.
 (Pour lire le plan sans rien créer, ajoute `PLAN_ONLY=1` : il s'arrête au plan de la
-phase 1, voir
+phase 1, simulé seulement et NON VÉRIFIÉ sur un cluster, voir
 [`upgrade.fr.md`](upgrade.fr.md#ajouter-des-nœuds--cluster-up-crée-la-machine-avant-de-poser-la-question-conception-03x-inchangée).
 Pour relire à part un plan de la phase 1,
 enregistre-le : `task infra-plan ROLE=management PROVIDER=scaleway OUT=tfplan`,
@@ -256,7 +256,7 @@ seconde copie de l'archive CNPG, et il existe aussi avec le `backup_immutability
 défaut (avant la 0.4.0 il manquait, et `cnpg-store-replicate` échouait avec `NoSuchBucket`
 toutes les 15 minutes) ; `task cluster-verify` échoue s'il manque.
 
-Un port de tunnel Talos qu'un poste chargé tient un instant (« Address already in use » sans rien qui écoute) est réessayé tout seul depuis la 0.4.1 ; si l'un reste occupé, le script nomme la sortie (`net.ipv4.ip_local_reserved_ports` pour le bloc des tunnels, ou un autre `TALOS_TUNNEL_OFFSET`), voir [`upgrade.fr.md`](upgrade.fr.md).
+Un port de tunnel Talos qu'un poste chargé tient un instant (« Address already in use » sans rien qui écoute) est réessayé tout seul depuis la 0.4.1 (simulé seulement, NON VÉRIFIÉ sur un cluster) ; si l'un reste occupé, le script nomme la sortie : réserver le bloc des tunnels avec `net.ipv4.ip_local_reserved_ports` (le réglage remplace toute la liste, donc lire d'abord `/proc/sys/net/ipv4/ip_local_reserved_ports` et y ajouter le bloc, et il est perdu au redémarrage sauf s'il est aussi écrit dans `/etc/sysctl.d/`), ou utiliser un autre `TALOS_TUNNEL_OFFSET` ; voir [`upgrade.fr.md`](upgrade.fr.md).
 
 Relancer reprend où ça s'est arrêté. Ajouter un worker aussi : `task cluster-up` crée la
 machine, ouvre les tunnels, puis configure seulement le nouveau nœud

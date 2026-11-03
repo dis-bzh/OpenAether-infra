@@ -96,14 +96,19 @@ retry_bind_clash() { # <pidfile> <port>...
   done
 }
 
-# What to do when a port stays busy after the retries.
+# What to do when a port stays busy after the retries. `sysctl -w` REPLACES the whole list, so the ports the machine reserves now
+# come first (read from OA_RESERVED_PORTS_FILE, the kernel's own file by default), and the setting is lost at a reboot.
 clash_hint() { # <port>... (the ones still down)
-  local p
+  local p cur block="${CP_BASE}-$((WK_BASE + 99))"
+  cur="$(cat "${OA_RESERVED_PORTS_FILE:-/proc/sys/net/ipv4/ip_local_reserved_ports}" 2>/dev/null || true)"
   for p in "$@"; do
     bind_clashed "$p" || continue
     echo "  :${p} stayed busy through ${OA_TUNNEL_BIND_RETRIES:-3} retries and nothing listens on it: something on this machine holds it as the source port of a connection"
-    echo "    (who: ss -tnp 'sport = :${p}'). Keep the kernel from handing the tunnel block out:"
-    echo "      sudo sysctl -w net.ipv4.ip_local_reserved_ports=${CP_BASE}-$((WK_BASE + 99))     or give this cluster another TALOS_TUNNEL_OFFSET."
+    echo "    (who: ss -tnp 'sport = :${p}'). Keep the kernel from handing the tunnel block out. \`sysctl -w\` REPLACES the list of reserved"
+    echo "    ports, so the ones reserved now (${cur:-none}) stay in front of the block; it does NOT survive a reboot:"
+    echo "      sudo sysctl -w net.ipv4.ip_local_reserved_ports=${cur:+${cur},}${block}"
+    echo "    To keep it, write the same value as  net.ipv4.ip_local_reserved_ports = ${cur:+${cur},}${block}  in a file of /etc/sysctl.d/ (then: sudo sysctl --system)."
+    echo "    Or give this cluster another TALOS_TUNNEL_OFFSET."
   done
 }
 
