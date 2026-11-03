@@ -515,10 +515,13 @@ PO_LATE='^(tofu apply|adopt-bootstrap|cnpg-presync|cluster-identity-sync|cluster
 [ "$(grep -v 'echo "' "$O" | grep -c 'local Talos tunnels')" = 2 ] \
   && ok "the banners at the start and at the end say that a bootstrapped cluster's plan opens the local Talos tunnels" \
   || bad "the plan-only banners do not both name the local Talos tunnels: $(grep -v 'echo "' "$O" | grep -c 'local Talos tunnels') printed mention(s)"
-# With the Talos image missing the phase-1 plan cannot be read (Scaleway, OVH and Outscale find the image by name; seen on Scaleway, rc 201):
+# With the Talos image missing the phase-1 plan cannot be read (seen on Scaleway, rc 201; OVH and Outscale look the image up too and were not run):
 # the opening banner must say so, or "stops at the phase-1 plan" is a promise the run does not keep.
-{ grep -v 'echo "' "$O" | grep -q 'the plan cannot be read' && grep -v 'echo "' "$O" | grep -q 'WOULD be built' && grep -v 'echo "' "$O" | grep -q 'ends rc 201'; } \
-  && ok "the opening banner says what a missing image does: the plan cannot be read, the image WOULD be built, the run ends rc 201" \
+# (captured once and read with here-strings: `grep -v ... | grep -q` under pipefail can die of SIGPIPE when the match comes early)
+BANNER="$(grep -v 'echo "' "$O")"
+{ grep -q 'the plan cannot be read' <<<"$BANNER" && grep -q 'WOULD be built' <<<"$BANNER" && grep -q 'ends rc 201' <<<"$BANNER" \
+  && grep -q 'OVH and Outscale were not run' <<<"$BANNER"; } \
+  && ok "the opening banner says what a missing image does (the plan cannot be read, WOULD be built, ends rc 201) and that only Scaleway was run" \
   || bad "the plan-only banner does not say what a missing image does: $(grep -v 'echo "' "$O" | grep -c 'rc 201') mention(s) of rc 201"
 { grep -qx 'talos-image.sh scaleway v0.0.0-fixture --ensure --plan-only' "$W/calls.log" && [ "$(calls '^talos-image.sh')" = 1 ]; } \
   && ok "the image is PLANNED (--ensure --plan-only), once: a missing one is reported, not built" || bad "image calls: $(grep '^talos-image' "$W/calls.log" | tr '\n' '|')"
