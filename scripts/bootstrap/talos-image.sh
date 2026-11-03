@@ -16,6 +16,7 @@
 # --ensure: idempotence gate for `task cluster-up`: plan first, apply only on a real change.
 # --plan-only (with --ensure only; `task cluster-up PLAN_ONLY=1`, infra #412): the same plan and the same refusals ahead of the spend, then it
 #   stops: a missing or changed image is reported as "would be built" and nothing is applied. Exit 0 unless the plan or a refusal fails.
+#   It writes nothing to the state bucket either: the one-time copy of the pre-#69 state is left for a real run (the plan reads that state as it is).
 # --list: the versions this lane holds (one state each); builds nothing and creates no bucket.
 # --prune: destroy ONE version's image set (the only way an image leaves the lane); refused while a tfvars names it.
 # --retain: keep N (the newest tfvars pin) and the highest held below it; --prune the rest, lowest first, bar what a tfvars names. No version.
@@ -418,7 +419,14 @@ if [ "$MODE" = prune ] && [ "$MIGRATE" = false ] && ! grep -qx "$NEW_KEY" <<<"$K
   echo "✗ nothing to prune: no state holds ${VERSION} on ${TGT} (--list shows what does)." >&2
   exit 1
 fi
-init_state "$NEW_KEY"
+# --plan-only writes nothing to the state bucket, and the copy of the legacy state is a write (a push, then a rename). The backend is
+# still on the legacy key from the read above: the plan reads it as it stands, which is what a real run finds once it has copied it.
+if [ "$MIGRATE" = true ] && [ "$PLAN_ONLY" = true ]; then
+  echo "~ plan only: ${LEGACY_KEY} (${VERSION}) would be copied to ${NEW_KEY} by a real run; it was NOT copied, the plan reads ${LEGACY_KEY} as it stands."
+  MIGRATE=false
+else
+  init_state "$NEW_KEY"
+fi
 if [ "$MIGRATE" = true ]; then
   echo "▶ Copying ${LEGACY_KEY} (${VERSION}) to ${NEW_KEY}"
   tofu state push "$LEGACY_JSON"

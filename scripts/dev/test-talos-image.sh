@@ -432,6 +432,18 @@ OUT="$(VER=v1.13.9 run 2 --ensure)"; RC=$?
   && ok "a build of ANOTHER version leaves the legacy state where it is" || bad "another version's build moved the legacy state (rc=$RC, keys: $(initkeys))"
 grep -q 'stays its authority' <<<"$OUT" && ok "and says whose it stays" || bad "it did not say why the legacy state was left"
 
+# --plan-only (cluster-up PLAN_ONLY=1) writes nothing to the state bucket: the copy of the legacy state is a write, so it waits for a real run.
+OUT="$(run 2 --ensure --plan-only)"; RC=$?
+{ [ "$RC" -eq 0 ] && [ "$(calls 'state push')" = 0 ] && [ "$(acalls 's3 mv')" = 0 ] && [ "$(acalls 's3 rm')" = 0 ] \
+  && [ "$(initkeys)" = "$LEG" ] && [ "$(calls plan)" = 1 ] && [ "$(calls apply)" = 0 ]; } \
+  && ok "--plan-only on a lane the legacy state holds: nothing pushed, renamed or removed, and the plan reads the legacy state itself" \
+  || bad "plan-only wrote to the state bucket or planned another state (rc=$RC, keys: $(initkeys), pushes: $(calls 'state push')): ${OUT:0:300}"
+grep -q 'would be copied' <<<"$OUT" && ok "…and says the copy was left for a real run" || bad "plan-only said nothing of the copy it skipped: ${OUT:0:300}"
+is "…and the decrypted copy of the legacy state is gone" 0 "$(find "$SB/tmp" -type f | wc -l)"
+OUT="$(run 2 --ensure)"; RC=$?
+{ [ "$RC" -eq 0 ] && [ "$(calls 'state push')" = 1 ] && [ "$(acalls 's3 mv')" = 1 ]; } \
+  && ok "(control) the same run without --plan-only still copies and retires the legacy state" || bad "the migration no longer runs on a real build (rc=$RC)"
+
 OUT="$(OA_STUB_KEYS=$'talos-image.tfstate\ttalos-image-scaleway-v1.13.4.tfstate' run 2 --ensure)"
 is "an already migrated version does not read the legacy state again" "talos-image-scaleway-v1.13.4.tfstate" "$(initkeys)"
 OUT="$(OA_STUB_PULL_FAIL=1 run 2 --ensure)"; RC=$?

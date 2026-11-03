@@ -819,7 +819,8 @@ tasks:
       CoreDNS is converged before the verify. APPROVE=auto answers the plans for you, for CI and for a shell that cannot
       be asked, and skips the retention. PLAN_ONLY=1 stops at the phase-1 plan with nothing created: the image is
       planned and not built, the grow step only says which nodes it would create, nothing is applied (it still ensures
-      the state buckets, renders the manifests and runs `tofu init`); no receipt is recorded for it.
+      the state buckets, renders the manifests and runs `tofu init`; the one-time copy of a pre-#69 image state waits
+      for a real run); no receipt is recorded for it.
     # PROVIDER is REQUIRED, not defaulted. Twenty targets used to fall back to
     # scaleway in silence — including destroy and down — so a command typed
     # while working on another cloud aimed at the wrong account. The refusal is
