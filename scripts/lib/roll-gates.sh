@@ -955,7 +955,8 @@ dead_node_survey() { # <cp|worker> <index> <node_name>
     # ONE failed read is not an unhealthy member (infra #401: lab 25 refused with two healthy survivors; the identical rerun
     # passed). Each member is read up to ETCD_READ_TRIES times with ETCD_READ_PAUSE seconds between the reads, and counts as
     # healthy on the first HEALTH OK. A member that never answers OK is still not counted, so a real loss of quorum is refused
-    # exactly as before, 2 x ETCD_READ_PAUSE seconds later per silent member; the ones that stayed silent are named.
+    # exactly as before, after two more reads and 2 x ETCD_READ_PAUSE more seconds per silent member (two more read timeouts when
+    # the endpoint hangs instead of refusing); the ones that stayed silent are named.
     local tries="${ETCD_READ_TRIES:-3}" try silent=""
     for k in "${!CP_IPS[@]}"; do
       [[ "$k" == "$idx" ]] && continue
