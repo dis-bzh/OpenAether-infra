@@ -2259,7 +2259,8 @@ tasks:
       each, CoreDNS serving, no Flux and no app load balancer unless deploy_flux / deploy_app_lb
       ask for them (then Flux Available and the balancer present), the Talos and Kubernetes versions the
       config pins, the schematic it pins, the Cilium and Flux controller versions the artifacts pin, the apps ref Flux
-      follows against git_ref, and a tfstate replica in the backup store.
+      follows against git_ref, the cluster-identity ConfigMap against the rendered map, the WAL archiving of every
+      database-profile CNPG Cluster, and a tfstate replica in the backup store.
       Usage: task verify PROVIDER=scaleway [ROLE=management]
     # See backup-state above: the *provider-env anchor needs this dir, and the
     # first version of this target shipped without it and exited 127 everywhere.
