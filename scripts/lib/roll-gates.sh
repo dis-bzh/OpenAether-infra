@@ -1094,24 +1094,45 @@ drain_stall_blockers() { # <node_name> <drainable_pods lines>
 # 10.6-16.6 s, lab 28 O4), and DRAIN_STALL_AFTER=0 restores the plain drain.
 # The watch asks every DRAIN_TICK seconds (a fifth of a second) whether kubectl has ended, so a drain that works is noticed at once.
 DRAIN_WHY=""
+DRAIN_PID=""
+DRAIN_TRAPS=()
+# The background drain and a signal. A script's async commands ignore Ctrl+C, so kubectl would outlive a script that dies of it
+# (cluster-shrink has no INT trap: its EXIT trap would uncordon the node while the drain went on evicting pods from it). While the
+# drain runs, INT, TERM and HUP therefore kill it first, then put the caller's own traps back and send the signal to the script
+# again: it takes the road it would have taken without the watch (the roll's trap asks for a stop; a script with none dies, and
+# its EXIT trap runs). A signal the caller ignores stays ignored. drain_watched puts the caller's traps back when it returns.
+drain_untrap() {
+  local c
+  DRAIN_PID=""
+  if (( ${#DRAIN_TRAPS[@]} )); then for c in "${DRAIN_TRAPS[@]}"; do eval "$c"; done; fi
+  DRAIN_TRAPS=()
+}
+drain_interrupted() { # <signal name>
+  DRAIN_WHY="interrupted by SIG${1}"
+  [[ -z "${DRAIN_PID:-}" ]] || kill "$DRAIN_PID" 2>/dev/null || true
+  drain_untrap
+  kill -s "$1" "$BASHPID"
+}
 drain_watched() { # <node_name> → kubectl's status, or 1 when this function stopped it
-  local node="$1" after="${DRAIN_STALL_AFTER:-120}" poll="${DRAIN_STALL_POLL:-10}" tick="${DRAIN_TICK:-0.2}" pid cur sig prev="" changed_at next idle blockers residue
+  local node="$1" after="${DRAIN_STALL_AFTER:-120}" poll="${DRAIN_STALL_POLL:-10}" tick="${DRAIN_TICK:-0.2}" pid cur sig prev="" changed_at next idle blockers residue rc="" s t
   DRAIN_WHY=""
   if (( after <= 0 )); then
     "${KCTL[@]}" drain "$node" --ignore-daemonsets --delete-emptydir-data --timeout="$DRAIN_TIMEOUT"
     return
   fi
+  DRAIN_TRAPS=()
+  for s in INT TERM HUP; do
+    t="$(trap -p "$s")"
+    [[ "$t" == "trap -- '' "* ]] && continue    # ignored by the caller: ignored here too, as for a foreground drain
+    DRAIN_TRAPS+=("${t:-trap - $s}")
+    # shellcheck disable=SC2064  # the signal name is wanted now: one handler call per signal
+    trap "drain_interrupted $s" "$s"
+  done
   "${KCTL[@]}" drain "$node" --ignore-daemonsets --delete-emptydir-data --timeout="$DRAIN_TIMEOUT" &
-  pid=$!
+  pid=$!; DRAIN_PID=$pid
   changed_at=$SECONDS; next=$((SECONDS + poll))
   while kill -0 "$pid" 2>/dev/null; do
     sleep "$tick" 2>/dev/null || sleep 1
-    # A background command ignores Ctrl+C, where the foreground drain used to die of it: the interrupt is read here, and takes
-    # the same road (the drain ends in failure, the caller gives the node back).
-    if (( ${STOP_REQUESTED:-0} )); then
-      kill "$pid" 2>/dev/null; { wait "$pid"; } 2>/dev/null || true
-      DRAIN_WHY="interrupted"; return 1
-    fi
     (( SECONDS >= next )) || continue
     next=$((SECONDS + poll))
     cur="$(drainable_pods "$node")" || continue          # not answered: no information, neither progress nor stall
@@ -1132,9 +1153,11 @@ drain_watched() { # <node_name> → kubectl's status, or 1 when this function st
     fi
     kill "$pid" 2>/dev/null; { wait "$pid"; } 2>/dev/null || true
     DRAIN_WHY="stalled: no progress for ${idle}s, see above"
-    return 1
+    rc=1; break
   done
-  { wait "$pid"; }
+  if [[ -z "$rc" ]]; then rc=0; { wait "$pid"; } 2>/dev/null || rc=$?; fi
+  drain_untrap
+  return "$rc"
 }
 
 cordon_drain() { # <node_name>
@@ -1155,7 +1178,12 @@ cordon_drain() { # <node_name>
   info "Cordon + drain ${node}…"
   "${KCTL[@]}" cordon "$node" || die "cordon failed for ${node}"
   if ! drain_watched "$node"; then
-    warn "drain did not complete (kubectl's own reason is printed just above; ${DRAIN_WHY:-the timeout is ${DRAIN_TIMEOUT}}); some pods may be stuck (PDBs?) or refused (a pod without a controller)."
+    # kubectl's own reason is there only when kubectl ended by itself: after a stall or an interrupt it was killed and said nothing.
+    if [[ -n "$DRAIN_WHY" ]]; then
+      warn "drain did not complete (${DRAIN_WHY}); some pods may be stuck behind a budget (PDBs?)."
+    else
+      warn "drain did not complete (kubectl's own reason is printed just above; the timeout is ${DRAIN_TIMEOUT}); some pods may be stuck (PDBs?) or refused (a pod without a controller)."
+    fi
     # Name them instead of asking. Every one of these forbids its last disruption
     # while missing nothing, so it is the drain's answer, and "(PDBs?)" made the
     # operator go and find by hand what the cluster already knew.
@@ -1189,10 +1217,14 @@ cordon_drain() { # <node_name>
       # nowhere to go, its budget never recovered, and the drain waited out its
       # full 900s with no eviction error to show for it.
       worker_cpu_requests >&2 || true
-      die "${node} could not be drained (${DRAIN_WHY:-timeout ${DRAIN_TIMEOUT}}) — refusing to reboot it under workloads that would not move.
-  0. A pod without a controller (a bare pod, e.g. left by a test or kubectl run) is refused by kubectl at once and is named
+      # Cause 0 is kubectl's own refusal of a bare pod: it applies when kubectl ended by itself, not after a stall or an interrupt
+      # (kubectl was killed, and the bare pods were refused before the drain started).
+      local bare_hint=""
+      [[ -n "$DRAIN_WHY" ]] || bare_hint="  0. A pod without a controller (a bare pod, e.g. left by a test or kubectl run) is refused by kubectl at once and is named
      before the drain starts, since infra #402; delete it, or move it under a Deployment, and re-run.
-  1. Capacity: the CPU requests above are per worker. If the others are near
+"
+      die "${node} could not be drained (${DRAIN_WHY:-timeout ${DRAIN_TIMEOUT}}) — refusing to reboot it under workloads that would not move.
+${bare_hint}  1. Capacity: the CPU requests above are per worker. If the others are near
      100%, the evicted pods cannot be rescheduled, so their budgets never
      recover. A rolling upgrade needs one node's worth of spare capacity.
   2. A budget that can never allow a disruption — see docs/upgrade.md

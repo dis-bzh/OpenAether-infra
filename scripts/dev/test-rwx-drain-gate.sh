@@ -36,6 +36,8 @@ case "$*" in
   *"get pods "*) [ -f "$STUB_PODS" ] && cat "$STUB_PODS" || exit 1 ;;
   *"get pdb "*)  [ -f "$STUB_PDB" ] && cat "$STUB_PDB" || exit 1 ;;
   *drain*)
+    # A drain that hangs 30 s as ONE process (exec) and says its pid: what a kubectl drain does under a budget that allows nothing.
+    if [ -n "${STUB_DRAIN_PIDFILE:-}" ]; then echo $$ >"$STUB_DRAIN_PIDFILE"; exec /bin/sleep 30; fi
     # A drain that goes on until STUB_SEQ/done exists (or 5 s), and says when it ended by itself.
     if [ -n "${STUB_SEQ:-}" ]; then
       for _ in $(seq 100); do [ -f "$STUB_SEQ/done" ] && break; /bin/sleep 0.05; done
@@ -57,7 +59,7 @@ extract() { awk -v fns="$1" '
 KCTL=(kubectl); ASSUME_YES=1; DRAIN_TIMEOUT=10s; RWX_CLEAR_TIMEOUT=2; RWX_POLL=1; SECONDS=0
 info() { :; }; warn() { echo "warn: $*" >&2; }; die() { echo "DIE: $*" >&2; exit 97; }
 # shellcheck disable=SC1090
-eval "$(extract 'rwx_node_residue,wait_rwx_clear,pdb_hard,cordon_drain,drainable_pods,refuse_bare_pods,drain_watched,drain_stall_blockers')"
+eval "$(extract 'rwx_node_residue,wait_rwx_clear,pdb_hard,cordon_drain,drainable_pods,refuse_bare_pods,drain_watched,drain_interrupted,drain_untrap,drain_stall_blockers')"
 # What cordon_drain does before and around the drain is other tests' business (test-rolling-replace.sh); they only leave a line
 # in the log here, so that "before anything else" can be asserted.
 cnpg_maintenance() { echo "STUB cnpg_maintenance" >>"$STUB_LOG"; }; wait_cnpg_whole() { :; }; wait_pdb_headroom() { :; }; worker_cpu_requests() { :; }
@@ -160,6 +162,9 @@ seq_reset; cp "$TMP/seq_last.json" "$TMP/seq/last.json"; drain_run
   && ok "the same pods, none terminating, a budget allowing 0 on one: stopped after 6 s, the budget and the share-manager named, node uncordoned, drain killed" \
   || bad "stall not detected: rc=$RC $OUT"
 [ "$(cat "$TMP/seq/n" 2>/dev/null || echo 99)" -lt 15 ] && ok "…and it took a handful of reads (not a drain of 900 s)" || bad "reads: $(cat "$TMP/seq/n")"
+# kubectl was killed, so it printed no reason, and a bare pod was refused before the drain: neither sentence may be said of a stall.
+{ ! grep -q 'printed just above' <<<"$OUT" && ! grep -q 'A pod without a controller' <<<"$OUT" && grep -q 'stalled: no progress' <<<"$OUT"; } \
+  && ok "…and the refusal says what was seen, without 'kubectl's reason is printed above' or the bare-pod cause (kubectl was killed, the bare pods were refused earlier)" || bad "stale words after a stall: $OUT"
 
 # the same pods, but the budget covers none of them: a slow drain, not a refused one. Left to kubectl and its own timeout.
 pdb longhorn-system other "{\"app\":\"other\"}" | jq -s '{items:.}' >"$TMP/pdb.json"
@@ -184,15 +189,59 @@ for i in 1 2 3; do { pod longhorn-system instance-manager-n1 Running "$im_l" Rep
 STUB_DONE_AT=5; drain_run
 { [ $RC -eq 0 ] && [ -f "$TMP/seq/drain-ended" ]; } && ok "a pod leaving the node restarts the 6 s: a drain that progresses is never stopped" || bad "stopped a drain that was progressing: rc=$RC $OUT"
 
-# an interrupt (Ctrl+C during the drain) ends it and takes the failure path, as the foreground drain's death used to.
-seq_reset; cp "$TMP/seq_last.json" "$TMP/seq/last.json"; STOP_REQUESTED=1; drain_run; STOP_REQUESTED=0
-{ [ $RC -eq 97 ] && grep -q 'interrupted' <<<"$OUT" && grep -q 'uncordon n1' "$TMP/log" && [ ! -f "$TMP/seq/drain-ended" ]; } \
-  && ok "an interrupt kills the drain and refuses, node uncordoned" || bad "interrupt: rc=$RC $OUT"
+# a stop asked BEFORE the drain started (a Ctrl+C during the CNPG or budget waits of the same node) is read between nodes, not by
+# the drain: "the node in flight finishes". Only a signal that arrives while the drain runs ends it (below, with real signals).
+seq_reset; cp "$TMP/seq_last.json" "$TMP/seq/last.json"; pdb longhorn-system other '{"app":"other"}' | jq -s '{items:.}' >"$TMP/pdb.json"
+STOP_REQUESTED=1; STUB_DONE_AT=7; drain_run; STOP_REQUESTED=0
+{ [ $RC -eq 0 ] && [ -f "$TMP/seq/drain-ended" ]; } && ok "a stop asked before the drain started does not end it: the node in flight finishes" || bad "stop flag ended a drain: rc=$RC $OUT"
+
+# The caller's traps are put back whatever ended the drain: a trap left behind would answer the next Ctrl+C with a dead pid.
+trap_after() { trap 'echo mine' INT; drain_watched n1 >/dev/null 2>&1; RC=$?; T="$(trap -p INT TERM HUP)"; trap - INT; }
+seq_reset; cp "$TMP/seq_last.json" "$TMP/seq/last.json"; STUB_DONE_AT=7; trap_after
+{ [ $RC -eq 0 ] && [ "$(grep -c . <<<"$T")" = 1 ] && grep -q 'echo mine' <<<"$T"; } \
+  && ok "after a drain that ended by itself the caller's INT trap is back, and no TERM or HUP trap is left" || bad "traps after a clean drain: rc=$RC [$T]"
+pdb longhorn-system instance-manager-n1 "$im_l" | jq -s '{items:.}' >"$TMP/pdb.json"
+seq_reset; cp "$TMP/seq_last.json" "$TMP/seq/last.json"; trap_after
+{ [ $RC -eq 1 ] && [ "$(grep -c . <<<"$T")" = 1 ] && grep -q 'echo mine' <<<"$T"; } \
+  && ok "…and after a drain stopped for a stall" || bad "traps after a stalled drain: rc=$RC [$T]"
+
+# A signal while the drain runs (review of 0.4.1 WP1, MAJOR). kubectl runs in the background, where a script's async commands ignore
+# Ctrl+C, so it would outlive a script that dies of the interrupt (shrink-nodes.sh has no INT trap), evicting pods from a node the
+# EXIT trap has already uncordoned. Real signals, real clock, a stub drain that hangs 30 s; the runner is a script of its own.
+alive() { local s; s="$(ps -o stat= -p "$1" 2>/dev/null | tr -d ' ')"; [ -n "$s" ] && [ "${s#Z}" = "$s" ]; }
+sig_run() { # <signal> <group|pid> [caller trap]
+  local sig="$1" target="$2" ct="${3:-}" pid i
+  rm -f "$TMP/drain.pid" "$TMP/runner.out"
+  { echo 'set -uo pipefail'; extract 'drain_watched,drain_interrupted,drain_untrap'
+    echo 'KCTL=(kubectl); DRAIN_TIMEOUT=30s; DRAIN_STALL_AFTER=120; DRAIN_TICK=0.1; warn() { :; }; STOP_REQUESTED=0'
+    echo "trap 'echo EXIT-TRAP' EXIT"
+    [ -z "$ct" ] || echo "trap '$ct' INT TERM"
+    echo 'drain_watched n1; echo "returned $? why=$DRAIN_WHY stop=$STOP_REQUESTED"; trap -p INT TERM'
+  } >"$TMP/runner.sh"
+  set -m; STUB_DRAIN_PIDFILE="$TMP/drain.pid" bash "$TMP/runner.sh" >"$TMP/runner.out" 2>&1 & pid=$!; set +m
+  for i in $(seq 100); do [ -s "$TMP/drain.pid" ] && break; command sleep 0.05; done
+  if [ "$target" = group ]; then kill -"$sig" -- "-$pid"; else kill -"$sig" "$pid"; fi
+  RC=0; wait "$pid" 2>/dev/null || RC=$?
+  OUT="$(cat "$TMP/runner.out")"; DPID="$(cat "$TMP/drain.pid" 2>/dev/null || echo 0)"
+}
+sig_run INT group
+{ [ "$DPID" != 0 ] && [ $RC -eq 130 ] && grep -q '^EXIT-TRAP$' <<<"$OUT" && ! alive "$DPID"; } \
+  && ok "Ctrl+C on a script with no INT trap (cluster-shrink): the script dies, its EXIT trap runs, and the drain is dead with it" \
+  || bad "Ctrl+C: rc=$RC drain pid $DPID alive=$(alive "$DPID" && echo yes || echo no) $OUT"
+alive "$DPID" && kill -9 "$DPID" 2>/dev/null
+sig_run TERM pid 'STOP_REQUESTED=1; echo CALLER-RAN'
+{ [ "$DPID" != 0 ] && [ $RC -eq 0 ] && ! alive "$DPID" && [ "$(grep -c '^CALLER-RAN$' <<<"$OUT")" = 1 ] && grep -q 'returned [1-9][0-9]* why=interrupted by SIGTERM stop=1' <<<"$OUT" \
+  && grep -q "^trap -- .*CALLER-RAN.* SIGTERM" <<<"$OUT" && grep -q '^EXIT-TRAP$' <<<"$OUT"; } \
+  && ok "SIGTERM on a script with its own trap (cluster-roll): the drain is killed, the caller's trap runs once (stop requested), the drain reports failure and the traps are back" \
+  || bad "SIGTERM: rc=$RC drain pid $DPID alive=$(alive "$DPID" && echo yes || echo no) $OUT"
+alive "$DPID" && kill -9 "$DPID" 2>/dev/null
 
 # kubectl's own answer is unchanged: a refusal at once is a refusal, with the timeout named, and DRAIN_STALL_AFTER=0 is the old foreground drain.
 seq_off; { pod app web Running '{}' ReplicaSet; } | mkpods >"$TMP/pods.json"; export STUB_DRAIN_RC=1; drain_run
 { [ $RC -eq 97 ] && grep -q 'could not be drained (timeout 900s)' <<<"$OUT" && grep -q 'uncordon n1' "$TMP/log"; } \
   && ok "a drain that fails by itself still ends in the old refusal, with the node uncordoned" || bad "plain failure: rc=$RC $OUT"
+{ grep -q "kubectl's own reason is printed just above" <<<"$OUT" && grep -q 'A pod without a controller' <<<"$OUT"; } \
+  && ok "…with the old words (kubectl printed its reason; the bare-pod cause is still listed)" || bad "plain failure lost its words: $OUT"
 export STUB_DRAIN_RC=0 STUB_DRAIN_SLEEP=0.4; DRAIN_STALL_AFTER=0; { pod app web Running '{}' ReplicaSet; } | mkpods >"$TMP/pods.json"; drain_run
 { [ $RC -eq 0 ] && grep -q 'drain n1' "$TMP/log" && ! grep -q 'get pdb' "$TMP/log" && [ "$(grep -c 'get pods -A' "$TMP/log")" = 2 ]; } \
   && ok "DRAIN_STALL_AFTER=0 switches the watch off: the plain drain, no reading of the pods or the budgets while it runs" || bad "watch not off: rc=$RC reads=$(grep -c 'get pods -A' "$TMP/log") $OUT"
