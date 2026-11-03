@@ -441,6 +441,7 @@ tasks:
       that cost real cloud runs on 2026-08-15 were logic, not cloud — a resource
       name resolving to the wrong CRD, an error read as an empty list, an rc
       capture `set -e` never reached. Seconds here instead of 25-90 minutes there.
+      Runs every scripts/dev/test-*.sh except those scripts/dev/exclude-from-test-scripts.txt names.
     vars:
       # Made when the task starts. The last step fails on anything under envs/
       # newer than it: a file written there, even one deleted again (#191).
@@ -451,239 +452,24 @@ tasks:
       # jsonpath first: a query kubectl cannot parse makes every assertion below
       # it meaningless, and this costs milliseconds.
       - ./scripts/dev/check-jsonpath.sh
-      - ./scripts/dev/test-rolling-replace.sh
-      - ./scripts/dev/test-shrink-nodes.sh
-      - ./scripts/dev/test-rwx-drain-gate.sh
-      - ./scripts/dev/test-roll-apiserver-gate.sh
-      - ./scripts/dev/test-node-provider.sh
-      - ./scripts/dev/test-wait-talos-port.sh
-      - ./scripts/dev/test-node-recovery.sh
-      # The volumes a replaced disk leaves behind: which are dropped, which are refused, against a fake kubectl.
-      - ./scripts/dev/test-replaced-node-cleanup.sh
-      # Critical pods sharing a node while another is empty: found, evicted one at a time, never wrongly
-      # (lab 27 part C, E4).
-      - ./scripts/dev/test-cluster-rebalance.sh
-      # The provider side is empty before fleet-down says complete (an Outscale Net, load balancers and a subnet
-      # outlived it in lab 27 part C, E5).
-      - ./scripts/dev/test-verify-provider-clean-outscale.sh
-      # The Talos image build refuses early when the disk cannot hold the raw image (about 12 GiB, lab 27 part C, E5).
-      - ./scripts/dev/test-image-disk-preflight.sh
-      - ./scripts/dev/test-dead-node-roll.sh
-      # The graceful stop of a live control plane before its replacement (F-CPFLAP): gates, order, failures.
-      - ./scripts/dev/test-cp-graceful-stop.sh
-      - ./scripts/dev/test-failure-domain-check.sh
-      # The CoreDNS manifest modules/talos injects (infra #388): selectors, host spread, tolerations, budget.
-      - ./scripts/dev/test-coredns-manifest.sh
-      - ./scripts/dev/test-egress-probe.sh
-      - ./scripts/dev/test-tunnel-guard.sh
-      # The one test that runs talos-tunnels.sh itself: every other harness stubs it (#65).
-      - ./scripts/dev/test-talos-tunnels.sh
-      - ./scripts/dev/test-real-cloud-workflow.sh
-      # These two were written, they pass, and nothing ever ran them — not this
-      # target, not CI. A harness nobody invokes is the failure mode this whole
-      # target exists for, one level up: the check does work, it is simply never
-      # asked. test-teardown owns the branches that decide whether a management
-      # is destroyed while its children keep billing; test-cluster-checks owns
-      # the queries that turn "the apply returned" into "the cluster works".
-      # Both use a stub kubectl, need no credentials, and cost ~10s together.
-      - ./scripts/dev/test-teardown.sh
-      # The dev fast lane's guard: each refusal proves nothing ran, each condition has a test that fails without it.
-      - ./scripts/dev/test-teardown-all.sh
-      - ./scripts/dev/test-cluster-checks.sh
-      # The purge scripts are the last sentence between a failed teardown and a
-      # bill, and both said "clean" when every API call was refused. Forced-403,
-      # in-process, no network.
-      - ./scripts/dev/test-purge-orphans.sh
-      # Six places build a bucket name, in two languages that cannot import each
-      # other. Nothing but this compares them.
-      - ./scripts/dev/test-bucket-names.sh
-      # The classifier behind `task lint`'s image-pin check, on fixtures.
-      - ./scripts/dev/test-image-pins.sh
-      # images.lock: the verifier, the lock writer against a fake Factory, the committed lock's format.
-      - ./scripts/dev/test-image-checksum.sh
-      # The CycloneDX inventory behind the weekly/release SBOM workflow, on a fixture and on the real tree.
-      - ./scripts/dev/test-sbom.sh
-      # The backup path had no inverse until 0.5.0. This is the round trip —
-      # the real enc() against the real dec(), offline.
-      - ./scripts/dev/test-restore.sh
-      # The entropy heuristic behind cluster-up's passphrase preflight: the generators never trip it, weak shapes do.
-      - ./scripts/dev/test-passphrase.sh
-      # The failover seeds a cluster from the OTHER provider's replica; what it untracks is the
-      # difference between a PKI carried over and a destroy plan against a cloud that is gone.
-      - ./scripts/dev/test-restore-state.sh
-      # The recovery chain as a command: dry-run runs nothing, --execute needs the name, a failing check stops it.
-      - ./scripts/dev/test-dr-restore-plan.sh
-      # The live cluster-identity ConfigMap against the rendered map (lab 25, D9): a dry run writes nothing,
-      # --apply patches only the rendered keys.
-      - ./scripts/dev/test-cluster-identity-sync.sh
-      # The apps ref (git_ref) of a live cluster against the tfvars and the two Flux objects, and the Cilium / Flux
-      # controller
-      # versions against the pinned artifacts (infra #408): dry runs write nothing, refusals come before any write.
-      - ./scripts/dev/test-cluster-apps-ref.sh
-      # The 0.4.0 synchronous block on the live CNPG Clusters, before the apps ref moves (study LAB-B2): dry run writes
-      # nothing, one patch of spec.postgresql.synchronous only, refusals before any write, no delete and no force.
-      - ./scripts/dev/test-cnpg-presync.sh
-      - ./scripts/dev/test-cluster-coredns-ha.sh
-      - ./scripts/dev/test-cluster-bootstrap-sync.sh
-      - ./scripts/dev/test-pins-verify.sh
-      # `nc -z` calls a dead ssh -L tunnel healthy. Two local listeners measure
-      # the difference the whole tunnel guard rests on.
-      - ./scripts/dev/test-endpoint-probe.sh
-      # Forgetting the second provider's keys does not fail — it signs the copy
-      # with the first provider's. Only the ENDPOINTS can say a backup was meant
-      # to be elsewhere, which is what these assert.
-      - ./scripts/dev/test-backup-creds.sh
-      # backup_immutability: versioning, expiry and object lock on a fake store that refuses a lock on a bucket not
-      # created with it; the read-back, the lifecycle rules someone else set, and the loud (not silent) refusal.
-      - ./scripts/dev/test-bucket-protection.sh
-      # Which S3 identity opens which bucket (s3-isolation-check.sh), on a fake store: a dedicated pair that
-      # reaches the backups, a key the store refuses, and "nothing dedicated" must each fail, never pass.
-      - ./scripts/dev/test-s3-isolation.sh
-      # backup-key-recipe.sh (#368): the rights and policies of a dedicated pair, per kind, real bucket names only.
-      - ./scripts/dev/test-backup-key-recipe.sh
-      # The audit sink settings (infra #318): where a sink may sit, COMPLIANCE only with the opt-in.
-      - ./scripts/dev/test-audit-sink-lib.sh
-      # The sink bucket: created with object lock on the right store, read back, a refusal is a failure (class A).
-      - ./scripts/dev/test-audit-sink-buckets.sh
-      # audit-sink-check.sh on real restic repositories: a hole, a recorded loss, a bad password, no lock are defects.
-      - ./scripts/dev/test-audit-sink-check.sh
-      # `task state` promises it never writes a state. Real task + real tofu on
-      # a local-backend fixture; the state's bytes are compared before and after.
-      - ./scripts/dev/test-state-task.sh
-      # `cluster-up` from first guard to last line, real go-task, stubbed leaves:
-      # a failing verifier fails it, and only a passing one prints success (#84).
-      - ./scripts/dev/test-cluster-up.sh
-      # check-alerts does not call a metric blind when no series is its healthy state (#357).
-      - ./scripts/dev/test-check-alert-metrics.sh
-      # A bootstrap the state forgot is imported only when a control plane already
-      # has etcd members (#67); every other answer must change nothing. The second
-      # harness runs the real talos provider offline, which the first can only assume.
-      - ./scripts/dev/test-adopt-bootstrap.sh
-      - ./scripts/dev/test-bootstrap-import.sh
-      # The three scripts between a cluster and a lost tfstate or etcd, and the
-      # Day-1 seeder whose one rule is never to rotate what exists. Writing
-      # these found a retention slice that deleted 28 of 29 snapshots and two
-      # scripts that died silently on an absent optional key.
-      - ./scripts/dev/test-state-backups.sh
-      - ./scripts/dev/test-seed-openbao.sh
-      # The escrow of the seal key, recovery shares and restic password (real gpg keys, stub cluster), and the one
-      # replace path for operator-supplied secrets (create-only seeding has none).
-      - ./scripts/dev/test-escrow-openbao.sh
-      - ./scripts/dev/test-rotate-secret.sh
-      # The recovery-share keys, checked for an encryption subkey before anything bills (sys/init commits, then fails).
-      - ./scripts/dev/test-check-openbao-keys.sh
-      # The language check (inline comments, Python strings, accents): its own cases.
-      - ./scripts/dev/test-check-language.sh
-      # Nothing said "tainted", so re-running destroyed a load balancer the
-      # provider was still building. This keeps that sentence on screen.
-      - ./scripts/dev/test-explain-failure.sh
-      # `cluster-up … APPROVE=auto` did not pass APPROVE to phase 2, so an "unattended"
-      # journey stopped for an approval after spending. Nothing read the call
-      # graph; this does.
-      - ./scripts/dev/test-unattended.sh
-      - ./scripts/dev/test-talos-image.sh
-      # Cléa reads every version this repository claims and rewrites it on a
-      # probe branch. Its reader, its writer and its comparator are all places a
-      # silent wrong answer would produce a confident report.
-      - ./scripts/dev/test-clea.sh
-      # A rejected PAT once lost every probe verdict for days without a signal: this
-      # drives push-probes.sh over real local remotes so the fallback cannot regress.
-      - ./scripts/dev/test-clea-push.sh
-      # setup.sh asked whether a tool was present, never which version it was —
-      # so it installed the pin once and refused every upgrade after that. Found
-      # by the Cléa probe, guarded here so it does not need Docker to stay fixed.
-      - ./scripts/dev/test-setup-checks.sh
-      # The SessionStart hook runs under `set -e` and is the only thing that
-      # installs the toolchain in a web session. Its Docker block fails in ways
-      # the ENVIRONMENT chooses, and any of them returning non-zero leaves the
-      # session with no tools at all — a failure nothing would connect to Docker.
-      - ./scripts/dev/test-session-start.sh
-      # converge-versions.sh had no downgrade guard of its own — it only
-      # survived one by accident, on two layers upstream it does not own.
-      - ./scripts/dev/test-converge-versions.sh
-      # talosconfig-new asked the Docker root's output name, without the data dir
-      # or S3 key, so no cloud lane found a node, and signed from any cluster's
-      # admin config. Real go-task, stubbed tofu.
-      - ./scripts/dev/test-talosconfig-new.sh
-      # Against an isolated throwaway git repo, not this one — proves
-      # check-script-reachability.sh actually flags an unreferenced script
-      # and clears once it's wired in, not just that today's tree is clean.
-      - ./scripts/dev/test-script-reachability.sh
-      # Same isolation, for check-dead-references.sh (#118): proves fences,
-      # backtick spans, comments and printed strings are checked, plain prose
-      # and fixture-writing redirects are not, and .deadreferencesignore
-      # scopes to the one file:candidate pair it names.
-      - ./scripts/dev/test-dead-references.sh
-      # check-doc-twins.sh against throwaway repos: a missing twin, a missing back-link, a section on one side only,
-      # a dead link, and what it must leave alone (anchors, external links, fenced text).
-      - ./scripts/dev/test-check-doc-twins.sh
-      # docs/network.md carries the node-inbound rules of each provider as a table generated from the Terraform:
-      # this fails when a table differs from the code or a rule has no justification row (both languages).
-      - ./scripts/dev/test-flow-matrix.sh
-      # A host missing CAP_SYS_RESOURCE looked healthy for 90s before this,
-      # then died on an unrelated-looking timeout (#54). Against a stubbed
-      # capsh, and also against this host's real one where reachable.
-      - ./scripts/dev/test-docker-talos-capability.sh
-      - ./scripts/dev/test-host-overlay-fd.sh
-      # A --set typo reaches the cluster silently past every other gate;
-      # this proves the effective-config reader (and check-cilium-parity.py's
-      # missing-key guard) actually catch it, offline.
-      - ./scripts/dev/test-cilium-effective-config.sh
-      # `set -e` does not see a process substitution's own git-log failure
-      # (#132) — proves a malformed rev-range fails loud instead of reading
-      # as zero commits, none of them tool-authored.
-      - ./scripts/dev/test-commit-authors.sh
-      # Unsigned or badly signed commits are reported (a warning until every maintainer signs): docs/signed-commits.md.
-      - ./scripts/dev/test-check-commit-signatures.sh
-      # A release tag is annotated and signed by a key of the signer table (infra #386): release-checklist.md section 8.
-      - ./scripts/dev/test-check-release-tag.sh
-      # feint.sh checked `running` once, immediately after `feint start`
-      # returned, with no retry — raced on a GitHub-hosted runner and failed
-      # CI once with no code change (#169). A stub feint puts the startup
-      # delay under our control; FEINT_RESTART_TIMEOUT=0 reproduces the exact
-      # pre-fix behavior through the real code path. Also holds every
-      # start/stop/status call, and the record lane's proxy, to FEINT_ENDPOINT.
-      - ./scripts/dev/test-feint-restart.sh
-      # Each check of check-required-checks.sh seen red and green against a
-      # canned API, not its HTTP layer; live, it runs in repo-settings.yml and in
-      # an admin's release-checklist run (bypass actors need an admin token).
+      # Each refusal of a check seen red and green against a canned API, not its HTTP layer; live, it runs in
+      # repo-settings.yml and in an admin's release-checklist run (bypass actors need an admin token).
       - ./scripts/dev/check-required-checks.sh --self-test
-      # The receipts behind a PR's rung claim (#120): the real Taskfile's defer
-      # under go-task, then every verdict the "Rung receipt" CI job can reach.
-      - ./scripts/dev/test-rung-receipts.sh
-      # The inline guards of `fmt`, `lint` and the step below, under the real Taskfile.
-      - ./scripts/dev/test-task-guards.sh
-      # infra-plan/infra-apply's talos_bootstrap answer: an unreadable state is refused, not "false".
-      - ./scripts/dev/test-bootstrap-in-state.sh
-      # A Flux refresh must leave upstream-artifacts.lock holding the hash of the file it just wrote.
-      - ./scripts/dev/test-render-bootstrap-lock.sh
-      # Cilium replaces kube-proxy: every machine config the module builds must disable it.
-      - ./scripts/dev/test-kube-proxy-disabled.sh
-      # infra-verify.sh's worker data-volume check (#62): names from the tfvars, verdicts from the nodes.
-      - ./scripts/dev/test-worker-volumes.sh
-      - ./scripts/dev/test-encryption-at-rest.sh
-      # cluster-security-tests.sh: Cilium WireGuard (1.8), development OpenBao bootstrap (4.6),
-      # escrow record (4.7), Loki bucket and keys (4.8, 4.9).
-      - ./scripts/dev/test-security-tests-checks.sh
-      # The read-only ops checks of the security pass: denied flows, exposed ports, RBAC subjects.
-      - ./scripts/dev/test-cluster-netcheck.sh
-      - ./scripts/dev/test-exposure-scan.sh
-      - ./scripts/dev/test-rbac-review.sh
-      # Named, short-lived Kubernetes certificates through the CSR API (stub kubectl, real openssl).
-      - ./scripts/dev/test-kubeconfig-new.sh
-      # The bastion scripts: harden-check (egress probes, opt-in baseline section, host key), the log pull (and its
-      # upload) and the fingerprint-to-person table.
-      - ./scripts/dev/test-bastion-harden-check.sh
-      - ./scripts/dev/test-bastion-logs-pull.sh
-      - ./scripts/dev/test-bastion-fingerprints.sh
-      # etcd-snapshot-cron.sh with two runs at once: the one that loses the lock cleans up nothing of the winner's.
-      - ./scripts/dev/test-etcd-snapshot-cron.sh
-      # grow-nodes.sh (#59): machines, then tunnels, then only the new nodes' configuration.
-      - ./scripts/dev/test-grow-nodes.sh
-      - ./scripts/dev/test-refuse-node-deletes.sh
-      # check-evidence-age.sh on fixtures and a fixed clock. The real tree must parse, never be
-      # current: a verdict here would turn a required check red with no commit.
-      - ./scripts/dev/test-evidence-age.sh
+      # Every harness, by glob (infra #400): a new scripts/dev/test-*.sh runs here without anyone remembering to
+      # list it, which is the failure mode this target exists for ("a harness nobody invokes"). What it leaves out
+      # is listed, each with its reason, in scripts/dev/exclude-from-test-scripts.txt; check-script-reachability.sh
+      # holds every name there to a task that runs it. Alphabetical order, first failure stops (as the hand-kept
+      # list did).
+      - |
+        skip="$(sed -E 's/[[:space:]]*#.*//; /^[[:space:]]*$/d' scripts/dev/exclude-from-test-scripts.txt)" || exit 1
+        n=0
+        for t in ./scripts/dev/test-*.sh; do
+          if grep -qxF "${t#./scripts/dev/}" <<<"$skip"; then continue; fi
+          echo "task: [test-scripts] $t" >&2
+          "$t" || { echo "✗ $t failed" >&2; exit 1; }
+          n=$((n + 1))
+        done
+        echo "$n harnesses ran under test-scripts"
       - |
         written="$(find infrastructure/opentofu/cluster/envs -newer {{.ENVS_STAMP}})" || exit 1
         [ -z "$written" ] || { echo "✗ a step wrote under envs/:" $written >&2; exit 1; }

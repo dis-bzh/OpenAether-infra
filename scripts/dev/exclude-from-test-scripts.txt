@@ -1,0 +1,9 @@
+# The harnesses `task test-scripts` leaves out. It runs every other scripts/dev/test-*.sh by glob (infra #400), so a new
+# harness needs no line anywhere. One file name per line, then "# why": the reason is mandatory.
+# scripts/dev/check-script-reachability.sh (in `task lint`) fails on a name that is no tracked file, on a line with no
+# reason, and on a name here that no cmds entry of another task in Taskfile.yml runs: an exclusion moves a harness, it never drops one.
+test-checkov-custom-checks.sh  # needs checkov and mutates tracked files under a trap: runs in `task lint`
+test-gates-local.sh            # needs the local Docker cluster (`task local-up`): `task test-gates-local`
+test-cnpg-gates-local.sh       # needs the local Docker cluster and installs CloudNativePG: `task test-cnpg-gates-local`
+test-talos-local.sh            # builds 3 control planes and 3 workers in Docker: `task local-test` (and `task local-down`)
+test-talos-rbac.sh             # asks a local Docker cluster whether Talos enforces roles: `task local-rbac` and `task local-test`

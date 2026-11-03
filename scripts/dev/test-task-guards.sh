@@ -89,22 +89,43 @@ t lint; rc=$?
   && ok "a hook whose files: drifted from TF_FMT_RE fails lint before fmt -check" \
   || bad "drifted hook (rc=$rc, tofu got: $(logged)): $(cat "$TMP/out")"
 
-echo "=== test-scripts fails on anything written under envs/ ==="
+echo "=== test-scripts runs every test-*.sh but the excluded ones, and fails on anything written under envs/ ==="
 fixture
 cp "$ROOT/.pre-commit-config.yaml" "$repo/"
-PATH="$TMP/bin:$PATH" task --dir "$repo" --dry test-scripts >"$TMP/dry" 2>&1
-stubs="$(grep -o '\./scripts/dev/[A-Za-z0-9._-]*\.sh' "$TMP/dry" | sort -u)"
-[ "$(wc -l <<<"$stubs")" -gt 10 ] && ok "$(wc -l <<<"$stubs") scripts of test-scripts stubbed" || bad "too few scripts in the dry run: $(cat "$TMP/dry")"
-last_script="$(grep -o '\./scripts/dev/[A-Za-z0-9._-]*\.sh' "$TMP/dry" | tail -n1)"
+EXCL=scripts/dev/exclude-from-test-scripts.txt
+cp "$ROOT/$EXCL" "$repo/$EXCL" 2>/dev/null || bad "$EXCL is missing: test-scripts has no list of what it leaves out"
+# A stub for every harness of this tree, one for a harness added later (the Taskfile is not touched for it), and one
+# for each explicit step. Each stub logs its name and arguments; WRITER writes, FAIL_ON fails.
+new_harness=test-zz-new-harness.sh
+stubs="$(cd "$ROOT" && ls scripts/dev/test-*.sh | sed 's|^|./|'; echo "./scripts/dev/$new_harness"; echo ./scripts/dev/check-jsonpath.sh; echo ./scripts/dev/check-required-checks.sh)"
 for s in $stubs; do
-  printf '#!/usr/bin/env bash\n%s\nexit 0\n' '[ "$(basename "$0")" != "$WRITER" ] || eval "$WRITE"' >"$repo/$s"
+  printf '#!/usr/bin/env bash\n%s\n%s\n%s\nexit 0\n' \
+    'printf "%s\n" "$(basename "$0")${1:+ $1}" >>"$RUN_LOG"' \
+    '[ "$(basename "$0")" != "${FAIL_ON:-}" ] || exit 7' \
+    '[ "$(basename "$0")" != "$WRITER" ] || eval "$WRITE"' >"$repo/$s"
   chmod +x "$repo/$s"
 done
 g add -A && g commit -q -m stubs
 envs="infrastructure/opentofu/cluster/envs"
-ts() { PATH="$TMP/bin:$PATH" WRITER="$(basename "$last_script")" WRITE="$1" task --dir "$repo" test-scripts >"$TMP/out" 2>&1; }
+export RUN_LOG="$TMP/run.log"
+ts() { : >"$RUN_LOG"; PATH="$TMP/bin:$PATH" WRITER="$new_harness" WRITE="$1" FAIL_ON="${2:-}" task --dir "$repo" test-scripts >"$TMP/out" 2>&1; }
 ts true; rc=$?
 [ "$rc" -eq 0 ] && ok "no step writes under envs/: test-scripts passes (rc=$rc)" || bad "clean run failed (rc=$rc): $(tail -5 "$TMP/out")"
+# The expected set is computed here from the list, not copied from the Taskfile: every harness minus the excluded.
+excluded="$(sed -E 's/[[:space:]]*#.*//; /^[[:space:]]*$/d' "$repo/$EXCL" 2>/dev/null)"
+want="$({ for s in $stubs; do basename "$s"; done | grep -v '^check-required-checks.sh$' | grep -vxF -f <(echo "$excluded")
+          echo "check-required-checks.sh --self-test"; } | sort)"
+got="$(sort "$RUN_LOG")"
+[ "$got" = "$want" ] && ok "it ran exactly the $(wc -l <<<"$want") harnesses and steps expected: every test-*.sh minus the excluded, plus the two explicit checks" \
+  || bad "the executed set differs from the expected one: $(diff <(echo "$want") <(echo "$got") | head -12)"
+grep -qx "$new_harness" "$RUN_LOG" && ok "a harness added without touching the Taskfile ($new_harness) runs" || bad "a new test-*.sh is not run by test-scripts"
+head -n1 "$RUN_LOG" | grep -q '^check-jsonpath.sh$' && ok "the jsonpath check still runs first" || bad "check-jsonpath.sh is not first: $(head -n1 "$RUN_LOG")"
+leaked=""
+for x in $excluded; do grep -qx "$x" "$RUN_LOG" && leaked="$leaked $x"; done
+[ -n "$excluded" ] && [ -z "$leaked" ] && ok "none of the $(wc -l <<<"$excluded") excluded harnesses ran" || bad "excluded harnesses ran (or none are excluded):${leaked:- (empty list)}"
+ts true "$new_harness"; rc=$?
+[ "$rc" -ne 0 ] && grep -q "$new_harness failed" "$TMP/out" && ok "a failing harness fails test-scripts and is named" \
+  || bad "a failing harness (rc=$rc): $(tail -5 "$TMP/out")"
 ts "printf x >$envs/leftover.tmp"; rc=$?
 [ "$rc" -ne 0 ] && grep -q 'a step wrote under envs/' "$TMP/out" && ok "a file left under envs/ fails it" \
   || bad "a file left behind (rc=$rc): $(tail -5 "$TMP/out")"
