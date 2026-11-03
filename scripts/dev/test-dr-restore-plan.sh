@@ -80,7 +80,7 @@ out=""; for x in "$d"*/; do [ -d "$x" ] && out="${out:+$out	}${p}$(basename "$x"
 echo "${out:-None}"
 STUB
 chmod +x "$TMP/bin/task" "$TMP/bin/restic" "$TMP/bin/talosctl" "$TMP/bin/aws"
-export PATH="$TMP/bin:$PATH" OA_DR_TASK=task OA_DR_POLL=0 OA_DR_WAIT_TRIES=3 OA_DR_STANDBY_TRIES=2
+export PATH="$TMP/bin:$PATH" OA_DR_TASK=task OA_DR_POLL=0 OA_DR_WAIT_TRIES=3 OA_DR_STANDBY_TRIES=2 OA_DR_STABLE_ROUNDS=2 OA_DR_STABLE_TRIES=8
 export SCW_AWS_ACCESS_KEY_ID=AKIAEXAMPLE SCW_AWS_SECRET_ACCESS_KEY=secretvalue OVH_AWS_ACCESS_KEY_ID=ovhak OVH_AWS_SECRET_ACCESS_KEY=ovhsk
 export TF_VAR_encryption_passphrase="a-passphrase-long-enough-to-be-accepted-32+"
 SEAL="$TMP/seal.key"; head -c 32 /dev/urandom | base64 >"$SEAL"
@@ -123,6 +123,7 @@ chk "nothing was run: no stub was called, no directory created" "[ ! -s '$FAKE_D
 chk "the targets and the RTO are stated, with the RPO of each data set" "grep -q '480 min RTO' '$TMP/stdout' && grep -q 'RPO' '$TMP/stdout'"
 chk "the report table has every step as dry-run" "[ \"\$(grep -c ' dry-run ' '$TMP/stdout')\" = 12 ]"
 chk "the dry-run says Grafana (observability) waits for the databases like identity does, and that its ExternalSecrets are read in the identity step (infra #426)" "grep -q 'except identity\* and observability' '$TMP/stdout' && grep -q 'every ExternalSecret is Ready (those of observability exist only from here on)' '$TMP/stdout'"
+chk "...and that the parent Kustomization openaether-platform is held first and resumed last, because its reconcile resets the suspend of its children (a proof lab)" "grep -q 'openaether-platform' '$TMP/stdout' && grep -q 'resets spec.suspend' '$TMP/stdout'"
 run "${ALL[@]}" --from replica
 chk "--from replica reads the -backup bucket on the replica endpoint with the replica store's keys" "grep -q 's3:https://s3.gra.io.cloud.ovh.net/s3-oa-zz-scaleway-backups-prod-backup/oa-test-prod-scaleway/openbao' '$TMP/stdout'"
 
@@ -146,9 +147,11 @@ chk "the steps ran in the documented order" "order 'task restore-artifacts' 'tas
 chk "the seal key Secret is created before Flux is switched on (the second cluster-up)" "[ \"\$(calls | grep -n 'create secret generic openbao-seal-key' | cut -d: -f1)\" -lt \"\$(calls | grep -n 'task cluster-up' | tail -1 | cut -d: -f1)\" ]"
 chk "deploy_flux is true afterwards, and the previous file is kept next to it" "grep -q '^deploy_flux = true' '$OA_ENVS_DIR/management-scaleway.tfvars' && grep -q '^deploy_flux = false' '$OA_ENVS_DIR/management-scaleway.tfvars.dr-bak'"
 chk "the held list excludes foundation-vault and what it needs, and includes identity" "! grep -qE '^(foundation-vault|namespaces|platform)\$' '$OUTD/work/held.txt' && grep -q '^identity\$' '$OUTD/work/held.txt' && grep -q '^cnpg\$' '$OUTD/work/held.txt'"
-chk "everything held is suspended first, identity and observability are resumed last" "head -n \$(wc -l <'$OUTD/work/held.txt') '$FAKE_DR/state/patches.log' | grep -q suspend && [ \"\$(tail -n 3 '$FAKE_DR/state/patches.log' | grep -cE '^(identity|identity-gateway|observability) resume')\" = 3 ]"
+chk "the parent Kustomization openaether-platform is held too (it is outside OpenBao's closure, as in the lab) and is the FIRST one suspended, so it cannot re-apply a child between two patches" "[ \"\$(head -n 1 '$OUTD/work/held.txt')\" = openaether-platform ] && [ \"\$(head -n 1 '$FAKE_DR/state/patches.log')\" = 'openaether-platform suspend' ]"
+chk "everything held is suspended first; the late group (identity, observability) is resumed after the databases, and the parent LAST: its first reconcile resets the suspend of every child, so a parent resumed with the first group released Grafana and Zitadel when the load had just begun (a proof lab, infra #426 again)" "[ \"\$(head -n \$(wc -l <'$OUTD/work/held.txt') '$FAKE_DR/state/patches.log' | grep -c ' suspend\$')\" = \$(wc -l <'$OUTD/work/held.txt') ] && [ \"\$(tail -n 4 '$FAKE_DR/state/patches.log' | tr '\n' ',')\" = 'identity resume,identity-gateway resume,observability resume,openaether-platform resume,' ] && ! head -n -4 '$FAKE_DR/state/patches.log' | grep -q 'openaether-platform resume'"
 chk "Grafana (observability) is not resumed before the last pg_restore: the load goes into a pristine grafana-db (infra #426)" "calls | awk '/pg_restore/ { exit } /patch kustomization observability .*false/ { bad = 1 } END { exit bad }'"
-chk "...it is resumed after the load and before the verify" "order 'pg_restore' 'patch kustomization observability .*false' 'task cluster-verify'"
+chk "...nor is the parent: it is resumed after the load, after the late group, and before the verify" "calls | awk '/pg_restore/ { exit } /patch kustomization openaether-platform .*false/ { bad = 1 } END { exit bad }' && order 'pg_restore' 'patch kustomization observability .*false' 'patch kustomization openaether-platform .*false' 'task cluster-verify'"
+chk "...and Grafana never met a pg_restore error: it was still held when grafana-db was loaded" "[ \$RC = 0 ] && ! grep -q 'short_url' '$TMP/stderr' '$TMP/stdout'"
 chk "the OpenBao restore received a token and the snapshot on stdin (3000 bytes)" "grep -q 'snapshot_bytes=3000' '$FAKE_DR/state/restore.log' && grep -q 'token_bytes=2[0-9]' '$FAKE_DR/state/restore.log'"
 chk "the source's three shares are back" "grep -c 'share-' '$FAKE_DR/state/shares.json' | grep -q 1 && python3 -c \"import json; assert len(json.load(open('$FAKE_DR/state/shares.json')))==3\""
 chk "both databases are recovered into a scratch Cluster from the ${STORE:-primary} ObjectStore, which never archives" "python3 - '$FAKE_DR/state/applied.jsonl' <<'PY'
@@ -224,6 +227,7 @@ new; FAKE_BROKEN_CHAIN=1 run "${ALL[@]}" --execute --confirm oa-test
 chk "a broken canary chain after the database load: exit 1, dbs failed" "[ $RC = 1 ] && grep -q '✗ dbs FAILED' '$TMP/stdout' && grep -q 'canary chain broken' '$TMP/stdout'"
 chk "identity is NOT resumed and the later steps are skipped" "! grep -q '^identity resume' '$FAKE_DR/state/patches.log' && grep -q ' skipped ' '$TMP/stdout' && ! calls | grep -q 'task cluster-verify'"
 chk "it says where to resume" "grep -q 'from-step dbs' '$TMP/stderr'"
+chk "...and that the parent Kustomization and the late group are still suspended, with the command to resume them if the chain is abandoned" "grep -q 'openaether-platform' '$TMP/stderr' && grep -q 'still suspended' '$TMP/stderr'"
 chk "the report still lists every step" "[ \"\$(grep -c -P '\t(ok|failed|skipped)\t' '$OUTD/dr-report-'*.tsv)\" = 12 ]"
 new; FAKE_FAIL_SECRET=1 run "${ALL[@]}" --execute --confirm oa-test
 chk "a command that fails inside a step fails the step (errexit in the step's own shell): seedkey failed, nothing after it ran" "[ $RC = 1 ] && grep -q '✗ seedkey FAILED' '$TMP/stdout' && ! calls | grep -q 'restic -r'"
@@ -262,11 +266,39 @@ new; mkdir -p "$OUTD/work"; printf 'cnpg\nidentity\nobservability\n' >"$OUTD/wor
 chk "...and still not for ever: a Kustomization that never gets Ready fails the step" "[ $RC = 1 ] && grep -q 'Kustomizations are not Ready' '$TMP/stdout'"
 
 new; FAKE_ES_LATE=bad run "${ALL[@]}" --execute --confirm oa-test
-chk "an ExternalSecret of observability that never syncs is not seen by resume (it does not exist yet) but stops the identity step, and verify does not run (the coverage #426 moved)" "[ $RC = 1 ] && grep -q '✓ resume done' '$TMP/stdout' && grep -q '✗ identity FAILED' '$TMP/stdout' && grep -q '1 of 7 ExternalSecrets are not Ready' '$TMP/stdout' && ! calls | grep -q 'task cluster-verify'"
+chk "an ExternalSecret of observability that never syncs (Loki's keys) is not seen by resume (it does not exist yet) but stops the identity step, and verify does not run (the coverage #426 moved)" "[ $RC = 1 ] && grep -q '✓ resume done' '$TMP/stdout' && grep -q '✗ identity FAILED' '$TMP/stdout' && grep -q '1 of 7 ExternalSecrets are not Ready' '$TMP/stdout' && ! calls | grep -q 'task cluster-verify'"
 new; mkdir -p "$OUTD/work"; printf 'cnpg\nidentity\nobservability\n' >"$OUTD/work/held.txt"; FAKE_ES_LATE=slow:4 run "${ALL[@]}" --execute --confirm oa-test --only identity
 chk "...but ExternalSecrets that are only slow to sync (NotReady for the first polls) are waited for" "[ $RC = 0 ]"
 new; mkdir -p "$OUTD/work"; printf 'cnpg\nidentity\nobservability\n' >"$OUTD/work/held.txt"; FAKE_ES_LATE=none run "${ALL[@]}" --execute --confirm oa-test --only identity
 chk "...and an ExternalSecret list that comes back empty is not a pass (no ExternalSecret is not 'none is NotReady')" "[ $RC = 1 ] && grep -q '0 of 0 ExternalSecrets are not Ready' '$TMP/stdout'"
+
+echo "=== ExternalSecrets that cannot be Ready on a default rebuild (a proof lab, F3) ==="
+idn() { mkdir -p "$OUTD/work"; printf 'cnpg\nidentity\nobservability\n' >"$OUTD/work/held.txt"; run "${ALL[@]}" --execute --confirm oa-test --only identity; }
+new; FAKE_ES_LATE=unseeded idn
+chk "grafana-oidc reads grafana/oidc, which only a console step puts into OpenBao: NotReady on every default rebuild, it must not stop the chain (a proof lab on Scaleway, 3 CP + 6 W: the identity step waited out its 30 minutes on it)" "[ $RC = 0 ] && grep -q '✓ identity done' '$TMP/stdout' && grep -q 'chain complete' '$TMP/stdout'"
+chk "...and the output says which ExternalSecret was left out and why (named, not silently skipped), with the way to seed it" "grep -q 'services-observability/grafana-oidc' '$TMP/stdout' && grep -q 'not counted' '$TMP/stdout' && grep -q 'grafana/oidc' '$TMP/stdout'"
+new; FAKE_ES_LATE=unseeded,bad FAKE_KS_SLOW=0 idn
+chk "the guard is kept for every other ExternalSecret: with grafana-oidc unseeded AND Loki's keys never syncing the step still stops, counting only the other six" "[ $RC = 1 ] && grep -q '1 of 6 ExternalSecrets are not Ready' '$TMP/stdout'"
+new; FAKE_ES_LATE=unseeded,oidc-elsewhere idn
+chk "the optional ExternalSecret is a namespace and a name: a grafana-oidc that is NotReady in another namespace is counted and stops the step" "[ $RC = 1 ] && grep -q '1 of 7 ExternalSecrets are not Ready' '$TMP/stdout'"
+new; FAKE_ES_LATE=bad idn
+chk "...and the exclusion does not widen with the namespace: Loki's ExternalSecret, NotReady in the same namespace as grafana-oidc, still stops the step" "[ $RC = 1 ] && grep -q '1 of 7 ExternalSecrets are not Ready' '$TMP/stdout'"
+new; OA_DR_ES_OPTIONAL='' FAKE_ES_LATE=unseeded idn
+chk "OA_DR_ES_OPTIONAL= (empty) counts every ExternalSecret again: the strict reading of 0.4.1 stays one variable away" "[ $RC = 1 ] && grep -q '1 of 7 ExternalSecrets are not Ready' '$TMP/stdout'"
+new; OA_DR_ES_OPTIONAL="services-observability/grafana-oidc,services-observability/loki-s3-credentials" FAKE_ES_LATE=unseeded,bad idn
+chk "OA_DR_ES_OPTIONAL extends the list (comma or space separated), and each one left out is named" "[ $RC = 0 ] && grep -q 'services-observability/loki-s3-credentials' '$TMP/stdout' && grep -q 'services-observability/grafana-oidc' '$TMP/stdout'"
+new; mkdir -p "$OUTD/work"; printf 'cnpg\nidentity\nobservability\n' >"$OUTD/work/held.txt"; FAKE_ES_EARLY_BAD=1 run "${ALL[@]}" --execute --confirm oa-test --only resume
+chk "step resume keeps its whole coverage (0.4.0): an ExternalSecret that exists and never syncs still stops it" "[ $RC = 1 ] && grep -q '1 ExternalSecrets are not Ready' '$TMP/stdout'"
+
+echo "=== the late group stays held until the databases are loaded (a proof lab, F4, infra #426) ==="
+new; run "${ALL[@]}" --execute --confirm oa-test --only hold
+chk "the hold suspends the parent first and reads every held Kustomization back as suspended" "[ $RC = 0 ] && [ \"\$(head -n 1 '$FAKE_DR/state/patches.log')\" = 'openaether-platform suspend' ] && grep -q 'read back' '$TMP/stdout'"
+new; run "${ALL[@]}" --execute --confirm oa-test --only hold; run "${ALL[@]}" --execute --confirm oa-test --only resume
+chk "after step resume the parent and the late group are STILL suspended (the lab: the parent, resumed with the first group, re-applied identity and observability with no spec.suspend within seconds)" "[ $RC = 0 ] && ! grep -qE '^(openaether-platform|identity|identity-gateway|observability) resume' '$FAKE_DR/state/patches.log' && grep -q '^cnpg resume' '$FAKE_DR/state/patches.log'"
+new; FAKE_HOLD_RESET=observability run "${ALL[@]}" --execute --confirm oa-test --only hold
+chk "a Kustomization found not suspended at the read-back (a reconcile of the parent was in flight) is suspended again and the step passes, saying so" "[ $RC = 0 ] && [ \"\$(grep -c '^observability suspend' '$FAKE_DR/state/patches.log')\" = 2 ] && grep -q 'observability' '$TMP/stdout' && grep -q 'suspended again' '$TMP/stdout'"
+new; FAKE_HOLD_RESET=observability FAKE_HOLD_RESET_ALWAYS=1 run "${ALL[@]}" --execute --confirm oa-test --only hold
+chk "...but one that is reset every time stops the chain, naming it and the command to read it" "[ $RC = 1 ] && grep -q '✗ hold FAILED' '$TMP/stdout' && grep -q 'observability' '$TMP/stdout' && grep -q 'spec.suspend' '$TMP/stdout'"
 
 echo "=== OpenBao standbys after the raft restore (apps #184) ==="
 dels() { sort "$FAKE_DR/state/pods-deleted.log" 2>/dev/null | tr '\n' ' '; }
@@ -280,6 +312,27 @@ new; FAKE_BAO_NOANSWER=openbao-1 run "${ALL[@]}" --execute --confirm oa-test --o
 chk "a pod that gives no readable answer is a warning, not a stop and not a second restart (the unreadable form must not stop a chain that worked in 0.4.0)" "[ $RC = 0 ] && [ \"\$(dels)\" = 'openbao-1 openbao-2 ' ] && grep -q 'openbao-1 gave no readable answer' '$TMP/stdout'"
 new; OA_DR_NO_STANDBY_FIX=1 FAKE_BAO_NOLEADER=openbao-0 run "${ALL[@]}" --execute --confirm oa-test --only openbao
 chk "OA_DR_NO_STANDBY_FIX=1 still switches the whole standby handling off: no pod deleted, no pod asked" "[ $RC = 0 ] && [ -z \"\$(dels)\" ] && ! calls | grep -q 'sys/leader'"
+
+new; FAKE_BAO_MOVE=3 run "${ALL[@]}" --execute --confirm oa-test --only openbao
+leaders() { local p n=0; for p in openbao-0 openbao-1 openbao-2; do kubectl -n foundation-vault exec "$p" -- bao read -format=json sys/leader 2>/dev/null | grep -q '"leader_address": "https' && n=$((n + 1)); done; echo "$n"; }
+chk "the active node moves right after the first look (a proof lab: 5 s after the check passed) and openbao-0 follows no one: one look is not enough, the step sees the change in the next survey, restarts openbao-0 once and ends with all three pods naming the active node" "[ $RC = 0 ] && [ \"\$(dels)\" = 'openbao-0 openbao-1 openbao-2 ' ] && grep -q 'openbao-0 answers but knows no active node' '$TMP/stdout' && [ \"\$(FAKE_BAO_MOVE=3 leaders)\" = 3 ]"
+chk "...and says how long the state held" "grep -q 'consecutive surveys' '$TMP/stdout'"
+new; FAKE_BAO_MOVE=3 FAKE_BAO_STUCK=1 run "${ALL[@]}" --execute --confirm oa-test --only openbao
+chk "a pod that still has no active node after its one restart stops the chain with the exact command to restart it, and the step to resume from: NOT the openbao step, which would restore the snapshot again" "[ $RC = 1 ] && [ \"\$(dels)\" = 'openbao-0 openbao-1 openbao-2 ' ] && grep -q 'openbao-0 still knows no active node after a restart' '$TMP/stdout' && grep -q 'kubectl --kubeconfig .*-n foundation-vault delete pod openbao-0' '$TMP/stdout' && grep -q 'resume with --from-step shares' '$TMP/stderr' && ! grep -q 'resume with --from-step openbao' '$TMP/stderr'"
+new; FAKE_BAO_FLAP=1 run "${ALL[@]}" --execute --confirm oa-test --only openbao
+chk "an active node that changes at every survey never gives N identical ones: bounded, the chain stops (it restarts nobody: no pod lacks an address) and says what to read" "[ $RC = 1 ] && [ \"\$(dels)\" = 'openbao-1 openbao-2 ' ] && grep -q 'did not settle' '$TMP/stdout' && grep -q 'bao operator raft list-peers' '$TMP/stdout' && grep -q 'resume with --from-step shares' '$TMP/stderr'"
+new; FAKE_BAO_SPLIT=openbao-1 run "${ALL[@]}" --execute --confirm oa-test --only openbao
+chk "pods that agree with themselves round after round but name different active nodes pass with a warning (the agreement between pods is not evidenced as a text equality: no new stop on a healthy cluster)" "[ $RC = 0 ] && grep -q 'WARNING: the pods name different active nodes' '$TMP/stdout'"
+new; OA_DR_WAIT_TRIES=6 FAKE_BAO_SEALED=openbao-0 run "${ALL[@]}" --execute --confirm oa-test --only openbao
+chk "openbao-0 left sealed after the restore (a second run of the step did: sealed for 8+ minutes) is restarted once, after the same grace as a standby, before the other two are touched" "[ $RC = 0 ] && [ \"\$(head -n 1 '$FAKE_DR/state/pods-deleted.log')\" = openbao-0 ] && [ \"\$(dels)\" = 'openbao-0 openbao-1 openbao-2 ' ] && grep -q 'openbao-0 is still sealed' '$TMP/stdout'"
+new; OA_DR_WAIT_TRIES=6 FAKE_BAO_SEALED=openbao-0 FAKE_BAO_STUCK=1 run "${ALL[@]}" --execute --confirm oa-test --only openbao
+chk "...and if it is still sealed after that restart the chain stops with the command, and nothing else was deleted" "[ $RC = 1 ] && [ \"\$(dels)\" = 'openbao-0 ' ] && grep -q 'openbao-0 is still sealed after a restart' '$TMP/stdout' && grep -q 'delete pod openbao-0' '$TMP/stdout' && grep -q 'resume with --from-step shares' '$TMP/stderr'"
+new; OA_DR_WAIT_TRIES=6 FAKE_BAO_SEALED=openbao-0 FAKE_BAO_NOLEADER=openbao-0 FAKE_BAO_NOLEADER_STUCK=1 run "${ALL[@]}" --execute --confirm oa-test --only openbao
+chk "no pod is restarted twice, whichever phase restarted it: openbao-0 restarted for being sealed and then without an active node stops the chain instead of a second restart" "[ \$RC = 1 ] && [ \"\$(dels)\" = 'openbao-0 openbao-1 openbao-2 ' ] && grep -q 'openbao-0 still knows no active node after a restart' '$TMP/stdout'"
+new; FAKE_BAO_SEALED=openbao-2 FAKE_BAO_STUCK=1 run "${ALL[@]}" --execute --confirm oa-test --only openbao
+chk "a standby that stays sealed is restarted once and then stops the chain, like one without an active node" "[ $RC = 1 ] && [ \"\$(dels)\" = 'openbao-1 openbao-2 openbao-2 ' ] && grep -q 'openbao-2 is still sealed after a restart' '$TMP/stdout'"
+new; FAKE_BAO_DOWN=openbao-1 run "${ALL[@]}" --execute --confirm oa-test --only openbao
+chk "a pod that does not answer at all for the whole bound stops the chain, is not restarted by the script (the StatefulSet owns a missing pod) and the output tells how to look at it" "[ $RC = 1 ] && [ \"\$(dels)\" = 'openbao-1 openbao-2 ' ] && grep -q 'openbao-1' '$TMP/stdout' && grep -q 'get pod openbao-1' '$TMP/stdout'"
 
 echo "=== subsets and the other sources ==="
 new; mkdir -p "$OUTD/work"; printf 'cnpg\nidentity\n' >"$OUTD/work/held.txt"

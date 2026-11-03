@@ -9,10 +9,21 @@ FAKE_*     failure injections: FAKE_FAIL_SECRET=1 (the seal key Secret is refuse
            FAKE_CRON_PRUNE=1 (the CronJob history limit prunes the Jobs made from it that still carry its owner reference), FAKE_JOB_GONE=<job> (that Job is
            NotFound), FAKE_JOB_PATCH_FAIL=1 (patching a Job is refused)
            FAKE_BAO_NOLEADER=<pod> (that OpenBao standby knows no active node until its pod is deleted), FAKE_BAO_STUCK=1 (...not even then),
-           FAKE_BAO_NOANSWER=<pod> (that pod does not answer exec)
+           FAKE_BAO_NOANSWER=<pod> (that pod does not answer sys/leader), FAKE_BAO_DOWN=<pod> (that pod does not answer exec at all),
+           FAKE_BAO_SEALED=<pod> (that pod stays sealed until its pod is deleted; FAKE_BAO_STUCK=1: not even then),
+           FAKE_BAO_MOVE=<n> (after n sys/leader calls the active node moves from openbao-0 to openbao-2 and openbao-0 follows no one until its
+           pod is deleted: the check had passed when a proof lab's leader moved), FAKE_BAO_SPLIT=<pod> (that pod names another active node),
+           FAKE_BAO_FLAP=1 (the active node changes at every survey)
+           FAKE_ES_LATE=bad,unseeded,oidc-elsewhere,slow:n,none (a comma list; ExternalSecrets of observability: loki's never syncs / grafana-oidc, whose OpenBao key
+           is never seeded, is NotReady / the same name is NotReady in ANOTHER namespace / the first n polls / the list is empty),
+           FAKE_ES_EARLY_BAD=1 (an ExternalSecret that exists before the late group is NotReady)
+           FAKE_HOLD_RESET=<ks> (the first read-back after the hold finds that Kustomization not suspended: a parent reconcile in flight;
+           FAKE_HOLD_RESET_ALWAYS=1: every read-back does)
            FAKE_CILIUM=stuck|stuck-forever|slow (the Cilium rollout does not finish: an agent stuck Terminating, which a force-delete frees / which
            stays Terminating, or is replaced by another that does / no pod Terminating at all)
-           Grafana: a pg_restore into grafana-db after the Kustomization observability was resumed fails with the three dependency errors of lab 28B
+           Grafana: a pg_restore into grafana-db after the Kustomization observability was released fails with the three dependency errors of lab 28B.
+           A Kustomization is released by its own resume patch, AND by every resume of its parent openaether-platform: the parent re-applies its
+           children, whose manifests carry no spec.suspend (a proof lab: a suspended child was reset within 10 s of the parent's reconcile)
 Secrets are never written to calls.log: stdin is summarised (a length), --from-file contents are not copied there.
 """
 import base64
@@ -71,6 +82,26 @@ def patched():  # "<kustomization> suspend|resume", one per patch so far
     return get(f("patches.log")).splitlines() if os.path.exists(f("patches.log")) else []
 
 
+PARENT = "openaether-platform"
+
+
+def suspended():  # the Kustomizations suspended now: the patches replayed, and a resume of the parent resets every child (it re-applies them)
+    s = set()
+    for line in patched():
+        name, act = line.split()
+        if act == "suspend":
+            s.add(name)
+        else:
+            s.discard(name)
+            if name == PARENT:
+                s = set()
+    return s
+
+
+def released(ks):  # was `ks` suspended by the hold and is it running now
+    return (ks + " suspend") in patched() and ks not in suspended()
+
+
 if "get --raw=/readyz" in A:
     out("ok")
 if a[:2] == ["get", "nodes"]:
@@ -123,8 +154,15 @@ if a[:5] == ["-n", "flux-system", "get", "configmap", "cnpg-archive-generation"]
     out("cnpg-archive-generation\n")
 if a[:3] == ["-n", "flux-system", "get"] and opt("-o") == "json":
     ks = {"foundation-vault": ["namespaces", "platform"], "namespaces": [], "platform": ["namespaces"], "external-secrets-stores": ["foundation-vault"],
-          "cnpg": ["external-secrets-stores"], "backup-databases": ["cnpg"], "identity": ["cnpg"], "identity-gateway": ["identity"], "observability": []}
-    out({"items": [{"metadata": {"name": k}, "spec": {"dependsOn": [{"name": d} for d in v]}} for k, v in ks.items()]})
+          "cnpg": ["external-secrets-stores"], "backup-databases": ["cnpg"], "identity": ["cnpg"], "identity-gateway": ["identity"], "observability": [],
+          PARENT: []}  # the parent is a Kustomization of the same namespace, outside OpenBao's closure, as on a cluster (it was in the held list of a proof lab)
+    sus = suspended()
+    rst = os.environ.get("FAKE_HOLD_RESET")
+    if rst and any(x.endswith(" suspend") for x in patched()) and (os.environ.get("FAKE_HOLD_RESET_ALWAYS") or not os.path.exists(f("hold-reset"))):
+        put(f("hold-reset"), "1")
+        sus.discard(rst)
+    out({"items": [{"metadata": {"name": k}, "spec": dict({"dependsOn": [{"name": d} for d in v]}, **({"suspend": True} if k in sus else {}))}
+                   for k, v in ks.items()]})
 if a[:3] == ["-n", "flux-system", "get"] and "--no-headers" in a:
     n = int(get(f("ks-polls")) or 0) if os.path.exists(f("ks-polls")) else 0
     put(f("ks-polls"), str(n + 1))
@@ -137,7 +175,18 @@ if a[:2] == ["-n", "foundation-vault"] and a[2:4] == ["exec", "-i"]:
     first, _, rest = data.partition(b"\n")
     put(f("restore.log"), f"token_bytes={len(first)} snapshot_bytes={len(rest)} sha={hashlib.sha256(rest).hexdigest()[:12]}\n")
     sys.exit(0)
-if "exec openbao-0 -- bao status" in A:
+def pods_deleted():
+    return get(f("pods-deleted.log")).split() if os.path.exists(f("pods-deleted.log")) else []
+
+
+if a[:3] == ["-n", "foundation-vault", "exec"] and a[3:4] and a[3].startswith("openbao-") and "bao status" in A:
+    pod = a[3]
+    if os.environ.get("FAKE_BAO_DOWN") == pod:
+        sys.stderr.write("error: unable to upgrade connection: container not found\n")
+        sys.exit(1)
+    if os.environ.get("FAKE_BAO_SEALED") == pod and (pod not in pods_deleted() or os.environ.get("FAKE_BAO_STUCK")):
+        sys.stdout.write('{"initialized": true, "sealed": true}')  # `bao status` prints this and exits 2 on a sealed node
+        sys.exit(2)
     out('{"initialized": true, "sealed": false}')
 if a[:3] == ["-n", "foundation-vault", "delete"] and "pod" in a:
     for n in a[a.index("pod") + 1:]:
@@ -149,23 +198,48 @@ if a[:3] == ["-n", "foundation-vault", "exec"] and a[3:4] and a[3].startswith("o
     if os.environ.get("FAKE_BAO_NOANSWER") == pod:
         sys.stderr.write("error: unable to upgrade connection: container not found\n")
         sys.exit(1)
-    deleted = get(f("pods-deleted.log")).split() if os.path.exists(f("pods-deleted.log")) else []
-    # FAKE_BAO_NOLEADER=<pod>: that standby knows no active node until it is restarted (FAKE_BAO_STUCK=1: not even then; lab 28B, apps #184)
-    none = os.environ.get("FAKE_BAO_NOLEADER") == pod and (pod not in deleted or os.environ.get("FAKE_BAO_STUCK"))
+    if os.environ.get("FAKE_BAO_SEALED") == pod and (pod not in pods_deleted() or os.environ.get("FAKE_BAO_STUCK")):
+        sys.stderr.write("Error making API request.\n\nCode: 503. Errors:\n\n* Vault is sealed\n")
+        sys.exit(2)
+    deleted = pods_deleted()
+    # FAKE_BAO_NOLEADER=<pod>: that standby knows no active node until it is restarted (FAKE_BAO_STUCK=1 or FAKE_BAO_NOLEADER_STUCK=1: not even then; lab 28B, apps #184)
+    none = os.environ.get("FAKE_BAO_NOLEADER") == pod and (pod not in deleted or os.environ.get("FAKE_BAO_STUCK") or os.environ.get("FAKE_BAO_NOLEADER_STUCK"))
     leader = "" if none else "https://openbao-1.openbao-internal.foundation-vault.svc:8200"
+    move = os.environ.get("FAKE_BAO_MOVE")
+    if os.environ.get("FAKE_BAO_FLAP"):  # the active node changes at every survey (three calls): the state never settles
+        n = int(get(f("leader-calls")) or 0) + 1 if os.path.exists(f("leader-calls")) else 1
+        put(f("leader-calls"), str(n))
+        leader = f"https://openbao-{((n - 1) // 3) % 2}.openbao.foundation-vault.svc.cluster.local:8200"
+    if move:  # openbao-0 is the active node for the first <move> calls, then openbao-2 is, and openbao-0 (a standby now) does not follow it
+        n = int(get(f("leader-calls")) or 0) + 1 if os.path.exists(f("leader-calls")) else 1
+        put(f("leader-calls"), str(n))
+        who = "openbao-0" if n <= int(move) else "openbao-2"
+        leader = f"https://{who}.openbao.foundation-vault.svc.cluster.local:8200"
+        if n > int(move) and pod == "openbao-0" and ("openbao-0" not in deleted or os.environ.get("FAKE_BAO_STUCK")):
+            leader = ""
+    if os.environ.get("FAKE_BAO_SPLIT") == pod:
+        leader = "https://elsewhere.foundation-vault.svc:8200"
     out(json.dumps({"request_id": "", "lease_id": "", "lease_duration": 0, "renewable": False, "warnings": None,
                     "data": {"ha_enabled": True, "is_self": False, "leader_address": leader, "leader_cluster_address": leader.replace("8200", "8201")}}, indent=2))
 LATE_ES = ["grafana-admin", "grafana-db-credentials", "grafana-oidc", "loki-s3-credentials"]
 if a[:2] == ["get", "externalsecret"]:
     rows = "ns es True\n" * 3
+    if os.environ.get("FAKE_ES_EARLY_BAD"):  # one that exists before the late group does, and never syncs
+        rows = "ns es-early True\nns es-early2 True\nns es-broken SecretSyncedError False\n"
     if "observability resume" in patched():  # Grafana's and Loki's ExternalSecrets are created by the Kustomization (infra #426: late)
-        mode = os.environ.get("FAKE_ES_LATE", "")
+        modes = os.environ.get("FAKE_ES_LATE", "").split(",")
+        slow = [int(m[5:]) for m in modes if m.startswith("slow:")]
         n = int(get(f("es-polls")) or 0) if os.path.exists(f("es-polls")) else 0
         put(f("es-polls"), str(n + 1))
+        # bad: a real failure (Loki's S3 keys never sync); unseeded: grafana/oidc was never put in OpenBao (rung 3, a console step), which is the
+        # state of every default install (a proof lab: SecretSyncedError "could not get secret data from provider" since the first install)
         for name in LATE_ES:
-            ready = not ((mode == "bad" and name == "grafana-oidc") or (mode.startswith("slow:") and n < int(mode[5:])))
+            ready = not (("bad" in modes and name == "loki-s3-credentials") or ("unseeded" in modes and name == "grafana-oidc")
+                         or (slow and n < slow[0]))
             rows += f"services-observability {name} ClusterSecretStore openbao 1h " + ("SecretSynced True\n" if ready else "SecretSyncedError False\n")
-        if mode == "none":  # the list comes back empty (kubectl prints "No resources found" on stderr): nothing to be not Ready is not a pass
+        if "oidc-elsewhere" in modes:  # the same name in another namespace is not the optional one
+            rows += "tenant-a grafana-oidc ClusterSecretStore openbao 1h SecretSyncedError False\n"
+        if "none" in modes:  # the list comes back empty (kubectl prints "No resources found" on stderr): nothing to be not Ready is not a pass
             rows = ""
     out(rows)
 if "get ds cilium" in A:
@@ -214,8 +288,8 @@ if "exec" in a and "pg_restore" in a:
     i = a.index("exec") + 1
     pod = a[i + 1] if a[i] == "-i" else a[i]
     put(f("pg_restore.log"), f"{pod} bytes={len(data)}\n", "a")
-    if "-d grafana" in A and "observability resume" in patched():
-        # Grafana was resumed before the load: it created its schema in the empty database (lab 28B, infra #426)
+    if "-d grafana" in A and released("observability"):
+        # Grafana was released before the load: it created its schema in the empty database (lab 28B, infra #426)
         sys.stderr.write('pg_restore: error: could not execute query: ERROR:  cannot drop sequence short_url_id_seq because other objects depend on it\n'
                          'pg_restore: error: could not execute query: ERROR:  relation "short_url_id_seq" already exists\n'
                          'pg_restore: error: could not execute query: ERROR:  relation "short_url_pkey" already exists\n'
