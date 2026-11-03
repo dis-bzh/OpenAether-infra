@@ -210,7 +210,7 @@ show_generation() {
 show_openbao() {
   say "  \$ restic -r $(repo openbao) restore latest --host openbao --target $WORK/openbao      # password from --restic-password-file"
   say "  \$ kubectl -n foundation-vault exec -i openbao-0 -- sh -c 'read token; … bao operator raft snapshot restore -force /tmp/dr.snap'   # token and snapshot on stdin"
-  say "  check: bao status says initialised and unsealed; openbao-1 and openbao-2 are deleted once; then ${OA_DR_STABLE_ROUNDS:-5} surveys in a row (one per ${OA_DR_POLL:-10} s) must find all three pods unsealed and naming the active node (bao read sys/leader), the same one each time. A pod that stays sealed or without an active node is restarted once, a second time is a stop with the command"
+  say "  check: bao status says initialised and unsealed; openbao-1 and openbao-2 are deleted once; then ${OA_DR_STABLE_ROUNDS:-5} surveys in a row (one per ${OA_DR_POLL:-10} s) must find all three pods unsealed and naming the active node (bao read sys/leader), the same one each time. A pod that stays sealed or without an active node is restarted once, one at a time and only while the two others are unsealed and one names the active node; a second time is a stop with the command"
 }
 show_shares() {
   say "  \$ kubectl -n foundation-vault delete secret openbao-recovery-shares ; kubectl -n foundation-vault create secret generic openbao-recovery-shares --from-file=share-N=<dir>/openbao-share-N.b64 …"
@@ -354,11 +354,16 @@ run_hold() {
 check_hold() {
   [ -s "$HELD" ] || { echo "no Kustomization was held: the list is empty"; return 1; }
   # A reconcile of the parent that was in flight when it was suspended can still re-apply a child after that child was patched: read every
-  # held Kustomization back after a pause, suspend again the ones that are not, and require a clean read.
+  # held Kustomization back after a pause, suspend again the ones that are not, and require a clean read. LIMIT: one clean read does not
+  # prove that such a reconcile has ended (the Reconciling condition of the parent is not read); the parent is suspended first and its
+  # apply is short, so the window is small, not closed.
   local round loose n
   for round in 1 2 3; do
     sleep "${OA_DR_POLL:-10}"
-    closure_json >"$WORK/hold-readback.json"
+    if ! closure_json >"$WORK/hold-readback.json" 2>/dev/null; then   # a transient API error is another round, not a traceback
+      [ "$round" -lt 3 ] && { say "  (the read-back failed: read again)"; continue; }
+      echo "the held Kustomizations could not be read back after 3 attempts (kubectl -n flux-system get kustomization): not known to be suspended, do not go on"; return 1
+    fi
     loose="$(python3 -c "$LOOSE_PY" "$WORK/hold-readback.json" <"$HELD")"
     if [ -z "$loose" ]; then
       say "  ($(wc -l <"$HELD") Kustomizations held and read back as suspended, the parent ${PARENT_KS} included when it exists: $HELD; the parent is resumed LAST, by step identity)"
@@ -467,19 +472,17 @@ run_openbao() {
 # After a raft restore a pod can stay without an active node ("local node not active but active cluster node not found": logins answered 500
 # for 25+ minutes) until its pod is restarted (apps #184). 0.4.1 asked each pod ONCE; a proof lab on Scaleway showed what that misses: the
 # check passed 20 s after the restore while openbao-0 was still the active node, the active node moved to openbao-2 seconds later, and
-# openbao-0 followed no one for 24 minutes until a person deleted the pod. A second run of the step left openbao-0 sealed for 8+ minutes.
-# So the step waits for a STABLE state. A survey asks each pod `bao status` and `bao read sys/leader` (no token needed); it is GOOD when
-# every pod is unsealed and names an active node (a pod whose sys/leader cannot be read is a warning: 0.4.0 never read it). The step ends
-# after OA_DR_STABLE_ROUNDS (5) GOOD surveys in a row, OA_DR_POLL (10 s) apart, naming the same nodes (a move starts the count again), or
-# stops after OA_DR_STABLE_TRIES (60) surveys. A pod sealed, or without an active node while another has one, for OA_DR_STANDBY_TRIES (18)
-# surveys in a row is restarted ONCE, one at a time (its volume stays, it unseals itself from the seal key Secret, the others keep the
-# quorum); never when no pod has an active node (an election: restarting would make it worse), never twice. A pod that does not answer at
-# all is the StatefulSet's to bring back: the step waits, then stops. Every stop prints the exact `kubectl delete pod` and resumes at step
-# shares: the snapshot IS restored, --from-step openbao would restore it again.
-# UNVERIFIED on a cluster: the JSON of sys/leader is read as the proof lab showed it; the time added (at least
-# (OA_DR_STABLE_ROUNDS - 1) x OA_DR_POLL) is the price of the guarantee, not measured yet.
+# openbao-0 followed no one for 24 minutes until a person deleted the pod. So the step waits for a STABLE state. A survey asks each pod
+# `bao status` and `bao read sys/leader` (no token needed); it is GOOD when every pod is unsealed and names an active node (a pod whose
+# sys/leader cannot be read is a warning: 0.4.0 never read it). The step ends after OA_DR_STABLE_ROUNDS (5) GOOD surveys in a row,
+# OA_DR_POLL (10 s) apart, with the same answers (a move starts the count again), or stops after OA_DR_STABLE_TRIES (60) surveys.
+# A pod sealed, or without an active node, for OA_DR_STANDBY_TRIES (18) surveys in a row is restarted ONCE (its volume stays, it unseals
+# itself from the seal key Secret), ONE pod per survey, and only while the two others are unsealed (they keep the raft quorum: nothing is
+# restarted while a pod is down or sealed, the one just restarted included) and one of them names an active node (with none it is an
+# election, and a restart would make it worse). A second need stops the chain with the exact `kubectl delete pod` and resumes at step
+# shares: the snapshot IS restored, --from-step openbao would restore it again. UNVERIFIED on a cluster; the time added, at least
+# (OA_DR_STABLE_ROUNDS - 1) x OA_DR_POLL, is the price of the guarantee, not measured.
 OPENBAO_PODS=(openbao-0 openbao-1 openbao-2)
-declare -A OB_AGAIN=()   # the pods this step has restarted: none is restarted twice, whichever phase restarted it
 bao_leader() { # <pod>: the active node address the pod knows (nothing when it knows none); rc 1 when it gave no readable answer
   local j
   j="$(K -n foundation-vault exec "$1" -- bao read -format=json sys/leader 2>/dev/null)" || return 1
@@ -495,7 +498,7 @@ bao_state() { # <pod>: down | uninitialised | sealed | unreadable | noleader | l
   a="$(bao_leader "$1")" || { echo unreadable; return 0; }
   if [ -n "$a" ]; then echo "leader=$a"; else echo noleader; fi
 }
-restart_pod() { K -n foundation-vault delete pod "$1" --ignore-not-found >/dev/null 2>&1 || true; }
+bao_up() { case "$1" in leader=* | noleader | unreadable) return 0 ;; *) return 1 ;; esac; }   # unsealed and answering: it counts for the quorum
 openbao_stop() { # <headline> <pod>...: the headline, the exact commands for each pod, where to resume; rc 1
   local p
   echo "$1"
@@ -504,31 +507,31 @@ openbao_stop() { # <headline> <pod>...: the headline, the exact commands for eac
     echo "  restart: kubectl --kubeconfig $KCFG -n foundation-vault delete pod $p      (its volume stays; it unseals itself from the seal key Secret and rejoins; wait until sys/leader on it names the active node)"
   done
   [ "$#" -le 2 ] || echo "  (several pods: restart them ONE AT A TIME, each until it names the active node, so that two stay up)"
-  echo "  then:    resume with --from-step shares. The snapshot IS restored: --from-step openbao would restore it again (a second restore left a pod sealed)"
+  echo "  then:    resume with --from-step shares. The snapshot IS restored: --from-step openbao would restore it again"
   echo shares >"$WORK/resume-from"
   return 1
 }
 openbao_settle() {
   local need="${OA_DR_STABLE_ROUNDS:-5}" grace="${OA_DR_STANDBY_TRIES:-18}" max="${OA_DR_STABLE_TRIES:-60}"
-  local -A state=() bad=()
-  local good=0 sig prev="" r pod all lead addrs summary
+  local -A state=() bad=() again=()
+  local good=0 sig prev="" r pod other safe what all lead addr why
   for r in $(seq 1 "$max"); do
-    all=1; lead=0; sig=""; addrs=""
+    all=1; lead=0; sig=""
     for pod in "${OPENBAO_PODS[@]}"; do
       state[$pod]="$(bao_state "$pod")"; sig+="${state[$pod]} "
       case "${state[$pod]}" in
-        leader=*) bad[$pod]=0; lead=$((lead + 1)); addrs+="${state[$pod]#leader=}"$'\n' ;;
+        leader=*) bad[$pod]=0; lead=$((lead + 1)) ;;
         unreadable) bad[$pod]=0 ;;
         sealed | noleader) bad[$pod]=$((${bad[$pod]:-0} + 1)); all=0 ;;
-        *) bad[$pod]=0; all=0 ;;   # down, uninitialised: the pod is not there (yet); not restarted from here
+        *) bad[$pod]=0; all=0 ;;   # down, uninitialised: not there (yet); the StatefulSet's to bring back, not restarted from here
       esac
     done
-    if [ "$all" = 1 ] && [ "$lead" -ge 1 ]; then
+    if [ "$all" = 1 ]; then
       if [ "$sig" = "$prev" ]; then good=$((good + 1)); else good=1; fi
       prev="$sig"
       if [ "$good" -ge "$need" ]; then
-        say "  (every OpenBao pod was unsealed and named the active node in $need consecutive surveys, $(sort -u <<<"$addrs" | head -n 1))"
-        [ "$(sort -u <<<"$addrs" | grep -c .)" -le 1 ] || say "  (WARNING: the pods name different active nodes: $(sort -u <<<"$addrs" | tr '\n' ' ')look at it: bao operator raft list-peers)"
+        addr="$(printf '%s\n' "${state[@]}" | sed -n 's/^leader=//p' | sort -u | head -n 1)"
+        say "  (every OpenBao pod was unsealed in $need consecutive surveys, the active node: ${addr:-not readable})"
         for pod in "${OPENBAO_PODS[@]}"; do
           [ "${state[$pod]}" != unreadable ] || say "  (WARNING: $pod gave no readable answer from bao read sys/leader; not restarted: look at it)"
         done
@@ -536,65 +539,46 @@ openbao_settle() {
       fi
     else
       good=0; prev=""
-      # One pod at a time, and only while another pod has an active node (a leader to follow, and the quorum to restart under)
-      if [ "$lead" -ge 1 ]; then
-        for pod in "${OPENBAO_PODS[@]}"; do
-          [ "${bad[$pod]:-0}" -ge "$grace" ] || continue
-          if [ -n "${OB_AGAIN[$pod]:-}" ]; then
-            if [ "${state[$pod]}" = sealed ]; then openbao_stop "$pod is still sealed after a restart" "$pod"
-            else openbao_stop "$pod still knows no active node after a restart (bao read sys/leader; its log says 'active cluster node not found')" "$pod"; fi
-            return 1
-          fi
-          if [ "${state[$pod]}" = sealed ]; then say "  ($pod is sealed: restarted once)"
-          else say "  ($pod answers but knows no active node: restarted once)"; fi
-          restart_pod "$pod"; OB_AGAIN[$pod]=1; bad[$pod]=0
-          break
-        done
-      fi
+      for pod in "${OPENBAO_PODS[@]}"; do
+        [ "${bad[$pod]:-0}" -ge "$grace" ] || continue
+        [ "${state[$pod]}" = sealed ] && what="sealed" || what="without an active node"
+        [ -z "${again[$pod]:-}" ] || { openbao_stop "$pod is still $what after a restart" "$pod"; return 1; }
+        safe=0; [ "$lead" -lt 1 ] || safe=1    # a leader to follow
+        for other in "${OPENBAO_PODS[@]}"; do [ "$other" = "$pod" ] || bao_up "${state[$other]}" || safe=0; done   # the quorum to restart under
+        [ "$safe" = 1 ] || continue
+        say "  ($pod is $what: restarted once)"
+        K -n foundation-vault delete pod "$pod" --ignore-not-found >/dev/null 2>&1 || true
+        again[$pod]=1; bad[$pod]=0
+        break   # one pod per survey: the states above are those from before this restart
+      done
     fi
     sleep "${OA_DR_POLL:-10}"
   done
-  summary=""; local stuck=()
+  local stuck=() summary=""
   for pod in "${OPENBAO_PODS[@]}"; do
     summary+="$pod=${state[$pod]%%=*} "
     case "${state[$pod]}" in leader=* | unreadable) ;; *) stuck+=("$pod") ;; esac
   done
-  if [ "${#stuck[@]}" -eq 0 ]; then
-    openbao_stop "OpenBao did not settle in $max surveys: the pods are unsealed and name an active node, but it keeps changing ($summary). An election that does not end: read bao operator raft list-peers and the logs of the pods (kubectl logs openbao-N -c openbao)"
-  else
-    openbao_stop "OpenBao did not settle in $max surveys: $summary" "${stuck[@]}"
-  fi
+  why="OpenBao did not settle in $max surveys: $summary"
+  [ "$lead" -ge 1 ] || why+="(no pod names an active node: an election that does not end, or the quorum is lost; read bao operator raft list-peers and the logs, kubectl logs openbao-N -c openbao, BEFORE restarting a pod)"
+  [ "${#stuck[@]}" -gt 0 ] || why+="(every pod is unsealed and names an active node, but it keeps changing: an election that does not end; read bao operator raft list-peers and the logs, kubectl logs openbao-N -c openbao)"
+  openbao_stop "$why" ${stuck[@]+"${stuck[@]}"}
 }
 check_openbao() {
-  local st sealed_for=0 grace="${OA_DR_STANDBY_TRIES:-18}" fixing=1 seen=""
-  [ "${OA_DR_NO_STANDBY_FIX:-0}" = 1 ] && fixing=0
+  local st
   for _ in $(seq 1 "${OA_DR_WAIT_TRIES:-90}"); do
     st="$(K -n foundation-vault exec openbao-0 -- bao status -format=json 2>/dev/null || true)"
     if grep -q '"initialized": *true' <<<"$st" && grep -q '"sealed": *false' <<<"$st"; then
-      [ "$fixing" = 1 ] || return 0
+      [ "${OA_DR_NO_STANDBY_FIX:-0}" = 1 ] && return 0
       # standbys that do not follow the restored leader: delete them once (the PVCs stay), as in labs 20, 27 and 28B ...
       K -n foundation-vault delete pod openbao-1 openbao-2 --ignore-not-found >/dev/null 2>&1 || true
       # ... then wait until the three pods have held a state, the pod where the restore ran included
       openbao_settle
       return
     fi
-    if grep -q '"initialized": *true' <<<"$st" && grep -q '"sealed": *true' <<<"$st"; then
-      seen=sealed; sealed_for=$((sealed_for + 1))
-      if [ "$fixing" = 1 ] && [ -z "${OB_AGAIN[openbao-0]:-}" ] && [ "$sealed_for" -ge "$grace" ]; then
-        say "  (openbao-0 is still sealed after $sealed_for polls: restarted once)"
-        restart_pod openbao-0; OB_AGAIN[openbao-0]=1; sealed_for=0
-      fi
-    else
-      sealed_for=0
-    fi
     sleep "${OA_DR_POLL:-10}"
   done
-  if [ "$seen" = sealed ] && [ "$fixing" = 1 ]; then
-    if [ -n "${OB_AGAIN[openbao-0]:-}" ]; then openbao_stop "openbao-0 is still sealed after a restart" openbao-0
-    else openbao_stop "openbao-0 stayed sealed after the restore" openbao-0; fi
-    return 1
-  fi
-  echo "bao status: not initialised and unsealed after the restore"; return 1
+  openbao_stop "openbao-0 is not initialised and unsealed after the restore (bao status)" openbao-0
 }
 
 # A development OpenBao keeps its single share in openbao-recovery-dev (labelled), a production one in openbao-recovery-shares: put the

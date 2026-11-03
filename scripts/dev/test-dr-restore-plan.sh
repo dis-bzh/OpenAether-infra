@@ -300,14 +300,17 @@ chk "a Kustomization found not suspended at the read-back (a reconcile of the pa
 new; FAKE_HOLD_RESET=observability FAKE_HOLD_RESET_ALWAYS=1 run "${ALL[@]}" --execute --confirm oa-test --only hold
 chk "...but one that is reset every time stops the chain, naming it and the command to read it" "[ $RC = 1 ] && grep -q '✗ hold FAILED' '$TMP/stdout' && grep -q 'observability' '$TMP/stdout' && grep -q 'spec.suspend' '$TMP/stdout'"
 
+new; FAKE_HOLD_READ_FAIL=1 run "${ALL[@]}" --execute --confirm oa-test --only hold
+chk "a read-back that fails once (a transient API error) is read again: the step passes, no traceback" "[ $RC = 0 ] && grep -q 'the read-back failed: read again' '$TMP/stdout' && ! cat '$TMP/stdout' '$TMP/stderr' | grep -q Traceback"
+
 echo "=== OpenBao standbys after the raft restore (apps #184) ==="
 dels() { sort "$FAKE_DR/state/pods-deleted.log" 2>/dev/null | tr '\n' ' '; }
 new; run "${ALL[@]}" --execute --confirm oa-test --only openbao
 chk "every pod is asked which node is active; openbao-1 and openbao-2 are still deleted once and the pod that follows is left alone" "[ $RC = 0 ] && [ \"\$(dels)\" = 'openbao-1 openbao-2 ' ] && [ \"\$(calls | grep -o 'exec openbao-[0-2] -- bao read -format=json sys/leader' | sort -u | wc -l)\" = 3 ]"
 new; FAKE_BAO_NOLEADER=openbao-0 run "${ALL[@]}" --execute --confirm oa-test --only openbao
-chk "openbao-0, the pod where the restore ran, stays a standby with no active node: it is restarted once and the step passes (lab 28B)" "[ $RC = 0 ] && [ \"\$(dels)\" = 'openbao-0 openbao-1 openbao-2 ' ] && grep -q 'openbao-0 answers but knows no active node' '$TMP/stdout'"
+chk "openbao-0, the pod where the restore ran, stays a standby with no active node: it is restarted once and the step passes (lab 28B)" "[ $RC = 0 ] && [ \"\$(dels)\" = 'openbao-0 openbao-1 openbao-2 ' ] && grep -q 'openbao-0 is without an active node: restarted once' '$TMP/stdout'"
 new; FAKE_BAO_NOLEADER=openbao-2 FAKE_BAO_STUCK=1 run "${ALL[@]}" --execute --confirm oa-test --only openbao
-chk "a standby that still knows no active node after its one restart stops the chain, naming the pod and the way on" "[ $RC = 1 ] && [ \"\$(dels)\" = 'openbao-1 openbao-2 openbao-2 ' ] && grep -q 'openbao-2 still knows no active node after a restart' '$TMP/stdout' && grep -q -- '--from-step shares' '$TMP/stdout'"
+chk "a standby that still knows no active node after its one restart stops the chain, naming the pod and the way on" "[ $RC = 1 ] && [ \"\$(dels)\" = 'openbao-1 openbao-2 openbao-2 ' ] && grep -q 'openbao-2 is still without an active node after a restart' '$TMP/stdout' && grep -q -- '--from-step shares' '$TMP/stdout'"
 new; FAKE_BAO_NOANSWER=openbao-1 run "${ALL[@]}" --execute --confirm oa-test --only openbao
 chk "a pod that gives no readable answer is a warning, not a stop and not a second restart (the unreadable form must not stop a chain that worked in 0.4.0)" "[ $RC = 0 ] && [ \"\$(dels)\" = 'openbao-1 openbao-2 ' ] && grep -q 'openbao-1 gave no readable answer' '$TMP/stdout'"
 new; OA_DR_NO_STANDBY_FIX=1 FAKE_BAO_NOLEADER=openbao-0 run "${ALL[@]}" --execute --confirm oa-test --only openbao
@@ -315,24 +318,26 @@ chk "OA_DR_NO_STANDBY_FIX=1 still switches the whole standby handling off: no po
 
 new; FAKE_BAO_MOVE=3 run "${ALL[@]}" --execute --confirm oa-test --only openbao
 leaders() { local p n=0; for p in openbao-0 openbao-1 openbao-2; do kubectl -n foundation-vault exec "$p" -- bao read -format=json sys/leader 2>/dev/null | grep -q '"leader_address": "https' && n=$((n + 1)); done; echo "$n"; }
-chk "the active node moves right after the first look (a proof lab: 5 s after the check passed) and openbao-0 follows no one: one look is not enough, the step sees the change in the next survey, restarts openbao-0 once and ends with all three pods naming the active node" "[ $RC = 0 ] && [ \"\$(dels)\" = 'openbao-0 openbao-1 openbao-2 ' ] && grep -q 'openbao-0 answers but knows no active node' '$TMP/stdout' && [ \"\$(FAKE_BAO_MOVE=3 leaders)\" = 3 ]"
+chk "the active node moves right after the first look (a proof lab: 5 s after the check passed) and openbao-0 follows no one: one look is not enough, the step sees the change in the next survey, restarts openbao-0 once and ends with all three pods naming the active node" "[ $RC = 0 ] && [ \"\$(dels)\" = 'openbao-0 openbao-1 openbao-2 ' ] && grep -q 'openbao-0 is without an active node: restarted once' '$TMP/stdout' && [ \"\$(FAKE_BAO_MOVE=3 leaders)\" = 3 ]"
 chk "...and says how long the state held" "grep -q 'consecutive surveys' '$TMP/stdout'"
 new; FAKE_BAO_MOVE=3 FAKE_BAO_STUCK=1 run "${ALL[@]}" --execute --confirm oa-test --only openbao
-chk "a pod that still has no active node after its one restart stops the chain with the exact command to restart it, and the step to resume from: NOT the openbao step, which would restore the snapshot again" "[ $RC = 1 ] && [ \"\$(dels)\" = 'openbao-0 openbao-1 openbao-2 ' ] && grep -q 'openbao-0 still knows no active node after a restart' '$TMP/stdout' && grep -q 'kubectl --kubeconfig .*-n foundation-vault delete pod openbao-0' '$TMP/stdout' && grep -q 'resume with --from-step shares' '$TMP/stderr' && ! grep -q 'resume with --from-step openbao' '$TMP/stderr'"
+chk "a pod that still has no active node after its one restart stops the chain with the exact command to restart it, and the step to resume from: NOT the openbao step, which would restore the snapshot again" "[ $RC = 1 ] && [ \"\$(dels)\" = 'openbao-0 openbao-1 openbao-2 ' ] && grep -q 'openbao-0 is still without an active node after a restart' '$TMP/stdout' && grep -q 'kubectl --kubeconfig .*-n foundation-vault delete pod openbao-0' '$TMP/stdout' && grep -q 'resume with --from-step shares' '$TMP/stderr' && ! grep -q 'resume with --from-step openbao' '$TMP/stderr'"
 new; FAKE_BAO_FLAP=1 run "${ALL[@]}" --execute --confirm oa-test --only openbao
 chk "an active node that changes at every survey never gives N identical ones: bounded, the chain stops (it restarts nobody: no pod lacks an address) and says what to read" "[ $RC = 1 ] && [ \"\$(dels)\" = 'openbao-1 openbao-2 ' ] && grep -q 'did not settle' '$TMP/stdout' && grep -q 'bao operator raft list-peers' '$TMP/stdout' && grep -q 'resume with --from-step shares' '$TMP/stderr'"
-new; FAKE_BAO_SPLIT=openbao-1 run "${ALL[@]}" --execute --confirm oa-test --only openbao
-chk "pods that agree with themselves round after round but name different active nodes pass with a warning (the agreement between pods is not evidenced as a text equality: no new stop on a healthy cluster)" "[ $RC = 0 ] && grep -q 'WARNING: the pods name different active nodes' '$TMP/stdout'"
 new; OA_DR_WAIT_TRIES=6 FAKE_BAO_SEALED=openbao-0 run "${ALL[@]}" --execute --confirm oa-test --only openbao
-chk "openbao-0 left sealed after the restore (a second run of the step did: sealed for 8+ minutes) is restarted once, after the same grace as a standby, before the other two are touched" "[ $RC = 0 ] && [ \"\$(head -n 1 '$FAKE_DR/state/pods-deleted.log')\" = openbao-0 ] && [ \"\$(dels)\" = 'openbao-0 openbao-1 openbao-2 ' ] && grep -q 'openbao-0 is still sealed' '$TMP/stdout'"
-new; OA_DR_WAIT_TRIES=6 FAKE_BAO_SEALED=openbao-0 FAKE_BAO_STUCK=1 run "${ALL[@]}" --execute --confirm oa-test --only openbao
-chk "...and if it is still sealed after that restart the chain stops with the command, and nothing else was deleted" "[ $RC = 1 ] && [ \"\$(dels)\" = 'openbao-0 ' ] && grep -q 'openbao-0 is still sealed after a restart' '$TMP/stdout' && grep -q 'delete pod openbao-0' '$TMP/stdout' && grep -q 'resume with --from-step shares' '$TMP/stderr'"
-new; OA_DR_WAIT_TRIES=6 FAKE_BAO_SEALED=openbao-0 FAKE_BAO_NOLEADER=openbao-0 FAKE_BAO_NOLEADER_STUCK=1 run "${ALL[@]}" --execute --confirm oa-test --only openbao
-chk "no pod is restarted twice, whichever phase restarted it: openbao-0 restarted for being sealed and then without an active node stops the chain instead of a second restart" "[ \$RC = 1 ] && [ \"\$(dels)\" = 'openbao-0 openbao-1 openbao-2 ' ] && grep -q 'openbao-0 still knows no active node after a restart' '$TMP/stdout'"
+chk "openbao-0 still sealed after the whole wait stops the chain with the commands and the step to resume from; the script restarts nothing (the cause of a sealed pod after a second restore is not established)" "[ \$RC = 1 ] && [ -z \"\$(dels)\" ] && grep -q 'openbao-0 is not initialised and unsealed' '$TMP/stdout' && grep -q 'delete pod openbao-0' '$TMP/stdout' && grep -q 'resume with --from-step shares' '$TMP/stderr'"
 new; FAKE_BAO_SEALED=openbao-2 FAKE_BAO_STUCK=1 run "${ALL[@]}" --execute --confirm oa-test --only openbao
 chk "a standby that stays sealed is restarted once and then stops the chain, like one without an active node" "[ $RC = 1 ] && [ \"\$(dels)\" = 'openbao-1 openbao-2 openbao-2 ' ] && grep -q 'openbao-2 is still sealed after a restart' '$TMP/stdout'"
 new; FAKE_BAO_DOWN=openbao-1 run "${ALL[@]}" --execute --confirm oa-test --only openbao
 chk "a pod that does not answer at all for the whole bound stops the chain, is not restarted by the script (the StatefulSet owns a missing pod) and the output tells how to look at it" "[ $RC = 1 ] && [ \"\$(dels)\" = 'openbao-1 openbao-2 ' ] && grep -q 'openbao-1' '$TMP/stdout' && grep -q 'get pod openbao-1' '$TMP/stdout'"
+
+new; OA_DR_STABLE_TRIES=20 FAKE_BAO_DOWNTIME=3 FAKE_BAO_NOLEADER=openbao-0,openbao-1 run "${ALL[@]}" --execute --confirm oa-test --only openbao
+chk "two pods past their grace at the same survey: ONE is restarted, the other waits until the first answers again, then it is restarted too; the step passes" "[ \$RC = 0 ] && [ \"\$(cat '$FAKE_DR/state/pods-restarted.log' | tr '\\n' ' ')\" = 'openbao-0 openbao-1 ' ]"
+chk "...and a pod is never restarted while another is down: two would be left, no raft quorum, in the step that restores OpenBao" "[ ! -s '$FAKE_DR/state/quorum-lost.log' ]"
+new; FAKE_BAO_NOLEADER=openbao-0,openbao-1,openbao-2 run "${ALL[@]}" --execute --confirm oa-test --only openbao
+chk "no pod names an active node (an election): nobody is restarted, the chain stops and says to read before restarting" "[ \$RC = 1 ] && [ \"\$(dels)\" = 'openbao-1 openbao-2 ' ] && grep -q 'no pod names an active node' '$TMP/stdout' && grep -q 'resume with --from-step shares' '$TMP/stderr'"
+new; FAKE_BAO_NOANSWER=openbao-0,openbao-1,openbao-2 run "${ALL[@]}" --execute --confirm oa-test --only openbao
+chk "sys/leader unreadable on all three pods (unsealed, as in 0.4.0, which never read it): a warning each, nothing restarted, the step passes" "[ \$RC = 0 ] && [ \"\$(dels)\" = 'openbao-1 openbao-2 ' ] && [ \"\$(grep -c 'gave no readable answer' '$TMP/stdout')\" = 3 ]"
 
 echo "=== subsets and the other sources ==="
 new; mkdir -p "$OUTD/work"; printf 'cnpg\nidentity\n' >"$OUTD/work/held.txt"

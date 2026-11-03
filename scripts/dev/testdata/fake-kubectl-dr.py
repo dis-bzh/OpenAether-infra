@@ -8,17 +8,19 @@ FAKE_*     failure injections: FAKE_FAIL_SECRET=1 (the seal key Secret is refuse
            FAKE_KS_SLOW=n (a Kustomization is NotReady for the first n polls)
            FAKE_CRON_PRUNE=1 (the CronJob history limit prunes the Jobs made from it that still carry its owner reference), FAKE_JOB_GONE=<job> (that Job is
            NotFound), FAKE_JOB_PATCH_FAIL=1 (patching a Job is refused)
-           FAKE_BAO_NOLEADER=<pod> (that OpenBao standby knows no active node until its pod is deleted), FAKE_BAO_STUCK=1 (...not even then),
-           FAKE_BAO_NOANSWER=<pod> (that pod does not answer sys/leader), FAKE_BAO_DOWN=<pod> (that pod does not answer exec at all),
-           FAKE_BAO_SEALED=<pod> (that pod stays sealed until its pod is deleted; FAKE_BAO_STUCK=1: not even then),
+           FAKE_BAO_NOLEADER=<pod,...> (those OpenBao pods know no active node until the step restarts the pod alone: the delete of openbao-1
+           and -2 together, which the step always does, does not cure them), FAKE_BAO_STUCK=1 (...not even then),
+           FAKE_BAO_NOANSWER=<pod,...> (those pods do not answer sys/leader), FAKE_BAO_DOWN=<pod> (that pod does not answer exec at all),
+           FAKE_BAO_SEALED=<pod> (that pod stays sealed until the step restarts it alone; FAKE_BAO_STUCK=1: not even then),
+           FAKE_BAO_DOWNTIME=<n> (a pod restarted alone does not answer its next n `bao status`; a restart while another pod is down is written
+           to quorum-lost.log: the raft quorum is gone)
            FAKE_BAO_MOVE=<n> (after n sys/leader calls the active node moves from openbao-0 to openbao-2 and openbao-0 follows no one until its
-           pod is deleted: the check had passed when a proof lab's leader moved), FAKE_BAO_SPLIT=<pod> (that pod names another active node),
-           FAKE_BAO_FLAP=1 (the active node changes at every survey)
+           pod is restarted: the check had passed when a proof lab's leader moved), FAKE_BAO_FLAP=1 (the active node changes at every survey)
            FAKE_ES_LATE=bad,unseeded,oidc-elsewhere,slow:n,none (a comma list; ExternalSecrets of observability: loki's never syncs / grafana-oidc, whose OpenBao key
            is never seeded, is NotReady / the same name is NotReady in ANOTHER namespace / the first n polls / the list is empty),
            FAKE_ES_EARLY_BAD=1 (an ExternalSecret that exists before the late group is NotReady)
            FAKE_HOLD_RESET=<ks> (the first read-back after the hold finds that Kustomization not suspended: a parent reconcile in flight;
-           FAKE_HOLD_RESET_ALWAYS=1: every read-back does)
+           FAKE_HOLD_RESET_ALWAYS=1: every read-back does), FAKE_HOLD_READ_FAIL=1 (the first read-back fails: a transient API error)
            FAKE_CILIUM=stuck|stuck-forever|slow (the Cilium rollout does not finish: an agent stuck Terminating, which a force-delete frees / which
            stays Terminating, or is replaced by another that does / no pod Terminating at all)
            Grafana: a pg_restore into grafana-db after the Kustomization observability was released fails with the three dependency errors of lab 28B.
@@ -156,6 +158,10 @@ if a[:3] == ["-n", "flux-system", "get"] and opt("-o") == "json":
     ks = {"foundation-vault": ["namespaces", "platform"], "namespaces": [], "platform": ["namespaces"], "external-secrets-stores": ["foundation-vault"],
           "cnpg": ["external-secrets-stores"], "backup-databases": ["cnpg"], "identity": ["cnpg"], "identity-gateway": ["identity"], "observability": [],
           PARENT: []}  # the parent is a Kustomization of the same namespace, outside OpenBao's closure, as on a cluster (it was in the held list of a proof lab)
+    if os.environ.get("FAKE_HOLD_READ_FAIL") and any(x.endswith(" suspend") for x in patched()) and not os.path.exists(f("hold-read-fail")):
+        put(f("hold-read-fail"), "1")  # the first read after the hold: a transient API error
+        sys.stderr.write("Unable to connect to the server: net/http: TLS handshake timeout\n")
+        sys.exit(1)
     sus = suspended()
     rst = os.environ.get("FAKE_HOLD_RESET")
     if rst and any(x.endswith(" suspend") for x in patched()) and (os.environ.get("FAKE_HOLD_RESET_ALWAYS") or not os.path.exists(f("hold-reset"))):
@@ -179,31 +185,57 @@ def pods_deleted():
     return get(f("pods-deleted.log")).split() if os.path.exists(f("pods-deleted.log")) else []
 
 
+def restarted():  # the pods the step restarted ONE AT A TIME (a delete of a single pod); the first delete, openbao-1 and -2 together, is not one
+    return get(f("pods-restarted.log")).split() if os.path.exists(f("pods-restarted.log")) else []
+
+
+def down_left(pod):  # `bao status` calls left that this pod does not answer, after a restart alone (FAKE_BAO_DOWNTIME)
+    return int(get(f("down-" + pod))) if os.path.exists(f("down-" + pod)) else 0
+
+
+def sealed(pod):
+    return os.environ.get("FAKE_BAO_SEALED") == pod and (pod not in restarted() or bool(os.environ.get("FAKE_BAO_STUCK")))
+
+
+def in_list(var, pod):
+    return pod in os.environ.get(var, "").split(",")
+
+
 if a[:3] == ["-n", "foundation-vault", "exec"] and a[3:4] and a[3].startswith("openbao-") and "bao status" in A:
     pod = a[3]
     if os.environ.get("FAKE_BAO_DOWN") == pod:
         sys.stderr.write("error: unable to upgrade connection: container not found\n")
         sys.exit(1)
-    if os.environ.get("FAKE_BAO_SEALED") == pod and (pod not in pods_deleted() or os.environ.get("FAKE_BAO_STUCK")):
+    if down_left(pod) > 0:
+        put(f("down-" + pod), str(down_left(pod) - 1))
+        sys.stderr.write("error: unable to upgrade connection: container not found\n")
+        sys.exit(1)
+    if sealed(pod):
         sys.stdout.write('{"initialized": true, "sealed": true}')  # `bao status` prints this and exits 2 on a sealed node
         sys.exit(2)
     out('{"initialized": true, "sealed": false}')
 if a[:3] == ["-n", "foundation-vault", "delete"] and "pod" in a:
-    for n in a[a.index("pod") + 1:]:
-        if n.startswith("openbao-"):
-            put(f("pods-deleted.log"), n + "\n", "a")
+    names = [n for n in a[a.index("pod") + 1:] if n.startswith("openbao-")]
+    for n in names:
+        put(f("pods-deleted.log"), n + "\n", "a")
+        if len(names) == 1:
+            others = [p for p in ("openbao-0", "openbao-1", "openbao-2") if p != n]
+            gone = [p for p in others if down_left(p) > 0 or sealed(p) or os.environ.get("FAKE_BAO_DOWN") == p]
+            if gone:
+                put(f("quorum-lost.log"), f"{n} deleted while {' '.join(gone)} down\n", "a")
+            put(f("pods-restarted.log"), n + "\n", "a")
+            put(f("down-" + n), os.environ.get("FAKE_BAO_DOWNTIME", "0"))
     sys.exit(0)
 if a[:3] == ["-n", "foundation-vault", "exec"] and a[3:4] and a[3].startswith("openbao-") and "sys/leader" in A:
     pod = a[3]
-    if os.environ.get("FAKE_BAO_NOANSWER") == pod:
+    if in_list("FAKE_BAO_NOANSWER", pod):
         sys.stderr.write("error: unable to upgrade connection: container not found\n")
         sys.exit(1)
-    if os.environ.get("FAKE_BAO_SEALED") == pod and (pod not in pods_deleted() or os.environ.get("FAKE_BAO_STUCK")):
+    if sealed(pod):
         sys.stderr.write("Error making API request.\n\nCode: 503. Errors:\n\n* Vault is sealed\n")
         sys.exit(2)
-    deleted = pods_deleted()
-    # FAKE_BAO_NOLEADER=<pod>: that standby knows no active node until it is restarted (FAKE_BAO_STUCK=1 or FAKE_BAO_NOLEADER_STUCK=1: not even then; lab 28B, apps #184)
-    none = os.environ.get("FAKE_BAO_NOLEADER") == pod and (pod not in deleted or os.environ.get("FAKE_BAO_STUCK") or os.environ.get("FAKE_BAO_NOLEADER_STUCK"))
+    # FAKE_BAO_NOLEADER=<pods>: those standbys know no active node until the step restarts the pod (FAKE_BAO_STUCK=1: not even then; lab 28B, apps #184)
+    none = in_list("FAKE_BAO_NOLEADER", pod) and (pod not in restarted() or os.environ.get("FAKE_BAO_STUCK"))
     leader = "" if none else "https://openbao-1.openbao-internal.foundation-vault.svc:8200"
     move = os.environ.get("FAKE_BAO_MOVE")
     if os.environ.get("FAKE_BAO_FLAP"):  # the active node changes at every survey (three calls): the state never settles
@@ -215,10 +247,8 @@ if a[:3] == ["-n", "foundation-vault", "exec"] and a[3:4] and a[3].startswith("o
         put(f("leader-calls"), str(n))
         who = "openbao-0" if n <= int(move) else "openbao-2"
         leader = f"https://{who}.openbao.foundation-vault.svc.cluster.local:8200"
-        if n > int(move) and pod == "openbao-0" and ("openbao-0" not in deleted or os.environ.get("FAKE_BAO_STUCK")):
+        if n > int(move) and pod == "openbao-0" and ("openbao-0" not in restarted() or os.environ.get("FAKE_BAO_STUCK")):
             leader = ""
-    if os.environ.get("FAKE_BAO_SPLIT") == pod:
-        leader = "https://elsewhere.foundation-vault.svc:8200"
     out(json.dumps({"request_id": "", "lease_id": "", "lease_duration": 0, "renewable": False, "warnings": None,
                     "data": {"ha_enabled": True, "is_self": False, "leader_address": leader, "leader_cluster_address": leader.replace("8200", "8201")}}, indent=2))
 LATE_ES = ["grafana-admin", "grafana-db-credentials", "grafana-oidc", "loki-s3-credentials"]
