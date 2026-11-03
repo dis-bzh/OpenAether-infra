@@ -6,6 +6,15 @@
 # SUT overrides the file under test (mutants).
 set -uo pipefail
 
+# A parent that ignores a signal hands the ignore down (nohup ignores HUP; a command started in the background by a non-interactive
+# shell ignores INT), and bash can neither trap nor reset a signal that was ignored when it started: the trap checks and the real-signal
+# tests below would go red for a reason that is not the product's. So this file runs again with INT, TERM and HUP at their default, as
+# test-talos-tunnels.sh does for HUP. The ignored-signal behaviour is tested on purpose below, by a runner that ignores HUP itself.
+if [ -z "${RWX_TEST_SIGDFL:-}" ]; then
+  if env --default-signal=INT,TERM,HUP true 2>/dev/null; then RWX_TEST_SIGDFL=1 exec env --default-signal=INT,TERM,HUP bash "$0" ${@+"$@"}; fi
+  case "$(trap -p INT TERM HUP)" in *"''"*) echo "note: INT, TERM or HUP is ignored by the parent and 'env --default-signal' is missing: the signal checks below may go red for that reason" >&2 ;; esac
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SUT="${SUT:-$ROOT/scripts/lib/roll-gates.sh}"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
@@ -209,18 +218,23 @@ seq_reset; cp "$TMP/seq_last.json" "$TMP/seq/last.json"; trap_after
 # Ctrl+C, so it would outlive a script that dies of the interrupt (shrink-nodes.sh has no INT trap), evicting pods from a node the
 # EXIT trap has already uncordoned. Real signals, real clock, a stub drain that hangs 30 s; the runner is a script of its own.
 alive() { local s; s="$(ps -o stat= -p "$1" 2>/dev/null | tr -d ' ')"; [ -n "$s" ] && [ "${s#Z}" = "$s" ]; }
-sig_run() { # <signal> <group|pid> [caller trap]
+sig_run() { # <signal> <group|pid> [caller trap]; SIG_PRELUDE: a line the runner runs first; SIG_FIRST: a signal sent before <signal>
   local sig="$1" target="$2" ct="${3:-}" pid i
-  rm -f "$TMP/drain.pid" "$TMP/runner.out"
+  rm -f "$TMP/drain.pid" "$TMP/runner.out"; FIRST_ALIVE=""
   { echo 'set -uo pipefail'; extract 'drain_watched,drain_interrupted,drain_untrap'
     echo 'KCTL=(kubectl); DRAIN_TIMEOUT=30s; DRAIN_STALL_AFTER=120; DRAIN_TICK=0.1; warn() { :; }; STOP_REQUESTED=0'
     echo "trap 'echo EXIT-TRAP' EXIT"
+    [ -z "${SIG_PRELUDE:-}" ] || echo "$SIG_PRELUDE"
     [ -z "$ct" ] || echo "trap '$ct' INT TERM"
     echo 'drain_watched n1; echo "returned $? why=$DRAIN_WHY stop=$STOP_REQUESTED"; trap -p INT TERM'
   } >"$TMP/runner.sh"
   set -m; STUB_DRAIN_PIDFILE="$TMP/drain.pid" bash "$TMP/runner.sh" >"$TMP/runner.out" 2>&1 & pid=$!; set +m
   for i in $(seq 100); do [ -s "$TMP/drain.pid" ] && break; command sleep 0.05; done
-  if [ "$target" = group ]; then kill -"$sig" -- "-$pid"; else kill -"$sig" "$pid"; fi
+  if [ -n "${SIG_FIRST:-}" ]; then   # a signal the runner ignores: it and its drain must both still be there a moment later
+    kill -"$SIG_FIRST" "$pid" 2>/dev/null; command sleep 0.4
+    ! alive "$pid" || ! alive "$(cat "$TMP/drain.pid" 2>/dev/null || echo 0)" || FIRST_ALIVE=yes
+  fi
+  if [ "$target" = group ]; then kill -"$sig" -- "-$pid" 2>/dev/null; else kill -"$sig" "$pid" 2>/dev/null; fi
   RC=0; wait "$pid" 2>/dev/null || RC=$?
   OUT="$(cat "$TMP/runner.out")"; DPID="$(cat "$TMP/drain.pid" 2>/dev/null || echo 0)"
 }
@@ -234,6 +248,18 @@ sig_run TERM pid 'STOP_REQUESTED=1; echo CALLER-RAN'
   && grep -q "^trap -- .*CALLER-RAN.* SIGTERM" <<<"$OUT" && grep -q '^EXIT-TRAP$' <<<"$OUT"; } \
   && ok "SIGTERM on a script with its own trap (cluster-roll): the drain is killed, the caller's trap runs once (stop requested), the drain reports failure and the traps are back" \
   || bad "SIGTERM: rc=$RC drain pid $DPID alive=$(alive "$DPID" && echo yes || echo no) $OUT"
+alive "$DPID" && kill -9 "$DPID" 2>/dev/null
+sig_run HUP pid
+{ [ "$DPID" != 0 ] && [ $RC -eq 129 ] && grep -q '^EXIT-TRAP$' <<<"$OUT" && ! alive "$DPID"; } \
+  && ok "SIGHUP (the terminal closed) on a script with no trap: the drain is killed, the script dies of HUP, its EXIT trap runs" \
+  || bad "SIGHUP: rc=$RC drain pid $DPID alive=$(alive "$DPID" && echo yes || echo no) $OUT"
+alive "$DPID" && kill -9 "$DPID" 2>/dev/null
+# A signal the caller ignores stays ignored, as for a foreground drain (nohup: HUP). The drain does not take it over, and the others
+# are still watched: TERM sent after it kills the drain and the script all the same.
+SIG_PRELUDE="trap '' HUP" SIG_FIRST=HUP sig_run TERM pid
+{ [ -n "$FIRST_ALIVE" ] && [ "$DPID" != 0 ] && [ $RC -eq 143 ] && ! alive "$DPID" && grep -q '^EXIT-TRAP$' <<<"$OUT"; } \
+  && ok "a signal the caller ignores (HUP, as under nohup) stays ignored: script and drain live on; TERM, not ignored, still kills the drain" \
+  || bad "ignored HUP: first-signal survivors=${FIRST_ALIVE:-none} rc=$RC drain pid $DPID alive=$(alive "$DPID" && echo yes || echo no) $OUT"
 alive "$DPID" && kill -9 "$DPID" 2>/dev/null
 
 # kubectl's own answer is unchanged: a refusal at once is a refusal, with the timeout named, and DRAIN_STALL_AFTER=0 is the old foreground drain.
