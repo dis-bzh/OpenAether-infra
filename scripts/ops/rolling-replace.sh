@@ -242,16 +242,35 @@ stop_here() {
   return 0
 }
 
-# The Kubernetes names of the nodes this run replaces: the one named by --node/--ip, else every worker and control plane in scope.
-roll_node_names() {
-  local ip
-  if [[ -n "$ONLY_T" ]]; then
-    if [[ "$ONLY_T" == cp ]]; then ip="${CP_IPS[$ONLY_I]}"; else ip="${WK_IPS[$ONLY_I]}"; fi
-    k8s_node_for_ip "$ip" || { [[ -z "$ONLY_NODE" ]] || echo "$ONLY_NODE"; }
-    return 0
+# infra #425: the nodes this run wipes, by Kubernetes name, and the question whether one of them holds the only copy of a database.
+# The names are read from the cluster, one address at a time, and an address that gives no name is NOT left out: the question
+# would then be asked about fewer nodes than the run replaces, and answered "nothing" for the one it could not name (a failed read,
+# a Node object that is gone). The run refuses, and says which address. A dead node is named by --node (the name its volumes are
+# pinned to, which an IP does not give back once the Node object is gone), else by the cluster.
+roll_sole_copy_gate() {
+  local ip name ips=() names=() unresolved=""
+  if [[ $DEAD -eq 1 ]]; then
+    name="$ONLY_NODE"
+    [[ -n "$name" ]] || name="$(k8s_node_for_ip "$ONLY_IP" || true)"
+    [[ -n "$name" ]] || die "cannot name the dead node at ${ONLY_IP}: no Node object has that address, so the volumes pinned to it cannot be looked up, and whether it held the only copy of a database cannot be told.
+  Add --node=<the name the node had> (task cluster-replace-node passes it) and run again. Nothing was changed."
+    names=("$name")
+  else
+    if [[ -n "$ONLY_T" ]]; then
+      if [[ "$ONLY_T" == cp ]]; then ips=("${CP_IPS[$ONLY_I]}"); else ips=("${WK_IPS[$ONLY_I]}"); fi
+    else
+      if [[ "$SCOPE" == all || "$SCOPE" == workers ]]; then ips+=(${WK_IPS[@]+"${WK_IPS[@]}"}); fi
+      if [[ "$SCOPE" == all || "$SCOPE" == cp ]]; then ips+=(${CP_IPS[@]+"${CP_IPS[@]}"}); fi
+    fi
+    for ip in ${ips[@]+"${ips[@]}"}; do
+      if name="$(k8s_node_for_ip "$ip")"; then names+=("$name")
+      elif [[ -n "$ONLY_T" && -n "$ONLY_NODE" ]]; then names+=("$ONLY_NODE")
+      else unresolved+=" ${ip}"; fi
+    done
+    [[ -z "$unresolved" ]] || die "cannot name the node(s) at${unresolved}: the cluster gave no name for them (a failed read, or no such node), so whether they hold the only copy of a database cannot be told.
+  Refusing to replace without the question. Check 'kubectl get nodes', then run the same command again. Nothing was changed."
   fi
-  if [[ "$SCOPE" == all || "$SCOPE" == workers ]]; then for ip in "${WK_IPS[@]}"; do k8s_node_for_ip "$ip" || true; done; fi
-  if [[ "$SCOPE" == all || "$SCOPE" == cp ]]; then for ip in "${CP_IPS[@]}"; do k8s_node_for_ip "$ip" || true; done; fi
+  sole_copy_gate ${names[@]+"${names[@]}"}
 }
 
 replace_node() { # <type: cp|worker> <index>
@@ -683,7 +702,7 @@ if [[ $DRY_RUN -eq 0 ]]; then
     dead_name="${ONLY_NODE:-$(k8s_node_for_ip "${ONLY_IP}" || echo "${ONLY_IP}")}"
     dead_node_survey "$ONLY_T" "$ONLY_I" "$dead_name"
     # The disk of a dead node is wiped like any other's, and may still hold the only copy of a database (infra #425).
-    sole_copy_gate "$dead_name"
+    roll_sole_copy_gate
   else
     cnpg_maintenance true
     # Now that the budgets are actually gone, ask everything else that is knowable
@@ -692,8 +711,7 @@ if [[ $DRY_RUN -eq 0 ]]; then
     # A replacement wipes each node's disk; --upgrade keeps it. A Cluster whose ONLY copy is on a node of this run is named, and
     # --yes does not answer for it (infra #425).
     if [[ $UPGRADE -eq 0 ]]; then
-      mapfile -t gate_nodes < <(roll_node_names)
-      sole_copy_gate "${gate_nodes[@]}"
+      roll_sole_copy_gate
     fi
   fi
 fi

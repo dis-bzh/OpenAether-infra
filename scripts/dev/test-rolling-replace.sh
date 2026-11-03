@@ -1183,6 +1183,46 @@ plan "${CRD}get clusters.postgresql.cnpg.io\t1\tconnection refused\n"
   && ok "a read that fails refuses (it is a data-loss guard: an unanswered question is not an empty answer)" || bad "blind: $(cat "$STUB_DIR/gate.out")"
 ASSUME_YES=0; ACCEPT_SOLE_COPY=()
 
+# The names the gate is asked about come from the cluster, one address at a time. An address that gives no name is a node the gate
+# cannot ask about, not a node to leave out (review of 0.4.1 WP1: one failed read dropped the node from the question, silently).
+eval "$(extract 'roll_sole_copy_gate')"
+k8s_node_for_ip() { case "$1" in 10.0.0.2[0-3]) echo "worker-$((${1##*.} - 20))" ;; 10.0.0.10) echo cp-0 ;; *) return 1 ;; esac; }
+SC1_PLAN="${CRD}get clusters.postgresql.cnpg.io\t0\t$({ echo "$LIGHT"; } | items)\n${SC_PODS}${SC_PVS}"
+scope() { DEAD=0; ONLY_T=""; ONLY_I=""; ONLY_NODE=""; ONLY_IP=""; SCOPE="$1"; WK_IPS=(10.0.0.20 10.0.0.21 10.0.0.22 10.0.0.23); CP_IPS=(10.0.0.10); }
+plan "$SC1_PLAN"; ASSUME_YES=1; ACCEPT_SOLE_COPY=()
+scope all
+[ "$(gate roll_sole_copy_gate)" = 42 ] && grep -q 'lab27/lab27-light' "$STUB_DIR/gate.out" \
+  && ok "a whole roll: every worker and control plane is named from its address, and the node that holds the only copy is found" || bad "whole roll: $(cat "$STUB_DIR/gate.out")"
+WK_IPS=(10.0.0.20 10.0.0.21 10.0.0.22 10.0.0.99)
+[ "$(gate roll_sole_copy_gate)" = 42 ] && grep -q '10.0.0.99' "$STUB_DIR/gate.out" && grep -q 'cannot name' "$STUB_DIR/gate.out" && ! grep -q 'lab27/lab27-light' "$STUB_DIR/gate.out" \
+  && ok "one address that gives no node name (a failed read, a node gone): the run refuses and names the address, it does not ask about the other three" || bad "unresolved address: rc=$(gate roll_sole_copy_gate) $(cat "$STUB_DIR/gate.out")"
+WK_IPS=(10.0.0.98 10.0.0.99); CP_IPS=(10.0.0.97)
+[ "$(gate roll_sole_copy_gate)" = 42 ] && grep -q 'cannot name' "$STUB_DIR/gate.out" \
+  && ok "no address gives a name: refused, not an empty question that passes" || bad "nothing resolvable passed: $(cat "$STUB_DIR/gate.out")"
+scope cp; WK_IPS=(10.0.0.99)
+[ "$(gate roll_sole_copy_gate)" = 0 ] && ok "the scope is respected: --cp-only does not look at the workers (an unknown worker address is not its business)" || bad "scope cp: $(cat "$STUB_DIR/gate.out")"
+scope all; ONLY_T=worker; ONLY_I=3
+[ "$(gate roll_sole_copy_gate)" = 42 ] && grep -q 'lab27/lab27-light' "$STUB_DIR/gate.out" \
+  && ok "one node (--node/--ip): its own address is read, and the only copy on it is named" || bad "one node: $(cat "$STUB_DIR/gate.out")"
+ONLY_I=0
+[ "$(gate roll_sole_copy_gate)" = 0 ] && ok "…a node that holds none: rc 0" || bad "one clean node: $(cat "$STUB_DIR/gate.out")"
+WK_IPS=(10.0.0.20 10.0.0.21 10.0.0.22 10.0.0.99); ONLY_I=3
+[ "$(gate roll_sole_copy_gate)" = 42 ] && grep -q 'cannot name' "$STUB_DIR/gate.out" \
+  && ok "one node whose address gives no name and no --node: refused" || bad "one unresolved node: $(cat "$STUB_DIR/gate.out")"
+ONLY_NODE=worker-3
+[ "$(gate roll_sole_copy_gate)" = 42 ] && grep -q 'lab27/lab27-light' "$STUB_DIR/gate.out" && ! grep -q 'cannot name' "$STUB_DIR/gate.out" \
+  && ok "…with --node=worker-3 the name given is the name asked about" || bad "one node by name: $(cat "$STUB_DIR/gate.out")"
+scope all; DEAD=1; ONLY_T=worker; ONLY_I=3; ONLY_NODE=worker-3; ONLY_IP=10.0.0.23
+[ "$(gate roll_sole_copy_gate)" = 42 ] && grep -q 'lab27/lab27-light' "$STUB_DIR/gate.out" \
+  && ok "a dead node (named): the dead machine's disk is wiped too, so its only copy is named" || bad "dead named: $(cat "$STUB_DIR/gate.out")"
+ONLY_NODE=""
+[ "$(gate roll_sole_copy_gate)" = 42 ] && grep -q 'lab27/lab27-light' "$STUB_DIR/gate.out" \
+  && ok "…by address alone, the Node object still answers: the name is read from the cluster" || bad "dead by address: $(cat "$STUB_DIR/gate.out")"
+ONLY_IP=10.0.0.99
+[ "$(gate roll_sole_copy_gate)" = 42 ] && grep -q 'cannot name' "$STUB_DIR/gate.out" && grep -q -- '--node=' "$STUB_DIR/gate.out" \
+  && ok "…by an address whose Node object is gone and no --node: refused, and the flag that names it is printed (the volumes are pinned to the OLD name)" || bad "dead unresolved: $(cat "$STUB_DIR/gate.out")"
+scope all; ASSUME_YES=0; ACCEPT_SOLE_COPY=()
+
 # Wired in: replacement only (--upgrade keeps the disk), once per mode, after the survey and before the first node is touched.
 RRX="$(cat "$ROOT/scripts/ops/rolling-replace.sh")"
 grep -q -- '--accept-sole-copy=\*)' <<<"$RRX" && ok "rolling-replace.sh parses --accept-sole-copy=<namespace>/<name>" || bad "the flag is not parsed"
@@ -1190,7 +1230,7 @@ awk '/^  if \[\[ \$DEAD -eq 1 \]\]; then$/ {s=1} s && /dead_node_survey/ {d=NR} 
      s && /^  else$/ {e=NR} s && /preflight_roll$/ {p=NR} s && /sole_copy_gate/ && p && !h {h=NR}
      END {exit !(d && g > d && g < e && p > e && h > p)}' <<<"$RRX" \
   && ok "a dead node: the gate follows the survey; a roll: it follows preflight_roll, both before any node is touched" || bad "the gate is not wired after the surveys"
-grep -B3 'sole_copy_gate' <<<"$RRX" | grep -q 'UPGRADE -eq 0' && ok "…and a roll with --upgrade (the disk is kept) is not asked" || bad "--upgrade would be asked about data it does not destroy"
+grep -B1 '^      roll_sole_copy_gate$' <<<"$RRX" | grep -q 'UPGRADE -eq 0' && ok "…and a roll with --upgrade (the disk is kept) is not asked" || bad "--upgrade would be asked about data it does not destroy"
 ! grep -q 'sole_copy_gate' "$ROOT/scripts/ops/shrink-nodes.sh" && ok "cluster-shrink is untouched: it already refuses ANY node-local volume" || bad "shrink-nodes.sh calls the new gate"
 
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"

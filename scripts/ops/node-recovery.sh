@@ -210,7 +210,7 @@ case "$CMD" in
     flags=(--role="$ROLE" --dead --node="$NAME_FOR_K8S" --ip="$NODE_IP")
     [[ $DRY_RUN -eq 0 ]] || flags+=(--dry-run)
     [[ $ASSUME_YES -eq 0 ]] || flags+=(--yes)
-    flags+=("${ACCEPT[@]}")
+    flags+=(${ACCEPT[@]+"${ACCEPT[@]}"})
     scope=--workers-only; [[ $T == cp ]] && scope=--cp-only
     "$HERE/rolling-replace.sh" "$PROVIDER" "$scope" "${flags[@]}"
     [[ $DRY_RUN -eq 0 ]] || exit 0
