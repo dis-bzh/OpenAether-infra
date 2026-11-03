@@ -186,7 +186,7 @@ recalculé à cet instant. Une fois vérifié, il lance aussi la rétention des 
 où tofu demande son propre oui pour chaque ancienne image détruite. Pour un run non
 supervisé, ajoute `APPROVE=auto` : il répond aux deux plans et saute la rétention.
 (Pour lire le plan sans rien créer, ajoute `PLAN_ONLY=1` : il s'arrête au plan de la
-phase 1, et sur un cluster déjà amorcé ce plan ouvre les tunnels Talos locaux, simulé seulement et NON VÉRIFIÉ sur un cluster, voir
+phase 1, et sur un cluster déjà amorcé ce plan ouvre les tunnels Talos locaux (simulé seulement et NON VÉRIFIÉ sur un cluster). Avec l'image Talos absente, comme sur un compte neuf, le plan ne peut pas être lu : l'exécution dit que l'image SERAIT construite, puis se termine en rc 201 sur le « no image found » du plan, sans rien créer ; voir
 [`upgrade.fr.md`](upgrade.fr.md#ajouter-des-nœuds--cluster-up-crée-la-machine-avant-de-poser-la-question-conception-03x-inchangée).
 Pour relire à part un plan de la phase 1,
 enregistre-le : `task infra-plan ROLE=management PROVIDER=scaleway OUT=tfplan`,

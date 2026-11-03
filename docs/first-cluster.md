@@ -179,7 +179,7 @@ for `-auto-approve`, which applies a *different* plan computed at that moment.
 Once verified it also runs the image retention, where tofu asks its own yes for each
 old image it destroys. For an unattended run add `APPROVE=auto`: it answers the two
 plans and skips the retention. (To read the plan with nothing created, add
-`PLAN_ONLY=1`: it stops at the phase-1 plan, and on a bootstrapped cluster that plan opens the local Talos tunnels, mocked only and UNVERIFIED on a cluster, see
+`PLAN_ONLY=1`: it stops at the phase-1 plan, and on a bootstrapped cluster that plan opens the local Talos tunnels (mocked only and UNVERIFIED on a cluster). With the Talos image missing, as on a new account, the plan cannot be read: the run says the image WOULD be built, then ends rc 201 on the plan's "no image found", nothing created; see
 [`upgrade.md`](upgrade.md#adding-nodes-cluster-up-creates-the-machine-before-it-asks-a-03x-design-unchanged).
 To read a phase-1 plan on its own, save it:
 `task infra-plan ROLE=management PROVIDER=scaleway OUT=tfplan`, read it, then

@@ -604,7 +604,9 @@ tasks:
       image the retention destroys. On a 0.3.x cluster the CNPG presync and the apps ref move are ONE step and
       CoreDNS is converged before the verify. APPROVE=auto answers the plans for you, for CI and for a shell that cannot
       be asked, and skips the retention. PLAN_ONLY=1 stops at the phase-1 plan with nothing created: the image is
-      planned and not built, the grow step only says which nodes it would create, nothing is applied (it still ensures
+      planned and not built (if it is missing the plan cannot be read: the run says the image WOULD be built, then
+      ends rc 201 on the plan's own "no image found", nothing created; Scaleway, OVH and Outscale read the image by
+      name), the grow step only says which nodes it would create, nothing is applied (it still ensures
       the state buckets, renders the manifests and runs `tofu init`, and on a bootstrapped cluster the phase-1 plan
       opens or repairs the local Talos tunnels through the bastion, as `task plan` does: ssh processes on this machine,
       nothing created in the cloud, closed by `task close-tunnels`; the one-time copy of a pre-#69 image state waits
@@ -640,9 +642,12 @@ tasks:
     cmds:
       - defer: *receipt
       - cmd: |
-          echo "▶ PLAN_ONLY=1: this run stops at the phase-1 plan."
+          echo "▶ PLAN_ONLY=1: this run stops at the phase-1 plan, when that plan can be read."
           echo "  No image is built, no machine is created, nothing is applied; the state buckets are still ensured"
           echo "  (the backend needs them), the manifests rendered and tofu inited, as in any run."
+          echo "  If the Talos image is missing (a new account, a new version) the plan cannot be read: the image"
+          echo "  step says it WOULD be built, then the plan fails (\"no image found\") and the run ends rc 201,"
+          echo "  nothing created. That is the answer, not a fault: a real run builds the image first."
           echo "  On a bootstrapped cluster the plan also opens or repairs the local Talos tunnels, as task plan does"
           echo "  (ssh processes on this machine, nothing in the cloud)."
         if: '[ -n "{{.PLAN_ONLY_ON}}" ]'
