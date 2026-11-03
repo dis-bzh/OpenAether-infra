@@ -387,13 +387,14 @@ expect "renovate[bot] writing 'Rung: none' declares nothing" 0 "renovate[bot]" "
 expect "a code diff writing 'Rung: none' is still refused" 1 "no rung declared" h false "$sha" "$(body 'none (docs-only diff)')"
 expect "a docs-only diff's free text after Rung: that is not 'none' is still refused" 1 "is not one of" h true "$sha" "$(body 'docs only')"
 expect "'Rung: none' does not hide a pasted receipt" 1 "exactly one" h true "$sha" "$(body none "$DIRTY")"
-# The reason after "none" is set off by " (", " —" or " -" (CONTRIBUTING.md and the PR template name these three): the doc and
+# The reason after "none" is set off by " (", " —" or " -", space included (CONTRIBUTING.md and the PR template name these): the doc and
 # this parser must agree, so each is asserted, and the separators a contributor would also try are refused, not guessed at.
 expect "'Rung: none — reason' (em dash) declares nothing on a docs-only diff" 0 "docs-only" h true "$sha" "$(body 'none — docs only')"
 expect "'Rung: none - reason' (hyphen) declares nothing on a docs-only diff" 0 "docs-only" h true "$sha" "$(body 'none - docs only')"
 expect "'Rung: none, reason' is not a documented form: refused" 1 "is not one of" h true "$sha" "$(body 'none, docs only')"
 expect "'Rung: none: reason' is not a documented form: refused" 1 "is not one of" h true "$sha" "$(body 'none: docs only')"
 expect "'Rung: none because reason' is not a documented form: refused" 1 "is not one of" h true "$sha" "$(body 'none because docs only')"
+expect "'Rung: none(reason)' (no space before the bracket) is refused: the docs ask for a space" 1 "is not one of" h true "$sha" "$(body 'none(docs only)')"
 # The docs' own examples must pass the parser they describe (they once said "a reason after it", which the parser refused).
 n=0
 while IFS= read -r ex; do
