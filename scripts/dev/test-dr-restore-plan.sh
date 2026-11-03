@@ -80,7 +80,7 @@ out=""; for x in "$d"*/; do [ -d "$x" ] && out="${out:+$out	}${p}$(basename "$x"
 echo "${out:-None}"
 STUB
 chmod +x "$TMP/bin/task" "$TMP/bin/restic" "$TMP/bin/talosctl" "$TMP/bin/aws"
-export PATH="$TMP/bin:$PATH" OA_DR_TASK=task OA_DR_POLL=0 OA_DR_WAIT_TRIES=3
+export PATH="$TMP/bin:$PATH" OA_DR_TASK=task OA_DR_POLL=0 OA_DR_WAIT_TRIES=3 OA_DR_STANDBY_TRIES=2
 export SCW_AWS_ACCESS_KEY_ID=AKIAEXAMPLE SCW_AWS_SECRET_ACCESS_KEY=secretvalue OVH_AWS_ACCESS_KEY_ID=ovhak OVH_AWS_SECRET_ACCESS_KEY=ovhsk
 export TF_VAR_encryption_passphrase="a-passphrase-long-enough-to-be-accepted-32+"
 SEAL="$TMP/seal.key"; head -c 32 /dev/urandom | base64 >"$SEAL"
@@ -91,9 +91,12 @@ ALL=(--seal-key-file "$SEAL" --restic-password-file "$RPW" --bao-token-file "$TO
 
 PB=s3-oa-zz-scaleway-backups-prod; RB="$PB-backup"     # the primary and the replica bucket of the test tfvars
 store() { mkdir -p "$FAKE_STORES/$1/cnpg/$2/$3"; }       # <bucket> <cluster> <serverName>: an archive generation in a store
+NEWN=0
 new() { # fresh double state and work dir; sets FAKE_DR, OUTD; the stores hold the dead cluster's archive (generation 1) on both sides
-  FAKE_DR="$TMP/dr.$RANDOM"; mkdir -p "$FAKE_DR"; export FAKE_DR; OUTD="$TMP/out.$RANDOM"
-  FAKE_STORES="$TMP/stores.$RANDOM"; export FAKE_STORES
+  # one number per call, never a random one: a name met twice would keep the calls.log, jobs.json or patches.log of an earlier scenario
+  NEWN=$((NEWN + 1))
+  FAKE_DR="$TMP/dr.$NEWN"; mkdir -p "$FAKE_DR"; export FAKE_DR; OUTD="$TMP/out.$NEWN"
+  FAKE_STORES="$TMP/stores.$NEWN"; export FAKE_STORES
   for b in "$PB" "$RB"; do for c in zitadel-db grafana-db; do store "$b" "$c" "$c"; done; done
   cp "$TMP/tfvars.orig" "$OA_ENVS_DIR/management-scaleway.tfvars"; rm -f "$OA_ENVS_DIR"/*.dr-bak
 }
@@ -119,6 +122,7 @@ chk "it says it is a dry-run and that nothing ran" "grep -q 'MODE: DRY-RUN' '$TM
 chk "nothing was run: no stub was called, no directory created" "[ ! -s '$FAKE_DR/calls.log' ] && [ ! -e '$OUTD' ]"
 chk "the targets and the RTO are stated, with the RPO of each data set" "grep -q '480 min RTO' '$TMP/stdout' && grep -q 'RPO' '$TMP/stdout'"
 chk "the report table has every step as dry-run" "[ \"\$(grep -c ' dry-run ' '$TMP/stdout')\" = 12 ]"
+chk "the dry-run says Grafana (observability) waits for the databases like identity does, and that its ExternalSecrets are read in the identity step (infra #426)" "grep -q 'except identity\* and observability' '$TMP/stdout' && grep -q 'every ExternalSecret is Ready (those of observability exist only from here on)' '$TMP/stdout'"
 run "${ALL[@]}" --from replica
 chk "--from replica reads the -backup bucket on the replica endpoint with the replica store's keys" "grep -q 's3:https://s3.gra.io.cloud.ovh.net/s3-oa-zz-scaleway-backups-prod-backup/oa-test-prod-scaleway/openbao' '$TMP/stdout'"
 
@@ -142,7 +146,9 @@ chk "the steps ran in the documented order" "order 'task restore-artifacts' 'tas
 chk "the seal key Secret is created before Flux is switched on (the second cluster-up)" "[ \"\$(calls | grep -n 'create secret generic openbao-seal-key' | cut -d: -f1)\" -lt \"\$(calls | grep -n 'task cluster-up' | tail -1 | cut -d: -f1)\" ]"
 chk "deploy_flux is true afterwards, and the previous file is kept next to it" "grep -q '^deploy_flux = true' '$OA_ENVS_DIR/management-scaleway.tfvars' && grep -q '^deploy_flux = false' '$OA_ENVS_DIR/management-scaleway.tfvars.dr-bak'"
 chk "the held list excludes foundation-vault and what it needs, and includes identity" "! grep -qE '^(foundation-vault|namespaces|platform)\$' '$OUTD/work/held.txt' && grep -q '^identity\$' '$OUTD/work/held.txt' && grep -q '^cnpg\$' '$OUTD/work/held.txt'"
-chk "everything held is suspended first, identity is resumed last" "head -n \$(wc -l <'$OUTD/work/held.txt') '$FAKE_DR/state/patches.log' | grep -q suspend && tail -n 2 '$FAKE_DR/state/patches.log' | grep -q '^identity'"
+chk "everything held is suspended first, identity and observability are resumed last" "head -n \$(wc -l <'$OUTD/work/held.txt') '$FAKE_DR/state/patches.log' | grep -q suspend && [ \"\$(tail -n 3 '$FAKE_DR/state/patches.log' | grep -cE '^(identity|identity-gateway|observability) resume')\" = 3 ]"
+chk "Grafana (observability) is not resumed before the last pg_restore: the load goes into a pristine grafana-db (infra #426)" "calls | awk '/pg_restore/ { exit } /patch kustomization observability .*false/ { bad = 1 } END { exit bad }'"
+chk "...it is resumed after the load and before the verify" "order 'pg_restore' 'patch kustomization observability .*false' 'task cluster-verify'"
 chk "the OpenBao restore received a token and the snapshot on stdin (3000 bytes)" "grep -q 'snapshot_bytes=3000' '$FAKE_DR/state/restore.log' && grep -q 'token_bytes=2[0-9]' '$FAKE_DR/state/restore.log'"
 chk "the source's three shares are back" "grep -c 'share-' '$FAKE_DR/state/shares.json' | grep -q 1 && python3 -c \"import json; assert len(json.load(open('$FAKE_DR/state/shares.json')))==3\""
 chk "both databases are recovered into a scratch Cluster from the ${STORE:-primary} ObjectStore, which never archives" "python3 - '$FAKE_DR/state/applied.jsonl' <<'PY'
@@ -235,6 +241,45 @@ new; FAKE_VERIFY_SKIP=1 run "${ALL[@]}" --execute --confirm oa-test --only verif
 chk "a restore test that only skipped does not pass the verify step" "[ $RC = 1 ] && grep -q 'without proving anything' '$TMP/stderr' '$TMP/stdout'"
 new; FAKE_VERIFY_FAIL=1 run "${ALL[@]}" --execute --confirm oa-test --only verify
 chk "a failing restore test on the rebuilt cluster fails the last step" "[ $RC = 1 ] && grep -q 'restore test of the rebuilt cluster failed' '$TMP/stdout'"
+new; FAKE_CRON_PRUNE=1 run "${ALL[@]}" --execute --confirm oa-test --only verify
+chk "the chain's own Jobs lose the CronJob's owner reference, so its history limit cannot prune them (lab 28B, infra #427)" "[ $RC = 0 ] && calls | grep -q 'patch job dr-replicate .*ownerReferences' && calls | grep -q 'patch job dr-check .*ownerReferences'"
+new; FAKE_JOB_GONE=dr-replicate run "${ALL[@]}" --execute --confirm oa-test --only verify
+chk "a copy Job that is gone fails the step at once and says so (NotFound is read once, not waited on for 900 s)" "[ $RC = 1 ] && grep -q 'dr-replicate is gone (NotFound)' '$TMP/stdout' && [ \"\$(calls | grep -c 'get job dr-replicate')\" = 1 ]"
+new; FAKE_JOB_GONE=dr-check run "${ALL[@]}" --execute --confirm oa-test --only verify
+chk "...and so does a restore-test Job that is gone" "[ $RC = 1 ] && grep -q 'dr-check is gone (NotFound)' '$TMP/stdout' && [ \"\$(calls | grep -c 'get job dr-check .*succeeded')\" = 1 ]"
+new; FAKE_JOB_PATCH_FAIL=1 run "${ALL[@]}" --execute --confirm oa-test --only verify
+chk "a refused patch is a warning, not a stop: the Job may still be pruned, which the NotFound read above then names" "[ $RC = 0 ] && grep -q 'could not remove the owner reference of the Job dr-replicate' '$TMP/stderr'"
+new; FAKE_KUBECTL_WARN=1 run "${ALL[@]}" --execute --confirm oa-test --only verify
+chk "a warning that kubectl prints on stderr next to a good answer does not hide the Job's success" "[ $RC = 0 ] && grep -q '✓ verify done' '$TMP/stdout'"
+new; FAKE_JOB_CREATE_FAIL=dr-replicate run "${ALL[@]}" --execute --confirm oa-test --only verify
+chk "a Job that cannot be created fails the step at once with that cause (errexit is off inside prove_new_archive), and nothing is waited for" "[ $RC = 1 ] && grep -q 'could not create the Job dr-replicate' '$TMP/stdout' '$TMP/stderr' && ! calls | grep -q 'get job dr-replicate' && ! calls | grep -q 'dr-check'"
+new; FAKE_JOB_CREATE_FAIL=dr-check run "${ALL[@]}" --execute --confirm oa-test --only verify
+chk "...the restore-test Job too (the last command of the step, which relies on errexit): the step fails with that cause and the Job is not waited for" "[ $RC = 1 ] && grep -q 'could not create the Job dr-check' '$TMP/stdout' '$TMP/stderr' && ! calls | grep -q 'get job dr-check .*succeeded'"
+
+new; mkdir -p "$OUTD/work"; printf 'cnpg\nidentity\nobservability\n' >"$OUTD/work/held.txt"; FAKE_KS_SLOW=4 run "${ALL[@]}" --execute --confirm oa-test --only identity
+chk "the identity step waits for the DAG twice as long as the other waits (30 min of the 15): observability converges in it since #426" "[ $RC = 0 ]"
+new; mkdir -p "$OUTD/work"; printf 'cnpg\nidentity\nobservability\n' >"$OUTD/work/held.txt"; FAKE_KS_SLOW=99 run "${ALL[@]}" --execute --confirm oa-test --only identity
+chk "...and still not for ever: a Kustomization that never gets Ready fails the step" "[ $RC = 1 ] && grep -q 'Kustomizations are not Ready' '$TMP/stdout'"
+
+new; FAKE_ES_LATE=bad run "${ALL[@]}" --execute --confirm oa-test
+chk "an ExternalSecret of observability that never syncs is not seen by resume (it does not exist yet) but stops the identity step, and verify does not run (the coverage #426 moved)" "[ $RC = 1 ] && grep -q '✓ resume done' '$TMP/stdout' && grep -q '✗ identity FAILED' '$TMP/stdout' && grep -q '1 of 7 ExternalSecrets are not Ready' '$TMP/stdout' && ! calls | grep -q 'task cluster-verify'"
+new; mkdir -p "$OUTD/work"; printf 'cnpg\nidentity\nobservability\n' >"$OUTD/work/held.txt"; FAKE_ES_LATE=slow:4 run "${ALL[@]}" --execute --confirm oa-test --only identity
+chk "...but ExternalSecrets that are only slow to sync (NotReady for the first polls) are waited for" "[ $RC = 0 ]"
+new; mkdir -p "$OUTD/work"; printf 'cnpg\nidentity\nobservability\n' >"$OUTD/work/held.txt"; FAKE_ES_LATE=none run "${ALL[@]}" --execute --confirm oa-test --only identity
+chk "...and an ExternalSecret list that comes back empty is not a pass (no ExternalSecret is not 'none is NotReady')" "[ $RC = 1 ] && grep -q '0 of 0 ExternalSecrets are not Ready' '$TMP/stdout'"
+
+echo "=== OpenBao standbys after the raft restore (apps #184) ==="
+dels() { sort "$FAKE_DR/state/pods-deleted.log" 2>/dev/null | tr '\n' ' '; }
+new; run "${ALL[@]}" --execute --confirm oa-test --only openbao
+chk "every pod is asked which node is active; openbao-1 and openbao-2 are still deleted once and the pod that follows is left alone" "[ $RC = 0 ] && [ \"\$(dels)\" = 'openbao-1 openbao-2 ' ] && [ \"\$(calls | grep -o 'exec openbao-[0-2] -- bao read -format=json sys/leader' | sort -u | wc -l)\" = 3 ]"
+new; FAKE_BAO_NOLEADER=openbao-0 run "${ALL[@]}" --execute --confirm oa-test --only openbao
+chk "openbao-0, the pod where the restore ran, stays a standby with no active node: it is restarted once and the step passes (lab 28B)" "[ $RC = 0 ] && [ \"\$(dels)\" = 'openbao-0 openbao-1 openbao-2 ' ] && grep -q 'openbao-0 answers but knows no active node' '$TMP/stdout'"
+new; FAKE_BAO_NOLEADER=openbao-2 FAKE_BAO_STUCK=1 run "${ALL[@]}" --execute --confirm oa-test --only openbao
+chk "a standby that still knows no active node after its one restart stops the chain, naming the pod and the way on" "[ $RC = 1 ] && [ \"\$(dels)\" = 'openbao-1 openbao-2 openbao-2 ' ] && grep -q 'openbao-2 still knows no active node after a restart' '$TMP/stdout' && grep -q -- '--from-step shares' '$TMP/stdout'"
+new; FAKE_BAO_NOANSWER=openbao-1 run "${ALL[@]}" --execute --confirm oa-test --only openbao
+chk "a pod that gives no readable answer is a warning, not a stop and not a second restart (the unreadable form must not stop a chain that worked in 0.4.0)" "[ $RC = 0 ] && [ \"\$(dels)\" = 'openbao-1 openbao-2 ' ] && grep -q 'openbao-1 gave no readable answer' '$TMP/stdout'"
+new; OA_DR_NO_STANDBY_FIX=1 FAKE_BAO_NOLEADER=openbao-0 run "${ALL[@]}" --execute --confirm oa-test --only openbao
+chk "OA_DR_NO_STANDBY_FIX=1 still switches the whole standby handling off: no pod deleted, no pod asked" "[ $RC = 0 ] && [ -z \"\$(dels)\" ] && ! calls | grep -q 'sys/leader'"
 
 echo "=== subsets and the other sources ==="
 new; mkdir -p "$OUTD/work"; printf 'cnpg\nidentity\n' >"$OUTD/work/held.txt"
@@ -264,6 +309,13 @@ chk "a tunnel endpoint is refused as the node: the address of the control plane 
 new; FAKE_ETCD_SIZE=8224 FAKE_TALOS_ENDPOINT=127.0.0.1:52000 run "${ALL[@]}" --scenario etcd --execute --confirm oa-test --control-plane-ip 172.16.0.3
 chk "behind a tunnel the node is the given address and the endpoint stays the tunnel" "[ $RC = 0 ] && calls | grep -q 'talosctl.* -n 172.16.0.3 -e 127.0.0.1:52000 bootstrap --recover-from='"
 chk "after the etcd restore the Cilium agents and operator are restarted (their watches predate the restored revision)" "calls | grep -q 'rollout restart ds/cilium deploy/cilium-operator'"
+chk "...and when the rollout finishes nothing is force-deleted" "[ \"\$(calls | grep -c 'rollout status ds/cilium --timeout=300s')\" = 1 ] && ! calls | grep -q 'delete pod cilium'"
+new; FAKE_ETCD_SIZE=8224 FAKE_CILIUM=stuck run "${ALL[@]}" --scenario etcd --execute --confirm oa-test
+chk "a Cilium agent stuck Terminating (lab 28B) is force-deleted once after the first 300 s, the wait is repeated once, and the step passes (infra #428)" "[ $RC = 0 ] && [ \"\$(calls | grep -c 'delete pod cilium-bbbbb --grace-period=0 --force')\" = 1 ] && [ \"\$(calls | grep -c 'rollout status ds/cilium --timeout=300s')\" = 2 ] && grep -q 'cilium-bbbbb is stuck Terminating' '$TMP/stdout'"
+new; FAKE_ETCD_SIZE=8224 FAKE_CILIUM=stuck-forever run "${ALL[@]}" --scenario etcd --execute --confirm oa-test
+chk "...but only once, though the pod is still listed Terminating after the force-delete: one delete, two waits, then the chain stops naming the recipe" "[ $RC = 1 ] && [ \"\$(calls | grep -c 'delete pod cilium')\" = 1 ] && [ \"\$(calls | grep -c 'rollout status ds/cilium --timeout=300s')\" = 2 ] && grep -q 'did not come back' '$TMP/stdout' && grep -q 'disaster-recovery.md' '$TMP/stdout'"
+new; FAKE_ETCD_SIZE=8224 FAKE_CILIUM=slow run "${ALL[@]}" --scenario etcd --execute --confirm oa-test
+chk "a rollout that is merely slow (no pod Terminating) fails after the bound and deletes nothing" "[ $RC = 1 ] && ! calls | grep -q 'delete pod' && grep -q 'did not come back' '$TMP/stdout'"
 new; FAKE_ETCD_SIZE=1000 run "${ALL[@]}" --scenario etcd --execute --confirm oa-test
 chk "a file that is not a bolt database stops the chain before talosctl is called" "[ $RC = 1 ] && ! calls | grep -q 'talosctl.*bootstrap'"
 

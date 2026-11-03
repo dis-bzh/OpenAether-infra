@@ -111,9 +111,9 @@ declare -A TITLE=(
   [generation]="New CNPG archive generation: the rebuilt clusters must not archive into the dead clusters' WAL path (ConfigMap cnpg-archive-generation)"
   [openbao]="OpenBao raft snapshot: restic restore from the ${STORE} store, then bao operator raft snapshot restore"
   [shares]="The source cluster's recovery shares back"
-  [resume]="Resume the held Kustomizations except identity; External Secrets rebuilds every Secret from the restored OpenBao"
+  [resume]="Resume the held Kustomizations except identity* and observability (Grafana); External Secrets rebuilds every Secret from the restored OpenBao"
   [dbs]="Databases: restore into the empty Clusters (${DBSRC}${PITR:+ to $PITR})"
-  [identity]="Resume identity and the rest; wait for the whole DAG"
+  [identity]="Resume identity and observability (Grafana), now that the databases are loaded; wait for the whole DAG and every ExternalSecret"
   [verify]="Verify: cluster-verify, a base backup of the new archive and its copy to the replica store, a restore test on the rebuilt cluster"
   [etcd-fetch]="etcd snapshot: restic restore of the newest one from the ${STORE} store"
   [etcd-recover]="talosctl bootstrap --recover-from on the control plane that lost its etcd"
@@ -209,15 +209,16 @@ show_generation() {
 show_openbao() {
   say "  \$ restic -r $(repo openbao) restore latest --host openbao --target $WORK/openbao      # password from --restic-password-file"
   say "  \$ kubectl -n foundation-vault exec -i openbao-0 -- sh -c 'read token; … bao operator raft snapshot restore -force /tmp/dr.snap'   # token and snapshot on stdin"
-  say "  check: bao status says initialised and unsealed; standbys follow (openbao-1 and openbao-2 are deleted once if they do not)"
+  say "  check: bao status says initialised and unsealed; openbao-1 and openbao-2 are deleted once, then each of the three pods must know the active node (bao read sys/leader), else it is restarted once"
 }
 show_shares() {
   say "  \$ kubectl -n foundation-vault delete secret openbao-recovery-shares ; kubectl -n foundation-vault create secret generic openbao-recovery-shares --from-file=share-N=<dir>/openbao-share-N.b64 …"
   say "  check: the Secret holds as many shares as the directory"
 }
 show_resume() {
-  say "  \$ kubectl -n flux-system patch kustomization <the held ones except identity*> --type merge -p '{\"spec\":{\"suspend\":false}}'"
+  say "  \$ kubectl -n flux-system patch kustomization <the held ones except identity* and observability (Grafana)> --type merge -p '{\"spec\":{\"suspend\":false}}'"
   say "  check: every ExternalSecret is Ready (the Secrets, the restic password and zitadel-masterkey included) within 15 minutes"
+  say "  note: identity* (Zitadel) and observability (Grafana) stay held until the databases are loaded: Grafana creates its schema in an empty database and pg_restore --clean then fails on it (lab 28B)"
 }
 show_dbs() {
   if [ "$DBSRC" = pitr ]; then
@@ -229,10 +230,11 @@ show_dbs() {
   fi
   say "  check: the canary chain of each restored database is intact and its newest row is dated; the scratch Clusters are removed"
 }
-show_identity() { say "  \$ kubectl -n flux-system patch kustomization <identity*, then the rest> --type merge -p '{\"spec\":{\"suspend\":false}}'"; say "  check: no Kustomization is NotReady within 30 minutes"; }
+show_identity() { say "  \$ kubectl -n flux-system patch kustomization <identity*, observability, then the rest> --type merge -p '{\"spec\":{\"suspend\":false}}'"; say "  check: no Kustomization is NotReady and every ExternalSecret is Ready (those of observability exist only from here on) within 30 minutes"; }
 show_verify() {
   say "  \$ $TASK cluster-verify PROVIDER=$PROVIDER ROLE=$ROLE"
-  say "  \$ kubectl -n foundation-databases create job --from=cronjob/cnpg-recovery-restore-test dr-check ; wait for it"
+  say "  \$ kubectl -n foundation-databases create job --from=cronjob/cnpg-store-replicate dr-replicate ; the same for cnpg-recovery-restore-test (dr-check)"
+  say "    each Job is patched to drop the CronJob's owner reference (its history limit would prune it), then waited for"
   say "  check: both pass (the rebuilt cluster restores its own backups); then log in to each UI by hand and re-seed what lives outside OpenBao"
 }
 show_etcd-fetch() { say "  \$ restic -r $(repo etcd) restore latest --host etcd --target $WORK/etcd"; say "  check: a file of the snapshot exists, a bolt database (size is a multiple of 4096, or 4096n + 32 with a sha256 trailer)"; }
@@ -240,7 +242,11 @@ show_etcd-recover() {
   say "  \$ talosctl --talosconfig $TCFG -n <control-plane IP, --control-plane-ip> -e <talosconfig endpoint> bootstrap --recover-from=<snapshot> [--recover-skip-hash-check]"
   say "  note: the node must have no etcd data (wiped or new); this REPLACES the etcd of the cluster and drops everything written since the snapshot"
 }
-show_etcd-check() { say "  \$ talosctl etcd members ; kubectl get nodes ; kubectl -n flux-system get kustomization"; say "  check: 3 members (or the control plane count), nodes Ready"; }
+show_etcd-check() {
+  say "  \$ talosctl etcd members ; kubectl get nodes ; kubectl -n flux-system get kustomization"
+  say "  \$ kubectl -n kube-system rollout restart ds/cilium deploy/cilium-operator ; rollout status ds/cilium --timeout=300s (an agent stuck Terminating is force-deleted once, then the wait is repeated once)"
+  say "  check: 3 members (or the control plane count), nodes Ready, the Cilium agents rolled. NOT scripted (docs/disaster-recovery.md, the hand steps): a node whose pods stay unreachable, controllers that crash-loop"
+}
 
 # ── run_<id>: execute ──────────────────────────────────────────────────────────────────────────────────────────────────────
 HELD="$WORK/held.txt"
@@ -422,13 +428,51 @@ run_openbao() {
   { printf '%s\n' "$(cat "$BAOTOK")"; cat "$snap"; } | K -n foundation-vault exec -i openbao-0 -- sh -c \
     'IFS= read -r BAO_TOKEN; export BAO_TOKEN; cat > /tmp/dr.snap && bao operator raft snapshot restore -force /tmp/dr.snap; rc=$?; rm -f /tmp/dr.snap; exit $rc'
 }
+# After a raft restore a standby can stay without an active node ("local node not active but active cluster node not found", logins answered 500
+# for 25+ minutes) until its pod is restarted. In lab 28B it was openbao-0, the pod where the restore ran, which the step never touched
+# (apps #184). Every pod is asked which node it believes is active (sys/leader answers without a token); one that answers and knows none
+# after the bound is restarted once. UNVERIFIED on a cluster: the JSON of `bao read -format=json sys/leader` is read as the API documents it.
+OPENBAO_PODS=(openbao-0 openbao-1 openbao-2)
+bao_leader() { # <pod>: the active node address the pod knows (nothing when it knows none); rc 1 when it gave no readable answer
+  local j
+  j="$(K -n foundation-vault exec "$1" -- bao read -format=json sys/leader 2>/dev/null)" || return 1
+  grep -q '"ha_enabled"' <<<"$j" || return 1
+  sed -nE '/"leader_address"/{s/.*"leader_address": *"([^"]*)".*/\1/p;q}' <<<"$j"
+}
+follow_leader() { # <pod>: 0 it knows the active node, 1 it answers but knows none within the bound, 2 it gave no readable answer
+  local answered=0 a
+  for _ in $(seq 1 "${OA_DR_STANDBY_TRIES:-18}"); do
+    if a="$(bao_leader "$1")"; then
+      answered=1
+      [ -z "$a" ] || return 0
+    fi
+    sleep "${OA_DR_POLL:-10}"
+  done
+  [ "$answered" = 1 ] && return 1 || return 2
+}
+standbys_follow() {
+  local pod r
+  for pod in "${OPENBAO_PODS[@]}"; do
+    follow_leader "$pod" && r=0 || r=$?
+    if [ "$r" -eq 1 ]; then
+      say "  ($pod answers but knows no active node: restarted once)"
+      K -n foundation-vault delete pod "$pod" --ignore-not-found >/dev/null 2>&1 || true
+      follow_leader "$pod" && r=0 || r=$?
+      [ "$r" -ne 1 ] || { echo "$pod still knows no active node after a restart (bao read sys/leader; its log says 'active cluster node not found'): fix it by hand, then resume with --from-step shares"; return 1; }
+    fi
+    [ "$r" -ne 2 ] || say "  (WARNING: $pod gave no readable answer from bao read sys/leader within the bound; not restarted again: look at it)"
+  done
+}
 check_openbao() {
   local st
   for _ in $(seq 1 "${OA_DR_WAIT_TRIES:-90}"); do
     st="$(K -n foundation-vault exec openbao-0 -- bao status -format=json 2>/dev/null || true)"
     if grep -q '"initialized": *true' <<<"$st" && grep -q '"sealed": *false' <<<"$st"; then
-      # standbys that do not follow the restored leader: delete them once (the PVCs stay)
-      [ "${OA_DR_NO_STANDBY_FIX:-0}" = 1 ] || K -n foundation-vault delete pod openbao-1 openbao-2 --ignore-not-found >/dev/null 2>&1 || true
+      [ "${OA_DR_NO_STANDBY_FIX:-0}" = 1 ] && return 0
+      # standbys that do not follow the restored leader: delete them once (the PVCs stay), as in labs 20, 27 and 28B ...
+      K -n foundation-vault delete pod openbao-1 openbao-2 --ignore-not-found >/dev/null 2>&1 || true
+      # ... then ask all three, the pod where the restore ran included, which node is active
+      standbys_follow || return 1
       return 0
     fi
     sleep "${OA_DR_POLL:-10}"
@@ -455,17 +499,24 @@ check_shares() {
   [ "$want" -gt 0 ] && [ "$want" = "$have" ] || { echo "the Secret $sec holds $have shares, the directory $want"; return 1; }
 }
 
-resume_list() { # held names; $1 = only|except identity
+# What stays held until the databases are loaded (step dbs): identity* (Zitadel needs its database and masterkey) and observability, which
+# carries Grafana. Grafana creates its schema in an empty grafana-db; pg_restore --clean then meets objects that exist and ends rc 1 (lab 28B,
+# infra #426), so the load goes into a pristine database. The sub-Kustomizations observability-* depend on observability and wait for it.
+LATE_RE='^(identity|observability$)'
+resume_list() { # held names; $1 = only|except the late group
   [ -s "$HELD" ] || { echo "no held list at $HELD (step hold did not run in this work directory)" >&2; return 1; }
-  if [ "$1" = except ]; then grep -v '^identity' "$HELD" || true; else grep '^identity' "$HELD" || true; fi
+  if [ "$1" = except ]; then grep -Ev "$LATE_RE" "$HELD" || true; else grep -E "$LATE_RE" "$HELD" || true; fi
 }
 unsuspend() { local n; while read -r n; do [ -z "$n" ] || K -n flux-system patch kustomization "$n" --type merge -p '{"spec":{"suspend":false}}' >/dev/null; done; }
 run_resume() { resume_list except | unsuspend; }
+es_state() { # "<ExternalSecrets not Ready> <ExternalSecrets in all namespaces>"
+  K get externalsecret -A --no-headers 2>/dev/null | awk '{ n++ } $0 !~ /True/ { b++ } END { print b + 0, n + 0 }'
+}
 check_resume() {
-  local bad
+  local bad all
   for _ in $(seq 1 "${OA_DR_WAIT_TRIES:-90}"); do
-    bad="$(K get externalsecret -A --no-headers 2>/dev/null | awk '$0 !~ /True/' | wc -l)"
-    [ "$bad" -eq 0 ] && [ "$(K get externalsecret -A --no-headers 2>/dev/null | wc -l)" -gt 0 ] && return 0
+    read -r bad all <<<"$(es_state)"
+    [ "$bad" -eq 0 ] && [ "$all" -gt 0 ] && return 0
     sleep "${OA_DR_POLL:-10}"
   done
   echo "$bad ExternalSecrets are not Ready"; return 1
@@ -563,13 +614,17 @@ check_dbs() {
 
 run_identity() { resume_list only | unsuspend; }
 check_identity() {
-  local bad
-  for _ in $(seq 1 "${OA_DR_WAIT_TRIES:-90}"); do
+  local bad esbad esall
+  # Twice the usual wait (30 min, the step's target): observability, held until the databases were loaded, converges in this step (#426).
+  # Its Kustomization has wait: false, so Ready says nothing about its ExternalSecrets (Grafana's, Loki's, Alertmanager's), which did not exist
+  # when step resume checked them: they are checked here, with every other ExternalSecret.
+  for _ in $(seq 1 $((${OA_DR_WAIT_TRIES:-90} * 2))); do
     bad="$(K -n flux-system get kustomization --no-headers 2>/dev/null | awk '$0 !~ /True/' | wc -l)"
-    [ "$bad" -eq 0 ] && return 0
+    read -r esbad esall <<<"$(es_state)"
+    [ "$bad" -eq 0 ] && [ "$esbad" -eq 0 ] && [ "$esall" -gt 0 ] && return 0
     sleep "${OA_DR_POLL:-10}"
   done
-  echo "$bad Kustomizations are not Ready"; return 1
+  echo "$bad Kustomizations are not Ready; $esbad of $esall ExternalSecrets are not Ready (kubectl get externalsecret -A)"; return 1
 }
 
 # The new archive generation starts empty: give it a base backup, force the segment that holds it into the archive (an idle database
@@ -581,7 +636,30 @@ wait_for() { # <tries> <command...>
 }
 backup_done() { [ "$(K -n foundation-databases get backups.postgresql.cnpg.io "dr-base-$1" -o jsonpath='{.status.phase}' 2>/dev/null)" = completed ]; }
 archiving_true() { [ "$(K -n foundation-databases get clusters.postgresql.cnpg.io "$1" -o 'jsonpath={.status.conditions[?(@.type=="ContinuousArchiving")].status}' 2>/dev/null)" = True ]; }
-replicate_done() { [ "$(K -n foundation-databases get job dr-replicate -o jsonpath='{.status.succeeded}' 2>/dev/null)" = 1 ]; }
+# A Job made with `kubectl create job --from=cronjob/...` is owned by the CronJob, and the CronJob deletes the finished Jobs beyond its history
+# limit (successfulJobsHistoryLimit 1): the next scheduled run removed dr-replicate while the step still waited for it, 900 s of "NotFound"
+# (lab 28B, infra #427). The chain's own Jobs belong to nobody; the null removes the field whether it is there or not.
+job_from_cronjob() { # <cronjob> <job>; callers add `|| return 1` where errexit is off (prove_new_archive is called that way)
+  K -n foundation-databases create job --from="cronjob/$1" "$2" >/dev/null || { echo "could not create the Job $2 from cronjob/$1 (kubectl said no)"; return 1; }
+  K -n foundation-databases patch job "$2" --type merge -p '{"metadata":{"ownerReferences":null}}' >/dev/null \
+    || echo "  (warning: could not remove the owner reference of the Job $2: the CronJob may prune it)" >&2
+}
+job_succeeded() { # <job>: 0 Complete, 3 NotFound (gone), 1 anything else (running, failed, the API did not answer)
+  local o err="$WORK/job-get.err"
+  # stderr goes to a file of its own: on a good answer a client warning must not become part of the value, and on a failure it is what says NotFound
+  if o="$(K -n foundation-databases get job "$1" -o jsonpath='{.status.succeeded}' 2>"$err")"; then [ "$o" = 1 ]; return; fi
+  grep -q NotFound "$err" && return 3
+  return 1
+}
+wait_job() { # <job>: 0 Complete, 3 gone (read once, not waited on), 1 not Complete within the bound
+  local r
+  for _ in $(seq 1 "${OA_DR_WAIT_TRIES:-90}"); do
+    job_succeeded "$1" && r=0 || r=$?
+    [ "$r" -eq 1 ] || return "$r"
+    sleep "${OA_DR_POLL:-10}"
+  done
+  return 1
+}
 backup_manifest() {
   python3 - "$1" <<'PY'
 import json, sys
@@ -605,18 +683,23 @@ prove_new_archive() {
     wait_for "${OA_DR_WAIT_TRIES:-90}" archiving_true "$c" || { echo "$c: ContinuousArchiving is not True"; return 1; }
   done
   K -n foundation-databases delete job dr-replicate --ignore-not-found >/dev/null
-  K -n foundation-databases create job --from=cronjob/cnpg-store-replicate dr-replicate >/dev/null
-  wait_for "${OA_DR_WAIT_TRIES:-90}" replicate_done || { echo "the copy of the new archive to the replica store (job dr-replicate) did not complete"; return 1; }
+  job_from_cronjob cnpg-store-replicate dr-replicate || return 1
+  local r; wait_job dr-replicate && r=0 || r=$?
+  [ "$r" -ne 3 ] || { echo "the Job dr-replicate is gone (NotFound) before it was seen Complete: something deleted it, so the copy of the new archive to the replica store is unproven (list the replica store, or run --only verify again)"; return 1; }
+  [ "$r" -eq 0 ] || { echo "the copy of the new archive to the replica store (job dr-replicate) did not complete"; return 1; }
 }
 run_verify() {
   ( cd "$ROOT" && $TASK cluster-verify PROVIDER="$PROVIDER" ROLE="$ROLE" )
   prove_new_archive || return 1
   K -n foundation-databases delete job dr-check --ignore-not-found >/dev/null
-  K -n foundation-databases create job --from=cronjob/cnpg-recovery-restore-test dr-check >/dev/null
+  job_from_cronjob cnpg-recovery-restore-test dr-check
 }
 check_verify() {
+  local r
   for _ in $(seq 1 "${OA_DR_WAIT_TRIES:-90}"); do
-    if [ "$(K -n foundation-databases get job dr-check -o jsonpath='{.status.succeeded}' 2>/dev/null)" = 1 ]; then
+    job_succeeded dr-check && r=0 || r=$?
+    [ "$r" -ne 3 ] || { echo "the Job dr-check is gone (NotFound) before it was seen Complete: something deleted it, run --only verify again"; return 1; }
+    if [ "$r" -eq 0 ]; then
       # A Job that skipped every combination also "succeeds" (lab 20: the application role could not read the canary, four SKIPs, exit 0).
       local out; out="$(K -n foundation-databases logs job/dr-check --all-containers 2>/dev/null || true)"
       grep -q '^PASS ' <<<"$out" && ! grep -q '^SKIP ' <<<"$out" && return 0
@@ -653,6 +736,22 @@ run_etcd-recover() {
 }
 check_etcd-recover() { :; }
 run_etcd-check() { :; }
+# Restart the Cilium agents and the operator and wait for the agents. In lab 28B the rollout waited its whole 300 s on ONE agent stuck
+# Terminating (a worker), and a person force-deleted the pod (infra #428). After the first bound the agent pods that are Terminating are
+# force-deleted ONCE and the wait is repeated ONCE; nothing else is touched (a slow rollout with no Terminating pod fails as before). The
+# node whose datapath stays dead after that (its pods unreachable from the others) is a reboot, by hand: docs/disaster-recovery.md.
+cilium_restart() {
+  local stuck p
+  K -n kube-system rollout restart ds/cilium deploy/cilium-operator >/dev/null || return 1
+  K -n kube-system rollout status ds/cilium --timeout=300s >/dev/null 2>&1 && return 0
+  stuck="$(K -n kube-system get pods -l k8s-app=cilium --no-headers 2>/dev/null | awk '$3 == "Terminating" { print $1 }')"
+  [ -n "$stuck" ] || return 1
+  for p in $stuck; do
+    say "  (the Cilium agent $p is stuck Terminating after 300 s: force-deleted once)"
+    K -n kube-system delete pod "$p" --grace-period=0 --force >/dev/null 2>&1 || true
+  done
+  K -n kube-system rollout status ds/cilium --timeout=300s >/dev/null 2>&1
+}
 check_etcd-check() {
   for _ in $(seq 1 "${OA_DR_WAIT_TRIES:-90}"); do
     if K get --raw=/readyz >/dev/null 2>&1 && [ "$(K get nodes --no-headers 2>/dev/null | awk '$2 !~ /^Ready/' | wc -l)" -eq 0 ]; then
@@ -660,7 +759,7 @@ check_etcd-check() {
       # and about twenty controllers (Flux, CNPG, cert-manager) crash-looped until the agents were restarted.
       if K -n kube-system get ds cilium >/dev/null 2>&1; then
         say "  (restarting the Cilium agents and operator: their watches predate the restored revision)"
-        K -n kube-system rollout restart ds/cilium deploy/cilium-operator >/dev/null && K -n kube-system rollout status ds/cilium --timeout=300s >/dev/null || { echo "the Cilium agents did not come back"; return 1; }
+        cilium_restart || { echo "the Cilium agents did not come back (docs/disaster-recovery.md, \"In-place etcd restore: the hand steps\")"; return 1; }
       fi
       return 0
     fi
