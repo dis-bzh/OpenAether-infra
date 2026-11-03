@@ -91,9 +91,12 @@ ALL=(--seal-key-file "$SEAL" --restic-password-file "$RPW" --bao-token-file "$TO
 
 PB=s3-oa-zz-scaleway-backups-prod; RB="$PB-backup"     # the primary and the replica bucket of the test tfvars
 store() { mkdir -p "$FAKE_STORES/$1/cnpg/$2/$3"; }       # <bucket> <cluster> <serverName>: an archive generation in a store
+NEWN=0
 new() { # fresh double state and work dir; sets FAKE_DR, OUTD; the stores hold the dead cluster's archive (generation 1) on both sides
-  FAKE_DR="$TMP/dr.$RANDOM"; mkdir -p "$FAKE_DR"; export FAKE_DR; OUTD="$TMP/out.$RANDOM"
-  FAKE_STORES="$TMP/stores.$RANDOM"; export FAKE_STORES
+  # one number per call, never a random one: a name met twice would keep the calls.log, jobs.json or patches.log of an earlier scenario
+  NEWN=$((NEWN + 1))
+  FAKE_DR="$TMP/dr.$NEWN"; mkdir -p "$FAKE_DR"; export FAKE_DR; OUTD="$TMP/out.$NEWN"
+  FAKE_STORES="$TMP/stores.$NEWN"; export FAKE_STORES
   for b in "$PB" "$RB"; do for c in zitadel-db grafana-db; do store "$b" "$c" "$c"; done; done
   cp "$TMP/tfvars.orig" "$OA_ENVS_DIR/management-scaleway.tfvars"; rm -f "$OA_ENVS_DIR"/*.dr-bak
 }
