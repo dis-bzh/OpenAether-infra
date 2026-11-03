@@ -16,7 +16,8 @@
 # Flags: --role=management|workload (default management), --ip=ADDR (private address, when the Node object is gone),
 #        --yes (no prompt), --dry-run (replace: print the plan of the roll and stop), --even-if-running (replace a
 #        machine the provider calls running: only after `recover` failed), --clean (replace: after the checks, drop the
-#        volumes the old disk left behind, see below).
+#        volumes the old disk left behind, see below), --accept-sole-copy=<namespace>/<name> (replace; repeatable: the roll
+#        asks before it wipes a disk that holds the ONLY copy of a single-instance database, and --yes does not answer that).
 # After a replacement the pods whose local-path volume was pinned to the old disk (CNPG instances, an OpenBao member, loki-0,
 # vmselect-0, vmstorage: lab 21) do not start by themselves. replace then runs scripts/ops/replaced-node-cleanup.py: it lists them
 # and PRINTS the exact kubectl commands; with --clean it runs them, for the known safe cases only (a healthy primary or a raft
@@ -29,11 +30,11 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/../lib/common.sh"
 
-usage() { echo "usage: $0 <state|recover|replace> <ovh|scaleway|outscale|proxmox> --node=NAME [--ip=ADDR] [--role=R] [--yes] [--dry-run] [--even-if-running] [--clean]" >&2; exit 2; }
+usage() { echo "usage: $0 <state|recover|replace> <ovh|scaleway|outscale|proxmox> --node=NAME [--ip=ADDR] [--role=R] [--yes] [--dry-run] [--even-if-running] [--clean] [--accept-sole-copy=<namespace>/<name>]..." >&2; exit 2; }
 [[ $# -ge 2 ]] || usage
 CMD="$1"; PROVIDER="$2"; shift 2
 case "$CMD" in state | recover | replace) ;; *) usage ;; esac
-NODE=""; ONLY_IP=""; ROLE="management"; ASSUME_YES=0; DRY_RUN=0; EVEN_RUNNING=0; CLEAN=0
+NODE=""; ONLY_IP=""; ROLE="management"; ASSUME_YES=0; DRY_RUN=0; EVEN_RUNNING=0; CLEAN=0; ACCEPT=()
 for arg in "$@"; do
   case "$arg" in
     --node=*) NODE="${arg#--node=}" ;;
@@ -43,6 +44,7 @@ for arg in "$@"; do
     --dry-run) DRY_RUN=1 ;;
     --even-if-running) EVEN_RUNNING=1 ;;
     --clean) CLEAN=1 ;;
+    --accept-sole-copy=*) ACCEPT+=("$arg") ;;   # the roll's own flag (infra #425): the replacement wipes the disk of the node
     *) echo "✗ unknown flag: $arg" >&2; usage ;;
   esac
 done
@@ -208,6 +210,7 @@ case "$CMD" in
     flags=(--role="$ROLE" --dead --node="$NAME_FOR_K8S" --ip="$NODE_IP")
     [[ $DRY_RUN -eq 0 ]] || flags+=(--dry-run)
     [[ $ASSUME_YES -eq 0 ]] || flags+=(--yes)
+    flags+=(${ACCEPT[@]+"${ACCEPT[@]}"})
     scope=--workers-only; [[ $T == cp ]] && scope=--cp-only
     "$HERE/rolling-replace.sh" "$PROVIDER" "$scope" "${flags[@]}"
     [[ $DRY_RUN -eq 0 ]] || exit 0

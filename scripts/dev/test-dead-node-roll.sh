@@ -9,6 +9,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SUT="${SUT:-$ROOT/scripts/lib/roll-gates.sh}"   # the file under test (a mutant, for the mutation check)
 STUB="$(mktemp -d)"
 trap 'rm -rf "${STUB:?}"' EXIT
 PASS=0; FAIL=0
@@ -28,15 +29,19 @@ case "$*" in
 esac
 exit 0
 S
+# STUB_FLAKY holds "<port> <n>": that member fails its first n reads (a transient), then answers like the healthy ones.
+# STUB_ETCD_CALLS keeps one line per read, to count the tries.
 cat >"$STUB/talosctl" <<'S'
 #!/usr/bin/env bash
 case "$*" in *"service etcd"*) ep="$(sed -E 's/.*-e 127.0.0.1:([0-9]+).*/\1/' <<<"$*")"
+  echo "$ep" >>"$STUB_ETCD_CALLS"
+  if [ -f "$STUB_FLAKY" ]; then read -r fp fn <"$STUB_FLAKY"; [ "$ep" = "$fp" ] && [ "$(grep -cx "$ep" "$STUB_ETCD_CALLS")" -le "$fn" ] && exit 1; fi
   grep -qx "$ep" "$STUB_HEALTHY" && printf 'NODE  SERVICE\n1  etcd  Running  OK  HEALTH  OK\n' || exit 1 ;; esac
 S
 chmod +x "$STUB"/kubectl "$STUB"/talosctl
-export PATH="$STUB:$PATH" STUB_CALLS="$STUB/calls" STUB_NODES="$STUB/nodes" STUB_DESCRIBE="$STUB/describe" STUB_HEALTHY="$STUB/healthy" STUB_GONE="$STUB/gone" STUB_CORDON_FAILS="$STUB/cordonfails"
+export PATH="$STUB:$PATH" STUB_CALLS="$STUB/calls" STUB_NODES="$STUB/nodes" STUB_DESCRIBE="$STUB/describe" STUB_HEALTHY="$STUB/healthy" STUB_GONE="$STUB/gone" STUB_CORDON_FAILS="$STUB/cordonfails" STUB_FLAKY="$STUB/flaky" STUB_ETCD_CALLS="$STUB/etcdcalls"
 
-extract() { awk -v fns="$1" 'BEGIN{n=split(fns,a,",");for(i=1;i<=n;i++)w[a[i]]=1} /^[a-z_]+\(\) \{/{nm=$1;sub(/\(\).*/,"",nm);ins=(nm in w)} ins{print} ins&&/^\}/{ins=0}' "$ROOT/scripts/lib/roll-gates.sh"; }
+extract() { awk -v fns="$1" 'BEGIN{n=split(fns,a,",");for(i=1;i<=n;i++)w[a[i]]=1} /^[a-z_]+\(\) \{/{nm=$1;sub(/\(\).*/,"",nm);ins=(nm in w)} ins{print} ins&&/^\}/{ins=0}' "$SUT"; }
 # shellcheck disable=SC2034  # read by the extracted functions
 KCTL=(kubectl)
 # shellcheck disable=SC2034
@@ -45,6 +50,9 @@ info() { :; }; ok() { :; }; warn() { printf 'WARN:%s\n' "$*" >&2; }; hr() { :; }
 die() { printf '%s\n' "$*" >&2; exit 42; }
 # shellcheck disable=SC2034
 TUNNEL_OFFSET=0
+# The pause between the tries of one etcd read: none here, the stub answers at once.
+# shellcheck disable=SC2034
+ETCD_READ_PAUSE=0
 eval "$(extract 'talos_ep,worker_requests,worker_cpu_requests,worker_memory_requests,dead_node_survey,cordon_dead,delete_dead_node_object')"
 
 survey() { (dead_node_survey "$@") >"$STUB/out" 2>&1; echo $?; }
@@ -69,6 +77,19 @@ printf '%s\n' 50001 50002 >"$STUB/healthy"; nodes 'cp0 NotReady control-plane\nc
 [ "$(survey cp 0 cp0)" = 0 ] && ok_ "a control plane: two healthy etcd members of three is a quorum" || bad "refused with a quorum: $(cat "$STUB/out")"
 printf '%s\n' 50001 >"$STUB/healthy"; nodes 'cp0 NotReady control-plane\ncp1 Ready control-plane\ncp2 NotReady control-plane\n'
 { [ "$(survey cp 0 cp0)" = 42 ] && grep -q 'dr-restore-plan' "$STUB/out"; } && ok_ "one healthy member of three is NOT a replacement: it names dr-restore-plan" || bad "replaced without a quorum: $(cat "$STUB/out")"
+
+# One failed read of one member is not an unhealthy member (infra #401: lab 25 refused with two healthy survivors, the identical
+# rerun passed). Tries are bounded, and a member that stays silent is still refused, by name.
+printf '%s\n' 50001 50002 >"$STUB/healthy"; nodes 'cp0 NotReady control-plane\ncp1 Ready control-plane\ncp2 Ready control-plane\n'
+: >"$STUB/etcdcalls"; echo "50001 2" >"$STUB/flaky"
+{ [ "$(survey cp 0 cp0)" = 0 ] && [ "$(grep -cx 50001 "$STUB/etcdcalls")" = 3 ]; } \
+  && ok_ "a member that fails two reads and answers the third is healthy (3 reads, survey clean)" || bad "a transient read refused the replacement: $(cat "$STUB/out") reads=$(grep -cx 50001 "$STUB/etcdcalls")"
+: >"$STUB/etcdcalls"; echo "50001 9" >"$STUB/flaky"
+{ [ "$(survey cp 0 cp0)" = 42 ] && [ "$(grep -cx 50001 "$STUB/etcdcalls")" = 3 ] && grep -q 'cp-1 (10.0.0.11)' "$STUB/out" && grep -q 'after 3 tries' "$STUB/out"; } \
+  && ok_ "a member silent on every try is refused after 3 reads (not more), and named with its address" || bad "persistent silence: $(cat "$STUB/out") reads=$(grep -cx 50001 "$STUB/etcdcalls")"
+rm -f "$STUB/flaky"; : >"$STUB/etcdcalls"; printf '%s\n' 50001 >"$STUB/healthy"; nodes 'cp0 NotReady control-plane\ncp1 Ready control-plane\ncp2 NotReady control-plane\n'
+{ [ "$(survey cp 0 cp0)" = 42 ] && grep -q 'cp-2 (10.0.0.12)' "$STUB/out" && ! grep -q 'cp-1 (' "$STUB/out"; } \
+  && ok_ "only the silent member is named: the one that answered is not" || bad "naming: $(cat "$STUB/out")"
 
 echo
 echo "=== cordon_dead and delete_dead_node_object ==="

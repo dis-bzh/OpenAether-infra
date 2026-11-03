@@ -1371,7 +1371,10 @@ tasks:
       provider-agnostic; --upgrade exercised live on Scaleway, OVH and Outscale. ROLE picks the env file and
       the state, and defaults to management.
       Usage: task cluster-roll PROVIDER=… [ROLE=management|workload] [KEY=~/.ssh/key] [APPROVE=auto]
-      [-- --workers-only|--cp-only|--dry-run|--upgrade]
+      [-- --workers-only|--cp-only|--dry-run|--upgrade|--accept-sole-copy=<namespace>/<name>]
+      A replacement (not --upgrade) wipes the node's disk: a CNPG Cluster with ONE instance on a node-local volume
+      has no other copy, so the survey names it and asks; APPROVE=auto does not answer that,
+      --accept-sole-copy=<namespace>/<name> does (once per Cluster).
     dir: infrastructure/opentofu/cluster
     # PROVIDER is REQUIRED, not defaulted. Twenty targets used to fall back to
     # scaleway in silence — including destroy and down — so a command typed
@@ -1457,7 +1460,10 @@ tasks:
       provider calls running (use cluster-node-recover first). An operator command: the management cluster has no
       automatic node replacement.
       Usage: task cluster-replace-node PROVIDER=… NODE=<node> [ROLE=management] [KEY=~/.ssh/key] [APPROVE=auto]
-      [-- --dry-run|--even-if-running|--ip=ADDR|--clean]
+      [-- --dry-run|--even-if-running|--ip=ADDR|--clean|--accept-sole-copy=<namespace>/<name>]
+      The node's disk is wiped: a CNPG Cluster with ONE instance whose volume is on it loses its only copy, so the
+      survey names it and asks; APPROVE=auto does not answer that, --accept-sole-copy=<namespace>/<name> does (once
+      per Cluster).
       Afterwards it lists the pods whose local-path volume stayed on the old disk (CNPG instances, an OpenBao
       member, loki, vmselect: they do not start by themselves) and PRINTS the commands that drop them; --clean
       runs them, for the safe cases only (task cluster-replaced-node-cleanup does the same on its own).

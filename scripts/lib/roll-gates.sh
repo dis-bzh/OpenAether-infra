@@ -811,6 +811,9 @@ preflight_roll() {
 # unmount is still "on the node", so this gate looks at what is left.
 RWX_CLEAR_TIMEOUT="${RWX_CLEAR_TIMEOUT:-300}"   # seconds
 RWX_POLL="${RWX_POLL:-5}"
+# The drain's stall watch (infra #417, drain_watched below). 0 turns the watch off: the plain foreground drain, as before.
+DRAIN_STALL_AFTER="${DRAIN_STALL_AFTER:-120}"   # seconds the pods of the node must stay the same, none terminating, behind a budget
+DRAIN_STALL_POLL="${DRAIN_STALL_POLL:-10}"      # seconds between two readings of the node's pods
 
 # "<ns>/<pod>\t<why>" per line: what still sits on <node> that an RWX volume
 # ties to it. Dies when it cannot ask: an unanswered query is not an empty list.
@@ -856,6 +859,78 @@ wait_rwx_clear() { # <node_name>
   done
 }
 
+# --- A replacement wipes the node's disk: the ONLY copy of a single-instance database goes with it (infra #425) ---------------
+#
+# Lab 28B, S5 (Scaleway): the roll of a worker replaced its machine and its local-path disk; the `light` database that lived there
+# (ONE instance, node-local volume, no backup) lost 42,583 acknowledged commits, and the cleanup that follows refused the volume
+# ("primary of record: its data was on the replaced disk"), too late. The owner's decision of 2026-10-30: `light` is outside the
+# zero-acknowledged-loss rule, and the roll must say so and ask first.
+#
+# "Only copy" is read from three facts the cluster states, none of them guessed: the Cluster declares ONE instance (spec.instances
+# unset is one, the CNPG default), a pod of that Cluster mounts a claim, and the PersistentVolume of that claim is pinned to a node
+# by its own node affinity (what a node-local class such as local-path-retain does; a replicated volume is not pinned, and its
+# data survives the node). The pinning is read as cluster-shrink's pinned_pvs reads it. A single-instance Cluster on a replicated
+# volume is therefore NOT named: nothing is lost with its node.
+# "<ns>/<cluster>\t<node>" per line, for the nodes given; nothing when CNPG is not installed; non-zero when a read failed.
+cnpg_sole_copies() { # <node_name>...
+  local clusters pods pvs nodes
+  cnpg_installed || return 0
+  clusters="$("${KCTL[@]}" get clusters.postgresql.cnpg.io -A -o json 2>/dev/null)" &&
+    pods="$("${KCTL[@]}" get pods -A -l cnpg.io/cluster -o json 2>/dev/null)" &&
+    pvs="$("${KCTL[@]}" get persistentvolumes -o json 2>/dev/null)" || return 1
+  nodes="$(printf '%s\n' "$@" | jq -R . | jq -sc .)" || return 1
+  # --slurpfile, not --argjson: the lists are far over what one argv entry may hold (lab 13).
+  jq -r --slurpfile pods <(printf '%s' "$pods") --slurpfile pvs <(printf '%s' "$pvs") --argjson nodes "$nodes" '
+    [.items[] | select((.spec.instances // 1) == 1) | "\(.metadata.namespace)/\(.metadata.name)"] as $one
+    | ($pvs[0].items
+       | map(select(.spec.claimRef != null)
+             | {claim: "\(.spec.claimRef.namespace)/\(.spec.claimRef.name)",
+                nodes: [.spec.nodeAffinity.required.nodeSelectorTerms[]?.matchExpressions[]?.values[]?]})) as $pinned
+    | [ $pods[0].items[]
+        | . as $p
+        | ($p.metadata.labels["cnpg.io/cluster"]) as $c
+        | select(("\($p.metadata.namespace)/\($c)") as $k | $one | index($k))
+        | $p.spec.volumes[]?.persistentVolumeClaim.claimName // empty
+        | "\($p.metadata.namespace)/\(.)" as $claim
+        | $pinned[] | select(.claim == $claim) | .nodes[]
+        | select(. as $n | $nodes | index($n))
+        | "\($p.metadata.namespace)/\($c)\t\(.)" ]
+    | unique | .[]' <<<"$clusters"
+}
+
+# The gate: before the first node is touched, name every Cluster whose only copy sits on a node this run is about to wipe, and
+# require an explicit yes. Unattended (--yes, APPROVE=auto) the yes is a flag, per Cluster: --accept-sole-copy=<namespace>/<name>
+# (ACCEPT_SOLE_COPY), so "do not ask me" never means "lose the data". For a REPLACEMENT only: --upgrade keeps the disk, and
+# cluster-shrink refuses any node-local volume on its own. A read that fails refuses: this is a data-loss guard, and an
+# unanswered question is not an empty answer. The answer "yes" covers the run; nothing is asked again node by node.
+sole_copy_gate() { # <node_name>... — the nodes this run will wipe
+  local found cl node a accepted todo="" hint=""
+  (( $# > 0 )) || return 0
+  found="$(cnpg_sole_copies "$@")" || die "cannot tell whether a database keeps its only copy on the node(s) to be wiped ($*) - refusing to replace blind."
+  while IFS=$'\t' read -r cl node; do
+    [[ -n "$cl" ]] || continue
+    accepted=0
+    for a in ${ACCEPT_SOLE_COPY[@]+"${ACCEPT_SOLE_COPY[@]}"}; do [[ "$a" == "$cl" ]] && accepted=1; done
+    if (( accepted )); then
+      warn "CNPG ${cl}: its only copy is on ${node}, which this run wipes - accepted by --accept-sole-copy."
+    else
+      todo+="    ${cl}  (one instance; its volume is pinned to ${node})"$'\n'
+      hint+=" --accept-sole-copy=${cl}"
+    fi
+  done <<<"$found"
+  [[ -n "$todo" ]] || return 0
+  warn "this run replaces nodes that hold the ONLY copy of these databases (a CNPG Cluster with one instance on a node-local volume):"
+  printf '%s' "$todo" >&2
+  warn "A replacement wipes the system disk of the node: that data is destroyed, not moved (lab 28B: 42,583 acknowledged commits)."
+  warn "Give each Cluster a second instance first (docs/upgrade.md, 'A node replace destroys the data of a single-instance database'), or accept the loss."
+  if [[ ${ASSUME_YES:-0} -eq 1 ]]; then
+    die "refusing to replace a node that holds the only copy of a database without your explicit yes. Nothing was changed.
+  To accept the loss of each one, by name, add to the same command (task: after the --):${hint}"
+  fi
+  read -rp "Replace anyway and DESTROY the data listed above? [y/N] " a || a=n
+  [[ "$a" == [yY] ]] || die "aborted by operator"
+}
+
 # --- A node that is already dead (task cluster-replace-node) ------------------------------------------------------
 # A drain cannot move pods off a machine that does not answer, and the roll's pre-flight demands every node Ready. For a
 # dead node the questions are different: can the SURVIVORS carry on while it is rebuilt, and is exactly one node down?
@@ -877,16 +952,28 @@ dead_node_survey() { # <cp|worker> <index> <node_name>
     ok "every other node is Ready"
   fi
   if [[ "$t" == cp ]]; then
+    # ONE failed read is not an unhealthy member (infra #401: lab 25 refused with two healthy survivors; the identical rerun
+    # passed). Each member is read up to ETCD_READ_TRIES times with ETCD_READ_PAUSE seconds between the reads, and counts as
+    # healthy on the first HEALTH OK. A member that never answers OK is still not counted, so a real loss of quorum is refused
+    # exactly as before, after two more reads and 2 x ETCD_READ_PAUSE more seconds per silent member (two more read timeouts when
+    # the endpoint hangs instead of refusing); the ones that stayed silent are named.
+    local tries="${ETCD_READ_TRIES:-3}" try silent=""
     for k in "${!CP_IPS[@]}"; do
       [[ "$k" == "$idx" ]] && continue
       ep="$(talos_ep cp "$k")"; ip="${CP_IPS[$k]}"
-      talosctl -e "$ep" -n "$ip" service etcd 2>/dev/null | grep -qE 'HEALTH[[:space:]]+OK' && healthy=$((healthy + 1))
+      for ((try = 1; try <= tries; try++)); do
+        if talosctl -e "$ep" -n "$ip" service etcd 2>/dev/null | grep -qE 'HEALTH[[:space:]]+OK'; then
+          healthy=$((healthy + 1)); continue 2
+        fi
+        (( try == tries )) || sleep "${ETCD_READ_PAUSE:-3}"
+      done
+      silent+="cp-${k} (${ip}) "
     done
     need=$(( ${#CP_IPS[@]} / 2 + 1 ))
     if (( healthy >= need )); then
       ok "etcd: ${healthy} healthy member(s) besides ${node}, quorum is ${need}"
     else
-      warn "etcd: only ${healthy} healthy member(s) besides ${node}, quorum is ${need}. Replacing a member without a quorum cannot work: this is the etcd disaster-recovery case (task dr-restore-plan), not a replacement."
+      warn "etcd: only ${healthy} healthy member(s) besides ${node}, quorum is ${need}; no healthy answer from ${silent:-nobody }after ${tries} tries. Replacing a member without a quorum cannot work: this is the etcd disaster-recovery case (task dr-restore-plan), not a replacement."
       fatal=1
     fi
   fi
@@ -930,8 +1017,155 @@ delete_dead_node_object() { # <node_name>
   fi
 }
 
+# The pods of <node> that a drain has to move or refuse, one "<ns>/<pod>\t<terminating 0|1>\t<controlled 0|1>" per line.
+# Non-zero when the apiserver did not answer. It sorts the way kubectl drain sorts: finished pods are removed without a word,
+# DaemonSet pods are left alone (--ignore-daemonsets), static (mirror) pods are skipped, and every other pod needs a CONTROLLER
+# (an ownerReference with controller: true) or the drain refuses it at once ("cannot delete Pods that declare no controller").
+# The same API call as rwx_node_residue, which every roll makes on real nodes after its drain.
+drainable_pods() { # <node_name>
+  local out
+  out="$("${KCTL[@]}" get pods -A --field-selector "spec.nodeName=$1" -o json 2>/dev/null)" || return 1
+  jq -r '.items[]
+         | select(.status.phase != "Succeeded" and .status.phase != "Failed")
+         | select((.metadata.annotations // {}) | has("kubernetes.io/config.mirror") | not)
+         | ((.metadata.ownerReferences // []) | map(select(.controller == true))) as $ctl
+         | select(($ctl | map(.kind) | index("DaemonSet")) | not)
+         | "\(.metadata.namespace)/\(.metadata.name)\t\(if .metadata.deletionTimestamp then 1 else 0 end)\t\(if ($ctl | length) > 0 then 1 else 0 end)"' <<<"$out"
+}
+
+# infra #402 (lab 25, D6): bare pods (no controller) on a control plane: kubectl printed "cannot delete Pods that declare no
+# controller" at once and the roll still ended in "could not be drained (timeout 900s)". Whatever the roll waited on, the answer
+# is knowable before it waits on anything: read the pods first, name the bare ones, and refuse in seconds.
+# Unattended it refuses; attended it asks, like the budgets gate does, so an operator who accepts losing a bare pod still can
+# (the drain then refuses it and asks again, as before). A list that cannot be read only warns: kubectl drain is the judge, and
+# this is an early answer, not a gate that lets anything through.
+refuse_bare_pods() { # <node_name>
+  local node="$1" pods bare="" id ctl a
+  if ! pods="$(drainable_pods "$node")"; then
+    warn "could not list the pods of ${node} to look for pods without a controller - the drain below is the judge."
+    return 0
+  fi
+  while IFS=$'\t' read -r id _ ctl; do
+    [[ -n "$id" && "$ctl" == 0 ]] && bare+="    ${id}"$'\n'
+  done <<<"$pods"
+  [[ -n "$bare" ]] || return 0
+  warn "pods without a controller on ${node} - kubectl drain refuses them at once (\"cannot delete Pods that declare no controller\"):"
+  printf '%s' "$bare" >&2
+  if [[ ${ASSUME_YES:-0} -eq 1 ]]; then
+    die "refusing to drain ${node}: it carries pods that nothing would recreate (a test pod, kubectl run), and a drain cannot move them.
+  Nothing was changed on ${node}. Delete them, or put them under a Deployment, then re-run this same command."
+  fi
+  read -rp "Drain ${node} anyway (kubectl will refuse these pods)? [y/N] " a || a=n
+  [[ "$a" == [yY] ]] || die "aborted by operator"
+}
+
+# The pods of <node> that sit behind a budget allowing nothing, one "<ns>/<pod>  behind  <ns>/<budget> (<healthy>/<expected>)" per
+# line. Only the pods the drain still has (the second argument is drainable_pods' answer: a DaemonSet pod, a static pod or a
+# finished pod covered by a budget is not something the drain waits on). The caller has already seen that none of them is
+# terminating (a pod being evicted is the drain at work, however long its grace period), so a pod listed here is one whose eviction
+# is being refused. Reads the budgets with pdb_hard, which already leaves out the ones that are short of a pod (those wait for the
+# pod to come back) and tells nothing about by-design zeros elsewhere in the cluster.
+# Non-zero when the budgets could not be read.
+drain_stall_blockers() { # <node_name> <drainable_pods lines>
+  local node="$1" remaining="$2" hard ns name state sel names p id live=$'\n'
+  hard="$(pdb_hard)" || return 1
+  while IFS=$'\t' read -r id _; do [[ -n "$id" ]] && live+="${id}"$'\n'; done <<<"$remaining"
+  while IFS=$'\t' read -r ns name state sel; do
+    [[ -n "$ns" && -n "$name" && -n "$sel" ]] || continue
+    names="$("${KCTL[@]}" -n "$ns" get pods -l "$sel" --field-selector "spec.nodeName=${node}" \
+      -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)" || continue
+    for p in $names; do
+      [[ "$live" == *$'\n'"${ns}/${p}"$'\n'* ]] || continue
+      printf '%s/%s  behind  %s/%s (%s)\n' "$ns" "$p" "$ns" "$name" "$state"
+    done
+  done <<<"$hard"
+}
+
+# infra #417 (lab 28, I3): a worker with an attached RWX share-manager (or the only instance of a single-instance database) kept
+# the drain waiting its whole timeout, then refused: rc 201 after 1,026 s, no damage. Waiting does not help, and nothing tells
+# in advance which node does that: the RWX gate exists because the drain is the cure on a node that holds a share-manager and
+# works, so a prediction would refuse rolls that go through today. The drain is WATCHED instead. It runs in the background and
+# the pods of the node are read every DRAIN_STALL_POLL seconds; it is stopped, and reported as failed, when for
+# DRAIN_STALL_AFTER seconds (a) the same pods remain, (b) none of them is terminating, and (c) a budget that allows nothing
+# covers one of them (drain_stall_blockers). A drain that evicts pods, or whose pods are winding down, or that waits on nothing a
+# budget forbids, is left to kubectl and its own timeout, exactly as before. The reason is left in DRAIN_WHY.
+# What stopping costs: nothing the timeout did not cost. The caller takes the failure path of a drain that failed (budgets and
+# Flux are restored by the EXIT trap, the node is uncordoned, the blockers and the volumes are named) after DRAIN_STALL_AFTER
+# seconds instead of DRAIN_TIMEOUT. UNVERIFIED on a cluster: the window is set above the planned drains measured (database gap
+# 10.6-16.6 s, lab 28 O4), and DRAIN_STALL_AFTER=0 restores the plain drain.
+# The watch asks every DRAIN_TICK seconds (a fifth of a second) whether kubectl has ended, so a drain that works is noticed at once.
+DRAIN_WHY=""
+DRAIN_PID=""
+DRAIN_TRAPS=()
+# The background drain and a signal. A script's async commands ignore Ctrl+C, so kubectl would outlive a script that dies of it
+# (cluster-shrink has no INT trap: its EXIT trap would uncordon the node while the drain went on evicting pods from it). While the
+# drain runs, INT, TERM and HUP therefore kill it first, then put the caller's own traps back and send the signal to the script
+# again: it takes the road it would have taken without the watch (the roll's trap asks for a stop; a script with none dies, and
+# its EXIT trap runs). A signal the caller ignores stays ignored. drain_watched puts the caller's traps back when it returns.
+drain_untrap() {
+  local c
+  DRAIN_PID=""
+  if (( ${#DRAIN_TRAPS[@]} )); then for c in "${DRAIN_TRAPS[@]}"; do eval "$c"; done; fi
+  DRAIN_TRAPS=()
+}
+drain_interrupted() { # <signal name>
+  DRAIN_WHY="interrupted by SIG${1}"
+  [[ -z "${DRAIN_PID:-}" ]] || kill "$DRAIN_PID" 2>/dev/null || true
+  drain_untrap
+  kill -s "$1" "$BASHPID"
+}
+drain_watched() { # <node_name> → kubectl's status, or 1 when this function stopped it
+  local node="$1" after="${DRAIN_STALL_AFTER:-120}" poll="${DRAIN_STALL_POLL:-10}" tick="${DRAIN_TICK:-0.2}" pid cur sig prev="" changed_at next idle blockers residue rc="" s t
+  DRAIN_WHY=""
+  if (( after <= 0 )); then
+    "${KCTL[@]}" drain "$node" --ignore-daemonsets --delete-emptydir-data --timeout="$DRAIN_TIMEOUT"
+    return
+  fi
+  DRAIN_TRAPS=()
+  for s in INT TERM HUP; do
+    t="$(trap -p "$s")"
+    [[ "$t" == "trap -- '' "* ]] && continue    # ignored by the caller: ignored here too, as for a foreground drain
+    DRAIN_TRAPS+=("${t:-trap - $s}")
+    # shellcheck disable=SC2064  # the signal name is wanted now: one handler call per signal
+    trap "drain_interrupted $s" "$s"
+  done
+  "${KCTL[@]}" drain "$node" --ignore-daemonsets --delete-emptydir-data --timeout="$DRAIN_TIMEOUT" &
+  pid=$!; DRAIN_PID=$pid
+  changed_at=$SECONDS; next=$((SECONDS + poll))
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep "$tick" 2>/dev/null || sleep 1
+    (( SECONDS >= next )) || continue
+    next=$((SECONDS + poll))
+    cur="$(drainable_pods "$node")" || continue          # not answered: no information, neither progress nor stall
+    sig="$(sort <<<"$cur")"
+    if [[ "$sig" != "$prev" ]]; then prev="$sig"; changed_at=$SECONDS; continue; fi
+    idle=$((SECONDS - changed_at))
+    (( idle >= after )) || continue
+    [[ -n "$sig" ]] || continue
+    grep -q "$(printf '\t1\t')" <<<"$sig" && continue    # a pod is terminating: the drain is working
+    blockers="$(drain_stall_blockers "$node" "$sig")" || continue
+    [[ -n "$blockers" ]] || continue
+    warn "the drain of ${node} makes no progress: for ${idle}s the same $(grep -c . <<<"$sig") pod(s) remain, none is terminating, and a budget that allows 0 disruptions covers:"
+    sed 's/^/    /' <<<"$blockers" >&2
+    residue="$(rwx_node_residue "$node" 2>/dev/null)" || residue=""
+    if [[ -n "$residue" ]]; then
+      warn "  and the node still hosts Longhorn RWX volumes (their instance-manager budget stays while a volume is attached here):"
+      sed 's/^/    /' <<<"$residue" >&2
+    fi
+    kill "$pid" 2>/dev/null; { wait "$pid"; } 2>/dev/null || true
+    DRAIN_WHY="stalled: no progress for ${idle}s, see above"
+    rc=1; break
+  done
+  if [[ -z "$rc" ]]; then rc=0; { wait "$pid"; } 2>/dev/null || rc=$?; fi
+  drain_untrap
+  return "$rc"
+}
+
 cordon_drain() { # <node_name>
   local node="$1"
+  # FIRST, before the CNPG waits, the budgets wait and the cordon: bare pods are read from the pods, not guessed from kubectl's
+  # words, and answered in seconds (infra #402).
+  refuse_bare_pods "$node"
   # RE-ASSERT, once per node. cnpg_maintenance ran once for the whole roll, and a
   # roll is forty minutes that reboots every worker: on Scaleway 2026-08-16 the
   # budgets were confirmed gone, worker-0 rebooted, CNPG rebuilt the instances it
@@ -944,9 +1178,13 @@ cordon_drain() { # <node_name>
   wait_pdb_headroom "$node"
   info "Cordon + drain ${node}…"
   "${KCTL[@]}" cordon "$node" || die "cordon failed for ${node}"
-  if ! "${KCTL[@]}" drain "$node" \
-        --ignore-daemonsets --delete-emptydir-data --timeout="$DRAIN_TIMEOUT"; then
-    warn "drain did not complete (kubectl's own reason is printed just above; the timeout is ${DRAIN_TIMEOUT}); some pods may be stuck (PDBs?) or refused (a pod without a controller)."
+  if ! drain_watched "$node"; then
+    # kubectl's own reason is there only when kubectl ended by itself: after a stall or an interrupt it was killed and said nothing.
+    if [[ -n "$DRAIN_WHY" ]]; then
+      warn "drain did not complete (${DRAIN_WHY}); some pods may be stuck behind a budget (PDBs?)."
+    else
+      warn "drain did not complete (kubectl's own reason is printed just above; the timeout is ${DRAIN_TIMEOUT}); some pods may be stuck (PDBs?) or refused (a pod without a controller)."
+    fi
     # Name them instead of asking. Every one of these forbids its last disruption
     # while missing nothing, so it is the drain's answer, and "(PDBs?)" made the
     # operator go and find by hand what the cluster already knew.
@@ -980,10 +1218,14 @@ cordon_drain() { # <node_name>
       # nowhere to go, its budget never recovered, and the drain waited out its
       # full 900s with no eviction error to show for it.
       worker_cpu_requests >&2 || true
-      die "${node} could not be drained (timeout ${DRAIN_TIMEOUT}) — refusing to reboot it under workloads that would not move.
-  0. kubectl refused at once: \"cannot delete Pods that declare no controller\" (a bare pod, e.g. left by a test or
-     kubectl run) is named in kubectl's message above; delete it, or move it under a Deployment, and re-run.
-  1. Capacity: the CPU requests above are per worker. If the others are near
+      # Cause 0 is kubectl's own refusal of a bare pod: it applies when kubectl ended by itself, not after a stall or an interrupt
+      # (kubectl was killed, and the bare pods were refused before the drain started).
+      local bare_hint=""
+      [[ -n "$DRAIN_WHY" ]] || bare_hint="  0. A pod without a controller (a bare pod, e.g. left by a test or kubectl run) is refused by kubectl at once and is named
+     before the drain starts, since infra #402; delete it, or move it under a Deployment, and re-run.
+"
+      die "${node} could not be drained (${DRAIN_WHY:-timeout ${DRAIN_TIMEOUT}}) — refusing to reboot it under workloads that would not move.
+${bare_hint}  1. Capacity: the CPU requests above are per worker. If the others are near
      100%, the evicted pods cannot be rescheduled, so their budgets never
      recover. A rolling upgrade needs one node's worth of spare capacity.
   2. A budget that can never allow a disruption — see docs/upgrade.md
