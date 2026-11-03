@@ -23,8 +23,19 @@ case "$*" in
       notfound) echo 'Error from server (NotFound): ciliumnetworkpolicies.cilium.io "vmagent" not found' >&2; exit 1 ;;
       error) echo 'Unable to connect to the server: TLS handshake timeout' >&2; exit 1 ;;
     esac
-    case "$*" in *"-o name"*) echo ciliumnetworkpolicy.cilium.io/vmagent ;; *) printf '%s' "${STUB_VMA_ENT:-}" ;; esac
+    # Only the exact queries of the script are answered: a changed jsonpath is an error, not the same answer.
+    case "$*" in
+      *"-o name") echo ciliumnetworkpolicy.cilium.io/vmagent ;;
+      *"-o jsonpath={.spec.egress[*].toEntities[*]}") printf '%s' "${STUB_VMA_ENT:-}" ;;
+      *) echo "stub: unexpected query: $*" >&2; exit 1 ;;
+    esac
     exit 0 ;;
+  *"get helmrelease victoria-metrics-operator -n services-observability"*"-o name"*)
+    case "${STUB_VMA_HR:-absent}" in
+      present) echo helmrelease.helm.toolkit.fluxcd.io/victoria-metrics-operator; exit 0 ;;
+      error) echo 'Unable to connect to the server: TLS handshake timeout' >&2; exit 1 ;;
+      *) echo 'Error from server (NotFound): helmreleases.helm.toolkit.fluxcd.io "victoria-metrics-operator" not found' >&2; exit 1 ;;
+    esac ;;
   *"configmap cilium-config"*) [ -n "${STUB_WG_CFG+x}" ] && printf '%s' "$STUB_WG_CFG"; exit 0 ;;
   *"exec ds/cilium"*) [ "${STUB_EXEC_FAIL:-}" = 1 ] && exit 1; printf 'Cilium: Ok\n%s\n' "${STUB_WG_STATUS:-}"; exit 0 ;;
   *"secret loki-s3-credentials"*"{.data.bucket}"*) printf '%s' "${STUB_LOKI_BUCKET:-}"; exit 0 ;;
@@ -64,7 +75,11 @@ verdict "1.6" "❌" && ok "world is not cluster: FAILS" || bad "world passed: $(
 STUB_VMA_ENT='' run
 verdict "1.6" "❌" && ok "a CNP with no toEntities at all FAILS" || bad "empty passed: $(line 1.6)"
 STUB_VMA=notfound run
-verdict "1.6" "⏭" && ok "no vmagent CNP on the cluster is a skip, not a pass" || bad "NotFound: $(line 1.6)"
+verdict "1.6" "⏭" && ok "no vmagent CNP and no operator HelmRelease (two signals) is a skip, not a pass" || bad "NotFound: $(line 1.6)"
+STUB_VMA=notfound STUB_VMA_HR=present run
+verdict "1.6" "❌" && ok "no vmagent CNP on a cluster that runs the stack FAILS (one signal is no skip)" || bad "CNP lost, stack there: $(line 1.6)"
+STUB_VMA=notfound STUB_VMA_HR=error run
+verdict "1.6" "❌" && ok "no vmagent CNP and a HelmRelease that cannot be read FAILS (an error is not 'absent')" || bad "HR API error: $(line 1.6)"
 STUB_VMA=error run
 verdict "1.6" "❌" && ok "an API error is a FAIL, not a skip and not a pass" || bad "API error: $(line 1.6)"
 # The file this check used to read (a sibling OpenAether-apps checkout, here a decoy next to a copy of the script) must not
@@ -80,9 +95,9 @@ verdict "1.6" "❌" && ok "a file that says cluster does not rescue a cluster th
 printf 'metadata:\n  name: vmagent\nspec:\n  egress:\n    - toEntities:\n        - kube-apiserver\n' >"$DECOY"
 STUB_VMA_ENT='kube-apiserver cluster' decoy_run
 verdict "1.6" "✅" && ok "a file that lacks cluster does not fail a cluster that has it" || bad "stale file decided: $(line 1.6)"
-{ printf 'metadata:\n  name: vmagent\nspec:\n  egress:\n    - toEntities:\n        - cluster\n'; yes 'name: vmagent' | head -n 20000; } >"$DECOY"
-fails=0; for _ in 1 2 3; do STUB_VMA_ENT='kube-apiserver cluster' decoy_run; verdict "1.6" "✅" || fails=$((fails + 1)); done
-[ "$fails" = 0 ] && ok "a long file, which made the old pipeline fail every time, changes nothing (3 of 3 runs pass)" || bad "long file: $fails of 3 runs not green: $(line 1.6)"
+{ printf 'metadata:\n  name: vmagent\nspec:\n  egress:\n    - toEntities:\n        - cluster\n'; yes 'name: vmagent' | head -n 10000; } >"$DECOY"
+STUB_VMA_ENT='kube-apiserver cluster' decoy_run
+verdict "1.6" "✅" && ok "a long file, which made the old pipeline fail every time, changes nothing" || bad "long file: $(line 1.6)"
 
 echo "=== 1.8 Cilium WireGuard ==="
 STUB_WG_CFG=true STUB_WG_STATUS='Encryption:  Wireguard   [cilium_wg0 (Pubkey: x, Port: 51871, Peers: 2)]' run

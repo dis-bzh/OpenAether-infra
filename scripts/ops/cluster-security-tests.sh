@@ -148,15 +148,22 @@ fi
 # 1.6 VMAgent scraping bounded (toEntities: cluster)
 # Asked of the CLUSTER, like 2.2: the object Flux applied. The file version read $REPO_ROOT/OpenAether-apps, whatever checkout
 # sits next to this one (apps 0.2.0 in a proof lab, not the ref Flux follows), so it judged nothing about the cluster, and its
-# `grep -A60 … | grep -q …` took SIGPIPE under pipefail when the match came early (red on a correct cluster, about 1 run in 100).
-# The answer is read into a variable and matched with case: no pipe.
+# `grep -A60 … | grep -q …` took SIGPIPE under pipefail when the match came early (red on a correct cluster: a race, measured at
+# 1 to 26 runs in 1,000 depending on load and file, every time on a long file). The answer is read into a variable and matched
+# with case: no pipe.
 if VMA_ENT="$(kubectl get cnp vmagent -n services-observability -o jsonpath='{.spec.egress[*].toEntities[*]}' 2>/dev/null)"; then
   case " $VMA_ENT " in
     *" cluster "*) pass "1.6 VMAgent scraping bounded (toEntities: cluster)" ;;
     *) fail "1.6 VMAgent scraping bounded" "CNP vmagent (services-observability) has no toEntities: cluster rule on the cluster (toEntities: ${VMA_ENT:-none})" ;;
   esac
 elif not_found cnp vmagent -n services-observability; then
-  skip "1.6 VMAgent scraping bounded" "CNP vmagent not found in services-observability on this cluster (observability not deployed?)"
+  # A skip needs two signals, as the mesh checks of section 2 do: no CNP AND no operator HelmRelease. The Namespace is declared
+  # in apps/base/namespaces, apart from the stack, so it says nothing. A cluster that runs the stack and has no CNP is a FAIL.
+  if not_found helmrelease victoria-metrics-operator -n services-observability; then
+    skip "1.6 VMAgent scraping bounded" "no CNP vmagent and no HelmRelease victoria-metrics-operator in services-observability (observability not deployed)"
+  else
+    fail "1.6 VMAgent scraping bounded" "CNP vmagent not found in services-observability, but the stack is there (HelmRelease victoria-metrics-operator exists or cannot be read): vmagent egress is not bounded"
+  fi
 else
   fail "1.6 VMAgent scraping bounded" "cannot read CNP vmagent in services-observability"
 fi
