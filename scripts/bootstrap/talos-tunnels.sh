@@ -12,6 +12,11 @@
 # bootstrapped from the same workstation instead of colliding on the ports —
 # see oa_tunnel_offset() in scripts/lib/common.sh.
 #
+# The block lies inside the range Linux hands out to outgoing connections (32768-60999), so a busy workstation can hold one of
+# its ports for a moment as the SOURCE port of its own connection: ssh then dies on "Address already in use" with nothing
+# listening there (lab 28B, infra #422). Only that message is retried, per port, OA_TUNNEL_BIND_RETRIES times (default 3)
+# after OA_TUNNEL_BIND_PAUSE seconds (default 4); every other failure is reported at once, as before.
+#
 # Usage:
 #   SSH_KEY=~/.ssh/mykey ./scripts/bootstrap/talos-tunnels.sh open|close [tofu_dir]
 #
@@ -42,13 +47,81 @@ API_PORT=$((6443 + OFFSET))
 # The one place a tunnel is started. Its ssh output is APPENDED to a per-port log (never truncated: concurrent
 # opens share it), because the last lines are the only record of how a tunnel ended (#65); the marker line tells
 # one generation from the next. Uses KEY BASTION BUSER BASTION_KH LOG_PREFIX and OA_BASTION_SHKC (set once pinned).
+declare -A TUN_TARGET TUN_PID # per local port: where it goes, and the pid of its last ssh (what a retry needs)
 spawn_tunnel() { # <pidfile> <local-port> <host:port behind the bastion>
   local log="${LOG_PREFIX}${2}.log"
   printf '%s spawn :%s\n' "$(date '+%F %T')" "$2" >>"$log"
   nohup ssh -o LogLevel=VERBOSE -o UserKnownHostsFile="$BASTION_KH" -o StrictHostKeyChecking="${OA_BASTION_SHKC:-accept-new}" \
     -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=20 -o TCPKeepAlive=yes \
     -i "$KEY" -N -L "$2:$3" "${BUSER}@${BASTION}" >>"$log" 2>&1 &
+  TUN_TARGET[$2]="$3"; TUN_PID[$2]=$!
   echo $! >>"$1"
+}
+
+# Counts which of "$@" answer: fills ok and down.
+count_up() { # <port>...
+  local p
+  ok=0; down=()
+  for p in "$@"; do nc -z 127.0.0.1 "$p" 2>/dev/null && ok=$((ok + 1)) || down+=("$p"); done
+}
+
+# Did the LAST ssh of this port (the log keeps every generation; a marker line starts each) die on a busy port?
+bind_clashed() { # <local-port>
+  awk '/ spawn :[0-9]+$/ { hit = 0 } /Address already in use/ { hit = 1 } END { exit !hit }' "${LOG_PREFIX}${1}.log" 2>/dev/null
+}
+
+# #422: respawn, alone, each tunnel of `down` whose ssh just died on "Address already in use". The port was held for a moment by
+# someone's outgoing connection (it listens nowhere, so the free-port wait before the spawns cannot see it); a pause lets it go.
+# Needs `down` and the ports (as "$@") from count_up, and refreshes them; nothing else is touched, so any other failure still
+# surfaces on the first count.
+retry_bind_clash() { # <pidfile> <port>...
+  local pidfile="$1" retries="${OA_TUNNEL_BIND_RETRIES:-3}" pause="${OA_TUNNEL_BIND_PAUSE:-4}" round p t clashed
+  shift
+  for ((round = 1; round <= retries; round++)); do
+    clashed=()
+    for p in "${down[@]}"; do bind_clashed "$p" && clashed+=("$p"); done
+    [[ ${#clashed[@]} -gt 0 ]] || return 0
+    echo "▶ :${clashed[*]} could not be bound (\"Address already in use\", nothing listens there: held as the source port of another connection) — retry ${round}/${retries} in ${pause}s"
+    sleep "$pause"
+    for p in "${clashed[@]}"; do
+      [[ -z "${TUN_PID[$p]:-}" ]] || kill "${TUN_PID[$p]}" 2>/dev/null || true
+      spawn_tunnel "$pidfile" "$p" "${TUN_TARGET[$p]}"
+    done
+    for ((t = 0; t < pause; t++)); do # ssh needs a moment to connect and bind; stop waiting once they all answer
+      count_up "$@"
+      [[ ${#down[@]} -eq 0 ]] && return 0
+      sleep 1
+    done
+    count_up "$@"
+  done
+}
+
+# What to do when a port stays busy after the retries. `sysctl -w` REPLACES the whole list, so the ports the machine reserves now
+# come first (read from OA_RESERVED_PORTS_FILE, the kernel's own file by default). When that file cannot be read (no /proc, a masked
+# one) nothing is claimed about the list and no command that could drop it is printed: the advice is to read it, then append.
+# The setting is lost at a reboot; a sysctl file that already sets the key is the one to change.
+clash_hint() { # <port>... (the ones still down)
+  local p cur known=1 file="${OA_RESERVED_PORTS_FILE:-/proc/sys/net/ipv4/ip_local_reserved_ports}" block="${CP_BASE}-$((WK_BASE + 99))"
+  cur="$(cat "$file" 2>/dev/null)" || known=0
+  for p in "$@"; do
+    bind_clashed "$p" || continue
+    echo "  :${p} stayed busy through ${OA_TUNNEL_BIND_RETRIES:-3} retries and nothing listens on it: something on this machine holds it as the source port of a connection"
+    echo "    (who: ss -tnp 'sport = :${p}'). Keep the kernel from handing the tunnel block out. \`sysctl -w\` REPLACES the list of reserved"
+    if [[ "$known" == 1 ]]; then
+      echo "    ports, so the ones reserved now (${cur:-none}) stay in front of the block:"
+      echo "      sudo sysctl -w net.ipv4.ip_local_reserved_ports=${cur:+${cur},}${block}"
+      echo "    It does NOT survive a reboot. To keep it, put the same value in /etc/sysctl.d/ (then: sudo sysctl --system):  net.ipv4.ip_local_reserved_ports = ${cur:+${cur},}${block}"
+    else
+      echo "    ports, and the list reserved now could not be read here (${file}), so no command is printed that could drop some of them."
+      echo "    Read it where you can, then append the block after what it lists (the block alone only if it lists nothing):"
+      echo "      cat /proc/sys/net/ipv4/ip_local_reserved_ports"
+      echo "      sudo sysctl -w net.ipv4.ip_local_reserved_ports=<what cat printed>,${block}"
+      echo "    It does NOT survive a reboot. To keep it, put the same value in /etc/sysctl.d/ (then: sudo sysctl --system):  net.ipv4.ip_local_reserved_ports = <that list>,${block}"
+    fi
+    echo "    If a file there or /etc/sysctl.conf already sets it (grep -rs ip_local_reserved_ports /etc/sysctl.conf /etc/sysctl.d), change THAT line instead:"
+    echo "    when two files set it, the one read last wins at boot and the block would be dropped without a word."
+    echo "    Or give this cluster another TALOS_TUNNEL_OFFSET."
+  done
 }
 
 # What ssh last wrote for a port. It says how the process ended, not who asked it to: a bastion-side close
@@ -110,10 +183,10 @@ if [[ "$ACTION" == "open-direct" ]]; then
   ports=()
   for j in "${!CPS[@]}"; do ports+=("$((CP_BASE + j))"); done
   [[ -n "${WKS_CSV:-}" ]] && for j in "${!WKS[@]}"; do ports+=("$((WK_BASE + j))"); done
-  ok=0; down=()
-  for p in "${ports[@]}"; do nc -z 127.0.0.1 "$p" 2>/dev/null && ok=$((ok + 1)) || down+=("$p"); done
+  count_up "${ports[@]}"
+  retry_bind_clash "$DIRECT_PIDFILE" "${ports[@]}"
   echo "✓ [open-direct] ${ok}/${#ports[@]} tunnels up"
-  [[ "$ok" -eq "${#ports[@]}" ]] || { echo "⚠ some tunnels failed — see 'open' path's troubleshooting notes"; quote_down "${down[@]}"; exit 1; }
+  [[ "$ok" -eq "${#ports[@]}" ]] || { echo "⚠ some tunnels failed — see 'open' path's troubleshooting notes"; quote_down "${down[@]}"; clash_hint "${down[@]}"; exit 1; }
   exit 0
 fi
 
@@ -306,8 +379,8 @@ ports=()
 for j in "${!CPS[@]}"; do ports+=("$((CP_BASE + j))"); done
 for j in "${!WKS[@]}"; do ports+=("$((WK_BASE + j))"); done
 [[ "$K8S_API_TUNNELED" == true ]] && ports+=("$API_PORT")
-ok=0; down=()
-for p in "${ports[@]}"; do nc -z 127.0.0.1 "$p" 2>/dev/null && ok=$((ok + 1)) || down+=("$p"); done
+count_up "${ports[@]}"
+retry_bind_clash "$PIDFILE" "${ports[@]}"
 
 echo "✓ ${ok}/${#ports[@]} tunnels up — CPs on ${CP_BASE}+i, workers on ${WK_BASE}+i"
 if [[ "$K8S_API_TUNNELED" == true ]]; then
@@ -317,5 +390,6 @@ if [[ "$ok" -ne "${#ports[@]}" ]]; then
   echo "⚠ some tunnels failed. Check: SSH_KEY is correct, the bastion is reachable"
   echo "  (ssh -i $KEY ${BUSER}@${BASTION}), and its routing fix has converged."
   quote_down "${down[@]}"
+  clash_hint "${down[@]}"
   exit 1
 fi

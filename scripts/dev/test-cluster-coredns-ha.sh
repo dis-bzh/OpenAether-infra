@@ -69,8 +69,12 @@ fixture 8 2 0; run --apply; rc=$?
 { [ "$rc" = 0 ] && [ "$(writes)" = 1 ] && jq -e '.spec.replicas == 3 and ([.spec.template.spec.topologySpreadConstraints[] | select(.whenUnsatisfiable == "DoNotSchedule")] | length) == 1' "$FX/dep.json" >/dev/null; } \
   && ok "patched once with the file's shape (3 replicas, hard spread), rollout awaited, read back" || bad "rc $rc, writes $(writes): $(tail -3 "$W/out")"
 grep -q 'rollout status' "$W/calls.log" && ok "the rollout is waited for" || bad "no rollout wait"
+# Lab 28B (infra #423): old pods are still counted while the new ones are scheduled, so the zones can end 2, 3, 2 after a standalone apply.
+{ grep -q '^~ .*unbalanced' "$W/out" && grep -q 'task cluster-rebalance PROVIDER=… ROLE=… APPLY=1' "$W/out"; } \
+  && ok "after a patch it says the placement can be unbalanced and names task cluster-rebalance ... APPLY=1" || bad "no rebalance hint after a patch: $(tail -4 "$W/out")"
 run --apply; rc=$?
 { [ "$rc" = 0 ] && [ "$(writes)" = 1 ]; } && ok "idempotent: a second apply writes nothing" || bad "second apply: rc $rc, writes $(writes)"
+! grep -q 'cluster-rebalance' "$W/out" && ok "…and says nothing of a rebalance, since nothing was rolled" || bad "a rebalance hint after a run that rolled nothing"
 fixture 2 2 0; run --apply; rc=$?
 jq -e '.spec.replicas == 2 and ([.spec.template.spec.topologySpreadConstraints[] | select(.minDomains != null) | .minDomains] == [2])' "$FX/dep.json" >/dev/null \
   && ok "2 nodes: replicas and minDomains follow min(3, nodes), so no pod waits for ever" || bad "2 nodes: $(jq -c . "$FX/dep.json")"

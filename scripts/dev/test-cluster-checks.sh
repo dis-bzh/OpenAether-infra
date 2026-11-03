@@ -82,6 +82,12 @@ if [ -n "${STUB_IMAGE_BUILD:-}" ] && [[ $argv == "task image-build "* ]]; then
 fi
 # A manifest piped to `apply -f -` is kept, so a scenario can read what was applied.
 case "$argv" in *"apply -f -"*) cat >>"${STUB_LOG:-/dev/null}.stdin" ;; esac
+# STUB_PROXY_FAIL_AFTER=<n>: the Service proxy of the upgrade probe answers its first n requests (the plan says how) and fails every later
+# one, as a pod that stops serving mid-upgrade does. The counter is per run.
+if [ -n "${STUB_PROXY_FAIL_AFTER:-}" ] && [[ $argv == *"services/http:upgrade-probe"* ]]; then
+  n=$(( $(cat "${STUB_LOG}.proxy" 2>/dev/null || echo 0) + 1 )); echo "$n" >"${STUB_LOG}.proxy"
+  if [ "$n" -gt "$STUB_PROXY_FAIL_AFTER" ]; then echo "error: no endpoints available" >&2; exit 1; fi
+fi
 # STUB_BLOCK: the matching call hangs, so a scenario can interrupt a run mid-step.
 if [ -n "${STUB_BLOCK:-}" ] && [[ $argv == *"$STUB_BLOCK"* ]]; then
   : >"${STUB_LOG}.blocked"; exec "$REAL_SLEEP" 30
@@ -200,7 +206,7 @@ RUN_TIMEOUT="${RUN_TIMEOUT:-30}"
 [ "$RUN_TIMEOUT" -gt 0 ] 2>/dev/null ||
   { echo "RUN_TIMEOUT must be a positive integer (0 disables the hang guard)" >&2; exit 2; }
 run() { # <cmd...> — RUN_OUT gets stdout+stderr, RUN_RC the status
-  : >"$STUB_LOG"; rm -f "$STUB_LOG.stdin"; RUN_HUNG=0; RUN_CMD="$*"
+  : >"$STUB_LOG"; rm -f "$STUB_LOG.stdin" "$STUB_LOG.proxy"; RUN_HUNG=0; RUN_CMD="$*"
   # To a file, not a pipe: cluster-upgrade leaves a background probe holding the
   # inherited stdout, and a command substitution would wait on it forever.
   # 30s is ten times the slowest scenario. -k: a script that swallows TERM must
@@ -239,6 +245,7 @@ VERIFY_OK+='task \t0\t\n'
 # The service probe (#41): two schedulable nodes, a workload that rolls out and
 # answers. Here because every real run deploys it before the first step.
 VERIFY_OK+='spec.taints\t0\tNoSchedule%%%%\n'
+VERIFY_OK+='get crd ciliumnetworkpolicies.cilium.io\t0\t\n'
 VERIFY_OK+='apply -f -\t0\t\n'
 VERIFY_OK+='rollout status deployment/upgrade-probe\t0\t\n'
 VERIFY_OK+='services/http:upgrade-probe\t0\tupgrade-probe-aaaaa\n'
@@ -464,6 +471,15 @@ read -r s_fail s_blind s_total s_long <<<"$(svc_line)"
   && ok "…2 replicas and a PDB, polled before the first apply" \
   || bad "the probe workload was not deployed and polled before the upgrade started"
 svc_cleaned && ok "…and deleted after the probe stopped" || bad "the probe workload was left behind on a green run"
+# Infra #403: the platform denies all ingress, so the apiserver proxy needs a policy to reach the pod. Applied after the workload and before
+# the first request (the entities Cilium gives the proxy's source are not established: all three are allowed, on the pod's port only).
+{ grep -q 'kind: CiliumNetworkPolicy' "$STUB_LOG.stdin" && grep -q 'name: upgrade-probe-from-apiserver' "$STUB_LOG.stdin" \
+  && grep -q 'namespace: upgrade-probe' "$STUB_LOG.stdin" && grep -q 'fromEntities: \[host, remote-node, kube-apiserver\]' "$STUB_LOG.stdin" \
+  && grep -q 'port: "8080"' "$STUB_LOG.stdin" && [ "$(grep -c 'apply -f -' "$STUB_LOG")" = 2 ] \
+  && [ "$(last_at 'apply -f -')" -lt "$(first_at 'services/http:upgrade-probe')" ]; } \
+  && ok "…with a CiliumNetworkPolicy for its namespace that lets the control plane reach port 8080, applied before the first request" \
+  || bad "the probe namespace got no ingress policy for the apiserver proxy: $(grep -c 'apply -f -' "$STUB_LOG") applies"
+! said 'NOT MEASURING' && ok "…and a green run does not say it is not measuring" || bad "a green run claimed it was not measuring"
 
 # A red final verify (a shared failure domain, #38) fails the run but loses no
 # measurement: the apiserver probe reported after each step, the service probe on exit.
@@ -474,13 +490,37 @@ read -r s_fail s_blind s_total s_long <<<"$(svc_line)"
   && ok "a red final verify fails the run after the apiserver and service probes reported" \
   || bad "a red final verify hid the outage measurement (rc=$RUN_RC): '$(svc_line)'"
 
-# The Service stops answering while the apiserver does: reported, not gated.
+# The Service stops answering while the apiserver does: reported, not gated. It answered once before the upgrade began (the check that
+# the probe can measure at all), then never again.
+export STUB_PROXY_FAIL_AFTER=1
+plan "${UPGRADE_OK}${VERIFY_OK}"
+upgrade
+unset STUB_PROXY_FAIL_AFTER
+read -r s_fail s_blind s_total s_long <<<"$(svc_line)"
+{ [ "$RUN_RC" -eq 0 ] && [ "${s_fail:-0}" -gt 0 ] && [ "$s_fail" = "$s_total" ] && [ "$s_long" = "$s_fail" ] && ! said 'NOT MEASURING'; } \
+  && ok "a Service that stops answering during the upgrade is counted: ${s_fail} FAIL, longest outage ${s_long}s — reported, not gated" \
+  || bad "a dead Service was not counted as down (rc=$RUN_RC): '$(svc_line)'"
+
+# Infra #403 (lab 25): the proxy never reaches the pod from the start, while the apiserver itself answers (a default-deny ingress). Before,
+# that read "394 FAIL, 2 BLIND in 396 samples" for a Service that was never measured.
 plan "services/http:upgrade-probe\t1\terror: no endpoints available\n${UPGRADE_OK}${VERIFY_OK}"
 upgrade
+{ [ "$RUN_RC" -eq 0 ] && said 'NOT MEASURING' && [ -z "$(svc_line)" ] && called 'task infra-apply' && ! said 'service probe: 0 FAIL'; } \
+  && ok "a pod the proxy cannot reach is reported as NOT MEASURING, with no FAIL count, and the upgrade goes on (reported, not gated)" \
+  || bad "an unreachable probe pod was not named as not measuring (rc=$RUN_RC): '$(svc_line)' $(grep -i 'service probe' <<<"$RUN_OUT" | head -3)"
+said 'default-deny' && said 'CiliumNetworkPolicy' \
+  && ok "…and names the likely cause and the policy that fixes it" || bad "no cause named: $(grep -i 'service probe' <<<"$RUN_OUT" | head -3)"
+[ "$(grep -c 'services/http:upgrade-probe' "$STUB_LOG")" = 15 ] && svc_cleaned \
+  && ok "…it asks 15 times before the upgrade (the pre-check), never starts its polling loop, and the workload is still deleted" \
+  || bad "the pre-check did not stop ($(grep -c 'services/http:upgrade-probe' "$STUB_LOG") requests) or left the workload behind"
+
+# No Cilium (no CRD): no policy is applied, and nothing else changes.
+plan "get crd ciliumnetworkpolicies.cilium.io\t1\terror: the server doesn't have a resource type\n${UPGRADE_OK}${VERIFY_OK}"
+upgrade
 read -r s_fail s_blind s_total s_long <<<"$(svc_line)"
-{ [ "$RUN_RC" -eq 0 ] && [ "${s_fail:-0}" -gt 0 ] && [ "$s_fail" = "$s_total" ] && [ "$s_long" = "$s_fail" ]; } \
-  && ok "a Service that never answers is counted: ${s_fail} FAIL, longest outage ${s_long}s — reported, not gated" \
-  || bad "a dead Service was not counted as down (rc=$RUN_RC): '$(svc_line)'"
+{ [ "$RUN_RC" -eq 0 ] && ! grep -q 'CiliumNetworkPolicy' "$STUB_LOG.stdin" && [ "$(grep -c 'apply -f -' "$STUB_LOG")" = 1 ] && [ "${s_total:-0}" -gt 0 ] && [ "$s_fail" = 0 ]; } \
+  && ok "without the Cilium CRD no policy is applied (a CRD that is not there would fail the whole apply) and the probe measures as before" \
+  || bad "no-Cilium cluster (rc=$RUN_RC): $(grep -c 'apply -f -' "$STUB_LOG") applies, '$(svc_line)'"
 
 # Failure: a stale kubelet fails the run; the numbers and the cleanup must survive it.
 plan "nodeInfo.kubeletVersion\t0\tv0.0.2%%v0.0.1\n${UPGRADE_OK}${VERIFY_OK}"
@@ -650,6 +690,10 @@ else
   ( ROOT="$FAKE" SVC_STARTED=$(( SECONDS - 600 )) report_svc_probe ) >/dev/null 2>&1 \
     && bad "an empty service log after 600s passed — a dead probe proves nothing" \
     || ok "an empty service log over 600s → refuses to conclude"
+  got="$( (ROOT="$FAKE" SVC_MEASURING=0 SVC_STARTED=$(( SECONDS - 600 )) report_svc_probe) 2>&1)"; rc=$?
+  { [ "$rc" = 0 ] && [[ "$got" == *"NOT MEASURING"* ]] && [[ "$got" != *"FAIL"* ]]; } \
+    && ok "a probe that never started measuring says NOT MEASURING and makes no claim, instead of failing on its empty log" \
+    || bad "the not-measuring report is wrong (rc=$rc): $got"
   unset SVC_LOG
 fi
 unset -f fail probe_ok; unset -f report_probe report_svc_probe 2>/dev/null || true

@@ -30,9 +30,10 @@ signer l'intermédiaire de la PKI) : [`admin-access.fr.md`](admin-access.fr.md).
 ## Avant de commencer
 
 - Un compte Scaleway, et le quota pour **7 instances** du type indiqué dans ton
-  tfvars. Un compte neuf peut être plafonné à 1 — Console → Quotas. Il n'existe
-  pas de script de préflight pour Scaleway (`preflight-quotas.py` ne couvre
-  qu'OVH et Outscale) : cette vérification est à ta charge. Les exemples livrés ont 3 control planes et 4 workers ; le bastion ajoute
+  tfvars. Un compte neuf peut être plafonné à 1 — Console → Quotas. Rien ne lit
+  le quota Scaleway (`preflight-quotas.py` ne couvre qu'OVH et Outscale ;
+  `task preflight-quotas PROVIDER=scaleway` n'interroge rien, le dit et se termine
+  par 2) : cette vérification est à ta charge. Les exemples livrés ont 3 control planes et 4 workers ; le bastion ajoute
   un `DEV1-S` ; ce que consomme chaque provider, et si son exemple atteint le
   plancher de dimensionnement : [`capacity.fr.md`](capacity.fr.md).
 - Une paire de clés SSH que tu possèdes déjà, ou `ssh-keygen -t ed25519`.
@@ -184,7 +185,10 @@ vient de montrer — n'utilise pas `-auto-approve`, qui en applique un *autre*,
 recalculé à cet instant. Une fois vérifié, il lance aussi la rétention des images,
 où tofu demande son propre oui pour chaque ancienne image détruite. Pour un run non
 supervisé, ajoute `APPROVE=auto` : il répond aux deux plans et saute la rétention.
-(Pour relire à part un plan de la phase 1,
+(Pour lire le plan sans rien créer, ajoute `PLAN_ONLY=1` : il s'arrête au plan de la
+phase 1, et sur un cluster déjà amorcé ce plan ouvre les tunnels Talos locaux, simulé seulement et NON VÉRIFIÉ sur un cluster, voir
+[`upgrade.fr.md`](upgrade.fr.md#ajouter-des-nœuds--cluster-up-crée-la-machine-avant-de-poser-la-question-conception-03x-inchangée).
+Pour relire à part un plan de la phase 1,
 enregistre-le : `task infra-plan ROLE=management PROVIDER=scaleway OUT=tfplan`,
 relis-le, puis `task infra-apply PROVIDER=scaleway PLAN=tfplan`. `PROVIDER` est
 exigé sur les deux — il retombait avant sur Scaleway, ce qui est le mauvais cloud
@@ -252,6 +256,8 @@ seconde copie de l'archive CNPG, et il existe aussi avec le `backup_immutability
 défaut (avant la 0.4.0 il manquait, et `cnpg-store-replicate` échouait avec `NoSuchBucket`
 toutes les 15 minutes) ; `task cluster-verify` échoue s'il manque.
 
+Un port de tunnel Talos qu'un poste chargé tient un instant (« Address already in use » sans rien qui écoute) est réessayé tout seul depuis la 0.4.1 (simulé seulement, NON VÉRIFIÉ sur un cluster) ; si l'un reste occupé, le script nomme la sortie : réserver le bloc des tunnels avec `net.ipv4.ip_local_reserved_ports` (le réglage remplace toute la liste, donc lire d'abord `/proc/sys/net/ipv4/ip_local_reserved_ports` et y ajouter le bloc, et il est perdu au redémarrage sauf s'il est aussi écrit dans `/etc/sysctl.d/`, dans le fichier qui le règle déjà s'il y en a un ; si le script ne peut pas lire la liste, il le dit et n'affiche aucune commande qui la remplacerait), ou utiliser un autre `TALOS_TUNNEL_OFFSET` ; voir [`upgrade.fr.md`](upgrade.fr.md).
+
 Relancer reprend où ça s'est arrêté. Ajouter un worker aussi : `task cluster-up` crée la
 machine, ouvre les tunnels, puis configure seulement le nouveau nœud
 (`scripts/bootstrap/grow-nodes.sh`), mesuré sur Scaleway en passant de 3 à 6 workers.
@@ -262,7 +268,7 @@ haut et ses volumes de données sans drain ni sortie d'etcd (`scripts/internal/r
 nœuds a ses deux commandes, `task cluster-shrink-plan` puis `task cluster-shrink`, mesurées sur les trois
 clouds : [`upgrade.fr.md`](upgrade.fr.md#retirer-des-nœuds).
 
-À savoir : la machine est créée avant toute question : sans `APPROVE=auto`, `cluster-up` construit et configure d'abord le nouveau nœud et ne montre le plan qu'ensuite (conception 0.3.x, voir [`upgrade.fr.md`](upgrade.fr.md#ajouter-des-nœuds--cluster-up-crée-la-machine-avant-de-poser-la-question-conception-03x-inchangée)).
+À savoir : la machine est créée avant toute question : sans `APPROVE=auto`, `cluster-up` construit et configure d'abord le nouveau nœud et ne montre le plan qu'ensuite (conception 0.3.x, voir [`upgrade.fr.md`](upgrade.fr.md#ajouter-des-nœuds--cluster-up-crée-la-machine-avant-de-poser-la-question-conception-03x-inchangée)) ; `PLAN_ONLY=1` lit le plan sans rien créer chez le fournisseur (sur un cluster déjà amorcé il ouvre les tunnels Talos locaux ; simulé seulement, NON VÉRIFIÉ sur un cluster).
 
 ### Risque résiduel : l'application en mode maintenance
 
