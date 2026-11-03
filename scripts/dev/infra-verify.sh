@@ -50,6 +50,20 @@ info() { printf '\n▶ %s\n' "$*"; }
 
 K() { timeout 60 kubectl "$@"; }
 
+# A kubectl read whose answer is a JSON document (infra #409, #430). stdout and stderr are kept APART: a command that exits 0 but writes a
+# warning on stderr (a deprecation notice, discovery noise) must not put that text in front of the JSON, where jq fails and a check built on
+# its output reads "nothing wrong". The answer is also checked against a jq predicate before anyone uses it.
+# Sets KJ_OUT (stdout) and KJ_ERR (stderr, at most 400 bytes). Returns 0 = valid, 1 = the read failed, 2 = it answered something that is not
+# the wanted document. The caller answers UNKNOWN to 1 (unless the message is a known absence) and to 2, never green.
+kjson() { # <jq -e predicate the document must satisfy> <kubectl args…>
+  local pred="$1" ef rc=0; shift
+  ef="$(mktemp)" || { KJ_OUT=""; KJ_ERR="no temporary file"; return 1; }
+  KJ_OUT="$(K "$@" 2>"$ef")" || rc=$?
+  KJ_ERR="$(head -c 400 "$ef" | tr '\n' ' ')"; rm -f "$ef"
+  [ "$rc" -eq 0 ] || return 1
+  jq -e "$pred" <<<"$KJ_OUT" >/dev/null 2>&1 || return 2
+}
+
 # Sourced HERE, not where the first caller happens to be: the version check below
 # needs `tfv` too, and it runs long before the backup section that used to own
 # this line. common.sh is function definitions only, so sourcing it early costs
@@ -461,14 +475,19 @@ if ! WANT_ID="$(cd "$CLUSTER_DIR" && timeout 60 tofu output -json cluster_identi
   unk "could not read the cluster_identity output from the state — the cluster-identity ConfigMap is UNCHECKED"
 elif [ "$(jq 'length' <<<"$WANT_ID")" -eq 0 ]; then
   unk "the state renders an empty cluster_identity although deploy_flux is true (the state and the config disagree) — the cluster-identity ConfigMap is UNCHECKED"
-elif ! LIVE_ID="$(K -n "$FLUX_NS" get configmap cluster-identity -o json 2>&1)"; then
-  case "$LIVE_ID" in
-    *NotFound*|*"not found"*) bad "the cluster-identity ConfigMap does not exist although deploy_flux = true: the Flux bootstrap manifest has not been applied on this cluster (docs/upgrade.md, 'Why a plain task cluster-up is not enough')" ;;
-    *) unk "could not read the ConfigMap cluster-identity — its keys are UNCHECKED" ;;
-  esac
 else
-  ID_KEYS="$(jq -r --argjson live "$LIVE_ID" '($live.data // {}) as $h | to_entries | sort_by(.key)[] | . as $e | select((($h | has($e.key)) | not) or $h[$e.key] != $e.value) | $e.key' <<<"$WANT_ID" 2>/dev/null)"
-  if [ -z "$ID_KEYS" ]; then
+  kjson 'type == "object" and ((.data // {}) | type == "object")' -n "$FLUX_NS" get configmap cluster-identity -o json; kj=$?
+  if [ "$kj" -eq 1 ]; then
+    case "$KJ_ERR" in
+      *NotFound*|*"not found"*) bad "the cluster-identity ConfigMap does not exist although deploy_flux = true: the Flux bootstrap manifest has not been applied on this cluster (docs/upgrade.md, 'Why a plain task cluster-up is not enough')" ;;
+      *) unk "could not read the ConfigMap cluster-identity — its keys are UNCHECKED" ;;
+    esac
+  elif [ "$kj" -ne 0 ]; then
+    unk "could not read the ConfigMap cluster-identity: the answer is not a ConfigMap as JSON${KJ_ERR:+ (${KJ_ERR:0:160})} — its keys are UNCHECKED"
+  # A comparison that fails is not an empty difference: ID_KEYS empty must mean "every rendered key matches", nothing else.
+  elif ! ID_KEYS="$(jq -r --argjson live "$KJ_OUT" '($live.data // {}) as $h | to_entries | sort_by(.key)[] | . as $e | select((($h | has($e.key)) | not) or $h[$e.key] != $e.value) | $e.key' <<<"$WANT_ID" 2>/dev/null)"; then
+    unk "could not compare the ConfigMap cluster-identity with the rendered map — its keys are UNCHECKED"
+  elif [ -z "$ID_KEYS" ]; then
     ok "the cluster-identity ConfigMap holds the $(jq 'length' <<<"$WANT_ID") keys the config renders"
   else
     bad "the cluster-identity ConfigMap differs from the config: $(wc -l <<<"$ID_KEYS") key(s) missing or different ($(paste -sd, - <<<"$ID_KEYS" | sed 's/,/, /g')). The apps that read them stay NotReady. Write them: ${IDFIX}"
@@ -552,44 +571,61 @@ fi
 # The loop above leaves out the Clusters of a database profile (label openaether.io/db-profile) and the rt-* restore-test copies. A profile
 # Cluster created on an archive path that still holds the WAL of ANOTHER database system has ContinuousArchiving False from its first
 # minute, looks healthy, replicates, and wedges at its FIRST failover (PANIC at promotion, the operator then waits for ever; 4 of 4
-# reproductions, no data lost). The alert CnpgWalArchiveFailing (10 min window + for: 15m) is silent for 25 minutes by design.
-# So this reads ONE fact on every such Cluster, in ALL namespaces (profile Clusters live in the application namespaces, not in
-# OA_CNPG_NAMESPACES): the ContinuousArchiving condition. False (or anything but True) is BAD at once, with the Cluster, its age and the
-# message the operator gives. Absent: a Cluster that declares a WAL archiver (a plugin with isWALArchiver, or backup.barmanObjectStore)
-# and is older than the grace below is UNKNOWN; a younger one gets a warning (its primary may not have reported yet); a Cluster that
-# declares none (profile light: no backup) has nothing to judge and prints nothing. rt-* copies are not judged. UNVERIFIED on a cluster:
-# whether a healthy NEW Cluster ever shows False for a moment before True (it would read BAD here, and the line says how old the Cluster is).
+# reproductions, no data lost). The alert CnpgWalArchiveFailing (10 min window + for: 15m) is silent for 25 minutes by design; the apps
+# alert CnpgWalNeverArchived (infra #430, added in the same release, for: 5m, offline-tested only) is the faster one. This reads ONE fact on every such Cluster, in ALL
+# namespaces (profile Clusters live in the application namespaces, not in OA_CNPG_NAMESPACES): the ContinuousArchiving condition.
+# THE AGE RULE (the triage: "red when False for a Cluster older than a few minutes, UNKNOWN when absent"). A new Cluster is legitimately
+# not archiving at second 0, so a Cluster younger than PROFILE_GRACE (creationTimestamp) with the condition False is a WARNING that gives
+# the age, the reason and the message; from PROFILE_GRACE on, False (or anything but True) is BAD, naming the same. Absent: a Cluster that
+# declares a WAL archiver (a plugin with isWALArchiver, or backup.barmanObjectStore) is a warning under the grace and UNKNOWN from it;
+# a Cluster that declares none (profile light: no backup) has nothing to judge and prints nothing. A creation time that cannot be read
+# gives NO grace (False is BAD, absent is UNKNOWN). rt-* copies are not judged. The price of the grace: a polluted Cluster reads yellow
+# for its first PROFILE_GRACE seconds and red after; run the verify again after that. The price of no grace would be a red on a healthy
+# new Cluster if it shows False for a moment before True, which is NOT known (UNVERIFIED on a cluster).
 if [ "$PROVIDER" != local ]; then
-PROFILE_GRACE=300   # seconds a Cluster that declares archiving may take to report the condition at all
+PROFILE_GRACE=300   # seconds: a Cluster younger than this is not yet judged False, and one that declares archiving may take this long to report the condition at all
 pcnpg_header=0
 pcnpg_head() { if [ "$pcnpg_header" = 0 ]; then info "The profile CNPG Clusters: WAL archiving"; pcnpg_header=1; fi; }
-if ! PCL_LIST="$(K get clusters.postgresql.cnpg.io -A -l openaether.io/db-profile -o json 2>&1)"; then
-  case "$PCL_LIST" in
+kjson 'type == "object" and (.items | type == "array")' get clusters.postgresql.cnpg.io -A -l openaether.io/db-profile -o json; kj=$?
+if [ "$kj" -eq 1 ]; then
+  case "$KJ_ERR" in
     *"doesn't have a resource type"*|*"no matches for kind"*|*"could not find the requested resource"*) ;;
     *) pcnpg_head; unk "could not list the profile CNPG Clusters (all namespaces) — their WAL archiving is UNCHECKED" ;;
   esac
+elif [ "$kj" -ne 0 ]; then
+  pcnpg_head; unk "could not list the profile CNPG Clusters (all namespaces): the answer is not a list as JSON${KJ_ERR:+ (${KJ_ERR:0:160})} — their WAL archiving is UNCHECKED"
+elif ! PCL_ITEMS="$(jq -c '.items[] | select(((.metadata.labels["openaether.io/db-profile"] // "") != "") and (.metadata.name | startswith("rt-") | not))' <<<"$KJ_OUT" 2>/dev/null)"; then
+  pcnpg_head; unk "could not read the profile CNPG Clusters (all namespaces) from the answer — their WAL archiving is UNCHECKED"
 else
   while IFS= read -r PCL; do
     [ -n "$PCL" ] || continue
     pname="$(jq -r '.metadata.name' <<<"$PCL")"; pns="$(jq -r '.metadata.namespace // "?"' <<<"$PCL")"
     pid="${pns}/${pname} (profile $(jq -r '.metadata.labels["openaether.io/db-profile"]' <<<"$PCL"))"
-    page="$(jq -r '(now - ((.metadata.creationTimestamp // "") | fromdateiso8601? // now)) | floor' <<<"$PCL")"
+    # Seconds since creation, "" when the time cannot be read (no grace then). A creation time ahead of this clock counts as 0.
+    page="$(jq -r '(.metadata.creationTimestamp // "") | (try fromdateiso8601 catch null) | if . == null then "" else ((now - .) | floor | if . < 0 then 0 else . end) end' <<<"$PCL")"
+    pagetxt="created ${page} s ago"; [ -n "$page" ] || pagetxt="creation time unreadable"
+    pyoung=0; if [ -n "$page" ] && [ "$page" -lt "$PROFILE_GRACE" ]; then pyoung=1; fi
     pstat="$(jq -r '[.status.conditions[]? | select(.type == "ContinuousArchiving") | .status] | first // "absent"' <<<"$PCL")"
     case "$pstat" in
       True) pcnpg_head; ok "${pid}: ContinuousArchiving True" ;;
       absent)
         if jq -e '([.spec.plugins[]? | select(.isWALArchiver == true)] | length > 0) or (.spec.backup.barmanObjectStore != null)' <<<"$PCL" >/dev/null 2>&1; then
           pcnpg_head
-          if [ "${page:-0}" -lt "$PROFILE_GRACE" ]; then
-            warn "${pid}: no ContinuousArchiving condition yet (created ${page} s ago) — run the verify again in a minute"
+          if [ "$pyoung" = 1 ]; then
+            warn "${pid}: no ContinuousArchiving condition yet (${pagetxt}) — run the verify again in a minute"
           else
-            unk "${pid}: no ContinuousArchiving condition on a Cluster that declares a WAL archiver (created ${page} s ago) — archiving is UNCHECKED"
+            unk "${pid}: no ContinuousArchiving condition on a Cluster that declares a WAL archiver (${pagetxt}) — archiving is UNCHECKED"
           fi
         fi ;;
       *) pcnpg_head
-         bad "${pid}: ContinuousArchiving is ${pstat} (created ${page} s ago): $(jq -r '[.status.conditions[]? | select(.type == "ContinuousArchiving")][0] | "\(.reason // "no reason"): \(.message // "no message")" | gsub("[\\r\\n]+"; " ") | .[0:300]' <<<"$PCL"). WAL is not reaching the store: the Cluster looks healthy, and in lab 28C a Cluster in this state wedged at its first failover (4 of 4). Read: kubectl cnpg status ${pname} -n ${pns}; one known cause is an archive path that still holds the WAL of an older Cluster (OpenAether-apps docs/traps.md, 'A cluster rebuilt on a bucket that still holds the old cluster's WAL archive does not archive')" ;;
+         pcmsg="$(jq -r '[.status.conditions[]? | select(.type == "ContinuousArchiving")][0] | "\(.reason // "no reason"): \(.message // "no message")" | gsub("[\\r\\n]+"; " ") | .[0:300]' <<<"$PCL")"
+         if [ "$pyoung" = 1 ]; then
+           warn "${pid}: ContinuousArchiving is ${pstat} (${pagetxt}, under the ${PROFILE_GRACE} s grace: a new Cluster is not archiving at second 0; from ${PROFILE_GRACE} s this is BAD): ${pcmsg}. Run the verify again in a few minutes; read: kubectl cnpg status ${pname} -n ${pns}"
+         else
+           bad "${pid}: ContinuousArchiving is ${pstat} (${pagetxt}): ${pcmsg}. WAL is not reaching the store: the Cluster looks healthy, and in lab 28C a Cluster in this state wedged at its first failover (4 of 4). Read: kubectl cnpg status ${pname} -n ${pns}; one known cause is an archive path that still holds the WAL of an older Cluster (OpenAether-apps docs/traps.md, 'A cluster rebuilt on a bucket that still holds the old cluster's WAL archive does not archive')"
+         fi ;;
     esac
-  done < <(jq -c '.items[] | select(((.metadata.labels["openaether.io/db-profile"] // "") != "") and (.metadata.name | startswith("rt-") | not))' <<<"$PCL_LIST")
+  done <<<"$PCL_ITEMS"
 fi
 fi
 
