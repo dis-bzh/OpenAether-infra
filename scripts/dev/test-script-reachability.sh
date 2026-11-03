@@ -88,7 +88,7 @@ fixture_repo
 mkdir -p "$TMP/repo/scripts/dev"
 for n in foo bar; do printf '#!/usr/bin/env bash\necho ok\n' >"$TMP/repo/scripts/dev/test-$n.sh"; done
 # The glob names neither harness: no Taskfile line and no document, and neither is unreachable for that.
-printf 'test-scripts:\n  cmds:\n    - |\n      for t in ./scripts/dev/test-*.sh; do "$t"; done\n' >"$TMP/repo/Taskfile.yml"
+printf 'tasks:\n  test-scripts:\n    cmds:\n      - |\n        for t in ./scripts/dev/test-*.sh; do "$t"; done\n' >"$TMP/repo/Taskfile.yml"
 printf 'test-bar.sh  # needs a cluster\n' >"$TMP/repo/scripts/dev/exclude-from-test-scripts.txt"
 commit
 out="$("$CHECKER" "$TMP/repo" 2>&1)"; rc=$?
@@ -118,11 +118,35 @@ out="$("$CHECKER" "$TMP/repo" 2>&1)"; rc=$?
 [ "$rc" -eq 0 ] && ok "comment and blank lines of the list are skipped (rc=0)" || bad "a commented list fails: ${out}"
 
 # Take the glob away (back to a hand list): both harnesses now need their own cmds entry again.
-printf 'test-scripts:\n  cmds:\n    # for t in ./scripts/dev/test-*.sh; do "$t"; done\n' >"$TMP/repo/Taskfile.yml"
+printf 'tasks:\n  test-scripts:\n    cmds:\n      # for t in ./scripts/dev/test-*.sh; do "$t"; done\n' >"$TMP/repo/Taskfile.yml"
 commit
 out="$("$CHECKER" "$TMP/repo" 2>&1)"; rc=$?
 [ "$rc" -ne 0 ] && grep -q 'never run.*test-foo.sh' <<<"$out" && ok "no glob in the Taskfile: every harness needs a cmds entry again" \
   || bad "a commented-out glob counted as running the harnesses (rc=${rc}): ${out}"
+
+# The glob counts only as the test-scripts task's own loop: the same text in another task runs nothing of test-scripts,
+# and the glob does not descend into a subdirectory (the `case` pattern's * would cross the slash).
+fixture_repo
+mkdir -p "$TMP/repo/scripts/dev"
+printf '#!/usr/bin/env bash\necho ok\n' >"$TMP/repo/scripts/dev/test-foo.sh"
+printf 'tasks:\n  test-scripts:\n    cmds:\n      - ./scripts/dev/check-x.sh\n  lint:\n    cmds:\n      - |\n        for t in ./scripts/dev/test-*.sh; do echo "$t"; done\n' >"$TMP/repo/Taskfile.yml"
+: >"$TMP/repo/scripts/dev/exclude-from-test-scripts.txt"
+commit
+out="$("$CHECKER" "$TMP/repo" 2>&1)"; rc=$?
+[ "$rc" -ne 0 ] && grep -q 'never run.*test-foo.sh' <<<"$out" \
+  && ok "the glob in another task is not test-scripts running the harnesses (rc=${rc})" \
+  || bad "a glob outside the test-scripts task counted as running the harnesses (rc=${rc}): ${out}"
+
+fixture_repo
+mkdir -p "$TMP/repo/scripts/dev/test-sub"
+printf '#!/usr/bin/env bash\necho ok\n' >"$TMP/repo/scripts/dev/test-sub/inner.sh"
+printf 'tasks:\n  test-scripts:\n    cmds:\n      - |\n        for t in ./scripts/dev/test-*.sh; do "$t"; done\n' >"$TMP/repo/Taskfile.yml"
+: >"$TMP/repo/scripts/dev/exclude-from-test-scripts.txt"
+commit
+out="$("$CHECKER" "$TMP/repo" 2>&1)"; rc=$?
+[ "$rc" -ne 0 ] && grep -q 'never run.*test-sub/inner.sh' <<<"$out" \
+  && ok "a harness in a subdirectory is not run by the glob and fails the check (rc=${rc})" \
+  || bad "a nested test-*.sh counted as run by a glob that does not descend (rc=${rc}): ${out}"
 
 echo
 echo "=== proof against reality: this repository's own tree is clean today ==="

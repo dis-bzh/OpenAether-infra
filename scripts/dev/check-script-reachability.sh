@@ -21,16 +21,19 @@ unreachable=0
 
 # `task test-scripts` runs every scripts/dev/test-*.sh by glob, except the names listed (each with a reason) in
 # scripts/dev/exclude-from-test-scripts.txt. A harness the glob runs needs no line of its own in the Taskfile.
-# Without the glob in the Taskfile (not in a comment) every harness needs its own cmds entry, as before.
+# The glob counts only as a `for x in ./scripts/dev/test-*.sh` line, not commented out, inside the test-scripts task
+# (task names sit two spaces in: re-indented, it is not found and every harness needs its own cmds entry, a loud failure).
+# Without it every harness needs its own cmds entry, as before.
 EXCL=scripts/dev/exclude-from-test-scripts.txt
 # Counted, not `grep -q` at the end of a pipe: -q quits at the first match and pipefail then reads the SIGPIPE as "no".
 glob=0
-[ "$(grep -vE '^[[:space:]]*#' Taskfile.yml 2>/dev/null | grep -cF './scripts/dev/test-*.sh')" -gt 0 ] && glob=1
+[ "$(sed -nE '/^  test-scripts:/,/^( {0,2})[^[:space:]#]/p' Taskfile.yml 2>/dev/null | grep -vE '^[[:space:]]*#' |
+  grep -cE 'for [A-Za-z_]+ in \./scripts/dev/test-\*\.sh([;[:space:]]|$)')" -gt 0 ] && glob=1
 excluded=""
 [ -f "$EXCL" ] && excluded="$(sed -E 's/[[:space:]]*#.*//; /^[[:space:]]*$/d' "$EXCL")"
-by_glob() { # is this file run by the test-scripts glob?
+by_glob() { # is this file run by the test-scripts glob? (the glob does not descend: a * in `case` would cross the slash)
   [ "$glob" -eq 1 ] || return 1
-  case "$1" in scripts/dev/test-*.sh) ;; *) return 1 ;; esac
+  case "$1" in scripts/dev/*/*) return 1 ;; scripts/dev/test-*.sh) ;; *) return 1 ;; esac
   ! grep -qxF "$(basename "$1")" <<<"$excluded"
 }
 
