@@ -353,6 +353,10 @@ case_open_held() { # a port that never frees: the retries stop at OA_TUNNEL_BIND
   { grep -qF -- "$want" <<<"$out" && grep -qi 'replaces' <<<"$out" && grep -q 'reboot' <<<"$out" && grep -q '/etc/sysctl.d' <<<"$out"; } \
     && ok "…and the advice keeps the reserved ports that are there (it does not replace them), says it does not survive a reboot, and where to keep it" \
     || bad "the sysctl advice is missing, would replace the reserved ports or hides the reboot (wanted '${want}'): ${out}"
+  # A file of /etc/sysctl.d/ that already sets the key and is read after the new one would win at boot and drop the block.
+  { grep -q 'already sets' <<<"$out" && grep -q 'ip_local_reserved_ports /etc/sysctl.conf /etc/sysctl.d' <<<"$out"; } \
+    && ok "…and tells to change the line a sysctl file already holds, not to add another one that may be read first" \
+    || bad "the advice does not mention an existing sysctl.d setting: ${out}"
 }
 case_direct_released() { # open-direct takes the same retry
   hold "$P0" || return
@@ -378,6 +382,26 @@ for n in open_released open_held direct_released; do
 done
 unset OA_TUNNEL_BIND_PAUSE
 for n in open_released open_held direct_released; do (cd "$W/cl-$n" && "$TUN" close . >/dev/null 2>&1); done
+
+# clash_hint on its own, for the file it cannot read (the real flow above covers a readable list): its text is cut out of the
+# script under test and called with the bind check stubbed, so it costs nothing.
+HINT_FN="$(awk '/^clash_hint\(\)/ { c = 1 } c { print } c && /^}/ { exit }' "$SUT")"
+hint() { # <reserved-ports file>: what clash_hint says for a port that stays busy
+  ( CP_BASE=50000 WK_BASE=50100; bind_clashed() { return 0; }; eval "$HINT_FN"; OA_RESERVED_PORTS_FILE="$1" clash_hint 50000 ) 2>&1
+}
+out="$(hint "$W/no-such-file")"
+# No command may be printed that replaces the list with the block alone, and the list must not be called "none" either:
+# the way out is to read it first and append.
+{ grep -q 'could not be read' <<<"$out" && grep -qF 'cat /proc/sys/net/ipv4/ip_local_reserved_ports' <<<"$out" \
+  && grep -qi 'append' <<<"$out" && grep -q 'reboot' <<<"$out" && grep -q 'already sets' <<<"$out" \
+  && ! grep -qF 'ip_local_reserved_ports=50000-' <<<"$out" && ! grep -q '(none)' <<<"$out"; } \
+  && ok "an unreadable reserved-ports file: says so and gives read-then-append, no command that replaces the list with the block alone" \
+  || bad "unreadable reserved-ports file: the advice would replace the list, calls it none, or is silent: ${out}"
+: >"$W/empty-reserved"
+out="$(hint "$W/empty-reserved")"
+{ grep -qF 'sudo sysctl -w net.ipv4.ip_local_reserved_ports=50000-50199' <<<"$out" && ! grep -q 'could not be read' <<<"$out"; } \
+  && ok "a readable but empty reserved-ports file: nothing is reserved, the block alone is the right value and is printed" \
+  || bad "an empty reserved-ports file was read as unreadable, or the block is missing: ${out}"
 
 # The Terraform side (SCC/F17): the local-exec of terraform_data.talos_tunnels hands its values over as environment
 # variables. Its real command is cut out of cluster/main.tf and run against a stub script that records argv, with values a

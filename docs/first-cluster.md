@@ -248,7 +248,7 @@ the CNPG archive, and it exists with the default `backup_immutability = off` too
 (before 0.4.0 it did not, and `cnpg-store-replicate` failed with `NoSuchBucket` every
 15 minutes); `task cluster-verify` fails when it is missing.
 
-A Talos tunnel port that a busy workstation holds for a moment ("Address already in use" with nothing listening) is retried by itself since 0.4.1 (mocked only, UNVERIFIED on a cluster); if one stays busy the script names the way out: reserve the tunnel block with `net.ipv4.ip_local_reserved_ports` (the setting replaces the whole list, so read `/proc/sys/net/ipv4/ip_local_reserved_ports` first and append to it, and it is lost at a reboot unless it is also written in `/etc/sysctl.d/`), or use another `TALOS_TUNNEL_OFFSET`; see [`upgrade.md`](upgrade.md).
+A Talos tunnel port that a busy workstation holds for a moment ("Address already in use" with nothing listening) is retried by itself since 0.4.1 (mocked only, UNVERIFIED on a cluster); if one stays busy the script names the way out: reserve the tunnel block with `net.ipv4.ip_local_reserved_ports` (the setting replaces the whole list, so read `/proc/sys/net/ipv4/ip_local_reserved_ports` first and append to it, and it is lost at a reboot unless it is also written in `/etc/sysctl.d/`, in the file that already sets it if there is one; if the script cannot read the list it says so and prints no replacing command), or use another `TALOS_TUNNEL_OFFSET`; see [`upgrade.md`](upgrade.md).
 
 Re-running resumes. So does an edit that adds a worker: `task cluster-up` creates the
 machine, opens the tunnels, then configures only the new node

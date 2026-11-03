@@ -97,17 +97,29 @@ retry_bind_clash() { # <pidfile> <port>...
 }
 
 # What to do when a port stays busy after the retries. `sysctl -w` REPLACES the whole list, so the ports the machine reserves now
-# come first (read from OA_RESERVED_PORTS_FILE, the kernel's own file by default), and the setting is lost at a reboot.
+# come first (read from OA_RESERVED_PORTS_FILE, the kernel's own file by default). When that file cannot be read (no /proc, a masked
+# one) nothing is claimed about the list and no command that could drop it is printed: the advice is to read it, then append.
+# The setting is lost at a reboot; a sysctl file that already sets the key is the one to change.
 clash_hint() { # <port>... (the ones still down)
-  local p cur block="${CP_BASE}-$((WK_BASE + 99))"
-  cur="$(cat "${OA_RESERVED_PORTS_FILE:-/proc/sys/net/ipv4/ip_local_reserved_ports}" 2>/dev/null || true)"
+  local p cur known=1 file="${OA_RESERVED_PORTS_FILE:-/proc/sys/net/ipv4/ip_local_reserved_ports}" block="${CP_BASE}-$((WK_BASE + 99))"
+  cur="$(cat "$file" 2>/dev/null)" || known=0
   for p in "$@"; do
     bind_clashed "$p" || continue
     echo "  :${p} stayed busy through ${OA_TUNNEL_BIND_RETRIES:-3} retries and nothing listens on it: something on this machine holds it as the source port of a connection"
     echo "    (who: ss -tnp 'sport = :${p}'). Keep the kernel from handing the tunnel block out. \`sysctl -w\` REPLACES the list of reserved"
-    echo "    ports, so the ones reserved now (${cur:-none}) stay in front of the block; it does NOT survive a reboot:"
-    echo "      sudo sysctl -w net.ipv4.ip_local_reserved_ports=${cur:+${cur},}${block}"
-    echo "    To keep it, write the same value as  net.ipv4.ip_local_reserved_ports = ${cur:+${cur},}${block}  in a file of /etc/sysctl.d/ (then: sudo sysctl --system)."
+    if [[ "$known" == 1 ]]; then
+      echo "    ports, so the ones reserved now (${cur:-none}) stay in front of the block:"
+      echo "      sudo sysctl -w net.ipv4.ip_local_reserved_ports=${cur:+${cur},}${block}"
+      echo "    It does NOT survive a reboot. To keep it, put the same value in /etc/sysctl.d/ (then: sudo sysctl --system):  net.ipv4.ip_local_reserved_ports = ${cur:+${cur},}${block}"
+    else
+      echo "    ports, and the list reserved now could not be read here (${file}), so no command is printed that could drop some of them."
+      echo "    Read it where you can, then append the block after what it lists (the block alone only if it lists nothing):"
+      echo "      cat /proc/sys/net/ipv4/ip_local_reserved_ports"
+      echo "      sudo sysctl -w net.ipv4.ip_local_reserved_ports=<what cat printed>,${block}"
+      echo "    It does NOT survive a reboot. To keep it, put the same value in /etc/sysctl.d/ (then: sudo sysctl --system):  net.ipv4.ip_local_reserved_ports = <that list>,${block}"
+    fi
+    echo "    If a file there or /etc/sysctl.conf already sets it (grep -rs ip_local_reserved_ports /etc/sysctl.conf /etc/sysctl.d), change THAT line instead:"
+    echo "    when two files set it, the one read last wins at boot and the block would be dropped without a word."
     echo "    Or give this cluster another TALOS_TUNNEL_OFFSET."
   done
 }

@@ -256,7 +256,7 @@ seconde copie de l'archive CNPG, et il existe aussi avec le `backup_immutability
 défaut (avant la 0.4.0 il manquait, et `cnpg-store-replicate` échouait avec `NoSuchBucket`
 toutes les 15 minutes) ; `task cluster-verify` échoue s'il manque.
 
-Un port de tunnel Talos qu'un poste chargé tient un instant (« Address already in use » sans rien qui écoute) est réessayé tout seul depuis la 0.4.1 (simulé seulement, NON VÉRIFIÉ sur un cluster) ; si l'un reste occupé, le script nomme la sortie : réserver le bloc des tunnels avec `net.ipv4.ip_local_reserved_ports` (le réglage remplace toute la liste, donc lire d'abord `/proc/sys/net/ipv4/ip_local_reserved_ports` et y ajouter le bloc, et il est perdu au redémarrage sauf s'il est aussi écrit dans `/etc/sysctl.d/`), ou utiliser un autre `TALOS_TUNNEL_OFFSET` ; voir [`upgrade.fr.md`](upgrade.fr.md).
+Un port de tunnel Talos qu'un poste chargé tient un instant (« Address already in use » sans rien qui écoute) est réessayé tout seul depuis la 0.4.1 (simulé seulement, NON VÉRIFIÉ sur un cluster) ; si l'un reste occupé, le script nomme la sortie : réserver le bloc des tunnels avec `net.ipv4.ip_local_reserved_ports` (le réglage remplace toute la liste, donc lire d'abord `/proc/sys/net/ipv4/ip_local_reserved_ports` et y ajouter le bloc, et il est perdu au redémarrage sauf s'il est aussi écrit dans `/etc/sysctl.d/`, dans le fichier qui le règle déjà s'il y en a un ; si le script ne peut pas lire la liste, il le dit et n'affiche aucune commande qui la remplacerait), ou utiliser un autre `TALOS_TUNNEL_OFFSET` ; voir [`upgrade.fr.md`](upgrade.fr.md).
 
 Relancer reprend où ça s'est arrêté. Ajouter un worker aussi : `task cluster-up` crée la
 machine, ouvre les tunnels, puis configure seulement le nouveau nœud
