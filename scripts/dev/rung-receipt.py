@@ -438,9 +438,10 @@ def verdict(body, head, author, docs_only):
     body, why = visible(re.sub(r"\r\n?", "\n", body))  # CRLF and a lone CR end a line too
     if why:
         return False, why
-    # The template's own "Rung:" line is empty until filled in. "Rung: none" (with or without a reason after it, as in
-    # "none (docs-only diff)") says the same: nothing declared, which only a docs-only diff or a bot may do, below. It is
-    # no rung, so a receipt pasted beside it, or any other word, is still judged.
+    # The template's own "Rung:" line is empty until filled in. "Rung: none" says the same: nothing declared, which only a
+    # docs-only diff or a bot may do, below. A reason may follow, set off as label_word splits it: "none (docs-only diff)",
+    # "none — docs only", "none - docs only" (CONTRIBUTING.md names these; a comma or a colon is no separator, so "none, docs
+    # only" is refused like any other unknown word). It is no rung, so a receipt pasted beside it is still judged.
     declared = {s for m in DECLARED.finditer(body)
                 if (s := m.group(1).strip(" \t")) and label_word(s) != "none"}
     lines = [s for b in BLOCK.findall(body) for s in map(str.strip, b.splitlines()) if s]

@@ -387,6 +387,21 @@ expect "renovate[bot] writing 'Rung: none' declares nothing" 0 "renovate[bot]" "
 expect "a code diff writing 'Rung: none' is still refused" 1 "no rung declared" h false "$sha" "$(body 'none (docs-only diff)')"
 expect "a docs-only diff's free text after Rung: that is not 'none' is still refused" 1 "is not one of" h true "$sha" "$(body 'docs only')"
 expect "'Rung: none' does not hide a pasted receipt" 1 "exactly one" h true "$sha" "$(body none "$DIRTY")"
+# The reason after "none" is set off by " (", " —" or " -" (CONTRIBUTING.md and the PR template name these three): the doc and
+# this parser must agree, so each is asserted, and the separators a contributor would also try are refused, not guessed at.
+expect "'Rung: none — reason' (em dash) declares nothing on a docs-only diff" 0 "docs-only" h true "$sha" "$(body 'none — docs only')"
+expect "'Rung: none - reason' (hyphen) declares nothing on a docs-only diff" 0 "docs-only" h true "$sha" "$(body 'none - docs only')"
+expect "'Rung: none, reason' is not a documented form: refused" 1 "is not one of" h true "$sha" "$(body 'none, docs only')"
+expect "'Rung: none: reason' is not a documented form: refused" 1 "is not one of" h true "$sha" "$(body 'none: docs only')"
+expect "'Rung: none because reason' is not a documented form: refused" 1 "is not one of" h true "$sha" "$(body 'none because docs only')"
+# The docs' own examples must pass the parser they describe (they once said "a reason after it", which the parser refused).
+n=0
+while IFS= read -r ex; do
+  n=$((n + 1)); ex="${ex#Rung: }"
+  expect "the documented form 'Rung: $ex' declares nothing on a docs-only diff" 0 "docs-only" h true "$sha" "$(body "$ex")"
+done < <(grep -ohE '`(Rung: )?none[^`]+`' "$ROOT/CONTRIBUTING.md" "$ROOT/.github/pull_request_template.md" | tr -d '`')
+[ "$n" -ge 2 ] && ok "CONTRIBUTING.md and the PR template give $n 'none (reason)' examples" \
+  || bad "CONTRIBUTING.md and the PR template give $n examples of 'Rung: none' with a reason, want at least 2"
 expect "a head that is not a sha is refused" 1 "not a commit sha" h false "" "$(body emulated "$GREEN")"
 
 echo

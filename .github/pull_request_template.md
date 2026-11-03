@@ -8,7 +8,7 @@
      (CONTRIBUTING.md, "The one rule"). Then paste what `task receipts` prints.
      The "Rung receipt" check fails when the declared rung has no green receipt
      for the head commit, or a pasted run at or below it is red: after a push,
-     re-run and paste again. A docs-only diff may write `none` (with its reason) instead. -->
+     re-run and paste again. A docs-only diff may write `none (reason)` instead. -->
 Rung:
 
 ```receipts
