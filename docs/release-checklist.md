@@ -1,8 +1,8 @@
-# Release checklist — 0.4.0 (the resilience release)
+# Release checklist — 0.4.1 (a hardening patch of the resilience release)
 
 English only: rewritten each release, and two copies would drift.
 
-What to run before tagging 0.4.0 (the resilience release: the tables below are those of 0.3.0 unless a line says 0.4.0; its evidence is in `CHANGELOG.md` `[0.4.0]`) and telling anyone about it. Ordered by what
+What to run before tagging 0.4.1 (a hardening patch of the resilience release: the tables below are those of 0.3.0 unless a line says 0.4.0 or 0.4.1; its evidence is in `CHANGELOG.md` `[0.4.1]`) and telling anyone about it. Ordered by what
 fails cheapest. **Stop at the first red** — every later step assumes the earlier
 ones held.
 
@@ -25,7 +25,7 @@ completion.
 | §4–§6 clouds | Labs 11 to 15c (2026-10-16 to 2026-10-18): Scaleway, OVH, Outscale, each once; see the `[0.3.0]` section of `CHANGELOG.md` for what ran and what did not. Run again with the **tags** pinned before tagging. |
 | §7 upgrade, growth, removal | Scaleway lifecycle from 0.2.1 + apps 0.2.0 (lab 15c); the etcd restore and real node replacement through the roll were **not run**. |
 | §8 mechanics, §9 stranger | To run at the cut. |
-| Before the tag | 0.4.0: `git_ref` of the tfvars examples and of `variables.tf` points at `refs/tags/0.4.0` of OpenAether-apps (0.3.2 pinned `refs/tags/0.3.2`), which must exist first (released first). The branch history is unsigned (squash merge, signed by GitHub; #332, #333). |
+| Before the tag | 0.4.1: `git_ref` of the tfvars examples and of `variables.tf` points at `refs/tags/0.4.1` of OpenAether-apps (0.4.0 pinned `refs/tags/0.4.0`), which must exist first (released first), at the apps commit the proof labs ran or at a difference known to be docs only (the second proof lab ran apps 11bd8fd); the labs followed the apps BRANCH, not the tag. The infra proof is infra 303851b on Scaleway (3 CP + 6 W); what the release adds on top is documentation, the `PLAN_ONLY` banner text with its test, and this pin: fresh receipts for the release head (`task receipts`, about 25 minutes) and the apps CI come before the merge. The branch history is unsigned (squash merge, signed by GitHub; #332, #333). |
 
 ---|---|
 | §1 clean machine | Run at the release commit (the stranger clone of §9). |
@@ -424,7 +424,7 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       out, including what you chose not to fix (`CLAUDE.md`: an audit is not a
       PR). Never write a closing keyword before an issue number in a commit, PR
       or the notes: GitHub reads prose, and an open issue was closed that way.
-- [ ] `CHANGELOG.md`: `[0.4.0]` carries its date and anything merged since
+- [ ] `CHANGELOG.md`: `[0.4.1]` carries its date and anything merged since
       the text was written is folded into it (`[Unreleased]` stays empty), in the
       voice of 0.1.0: what it claims **and** what it does not, each with its rung,
       no hand-typed counts. Upgrade notes: unset pins inherit the new default and
