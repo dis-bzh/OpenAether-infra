@@ -165,6 +165,8 @@ if a[:2] == ["get", "externalsecret"]:
         for name in LATE_ES:
             ready = not ((mode == "bad" and name == "grafana-oidc") or (mode.startswith("slow:") and n < int(mode[5:])))
             rows += f"services-observability {name} ClusterSecretStore openbao 1h " + ("SecretSynced True\n" if ready else "SecretSyncedError False\n")
+        if mode == "none":  # the list comes back empty (kubectl prints "No resources found" on stderr): nothing to be not Ready is not a pass
+            rows = ""
     out(rows)
 if "get ds cilium" in A:
     out("daemonset.apps/cilium\n")

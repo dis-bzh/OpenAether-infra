@@ -253,6 +253,8 @@ new; FAKE_KUBECTL_WARN=1 run "${ALL[@]}" --execute --confirm oa-test --only veri
 chk "a warning that kubectl prints on stderr next to a good answer does not hide the Job's success" "[ $RC = 0 ] && grep -q '✓ verify done' '$TMP/stdout'"
 new; FAKE_JOB_CREATE_FAIL=dr-replicate run "${ALL[@]}" --execute --confirm oa-test --only verify
 chk "a Job that cannot be created fails the step at once with that cause (errexit is off inside prove_new_archive), and nothing is waited for" "[ $RC = 1 ] && grep -q 'could not create the Job dr-replicate' '$TMP/stdout' '$TMP/stderr' && ! calls | grep -q 'get job dr-replicate' && ! calls | grep -q 'dr-check'"
+new; FAKE_JOB_CREATE_FAIL=dr-check run "${ALL[@]}" --execute --confirm oa-test --only verify
+chk "...the restore-test Job too (the last command of the step, which relies on errexit): the step fails with that cause and the Job is not waited for" "[ $RC = 1 ] && grep -q 'could not create the Job dr-check' '$TMP/stdout' '$TMP/stderr' && ! calls | grep -q 'get job dr-check .*succeeded'"
 
 new; mkdir -p "$OUTD/work"; printf 'cnpg\nidentity\nobservability\n' >"$OUTD/work/held.txt"; FAKE_KS_SLOW=4 run "${ALL[@]}" --execute --confirm oa-test --only identity
 chk "the identity step waits for the DAG twice as long as the other waits (30 min of the 15): observability converges in it since #426" "[ $RC = 0 ]"
@@ -263,6 +265,8 @@ new; FAKE_ES_LATE=bad run "${ALL[@]}" --execute --confirm oa-test
 chk "an ExternalSecret of observability that never syncs is not seen by resume (it does not exist yet) but stops the identity step, and verify does not run (the coverage #426 moved)" "[ $RC = 1 ] && grep -q '✓ resume done' '$TMP/stdout' && grep -q '✗ identity FAILED' '$TMP/stdout' && grep -q '1 of 7 ExternalSecrets are not Ready' '$TMP/stdout' && ! calls | grep -q 'task cluster-verify'"
 new; mkdir -p "$OUTD/work"; printf 'cnpg\nidentity\nobservability\n' >"$OUTD/work/held.txt"; FAKE_ES_LATE=slow:4 run "${ALL[@]}" --execute --confirm oa-test --only identity
 chk "...but ExternalSecrets that are only slow to sync (NotReady for the first polls) are waited for" "[ $RC = 0 ]"
+new; mkdir -p "$OUTD/work"; printf 'cnpg\nidentity\nobservability\n' >"$OUTD/work/held.txt"; FAKE_ES_LATE=none run "${ALL[@]}" --execute --confirm oa-test --only identity
+chk "...and an ExternalSecret list that comes back empty is not a pass (no ExternalSecret is not 'none is NotReady')" "[ $RC = 1 ] && grep -q '0 of 0 ExternalSecrets are not Ready' '$TMP/stdout'"
 
 echo "=== OpenBao standbys after the raft restore (apps #184) ==="
 dels() { sort "$FAKE_DR/state/pods-deleted.log" 2>/dev/null | tr '\n' ' '; }
