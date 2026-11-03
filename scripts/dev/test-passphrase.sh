@@ -50,11 +50,12 @@ want "one block repeated" "Xk9#mP2\$vL8@nQ4!Xk9#mP2\$vL8@nQ4!" "one block repeat
 want "a run of one character" "Xk9#mP2\$vL8@nQ4!wR7&tY5*uI3^oEEEEEE6%" "run of six"
 want "hex with too few distinct characters" "ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12" "hex string"
 
-echo "=== a random hex draw is not flagged for what chance puts in it, a typed shape still is (infra #416) ==="
+echo "=== a random hex draw is not flagged for what chance puts in it, some typed shapes still are (infra #416) ==="
 # 64 hex characters from `openssl rand -hex 32` carry a run of six identical characters about once in 18,000 draws
-# and "abcdef" or "123456" somewhere about once in 140,000 (computed; two simulations of 400,000 draws flagged 19 and 30): those are not
-# weaknesses of a random value. Hex keeps the guard in a form chance does not trip: a run of ten (about 8e-10 per
-# draw), a word only at the start (about 1.2e-7) or twice, plus the distinct-character and repeated-block rules.
+# and "abcdef" or "123456" somewhere about once in 140,000 (computed; a replica over 1,000,000 simulated draws flagged
+# 62 under the old rules, 0 under the new): those are not weaknesses of a random value. Hex keeps the guard in a form
+# chance does not trip: a run of ten (about 8e-10 per draw), a word only at the start (about 1.2e-7) or twice, plus the
+# distinct-character and repeated-block rules. A typed value with one word inside and none of these is accepted.
 hex_tail="1c7a9b3d5f2e8c4a6071b9d3f5e7a2c4b6d8091a3f"
 accept() { # label value: a random-looking hex value has to pass
   local got; got="$(oa_passphrase_problems "$2")"
