@@ -142,10 +142,15 @@ UPGRADE_WATCH_TIMEOUT="${UPGRADE_WATCH_TIMEOUT:-420}"
 UPGRADE_CONFIRM_TIMEOUT="${UPGRADE_CONFIRM_TIMEOUT:-120}"
 # Set by the INT/TERM trap and by an interrupted upgrade. Checked BETWEEN nodes:
 # the node in flight finishes and returns to rotation, then the run stops. Halting
-# between drain and reboot would leave the cordoned, half-upgraded node that has
-# already ruined one diagnosis.
+# between drain and reboot would leave the cordoned, half-upgraded node that has already ruined one diagnosis.
+# One exception, the drain itself: drain_watched runs kubectl drain in the background, and a signal that arrives WHILE it runs
+# kills it (a background command would ignore Ctrl+C and outlive the run), then runs this trap. The drain counts as failed and
+# takes the failure path of cordon_drain: the node is uncordoned and, unattended, the run dies with the budgets and Flux restored
+# (attended, the usual "Continue ... anyway?" is asked, as it was when the terminal killed the foreground drain). That was always
+# so for Ctrl+C; a SIGTERM sent to the script alone now does the same. A stop asked BEFORE the drain started does not end it:
+# the node in flight finishes.
 STOP_REQUESTED=0
-trap 'STOP_REQUESTED=1; printf "\n⚠ stop requested — finishing the node in flight, then stopping.\n" >&2' INT TERM
+trap 'STOP_REQUESTED=1; printf "\n⚠ stop requested — finishing the node in flight, then stopping (a drain in progress is ended and its node given back).\n" >&2' INT TERM
 ETCD_TIMEOUT="${ETCD_TIMEOUT:-300}"               # seconds
 API_TIMEOUT="${API_TIMEOUT:-300}"                 # seconds, for the kube-apiserver of a control plane to serve (#42)
 API_STABLE_POLLS="${API_STABLE_POLLS:-3}"         # consecutive Ready polls: one lucky poll between two restarts is not serving
