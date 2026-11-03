@@ -30,7 +30,7 @@ STUB_FREE_KIB=$((13 * GIB)); run twelve "x"; [ "$rc" = 2 ] && ok_ "a need that i
 # Wiring: asked before any apply of the build, and not in the list/prune/retain modes (they return before the apply paths).
 n="$(grep -c 'disk_preflight' "$ROOT/scripts/bootstrap/talos-image.sh")"
 [ "$n" = 3 ] && ok_ "talos-image.sh defines it once and calls it before both applies (ensure and interactive)" || bad "talos-image.sh disk_preflight count $n (want 3)"
-awk '/^disk_preflight\(\)/ {d=NR} /disk_preflight; tofu apply "\$PLAN"/ {e=NR} /^  disk_preflight$/ {i=NR} /^case "\$MODE" in/ {c=NR} END {exit !(d && c && e > d && i > d)}' \
+awk '/^disk_preflight\(\)/ {d=NR} /refuse_taken_omi; disk_preflight$/ {e=NR} /^  disk_preflight$/ {i=NR} /^case "\$MODE" in/ {c=NR} END {exit !(d && c && e > d && i > d)}' \
   "$ROOT/scripts/bootstrap/talos-image.sh" && ok_ "both calls come after the prune/import modes returned" || bad "the preflight sits before a mode that must not be blocked"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
