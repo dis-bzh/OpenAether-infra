@@ -240,6 +240,12 @@ reset; mkpc apps-team app-ha ha False 20 plugin "$ARCHMSG" | pcl_fx; run
 reset; { mkpc apps-team a-bad ha False none plugin "$ARCHMSG"; mkpc apps-team a-abs ha none none plugin; } | pcl_fx; run
 { [ -n "$(badline 'apps-team/a-bad (profile ha): ContinuousArchiving is False')" ] && [ -n "$(unkline 'apps-team/a-abs (profile ha): no ContinuousArchiving condition')" ]; } \
   && ok "an unreadable creation time never gives a grace: False is BAD, an absent condition is UNKNOWN" || bad "$(grep -i 'a-bad\|a-abs' "$W/out")"
+reset; { mkpc apps-team a-fut ha False -3600 plugin "$ARCHMSG"; mkpc apps-team b-fut ha none -3600 plugin; mkpc apps-team c-skew ha False -20 plugin "$ARCHMSG"; } | pcl_fx; run
+{ [ -n "$(badline 'apps-team/a-fut (profile ha): ContinuousArchiving is False')" ] && [ -n "$(unkline 'apps-team/b-fut (profile ha): no ContinuousArchiving condition')" ] \
+  && grep -F 'a-fut' "$W/out" | grep -qF "ahead of this machine's clock" && grep -F 'b-fut' "$W/out" | grep -qF "ahead of this machine's clock"; } \
+  && ok "a creation time far ahead of this clock (1 h): the age is unknown, so NO grace (False BAD, absent UNKNOWN), and the line says the clock is the reason" || bad "$(grep -i 'a-fut\|b-fut' "$W/out")"
+{ has "~ apps-team/c-skew (profile ha): ContinuousArchiving is False" && [ -z "$(badline 'c-skew')" ] && [ -z "$(unkline 'c-skew')" ]; } \
+  && ok "a creation time a few seconds ahead (ordinary clock skew): still a young Cluster, a warning" || bad "$(grep -i 'c-skew' "$W/out")"
 reset; mkpc apps-team app-ha ha True 600 plugin | pcl_fx; run
 { has "✓ apps-team/app-ha (profile ha): ContinuousArchiving True" && [ -z "$(badline 'app-ha')" ] && [ -z "$(unkline 'app-ha')" ]; } && ok "ContinuousArchiving True: passes" || bad "$(grep -i 'app-ha\|profile' "$W/out")"
 reset; { mkpc team-a a-ha ha True 600 plugin; mkpc team-b b-std standard False 600 plugin "$ARCHMSG"; } | pcl_fx; run
@@ -298,16 +304,20 @@ reset; mkid '{}'; run local
 ! has "$IDH" && ok "provider local: not judged" || bad "local judged"
 
 echo "--- infra #430 and #409: a kubectl read is JSON on stdout only (stderr noise never decides), and an unparsable answer is never green ---"
-reset; : >"$FX/warn.stderr"; mkid '{}'; mkpc apps-team app-ha ha False 600 plugin "$ARCHMSG" | pcl_fx; run
+reset; : >"$FX/warn.stderr"; mkid '{}'; mkpc apps-team app-ha ha False 600 plugin "$ARCHMSG" | pcl_fx; mkcl db 3 "$SYNCB" False | cnpg_fx; cnpg_ok; run
 { [ -n "$(badline '3 key(s) missing or different (BACKUP_S3_BUCKET, BACKUP_S3_ENDPOINT, CLUSTER_NAME)')" ] && ! has "✓ the cluster-identity ConfigMap"; } \
   && ok "identity: a warning on stderr with exit 0 does not turn an EMPTY ConfigMap green" || bad "$(grep -i 'identity' "$W/out")"
 [ -n "$(badline 'apps-team/app-ha (profile ha): ContinuousArchiving is False')" ] \
   && ok "profile: a warning on stderr with exit 0 does not hide a False Cluster" || bad "$(grep -i 'app-ha\|profile' "$W/out")"
-reset; echo 'this is not json' >"$FX/cm.json"; echo 'nor is this' >"$FX/cnpgp.json"; run
+[ -n "$(badline 'foundation-databases/db: ContinuousArchiving is False')" ] \
+  && ok "platform: a warning on stderr with exit 0 does not hide a False Cluster" || bad "$(grep -i 'foundation-databases' "$W/out")"
+reset; echo 'this is not json' >"$FX/cm.json"; echo 'nor is this' >"$FX/cnpgp.json"; echo 'nor this' >"$FX/cnpg.json"; run
 { [ -n "$(unkline 'could not read the ConfigMap cluster-identity')" ] && ! has "✓ the cluster-identity ConfigMap"; } \
   && ok "identity: an answer that is not JSON: UNKNOWN, not a pass" || bad "$(grep -i 'identity' "$W/out")"
 [ -n "$(unkline 'could not list the profile CNPG Clusters')" ] \
   && ok "profile: an answer that is not JSON: UNKNOWN, not silence" || bad "$(grep -i 'profile' "$W/out")"
+[ -n "$(unkline 'could not list the CNPG Clusters of foundation-databases')" ] \
+  && ok "platform: an answer that is not JSON: UNKNOWN, not silence" || bad "$(grep -i 'foundation-databases' "$W/out")"
 
 echo "--- K2 (lab 26): CoreDNS runs the declared replica count and spread, both directions ---"
 reset; run

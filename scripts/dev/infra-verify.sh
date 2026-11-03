@@ -509,11 +509,20 @@ CNPG_NS="${OA_CNPG_NAMESPACES:-foundation-databases}"
 cnpg_header=0
 cnpg_head() { if [ "$cnpg_header" = 0 ]; then info "The platform CNPG Clusters: synchronous replication, archiving, failover quorum"; cnpg_header=1; fi; }
 for ns in $CNPG_NS; do
-  if ! CL_LIST="$(K -n "$ns" get clusters.postgresql.cnpg.io -l openaether.io/managed=true -o json 2>&1)"; then
-    case "$CL_LIST" in
+  # JSON on stdout only (kjson): a warning on stderr with exit 0 used to sit in front of the JSON, jq failed inside the loop's process
+  # substitution and the whole namespace read "nothing wrong" without a line. The absence of the CRD is still told from stderr.
+  kjson 'type == "object" and (.items | type == "array")' -n "$ns" get clusters.postgresql.cnpg.io -l openaether.io/managed=true -o json; kj=$?
+  if [ "$kj" -eq 1 ]; then
+    case "$KJ_ERR" in
       *"doesn't have a resource type"*|*"no matches for kind"*|*"could not find the requested resource"*) ;;
       *) cnpg_head; unk "could not list the CNPG Clusters of ${ns} — their synchronous replication and archiving are UNCHECKED" ;;
     esac
+    continue
+  elif [ "$kj" -ne 0 ]; then
+    cnpg_head; unk "could not list the CNPG Clusters of ${ns}: the answer is not a list as JSON${KJ_ERR:+ (${KJ_ERR:0:160})} — their synchronous replication and archiving are UNCHECKED"
+    continue
+  elif ! CL_ITEMS="$(jq -c '.items[] | select(((.metadata.labels["openaether.io/db-profile"] // "") == "") and (.metadata.name | startswith("rt-") | not))' <<<"$KJ_OUT" 2>/dev/null)"; then
+    cnpg_head; unk "could not read the CNPG Clusters of ${ns} from the answer — their synchronous replication and archiving are UNCHECKED"
     continue
   fi
   while IFS= read -r CL; do
@@ -562,7 +571,7 @@ for ns in $CNPG_NS; do
         *) unk "${cid}: could not read the FailoverQuorum object — UNCHECKED" ;;
       esac
     fi
-  done < <(jq -c '.items[] | select(((.metadata.labels["openaether.io/db-profile"] // "") == "") and (.metadata.name | startswith("rt-") | not))' <<<"$CL_LIST")
+  done <<<"$CL_ITEMS"
 done
 fi
 
@@ -571,19 +580,23 @@ fi
 # The loop above leaves out the Clusters of a database profile (label openaether.io/db-profile) and the rt-* restore-test copies. A profile
 # Cluster created on an archive path that still holds the WAL of ANOTHER database system has ContinuousArchiving False from its first
 # minute, looks healthy, replicates, and wedges at its FIRST failover (PANIC at promotion, the operator then waits for ever; 4 of 4
-# reproductions, no data lost). The alert CnpgWalArchiveFailing (10 min window + for: 15m) is silent for 25 minutes by design; the apps
-# alert CnpgWalNeverArchived (infra #430, added in the same release, for: 5m, offline-tested only) is the faster one. This reads ONE fact on every such Cluster, in ALL
+# reproductions, no data lost). The alert CnpgWalArchiveFailing (10 min window + for: 15m) is silent for 25 minutes by design. This verify
+# stands alone: it reads no alert and needs none (an apps alert on a Cluster that never archived may fire sooner where the apps release
+# carries one). It reads ONE fact on every such Cluster, in ALL
 # namespaces (profile Clusters live in the application namespaces, not in OA_CNPG_NAMESPACES): the ContinuousArchiving condition.
 # THE AGE RULE (the triage: "red when False for a Cluster older than a few minutes, UNKNOWN when absent"). A new Cluster is legitimately
 # not archiving at second 0, so a Cluster younger than PROFILE_GRACE (creationTimestamp) with the condition False is a WARNING that gives
 # the age, the reason and the message; from PROFILE_GRACE on, False (or anything but True) is BAD, naming the same. Absent: a Cluster that
 # declares a WAL archiver (a plugin with isWALArchiver, or backup.barmanObjectStore) is a warning under the grace and UNKNOWN from it;
 # a Cluster that declares none (profile light: no backup) has nothing to judge and prints nothing. A creation time that cannot be read
-# gives NO grace (False is BAD, absent is UNKNOWN). rt-* copies are not judged. The price of the grace: a polluted Cluster reads yellow
-# for its first PROFILE_GRACE seconds and red after; run the verify again after that. The price of no grace would be a red on a healthy
-# new Cluster if it shows False for a moment before True, which is NOT known (UNVERIFIED on a cluster).
+# gives NO grace (False is BAD, absent is UNKNOWN); so does one more than PROFILE_SKEW seconds AHEAD of this machine's clock (the clock is
+# unknown, and the line says so; up to PROFILE_SKEW ahead is ordinary skew and counts as 0, said on the line too). rt-* copies are not
+# judged. The price of the grace: a POLLUTED Cluster YOUNGER THAN PROFILE_GRACE reads YELLOW (exit 0), red only from PROFILE_GRACE on, so a
+# verify run in the first 5 minutes after the Cluster is created cannot fail on it: run it again after that. The price of no grace would be
+# a red on a healthy new Cluster if it shows False for a moment before True, which is NOT known (UNVERIFIED on a cluster).
 if [ "$PROVIDER" != local ]; then
 PROFILE_GRACE=300   # seconds: a Cluster younger than this is not yet judged False, and one that declares archiving may take this long to report the condition at all
+PROFILE_SKEW=60     # seconds: how far ahead of this machine's clock a creation time may be before the clock is called unknown (then no grace)
 pcnpg_header=0
 pcnpg_head() { if [ "$pcnpg_header" = 0 ]; then info "The profile CNPG Clusters: WAL archiving"; pcnpg_header=1; fi; }
 kjson 'type == "object" and (.items | type == "array")' get clusters.postgresql.cnpg.io -A -l openaether.io/db-profile -o json; kj=$?
@@ -601,10 +614,17 @@ else
     [ -n "$PCL" ] || continue
     pname="$(jq -r '.metadata.name' <<<"$PCL")"; pns="$(jq -r '.metadata.namespace // "?"' <<<"$PCL")"
     pid="${pns}/${pname} (profile $(jq -r '.metadata.labels["openaether.io/db-profile"]' <<<"$PCL"))"
-    # Seconds since creation, "" when the time cannot be read (no grace then). A creation time ahead of this clock counts as 0.
-    page="$(jq -r '(.metadata.creationTimestamp // "") | (try fromdateiso8601 catch null) | if . == null then "" else ((now - .) | floor | if . < 0 then 0 else . end) end' <<<"$PCL")"
-    pagetxt="created ${page} s ago"; [ -n "$page" ] || pagetxt="creation time unreadable"
-    pyoung=0; if [ -n "$page" ] && [ "$page" -lt "$PROFILE_GRACE" ]; then pyoung=1; fi
+    # Seconds since creation (signed), "" when the time cannot be read (no grace then). A creation time ahead of this clock by up to
+    # PROFILE_SKEW seconds is ordinary skew between this machine and the apiserver and counts as 0; further ahead the clock is unknown:
+    # no grace, and the line says so (else a wrong clock would keep a polluted Cluster yellow for the offset PLUS the grace, unsaid).
+    page="$(jq -r '(.metadata.creationTimestamp // "") | (try fromdateiso8601 catch null) | if . == null then "" else ((now - .) | floor) end' <<<"$PCL")"
+    pyoung=0
+    if [ -z "$page" ]; then pagetxt="creation time unreadable"
+    elif [ "$page" -lt "-${PROFILE_SKEW}" ]; then pagetxt="creation time is $((-page)) s ahead of this machine's clock: the age is unknown, no grace"
+    else
+      pskew=""; if [ "$page" -lt 0 ]; then pskew=", this machine's clock is $((-page)) s behind the cluster's"; page=0; fi
+      pagetxt="created ${page} s ago${pskew}"; [ "$page" -ge "$PROFILE_GRACE" ] || pyoung=1
+    fi
     pstat="$(jq -r '[.status.conditions[]? | select(.type == "ContinuousArchiving") | .status] | first // "absent"' <<<"$PCL")"
     case "$pstat" in
       True) pcnpg_head; ok "${pid}: ContinuousArchiving True" ;;
