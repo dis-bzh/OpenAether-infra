@@ -67,9 +67,13 @@ entre le téléchargement et la conversion dans les trois modules local-exec.
   tags Flux chaque semaine.
 - **SBOM :** `scripts/dev/gen-sbom.py` écrit un inventaire CycloneDX 1.5 des outils épinglés
   (ancres `# renovate:`), des providers verrouillés, des images de bootstrap et des images
-  Factory. Le workflow `SBOM` le lance chaque semaine et à chaque release publiée, le joint
-  sous le nom `openaether-infra-<tag>.cdx.json`, et scanne chaque image de bootstrap avec Trivy
-  (un CRITICAL avec correctif amont échoue).
+  Factory. Le workflow `SBOM` le lance chaque semaine et à chaque tag de release poussé, le joint
+  sous le nom `openaether-infra-<tag>.cdx.json` à la release BROUILLON (il crée le brouillon s'il n'y en
+  a pas : une release immuable n'accepte plus de fichier une fois publiée), et scanne chaque image de
+  bootstrap avec Trivy (un CRITICAL avec correctif amont échoue). À la publication, le même workflow
+  vérifie seulement que le fichier est là. Les releases 0.3.2, 0.4.0 et 0.4.1 sont sorties sans lui
+  (publiées avant que le fichier puisse être ajouté) ; `python3 scripts/dev/gen-sbom.py --version <tag>`
+  sur un checkout du tag le reconstruit.
 - **VEX :** un constat qui ne s'applique pas est consigné comme déclaration OpenVEX dans
   `.vex/openaether-infra.openvex.json` (une purl par produit, `not_affected` avec une
   justification) ; le scan lit le fichier dès qu'il porte une déclaration.

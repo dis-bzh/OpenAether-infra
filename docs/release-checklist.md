@@ -469,8 +469,12 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       git tag -s -u 1D5895FDC14F5BAD6D1B170B5CA26229559044A2 -m "OpenAether-infra <tag>" <tag> <release sha>
       ./scripts/dev/check-release-tag.sh <tag> --notes notes.md    # annotated, signer in the table, notes name the sha
       git push origin <tag>
-      gh release create <tag> --verify-tag --notes-file notes.md   # refuses when the tag is not on the remote
+      # the SBOM workflow starts on the tag, creates the DRAFT release and attaches the inventory to it:
+      gh run watch "$(gh run list --workflow SBOM --event push --limit 1 --json databaseId --jq '.[0].databaseId')"
+      gh release view <tag> --json isDraft,assets --jq '[.isDraft, (.assets[].name)]'   # true and openaether-infra-<tag>.cdx.json
+      gh release edit <tag> --notes-file notes.md --draft=false                          # the publish: nothing can be added after
       ```
+      Never `gh release create <tag>` without `--draft`: an immutable release takes no asset once published (infra #395).
       The notes carry the release commit sha in full. A client verifies with `git verify-tag <tag>` (public key
       `docs/signers/release-vps.asc`, fingerprint compared with the table) and `git rev-parse <tag>^{commit}` against the
       notes. Immutable releases are on (owner, 2026-10); `.github/workflows/release-tag.yml` repeats the check when a tag
@@ -481,8 +485,9 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       items** list built from the open issue titles that day (`gh issue list
       --state open`): several known limits appear in no tracked file. Link the
       issues, not a backlog file. Not a pre-release (the owner's decision, 2026-10-12).
-- [ ] the release carries `openaether-infra-<tag>.cdx.json` (the `SBOM` workflow attaches it on
-      publish; `gh release view <tag> --json assets`) and the last `SBOM` run's image scans are green
+- [ ] the release carries `openaether-infra-<tag>.cdx.json` (the `SBOM` workflow attaches it to the draft when the tag is
+      pushed, and its `release-has-asset` job goes red when a published release lacks it; `gh release view <tag> --json assets`)
+      and the SBOM run's image scans on the tag are green
       or each red one is in `.vex/openaether-infra.openvex.json`. `docs/supply-chain.md` says what
       the inventory covers and what it does not.
 - [ ] the examples and the default pin the apps tag, and it exists. OpenAether-apps

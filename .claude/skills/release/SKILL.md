@@ -51,7 +51,9 @@ validation leg turned it on, so what the pin asserts is that the tag exists and
    the release key of the signer table (`docs/signed-commits.md`), pushed **before** the release exists, and the
    release is created against it: `git tag -s -u <fingerprint> -m "OpenAether-infra <tag>" <tag> <release sha>`,
    `./scripts/dev/check-release-tag.sh <tag>` (annotated, signer in the table), `git push origin <tag>`, then
-   `gh release create <tag> --verify-tag --notes-file notes.md`. The notes carry the release commit SHA in full. A client
+   the `SBOM` workflow (started by the pushed tag) creates the **draft** release and attaches the inventory, and
+   `gh release edit <tag> --notes-file notes.md --draft=false` publishes it (an immutable release takes no asset once
+   published: never `gh release create` without `--draft`, infra #395). The notes carry the release commit SHA in full. A client
    checks it with `git verify-tag <tag>` (the public key is `docs/signers/release-vps.asc`, compare its fingerprint
    with the table) and `git rev-parse <tag>^{commit}` against the notes. Immutable releases are on; no admin token is
    used in CI, so bypass actors are checked by hand each release (`check-required-checks.sh`, checklist section 8).
