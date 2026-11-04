@@ -139,8 +139,8 @@ jobs:
   scan-images:
     name: Scan ${{ matrix.image }}
     needs: inventory
-    # Not on the publish event: inventory is skipped there, and a matrix built from the output of a skipped job
-    # (an empty string for fromJSON) must not even be evaluated.
+    # Not on the publish event: inventory is skipped there, so there is no image list to scan. A skipped need would
+    # skip this job anyway; the condition says it out loud. Not run on GitHub yet (docs/release-checklist.md).
     if: github.event_name != 'release'
     runs-on: ubuntu-latest
     timeout-minutes: 15

@@ -25,7 +25,7 @@ completion.
 | §4–§6 clouds | Labs 11 to 15c (2026-10-16 to 2026-10-18): Scaleway, OVH, Outscale, each once; see the `[0.3.0]` section of `CHANGELOG.md` for what ran and what did not. Run again with the **tags** pinned before tagging. |
 | §7 upgrade, growth, removal | Scaleway lifecycle from 0.2.1 + apps 0.2.0 (lab 15c); the etcd restore and real node replacement through the roll were **not run**. |
 | §8 mechanics, §9 stranger | To run at the cut. |
-| Before the tag | 0.4.2: `git_ref` of the tfvars examples and of `variables.tf` points at `refs/tags/0.4.2` of OpenAether-apps (0.4.1 pinned `refs/tags/0.4.1`), which must exist first (released first). The apps release head is the head the 0.4.2 cloud retests ran plus CI- and documentation-only commits (the apps `SBOM` workflow, its `release` skill, `docs/supply-chain.md`, the CHANGELOG and the version lines): `git diff --stat <apps head the retests ran> <apps release head>` must show those and nothing else at the cut, and so must `git diff --stat 0.4.1 <apps release head>` (no apps runtime change since 0.4.1). Here `git diff --stat 0.4.1 <infra release head>` shows the same kinds plus the apps pin (the `git_ref` default of `variables.tf`, the twelve examples, one tftest line): no script, no resource. The retests and their results are written in `CHANGELOG.md` `[0.4.2]`, in one place. Fresh receipts for the release head (`task receipts`, about 25 minutes) and the apps CI come before the merge. The `SBOM` procedure of §8 has not run on a tag yet: the 0.4.2 release is its first live run. The branch history is unsigned (squash merge, signed by GitHub; #332, #333). |
+| Before the tag | 0.4.2: `git_ref` of the tfvars examples and of `variables.tf` points at `refs/tags/0.4.2` of OpenAether-apps (0.4.1 pinned `refs/tags/0.4.1`), which must exist first (released first). The apps release head is the head the 0.4.2 cloud retests ran plus commits that touch CI, documentation and one VEX data file only: `git diff --stat <apps head the retests ran> <apps release head>` must show those and nothing else at the cut, and so must `git diff --stat 0.4.1 <apps release head>` (no apps runtime change since 0.4.1). As read in the apps checkout when this line was written, `git diff --stat 0.4.1..HEAD` listed eight files: `.claude/skills/release/SKILL.md` (the apps `release` skill), `.github/workflows/sbom.yml`, `.vex/openaether-apps.openvex.json` (two statements renewed; Trivy and the apps `check-vex.py` read it, no cluster does), `CHANGELOG.md`, `README.md`, `README.fr.md`, `docs/supply-chain.md` and `zitadel-hardening.md` in the apps `docs` directory. A path outside this list is read before the tag, not waved through. Here `git diff --stat 0.4.1 <infra release head>` shows the same kinds plus the apps pin (the `git_ref` default of `variables.tf`, the twelve examples, one tftest line): no script, no resource. The retests and their results are written in `CHANGELOG.md` `[0.4.2]`, in one place. Fresh receipts for the release head (`task receipts`, about 25 minutes) and the apps CI come before the merge. The `SBOM` procedure of §8 has not run on a tag yet: the 0.4.2 release is its first live run. The branch history is unsigned (squash merge, signed by GitHub; #332, #333). |
 
 ---|---|
 | §1 clean machine | Run at the release commit (the stranger clone of §9). |
@@ -471,7 +471,9 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       git push origin <tag>
       # the SBOM workflow starts on the tag, creates the DRAFT release and attaches the inventory to it.
       # Take ITS run by the tag commit (the newest SBOM run can be the previous release's); empty just after the push: ask again.
-      run="$(gh run list --workflow SBOM --event push --commit <release sha> --json databaseId --jq '.[0].databaseId')"
+      gh run list --workflow SBOM --event push --commit <release sha> --json databaseId,headSha,headBranch,event,conclusion
+      # read the row before taking it: event is push, headSha is the release sha, headBranch is the tag
+      run=<its databaseId>
       gh run watch "$run" --exit-status                                                  # rc 0 only when every job ended green
       gh release view <tag> --json isDraft,assets --jq '[.isDraft, (.assets[].name)]'   # true and openaether-infra-<tag>.cdx.json
       gh release edit <tag> --notes-file notes.md --draft=false                          # the publish: nothing can be added after
@@ -480,10 +482,19 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       (0.4.2: #444, see the scan line below): then read the attach job alone, which must print `success`:
       `gh run view "$run" --json jobs --jq '.jobs[] | select(.name | startswith("Attach")) | .conclusion'`.
       Never `gh release create <tag>` without `--draft`: an immutable release takes no asset once published (infra #395).
+      If `--commit` matches nothing a few minutes after the push (that the `head_sha` of a tag-push run of an annotated
+      tag is the release commit has not been observed), list by event and tag instead and read the same columns:
+      `gh run list --workflow SBOM --event push --branch <tag> --json databaseId,headSha,headBranch,event,conclusion`.
+      The `--commit` flag was tried read-only on gh 2.46.0; no other version was tried.
       If the run never started, or its `Attach` job is red, make the draft by hand and point the workflow at it:
-      `gh release create <tag> --draft --verify-tag --notes-file notes.md`, then `gh workflow run sbom.yml -f tag=<tag>`;
-      wait for that run, check the asset as above, then publish.
-      The notes carry the release commit sha in full. A client verifies with `git verify-tag <tag>` (public key
+      `gh release create <tag> --draft --verify-tag --title <tag> --notes-file notes.md`, then `gh workflow run sbom.yml -f tag=<tag>`.
+      That run has the event `workflow_dispatch`, so the lookups above never find it: take the newest
+      `gh run list --workflow SBOM --event workflow_dispatch --limit 3 --json databaseId,headSha,headBranch,event,conclusion,createdAt`
+      row created after the dispatch. Its scan jobs run too (expected red on #444 for 0.4.2), so read its `Attach` job alone
+      as above; check the asset, then publish.
+      The notes carry the release commit sha in full: the squash-merge commit on `main` that the tag points at, not the
+      head of the pull-request branch (`check-release-tag.sh --notes` refuses notes that do not name
+      `git rev-parse <tag>^{commit}`). A client verifies with `git verify-tag <tag>` (public key
       `docs/signers/release-vps.asc`, fingerprint compared with the table) and `git rev-parse <tag>^{commit}` against the
       notes. Immutable releases are on (owner, 2026-10); `.github/workflows/release-tag.yml` repeats the check when a tag
       arrives. It is a verdict after the fact: run it before pushing.
@@ -500,12 +511,15 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       says what the inventory covers and what it does not.
       **One exception, for 0.4.2 only and for infra #444 by name:** the scan of the Flux kustomize-controller image is red
       on a CRITICAL finding whose fix has to come from upstream, and 0.4.2 may ship with it open if the notes link #444.
-      That is the lead's decision under the owner's delegation, and it is recorded in the owner-decisions file with its
-      ACTION before the tag. It is not a standing waiver: for the next release the rule above applies again, and any other
-      open issue needs its own decision.
-- [ ] `git grep -n 'RETEST-PENDIN[G]'` prints nothing (the cloud-retest marker of `CHANGELOG.md` `[0.4.2]` is replaced
-      by the audited results; the bracket keeps this line from matching itself), and the date on the `[0.4.2]` heading
-      is the day of the tag: re-confirm it then, because the cut was written before the retests ran.
+      That is the lead's decision under the owner's delegation, recorded by the lead before the tag, with its ACTION, in
+      the owner-decisions file (outside this repository, so a reader here cannot check it). It is not a standing waiver:
+      for the next release the rule above applies again, and any other open issue needs its own decision.
+- [ ] no retest marker is left, in either repository or in the notes. `git grep -n 'RETEST-PENDIN[G]'` prints nothing
+      here (the cloud-retest marker of `CHANGELOG.md` `[0.4.2]` is replaced by the audited results; the bracket keeps
+      this line from matching itself), prints nothing in OpenAether-apps either
+      (`git -C ../OpenAether-apps grep -n 'RETEST-PENDIN[G]'`: its `CHANGELOG.md` `[0.4.2]` has its own marker, and apps is
+      tagged first, so run it before the apps tag), and `grep -n 'RETEST-PENDIN[G]' notes.md` prints nothing. The date on
+      the `[0.4.2]` heading is the day of the tag: re-confirm it then, because the cut was written before the retests ran.
 - [ ] the examples and the default pin the apps tag, and it exists. OpenAether-apps
       is tagged and released first (`git ls-remote --tags
       https://github.com/dis-bzh/OpenAether-apps refs/tags/0.2.0` prints it).
