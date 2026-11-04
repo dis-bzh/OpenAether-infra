@@ -134,7 +134,7 @@ version qui le fera : **[docs/capi-bootstrap.fr.md](docs/capi-bootstrap.fr.md)**
 | **IaC** | OpenTofu 1.13.x | ✅ |
 | **OS** | Talos Linux v1.14.x (immuable) | ✅ |
 | **CNI** | Cilium 1.20.2 (WireGuard) | ✅ livré, manifeste inline — toute la plateforme de cette version |
-| **GitOps** | Flux v2.9.6 | ⬜ code présent, `deploy_flux = false` — redeviendra un choix dans une version ultérieure |
+| **GitOps** | Flux v2.10.0 | ⬜ code présent, `deploy_flux = false` — redeviendra un choix dans une version ultérieure |
 
 Tout le reste — secrets, PKI, mesh, base de données, stockage, identité,
 observabilité, policy, Cluster API — vit dans

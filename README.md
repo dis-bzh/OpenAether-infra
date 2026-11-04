@@ -128,7 +128,7 @@ deploys no CAPI** — the procedure is kept for the release that does:
 | **IaC** | OpenTofu 1.13.x | ✅ |
 | **OS** | Talos Linux v1.14.x (immutable) | ✅ |
 | **CNI** | Cilium 1.20.2 (WireGuard) | ✅ shipped, inline manifest — the whole of this release's platform |
-| **GitOps** | Flux v2.9.6 | ⬜ code present, `deploy_flux = false` — returns as a choice in a later release |
+| **GitOps** | Flux v2.10.0 | ⬜ code present, `deploy_flux = false` — returns as a choice in a later release |
 
 Everything else — secrets, PKI, mesh, database, storage, identity, observability,
 policy, Cluster API — lives in
