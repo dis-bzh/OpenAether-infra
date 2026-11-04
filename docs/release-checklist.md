@@ -1,8 +1,8 @@
-# Release checklist — 0.4.1 (a hardening patch of the resilience release)
+# Release checklist — 0.4.2 (0.4.1 plus the SBOM fix)
 
 English only: rewritten each release, and two copies would drift.
 
-What to run before tagging 0.4.1 (a hardening patch of the resilience release: the tables below are those of 0.3.0 unless a line says 0.4.0 or 0.4.1; its evidence is in `CHANGELOG.md` `[0.4.1]`) and telling anyone about it. Ordered by what
+What to run before tagging 0.4.2 (0.4.1 plus the SBOM fix, no runtime change: the tables below are those of 0.3.0 unless a line says 0.4.0, 0.4.1 or 0.4.2; its evidence is in `CHANGELOG.md` `[0.4.2]`, and `[0.4.1]` for the code) and telling anyone about it. Ordered by what
 fails cheapest. **Stop at the first red** — every later step assumes the earlier
 ones held.
 
@@ -25,7 +25,7 @@ completion.
 | §4–§6 clouds | Labs 11 to 15c (2026-10-16 to 2026-10-18): Scaleway, OVH, Outscale, each once; see the `[0.3.0]` section of `CHANGELOG.md` for what ran and what did not. Run again with the **tags** pinned before tagging. |
 | §7 upgrade, growth, removal | Scaleway lifecycle from 0.2.1 + apps 0.2.0 (lab 15c); the etcd restore and real node replacement through the roll were **not run**. |
 | §8 mechanics, §9 stranger | To run at the cut. |
-| Before the tag | 0.4.1: `git_ref` of the tfvars examples and of `variables.tf` points at `refs/tags/0.4.1` of OpenAether-apps (0.4.0 pinned `refs/tags/0.4.0`), which must exist first (released first), at the apps commit the third proof lab ran, d028aed, plus documentation-only commits: against the second proof lab's apps 11bd8fd, d028aed carries documentation and the text edits that are not documentation, which the notes list: three comment or docstring edits (a Zitadel HelmRelease comment, the comment of the Gateway DENY policy, the docstring of `OpenAether-apps/scripts/zitadel-apply-policies.py`), the `backup-verify` message in `apps/base/backup/databases/verify/barman_check.py` (and a `newest` variable in its FAIL branch only; the script ran at d028aed on its PASS path, the message of its FAIL path never ran on a cluster) and the cases added to its mocked test `OpenAether-apps/scripts/dev/test-backup-verify.sh`; `git diff 11bd8fd d028aed` lists them, and `git diff --stat d028aed <apps release head>` must show documentation only at the cut. The labs followed the apps BRANCH, not the tag: **the move from `refs/tags/0.4.1` was not shown**, and cannot be before the tag exists. The infra proof is infra 67be1e8 on Scaleway (3 CP + 6 W: the move from the 0.4.0 tags at the lab-proven heads, with the upgraded cluster read; the DR chain at 303851b); what came after it is documentation and the `cluster-security` 1.6 fix (mocked only, never run on a cluster): fresh receipts for the release head (`task receipts`, about 25 minutes) and the apps CI come before the merge. The notes carry the third proof lab's rows by the rule `CHANGELOG.md` states, durations NOMINAL unless said: WORSE for the install, 20 min 25 s INCIDENT, and the first day after it, +35 s (both at the 0.4.0 tags, so not a 0.4.1 regression), and for 41 of 41 after rc 0 of the move, +26 s; at the edge, resolution about 6 s, for `PLAN_ONLY=1`, +10 s, and 41 of 41 after the ref move, +21 s; and what is not shown (`CHANGELOG.md`, [0.4.1]). The branch history is unsigned (squash merge, signed by GitHub; #332, #333). |
+| Before the tag | 0.4.2: `git_ref` of the tfvars examples and of `variables.tf` points at `refs/tags/0.4.2` of OpenAether-apps (0.4.1 pinned `refs/tags/0.4.1`), which must exist first (released first). The apps release head is the head the 0.4.2 cloud retests ran plus CI- and documentation-only commits (the apps `SBOM` workflow, its `release` skill, `docs/supply-chain.md`, the CHANGELOG and the version lines): `git diff --stat <apps head the retests ran> <apps release head>` must show those and nothing else at the cut, and so must `git diff --stat 0.4.1 <apps release head>` (no apps runtime change since 0.4.1). Here `git diff --stat 0.4.1 <infra release head>` shows the same kinds plus the apps pin (the `git_ref` default of `variables.tf`, the twelve examples, one tftest line): no script, no resource. The retests and their results are written in `CHANGELOG.md` `[0.4.2]`, in one place. Fresh receipts for the release head (`task receipts`, about 25 minutes) and the apps CI come before the merge. The `SBOM` procedure of §8 has not run on a tag yet: the 0.4.2 release is its first live run. The branch history is unsigned (squash merge, signed by GitHub; #332, #333). |
 
 ---|---|
 | §1 clean machine | Run at the release commit (the stranger clone of §9). |
@@ -424,7 +424,7 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       out, including what you chose not to fix (`CLAUDE.md`: an audit is not a
       PR). Never write a closing keyword before an issue number in a commit, PR
       or the notes: GitHub reads prose, and an open issue was closed that way.
-- [ ] `CHANGELOG.md`: `[0.4.1]` carries its date and anything merged since
+- [ ] `CHANGELOG.md`: `[0.4.2]` carries its date and anything merged since
       the text was written is folded into it (`[Unreleased]` stays empty), in the
       voice of 0.1.0: what it claims **and** what it does not, each with its rung,
       no hand-typed counts. Upgrade notes: unset pins inherit the new default and
@@ -475,6 +475,9 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       gh release edit <tag> --notes-file notes.md --draft=false                          # the publish: nothing can be added after
       ```
       Never `gh release create <tag>` without `--draft`: an immutable release takes no asset once published (infra #395).
+      If the `SBOM` run on the tag is red or never started, make the draft by hand and point the workflow at it:
+      `gh release create <tag> --draft --verify-tag --notes-file notes.md`, then `gh workflow run sbom.yml -f tag=<tag>`;
+      wait for that run, check the asset as above, then publish.
       The notes carry the release commit sha in full. A client verifies with `git verify-tag <tag>` (public key
       `docs/signers/release-vps.asc`, fingerprint compared with the table) and `git rev-parse <tag>^{commit}` against the
       notes. Immutable releases are on (owner, 2026-10); `.github/workflows/release-tag.yml` repeats the check when a tag
@@ -488,8 +491,9 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
 - [ ] the release carries `openaether-infra-<tag>.cdx.json` (the `SBOM` workflow attaches it to the draft when the tag is
       pushed, and its `release-has-asset` job goes red when a published release lacks it; `gh release view <tag> --json assets`)
       and the SBOM run's image scans on the tag are green
-      or each red one is in `.vex/openaether-infra.openvex.json`. `docs/supply-chain.md` says what
-      the inventory covers and what it does not.
+      or each red one is in `.vex/openaether-infra.openvex.json` or is an open issue the notes link
+      (0.4.2: infra #444, the Flux kustomize-controller image, red until upstream fixes it). `docs/supply-chain.md`
+      says what the inventory covers and what it does not.
 - [ ] the examples and the default pin the apps tag, and it exists. OpenAether-apps
       is tagged and released first (`git ls-remote --tags
       https://github.com/dis-bzh/OpenAether-apps refs/tags/0.2.0` prints it).

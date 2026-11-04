@@ -14,9 +14,33 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-11-04
+
+0.4.2 is the 0.4.1 release plus **one fix**: the `SBOM` workflow attaches the inventory to a DRAFT release (#395), so a release carries `openaether-infra-<tag>.cdx.json` again. **No runtime change since 0.4.1.** The diff from the 0.4.1 tag is the workflow, the `release` skill, the release checklist, `docs/supply-chain.md` and its French twin, `docs/status.md`, the two READMEs and this file, and the move of the apps pin: the `git_ref` default and the twelve `envs/*.tfvars.example` now pin OpenAether-apps `refs/tags/0.4.2` (they pinned `refs/tags/0.4.1`), and the tftest assertion on the rendered GitRepository follows. No script, no resource and no module logic changed (the default of `git_ref` is the one value that moved), and no Talos, Kubernetes or provider version. It pairs with OpenAether-apps 0.4.2, which must be tagged first and differs from apps 0.4.1 by CI and documentation only (the apps half is in its own CHANGELOG).
+
+**Upgrade path: 0.4.1 to 0.4.2 only** (previous release, the policy before 1.0.0). Only the apps ref moves, and there is nothing new to run by hand: no knob, no migration, no node roll (the Talos and Kubernetes pins are the same in 0.4.1 and 0.4.2). The steps are those of `docs/upgrade.md`, "From 0.4.0 to 0.4.1", with the numbers moved by one: check out the tag, `git_ref = "refs/tags/0.4.2"` in the tfvars (the examples carry it; a tfvars that leaves `git_ref` unset inherits the new default), `task cluster-up PROVIDER=… ROLE=…` with the plan read, then `task cluster-verify`. What the move looks like on a cluster is the cloud retest below.
+
+RETEST-PENDING: Cloud retest: pending at the time of writing. Planned: a Scaleway move from the 0.4.1 tags to the 0.4.2 heads, and an OVH install and move. This line is replaced by the audited results before the tag.
+
+**What is proven for the fix, and what is not (the rung is mocked and GitHub, not a cluster):**
+
+- **Proven:** `actionlint` and `yamllint` on the workflow, green. The commands of the upload step replayed against GitHub with a throwaway DRAFT release (the asset attached) and with the published 0.4.1 release (the upload refused).
+- **Not run yet:** the workflow itself on a pushed tag, so the trigger on `push: tags`, the "no release yet" path (the workflow creates the draft) and the `release-has-asset` job (it needs a publish event) have never run. **The 0.4.2 release is the first live proof of all three**, and it is not proven until it has gone through. If the run on the tag is red or does not start, the documented fallback (`docs/release-checklist.md` §8) is `gh release create <tag> --draft --verify-tag --notes-file notes.md`, then `gh workflow run sbom.yml -f tag=<tag>`; the release is published once the asset is there, and the failure is an issue.
+
+**Known open items (stated, not hidden):**
+
+- The weekly `SBOM` scan is red on the Flux kustomize-controller image (infra #444): a CRITICAL finding whose fix has to come from upstream. The pins are those of 0.4.1, so the scan of the 0.4.2 tag is expected to show it too. The scan jobs are separate from the attach job: a red scan does not stop the inventory from being attached.
+- OpenAether-apps: the weekly scan is red on the Forgejo image (apps #179).
+- Everything `[0.4.1]` lists as not proven or not fixed is still so: this release changes none of it.
+
 ### Fixed
 
-- **The `SBOM` workflow attaches the inventory to a DRAFT release** (#395). Immutable releases (on since 2026-10) take no asset once published: the old `release: published` trigger failed with "Cannot upload assets to an immutable release", and 0.3.2, 0.4.0 and 0.4.1 went out without `openaether-infra-<tag>.cdx.json`. The workflow now starts on the pushed tag, creates the release as a draft when there is none, attaches the inventory, and fails with a clear message on an already published release; on publish a job only checks that the asset is there (red when it is not). Procedure (`docs/release-checklist.md`, `release` skill): push the signed tag, wait for the `SBOM` run, `gh release edit <tag> --notes-file notes.md --draft=false`. Rung: actionlint and yamllint; the "existing draft" path is read on GitHub before the merge (see the PR), the "no release yet" path first runs at the next release tag. The three released versions stay without the file: `python3 scripts/dev/gen-sbom.py --version <tag>` on the tag rebuilds it.
+- **The `SBOM` workflow attaches the inventory to a DRAFT release** (#395). Immutable releases (on since 2026-10) take no asset once published: the old `release: published` trigger failed with "Cannot upload assets to an immutable release", and 0.3.2, 0.4.0 and 0.4.1 went out without `openaether-infra-<tag>.cdx.json`. The workflow now starts on the pushed tag (`push: tags`), creates the release as a draft when there is none (or reuses yours), attaches the inventory to it, and fails with a clear message on an already published release. When the release is published, a job (`release-has-asset`) only checks that the asset is there and goes red, with the way to rebuild it, when it is not. **New procedure** (`docs/release-checklist.md` §8, the `release` skill): push the signed tag, wait for the `SBOM` run, check the asset, then `gh release edit <tag> --notes-file notes.md --draft=false`. Never `gh release create` without `--draft`. Rung: see "What is proven for the fix" above.
+- **The three missing inventories cannot be attached; they can be rebuilt.** 0.3.2, 0.4.0 and 0.4.1 are published and immutable, so their release stays without the file. `python3 scripts/dev/gen-sbom.py --version <tag>` on a checkout of the tag rebuilds it: run offline on an export of each of the three tags, it ended rc 0 and wrote a CycloneDX 1.5 file (48, 53 and 53 components for 0.3.2, 0.4.0 and 0.4.1). Mocked rung (the generator, no cloud).
+
+### Documented (0.4.2)
+
+- **`docs/release-checklist.md`, `docs/supply-chain.md` (and its French twin) and the `release` skill** describe the procedure above and the alarm; the checklist's scan line now accepts a red image scan that is an open issue the notes link (0.4.2: #444), next to a VEX statement. Rung: mocked (the doc checks).
 
 ## [0.4.1] — 2026-11-03
 
