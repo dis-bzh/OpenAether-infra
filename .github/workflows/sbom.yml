@@ -1,7 +1,11 @@
-# Weekly and on every published release: an inventory of what this repository pins and ships (CycloneDX 1.5,
+# Weekly and on every pushed release tag: an inventory of what this repository pins and ships (CycloneDX 1.5,
 # scripts/dev/gen-sbom.py), and a Trivy scan of the bootstrap container images (ANSSI SBOM25-1/-2/-3,
 # SSDLC CICD-AIP-01b).
-# The inventory is attached to the release as openaether-infra-<tag>.cdx.json. A CRITICAL finding with a fix upstream
+# The inventory is attached to the release as openaether-infra-<tag>.cdx.json, to a DRAFT release: immutable releases
+# (on since 2026-10) refuse every upload once a release is published, so the asset has to be there BEFORE the publish
+# (infra #395: 0.3.2, 0.4.0 and 0.4.1 went out without it). Order: push the signed tag, this workflow creates the draft
+# (or reuses yours) and attaches the file, the owner edits the notes and publishes (docs/release-checklist.md). On the
+# publish event the same workflow only checks that the asset is there. A CRITICAL finding with a fix upstream
 # fails the scan job; an accepted one is recorded in .vex/openaether-infra.openvex.json (docs/supply-chain.md).
 # Never on a pull request, so it joins no required check; no cloud credential, only anonymous registry reads.
 name: SBOM
@@ -10,9 +14,16 @@ on:
   schedule:
     # Off the hour: a shared runner pool is busiest at :00.
     - cron: "11 5 * * 2"
+  push:
+    tags: ["[0-9]*"]
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "An existing tag whose DRAFT release gets the inventory (empty: a plain run on the branch)"
+        required: false
+        default: ""
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -24,7 +35,7 @@ permissions:
 jobs:
   inventory:
     name: Inventory
-    if: github.repository == 'dis-bzh/OpenAether-infra'
+    if: github.repository == 'dis-bzh/OpenAether-infra' && github.event_name != 'release'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -33,10 +44,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           persist-credentials: false
+          ref: ${{ inputs.tag || '' }}
 
       - name: Generate the CycloneDX inventory
         env:
-          REF_NAME: ${{ github.ref_name }}
+          REF_NAME: ${{ inputs.tag || github.ref_name }}
         run: python3 -I scripts/dev/gen-sbom.py --version "$REF_NAME" --output sbom.cdx.json
 
       - name: Keep it as a run artifact
@@ -55,31 +67,81 @@ jobs:
           echo "images=${list}" >>"$GITHUB_OUTPUT"
 
   release-asset:
-    name: Attach to the release
+    name: Attach to a draft release
     needs: inventory
-    if: github.event_name == 'release'
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      contents: write  # upload one asset to the release being published, nothing else
+      contents: write  # create the DRAFT release when there is none, upload one asset to it, nothing else
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           name: sbom
 
-      - name: Upload, named by the tag
+      - name: Upload to the draft, named by the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          file="openaether-infra-${TAG}.cdx.json"
+          mv sbom.cdx.json "$file"
+          # The by-tag endpoint does not return drafts: list the releases (drafts included) and pick the tag.
+          releases="$(gh api "repos/${REPO}/releases" --paginate)"
+          # shellcheck disable=SC2016  # $t is a jq variable, not a shell one
+          pick='[.[] | select(.tag_name == $t) | .draft | tostring] | first // "none"'
+          state="$(jq -r --arg t "$TAG" "$pick" <<<"$releases")"
+          case "$state" in
+            none)
+              gh release create "$TAG" --repo "$REPO" --draft --verify-tag --title "$TAG" \
+                --notes "Draft by the SBOM workflow. Write the notes, then: gh release edit $TAG --draft=false"
+              ;;
+            true) ;;
+            false)
+              msg="the release of ${TAG} is already published, and an immutable release takes no more assets."
+              msg="$msg The SBOM goes on a DRAFT: create the release with --draft (or let this workflow create it)"
+              echo "::error::$msg before publishing (docs/release-checklist.md)."
+              exit 1
+              ;;
+            *) echo "::error::unexpected isDraft value: $state"; exit 1 ;;
+          esac
+          gh release upload "$TAG" "$file" --clobber --repo "$REPO"
+
+  release-has-asset:
+    name: The published release carries the SBOM
+    if: github.repository == 'dis-bzh/OpenAether-infra' && github.event_name == 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check the asset
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          mv sbom.cdx.json "openaether-infra-${TAG}.cdx.json"
-          gh release upload "$TAG" "openaether-infra-${TAG}.cdx.json" --clobber --repo "$REPO"
+          want="openaether-infra-${TAG}.cdx.json"
+          have="$(gh release view "$TAG" --repo "$REPO" --json assets --jq '[.assets[].name] | join(" ")')"
+          case " $have " in
+            *" $want "*) echo "ok: $want is attached" ;;
+            *)
+              msg="the published release $TAG has no $want (assets: ${have:-none}); an immutable release takes no more."
+              msg="$msg Rebuild it from the tag: gen-sbom.py --version $TAG (docs/release-checklist.md)."
+              echo "::error::$msg"
+              exit 1
+              ;;
+          esac
 
   scan-images:
     name: Scan ${{ matrix.image }}
     needs: inventory
+    # Not on the publish event: inventory is skipped there, so there is no image list to scan. A skipped need would
+    # skip this job anyway; the condition says it out loud. Not run on GitHub yet (docs/release-checklist.md).
+    if: github.event_name != 'release'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:

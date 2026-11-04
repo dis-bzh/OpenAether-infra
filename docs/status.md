@@ -7,7 +7,7 @@ to pick up.
 Open work is **not** here — it is in the GitHub issues, each naming what closes it
 and the rung it needs. This file answers "what is true today", not "what is left".
 
-**The current release is 0.4.1, a hardening patch of the 0.4.0 resilience release (pairs with OpenAether-apps 0.4.1): see `[0.4.1]` in `CHANGELOG.md` for what was and was not run; every cluster result of 0.4.1 is Scaleway, 3 CP + 6 W. Nothing else in this file changes with it.**
+**The current release is 0.4.2, the 0.4.1 release plus the SBOM fix (pairs with OpenAether-apps 0.4.2): see `[0.4.2]` in `CHANGELOG.md` for what was and was not run. No script, resource or module logic changed since 0.4.1; the one behaviour that did change is the `git_ref` default, which now follows apps 0.4.2 (a tfvars that leaves it unset inherits it). Every cluster result of 0.4.1 is Scaleway, 3 CP + 6 W (`[0.4.1]`), and `[0.4.2]` says what its own retests added. Nothing else in this file changes with it.**
 
 **0.3.0 (released 2026-10-19) is described by its `[0.3.0]` section of `CHANGELOG.md`: hardening options (all off by default), a 50 GB default system disk, and labs 11 to 15c on Scaleway, OVH and Outscale (2026-10-16 to 2026-10-18), each once. The table below is the older 0.2.0 measurement and is not re-measured by those labs.**
 

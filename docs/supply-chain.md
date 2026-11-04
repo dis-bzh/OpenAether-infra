@@ -65,9 +65,13 @@ between the download and the conversion in the three local-exec modules.
   the Flux tags weekly.
 - **SBOM:** `scripts/dev/gen-sbom.py` writes a CycloneDX 1.5 inventory of the tool pins
   (`# renovate:` anchors), the locked providers, the bootstrap images and the Factory images.
-  The `SBOM` workflow runs it weekly and on every published release, attaches it as
-  `openaether-infra-<tag>.cdx.json`, and scans each bootstrap image with Trivy (CRITICAL with a
-  fix upstream fails).
+  The `SBOM` workflow runs it weekly and on every pushed release tag, attaches it as
+  `openaether-infra-<tag>.cdx.json` to the DRAFT release (it creates the draft when there is none:
+  an immutable release takes no asset once published), and scans each bootstrap image with Trivy
+  (CRITICAL with a fix upstream fails). When the release is published, the same workflow only checks
+  that the asset is there. The releases 0.3.2, 0.4.0 and 0.4.1 went out without it (published before
+  the file could be added); `python3 scripts/dev/gen-sbom.py --version <tag>` on a checkout of the tag
+  rebuilds it.
 - **VEX:** a finding that does not apply is recorded as an OpenVEX statement in
   `.vex/openaether-infra.openvex.json` (a purl per product, `not_affected` with a
   justification); the scan reads the file once it has a statement.
