@@ -469,13 +469,18 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       git tag -s -u 1D5895FDC14F5BAD6D1B170B5CA26229559044A2 -m "OpenAether-infra <tag>" <tag> <release sha>
       ./scripts/dev/check-release-tag.sh <tag> --notes notes.md    # annotated, signer in the table, notes name the sha
       git push origin <tag>
-      # the SBOM workflow starts on the tag, creates the DRAFT release and attaches the inventory to it:
-      gh run watch "$(gh run list --workflow SBOM --event push --limit 1 --json databaseId --jq '.[0].databaseId')"
+      # the SBOM workflow starts on the tag, creates the DRAFT release and attaches the inventory to it.
+      # Take ITS run by the tag commit (the newest SBOM run can be the previous release's); empty just after the push: ask again.
+      run="$(gh run list --workflow SBOM --event push --commit <release sha> --json databaseId --jq '.[0].databaseId')"
+      gh run watch "$run" --exit-status                                                  # rc 0 only when every job ended green
       gh release view <tag> --json isDraft,assets --jq '[.isDraft, (.assets[].name)]'   # true and openaether-infra-<tag>.cdx.json
       gh release edit <tag> --notes-file notes.md --draft=false                          # the publish: nothing can be added after
       ```
+      Read the run's conclusion, do not assume it. A red `Scan …` job makes the whole run red and `--exit-status` ends rc 1
+      (0.4.2: #444, see the scan line below): then read the attach job alone, which must print `success`:
+      `gh run view "$run" --json jobs --jq '.jobs[] | select(.name | startswith("Attach")) | .conclusion'`.
       Never `gh release create <tag>` without `--draft`: an immutable release takes no asset once published (infra #395).
-      If the `SBOM` run on the tag is red or never started, make the draft by hand and point the workflow at it:
+      If the run never started, or its `Attach` job is red, make the draft by hand and point the workflow at it:
       `gh release create <tag> --draft --verify-tag --notes-file notes.md`, then `gh workflow run sbom.yml -f tag=<tag>`;
       wait for that run, check the asset as above, then publish.
       The notes carry the release commit sha in full. A client verifies with `git verify-tag <tag>` (public key
@@ -491,9 +496,16 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
 - [ ] the release carries `openaether-infra-<tag>.cdx.json` (the `SBOM` workflow attaches it to the draft when the tag is
       pushed, and its `release-has-asset` job goes red when a published release lacks it; `gh release view <tag> --json assets`)
       and the SBOM run's image scans on the tag are green
-      or each red one is in `.vex/openaether-infra.openvex.json` or is an open issue the notes link
-      (0.4.2: infra #444, the Flux kustomize-controller image, red until upstream fixes it). `docs/supply-chain.md`
+      or each red one is in `.vex/openaether-infra.openvex.json`. `docs/supply-chain.md`
       says what the inventory covers and what it does not.
+      **One exception, for 0.4.2 only and for infra #444 by name:** the scan of the Flux kustomize-controller image is red
+      on a CRITICAL finding whose fix has to come from upstream, and 0.4.2 may ship with it open if the notes link #444.
+      That is the lead's decision under the owner's delegation, and it is recorded in the owner-decisions file with its
+      ACTION before the tag. It is not a standing waiver: for the next release the rule above applies again, and any other
+      open issue needs its own decision.
+- [ ] `git grep -n 'RETEST-PENDIN[G]'` prints nothing (the cloud-retest marker of `CHANGELOG.md` `[0.4.2]` is replaced
+      by the audited results; the bracket keeps this line from matching itself), and the date on the `[0.4.2]` heading
+      is the day of the tag: re-confirm it then, because the cut was written before the retests ran.
 - [ ] the examples and the default pin the apps tag, and it exists. OpenAether-apps
       is tagged and released first (`git ls-remote --tags
       https://github.com/dis-bzh/OpenAether-apps refs/tags/0.2.0` prints it).

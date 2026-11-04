@@ -111,7 +111,7 @@ jobs:
 
   release-has-asset:
     name: The published release carries the SBOM
-    if: github.event_name == 'release'
+    if: github.repository == 'dis-bzh/OpenAether-infra' && github.event_name == 'release'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -139,6 +139,9 @@ jobs:
   scan-images:
     name: Scan ${{ matrix.image }}
     needs: inventory
+    # Not on the publish event: inventory is skipped there, and a matrix built from the output of a skipped job
+    # (an empty string for fromJSON) must not even be evaluated.
+    if: github.event_name != 'release'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
