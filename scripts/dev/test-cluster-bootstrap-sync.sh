@@ -37,6 +37,14 @@ oa_artifact_pins cilium "$M/cilium.yaml" >"$W/cilium.target"
 oa_artifact_pins cilium "$M/cilium-hubble-drops.yaml" >"$W/hubble.target"
 [ "$(wc -l <"$W/flux.target")" = 7 ] && [ "$(wc -l <"$W/cilium.target")" = 2 ] || { echo "✗ the committed artifacts do not give 7 + 2 pins" >&2; exit 1; }
 
+# The versions a case runs against are derived from the committed pin, never written out: v1.8.5 meant "one minor behind" until
+# Flux 2.10 moved the pin to 1.10 (the first two-digit minor), when it silently meant two and 13 cases went red.
+tagof() { awk -v n="$1" '$2 == n { print $3 }' "$W/flux.target"; }
+behind() { local ma mi; IFS=. read -r ma mi _ <<<"$(tagof "$1" | sed 's/^v//')"; echo "v${ma}.$((mi - $2)).$3"; }  # <controller> <minors> <patch>
+ahead() { local ma mi pa; IFS=. read -r ma mi pa <<<"$(tagof "$1" | sed 's/^v//')"; echo "v${ma}.${mi}.$((pa + $2))"; }  # <controller> <patches>
+B1K="$(behind kustomize-controller 1 5)"; B1S="$(behind source-controller 1 5)"; B2K="$(behind kustomize-controller 2 4)"; AHS="$(ahead source-controller 3)"
+case "$B1K$B1S$B2K$AHS" in *[!0-9v.]*|"") echo "✗ cannot derive the fixture versions from the pin" >&2; exit 1 ;; esac
+
 cat >"$W/stub" <<STUB
 #!/usr/bin/env bash
 echo "kubectl \$*" >>"$W/calls.log"
@@ -90,9 +98,9 @@ reset; run; rc=$?
 [ -s "$W/kubeconfig.seen" ] && ! grep -qv "^$C/kubeconfig\$" "$W/kubeconfig.seen" && ok "the cluster directory's kubeconfig is used" || bad "kubeconfig seen"
 
 echo "--- Flux one minor behind: the dry run shows it and writes nothing; --apply moves it and re-reads ---"
-reset; setlive flux.live kustomize-controller v1.8.5
+reset; setlive flux.live kustomize-controller "$B1K"
 run; rc=$?
-[ "$rc" = 3 ] && said "kustomize-controller" && said "v1.8.5" && said "NOTHING was written" && [ "$(writes)" = 0 ] && ok "dry run: exit 3, the difference shown, no write" || bad "rc $rc: $(cat "$W/out" "$W/err")"
+[ "$rc" = 3 ] && said "kustomize-controller" && said "$B1K" && said "NOTHING was written" && [ "$(writes)" = 0 ] && ok "dry run: exit 3, the difference shown, no write" || bad "rc $rc: $(cat "$W/out" "$W/err")"
 said "server-side dry run: the API server accepts" && [ "$(calls 'dry-run=server')" = 1 ] && ok "the server-side dry run of the manifest ran" || bad "no server dry run"
 run --apply; rc=$?
 [ "$rc" = 0 ] && [ "$(writes)" = 1 ] && [ "$(calls 'rollout status')" = 7 ] && said "run the pinned versions" && ok "applied once, 7 rollouts waited for, re-read at the pin" || bad "rc $rc writes $(writes) rollouts $(calls 'rollout status'): $(cat "$W/err")"
@@ -101,7 +109,7 @@ run --apply; rc=$?
 [ "$rc" = 0 ] && [ "$(writes)" = 1 ] && ok "idempotent: the second run writes nothing" || bad "second run rc $rc"
 
 echo "--- mutation: Flux AHEAD of the pin is a difference, a downgrade, refused ---"
-reset; setlive flux.live source-controller v1.9.9
+reset; setlive flux.live source-controller "$AHS"
 run; rc=$?
 [ "$rc" = 3 ] && said "DOWNGRADE" && said "would be REFUSED" && ok "dry run: exit 3, says the apply would be refused as a downgrade" || bad "rc $rc"
 run --apply; rc=$?
@@ -111,10 +119,10 @@ run --apply; rc=$?
 [ "$rc" = 2 ] && [ "$(writes)" = 0 ] && ok "a higher major is a downgrade too" || bad "rc $rc"
 
 echo "--- more than one minor at a time is refused ---"
-reset; setlive flux.live kustomize-controller v1.7.4
+reset; setlive flux.live kustomize-controller "$B2K"
 run --apply; rc=$?
 [ "$rc" = 2 ] && [ "$(writes)" = 0 ] && said "more than ONE minor" && ok "two minors behind: refused (exit 2), nothing written" || bad "rc $rc writes $(writes)"
-reset; setlive flux.live kustomize-controller v1.8.0; setlive flux.live source-controller v1.8.0
+reset; setlive flux.live kustomize-controller "$B1K"; setlive flux.live source-controller "$B1S"
 run --apply; rc=$?
 [ "$rc" = 0 ] && ok "(control) one minor behind on two controllers is allowed" || bad "control rc $rc"
 
@@ -122,22 +130,22 @@ echo "--- other Flux gates ---"
 reset; echo "flux old-controller v0.1.0" >>"$FX/flux.live"
 run --apply; rc=$?
 [ "$rc" = 2 ] && [ "$(writes)" = 0 ] && said "does not prune" && ok "a controller the artifact no longer has: refused, no prune" || bad "rc $rc"
-reset; droplive flux.live source-watcher; setlive flux.live source-controller v1.8.5
+reset; droplive flux.live source-watcher; setlive flux.live source-controller "$B1S"
 run --apply; rc=$?
 [ "$rc" = 0 ] && [ "$(writes)" = 1 ] && ok "a controller that is new in the artifact (not running yet) does not block" || bad "rc $rc: $(cat "$W/err")"
-reset; setlive flux.live source-controller v1.8.5; : >"$FX/rollout.rc"
+reset; setlive flux.live source-controller "$B1S"; : >"$FX/rollout.rc"
 run --apply; rc=$?
 [ "$rc" = 1 ] && said "did not finish rolling out" && ok "a rollout that times out fails (exit 1) naming the Deployment" || bad "rc $rc"
-reset; setlive flux.live source-controller v1.8.5; : >"$FX/noop-apply"
+reset; setlive flux.live source-controller "$B1S"; : >"$FX/noop-apply"
 run --apply; rc=$?
 [ "$rc" = 1 ] && said "still differ from the pin" && ok "an apply that did not reach the pin is caught by the re-read" || bad "rc $rc"
-reset; setlive flux.live source-controller v1.8.5; : >"$FX/apply.rc"
+reset; setlive flux.live source-controller "$B1S"; : >"$FX/apply.rc"
 run --apply; rc=$?
 [ "$rc" = 1 ] && said "apply refused" && ok "a refused apply fails (exit 1)" || bad "rc $rc"
 
 echo "--- never during a Talos or Kubernetes roll ---"
 roll_case() { # <label> <setup>
-  reset; setlive flux.live source-controller v1.8.5; eval "$2"
+  reset; setlive flux.live source-controller "$B1S"; eval "$2"
   run --apply; rc=$?
   [ "$rc" = 2 ] && [ "$(writes)" = 0 ] && ok "$1: refused (exit 2), nothing written" || bad "$1: rc $rc writes $(writes): $(cat "$W/err")"
 }
@@ -147,7 +155,7 @@ roll_case "Talos mixed across nodes" "printf 'v1.14.3\nv1.14.4\n' >$FX/talos.liv
 roll_case "Kubernetes mixed across nodes" "printf 'v1.37.0\nv1.37.1\n' >$FX/k8s.live"
 roll_case "Talos behind the pin (roll pending)" "printf 'v1.14.2\n' >$FX/talos.live"
 roll_case "Kubernetes behind the pin (roll pending)" "printf 'v1.36.3\nv1.36.3\n' >$FX/k8s.live"
-reset; setlive flux.live source-controller v1.8.5; : >"$FX/api.rc"; run --apply; rc=$?
+reset; setlive flux.live source-controller "$B1S"; : >"$FX/api.rc"; run --apply; rc=$?
 [ "$rc" = 1 ] && [ "$(writes)" = 0 ] && ok "API unreachable: exit 1, nothing written" || bad "rc $rc"
 
 echo "--- Cilium: compared, never applied ---"
@@ -161,12 +169,12 @@ run --apply --component cilium; rc=$?
 reset; setlive cilium.live cilium v1.21.0
 run; rc=$?
 [ "$rc" = 3 ] && said "v1.21.0" && ok "Cilium AHEAD of the pin is a difference too" || bad "rc $rc"
-reset; setlive cilium.live cilium-operator v1.19.0; setlive flux.live source-controller v1.8.5
+reset; setlive cilium.live cilium-operator v1.19.0; setlive flux.live source-controller "$B1S"
 run --apply; rc=$?
 [ "$rc" = 5 ] && [ "$(writes)" = 1 ] && said "run the pinned versions" && said "Cilium differs from the pin and was NOT changed" && ok "both differ: Flux is moved, Cilium is reported unchanged, exit 5 (never 0)" || bad "rc $rc writes $(writes)"
 
 echo "--- the pins come from the committed artifact, checked against the lock ---"
-reset; sed -i 's#ghcr.io/fluxcd/source-controller:v1.9.6#ghcr.io/fluxcd/source-controller:v1.9.7#' "$M/flux-install.yaml"
+reset; sed -i "s#ghcr.io/fluxcd/source-controller:$(tagof source-controller)#ghcr.io/fluxcd/source-controller:${AHS}#" "$M/flux-install.yaml"
 run --apply; rc=$?
 [ "$rc" = 1 ] && [ "$(writes)" = 0 ] && said "does not match upstream-artifacts.lock" && ok "an artifact that does not match the lock is neither compared nor applied" || bad "rc $rc"
 reset; printf 'cilium_hubble_drop_log = true\n' >>"$TFV"; setlive cilium.live cilium v1.19.5
