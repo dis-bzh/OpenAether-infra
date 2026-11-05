@@ -14,6 +14,12 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ## [Unreleased]
 
+### Changed
+
+- **Kubernetes v1.37.1 → v1.37.2** (Cléa #91, probed green in a bare container, released 2026-10-28): the default `kubernetes_version` of the `cluster` root and of the local Docker lane, and `KUBECTL_VERSION` in `scripts/setup.sh`.
+  This moves the default pin of new clusters; a running cluster only moves when its owner runs `task cluster-upgrade`. Left out: Talos v1.14.5, flux2 v2.10.0 (in the 0.4.3 draft), plumber v0.7.18, aws-cli 2.39.3 and checkov 3.4.3 (not probed or too young),
+  cilium 1.20.4 and feint v0.14.0 (probe failed). Rung: mocked.
+
 ## [0.4.2] — 2026-11-04
 
 0.4.2 is the 0.4.1 release plus **one fix**: the `SBOM` workflow attaches the inventory to a DRAFT release (#395), so a release carries `openaether-infra-<tag>.cdx.json` again. **No runtime change since 0.4.1.** The diff from the 0.4.1 tag is the workflow, the `release` skill, the release checklist, `docs/supply-chain.md` and its French twin, `docs/status.md`, `docs/upgrade.md` and its French twin (a short "From 0.4.1 to 0.4.2"), the two READMEs and this file, and the move of the apps pin: the `git_ref` default and the twelve `envs/*.tfvars.example` now pin OpenAether-apps `refs/tags/0.4.2` (they pinned `refs/tags/0.4.1`), and the tftest assertion on the rendered GitRepository follows. No script, no resource and no module logic changed (the default of `git_ref` is the one value that moved), and no Talos, Kubernetes or provider version. It pairs with OpenAether-apps 0.4.2, which must be tagged first and differs from apps 0.4.1 by CI, documentation and one VEX data file, `.vex/openaether-apps.openvex.json`, which Trivy and the CI check read and no cluster does (eight files in all, listed in `docs/release-checklist.md`; the apps half is in its own CHANGELOG).
