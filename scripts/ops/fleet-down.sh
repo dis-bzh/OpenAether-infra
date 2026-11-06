@@ -334,7 +334,7 @@ if [ "$FAILED" -eq 0 ]; then
         printf '%s\n' "$VERIFY_OUT" | sed 's/^/    /' >&2
         printf '\n✗ fleet-down INCOMPLETE: the destroy reported success but %s still holds the resources above (billing may continue).\n' "$PROVIDER" >&2
         printf '  Remove them: python3 scripts/ops/purge-orphans/%s.py            # dry run, WHOLE ACCOUNT\n' "$PROVIDER" >&2
-        printf '               python3 scripts/ops/purge-orphans/%s.py --apply     # when nothing else lives there\n' "$PROVIDER" >&2
+        printf '               python3 scripts/ops/purge-orphans/%s.py --apply --project-id=<the id the dry run prints>   # when nothing else lives there\n' "$PROVIDER" >&2
         printf '  A resource the provider itself cannot delete (infra #43) is skipped with OA_CLEAN_IGNORE=<id,id>.\n' >&2
         exit 1 ;;
       *) warn "the provider side could NOT be verified (exit ${vrc}): ${VERIFY_OUT}" ;;

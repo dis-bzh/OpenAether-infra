@@ -1,13 +1,36 @@
 #!/usr/bin/env python3
 """Purges ALL OVH project resources (servers, LBs, FIPs, routers, networks,
 security groups) — whole-account, no name filtering. See README.md.
-Usage: purge-orphans-ovh.py [--apply]   (dry-run by default)"""
+Usage: purge-orphans-ovh.py [--apply --project-id=<the id it prints>]   (dry-run by default; --apply needs the id)"""
 import json
 import os
 import sys
 import urllib.request
 
 APPLY = '--apply' in sys.argv
+
+
+def confirm_target(what, target):
+    """Name the project this run reaches; refuse unless --project-id agrees (infra #342).
+
+    --apply deletes the WHOLE project and the listing never said which one, so a wrong
+    .env.sh went unseen. --apply must repeat the id; one that is given must match.
+    Exit 2 like a missing credential: nothing was asked, which is not the 1 of "leftovers".
+    """
+    argv = sys.argv[1:]
+    given = next((a.split('=', 1)[1] for a in argv if a.startswith('--project-id=')), None)
+    if given is None and '--project-id' in argv[:-1]:
+        given = argv[argv.index('--project-id') + 1]
+    print(f"Target: {what} {target}  (the WHOLE project)")
+    if given is None and '--apply' in argv:
+        print(f"✗ --apply deletes the WHOLE project: repeat its id, --project-id={target}. Nothing was asked.")
+        return 2
+    if given is not None and given != target:
+        print(f"✗ --project-id={given} is not the project these credentials reach ({target}). Nothing was asked.")
+        return 2
+    return 0
+
+
 # Exit 2, not the 1 callers read as "leftovers found": nothing was asked.
 try:
     base = os.environ['OS_AUTH_URL'].rstrip('/')
@@ -15,6 +38,9 @@ try:
         print("✗ OS_AUTH_URL must be https:// — the password would travel in clear. Nothing was sent.", file=sys.stderr)
         sys.exit(2)
     url = base + ('/auth/tokens' if base.endswith('/v3') else '/v3/auth/tokens')
+    refused_target = confirm_target('OVH project', os.environ['OS_PROJECT_ID'])
+    if refused_target:   # before the password leaves the machine
+        sys.exit(refused_target)
     auth = {"auth": {"identity": {"methods": ["password"], "password": {"user": {
         "name": os.environ['OS_USERNAME'], "password": os.environ['OS_PASSWORD'],
         "domain": {"name": os.environ.get('OS_USER_DOMAIN_NAME', 'Default')}}}},

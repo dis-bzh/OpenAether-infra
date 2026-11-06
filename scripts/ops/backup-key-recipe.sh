@@ -15,6 +15,9 @@
 # Policy shapes: Scaleway (bucket policy version 2023-04-17, principal {"SCW": "application_id:<id>"}) is the measured one;
 # Outscale uses an AWS-style principal and is an expectation (the store refused dedicated keys in lab 15B, infra #377); OVH's
 # S3 API has no bucket policy, so only the rights are printed and the user's policy goes through the OVH API (not verified).
+# An OVH key pair reaches every bucket of its project (no bucket policy exists to narrow it, infra #393). The recipe cannot know
+# whether the sink has a project of its own: it stops (exit 2) until the operator names it in OVH_SINK_PROJECT_ID, and prints the
+# proof to run. That is an attestation, not a check; the one value it refuses is the project of an OVH cluster itself (OS_PROJECT_ID).
 # Exit 0 printed; 2 usage.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
@@ -29,13 +32,22 @@ CLUSTER="$(tfv "$TFVARS" cluster_name)"; ROLE="$(tfv "$TFVARS" cluster_role)"; E
 PROVIDER="$(tfv_provider "$TFVARS")"
 STORE_PROVIDER="$PROVIDER"   # who HOLDS the bucket: the replica pair lives on the replica store, which may be another cloud (lab 19: OVH)
 if [ "$KIND" = replica ]; then rp="$(provider_of_endpoint "$(tfv "$TFVARS" s3_replica_endpoint)")"; [ -z "$rp" ] || STORE_PROVIDER="$rp"; fi
-SINK_EP=""
+SINK_EP=""; SINK_PROJECT=""
 case "$KIND" in audit-sink | audit-sink-secondary)
   oa_audit_sink_load "$TFVARS" || exit 2
   [ "$AS_PLACEMENT" != off ] || { echo "✗ audit_sink_placement is off in $TFVARS: there is no sink to make a key for" >&2; exit 2; }
   if [ "$KIND" = audit-sink ]; then SINK_EP="$AS_EP1"; else SINK_EP="$AS_EP2"; fi
   [ -n "$SINK_EP" ] || { echo "✗ $KIND: this tfvars has no such sink (audit_sink_placement = $AS_PLACEMENT)" >&2; exit 2; }
-  STORE_PROVIDER="$(provider_of_endpoint "$SINK_EP")"; STORE_PROVIDER="${STORE_PROVIDER:-$PROVIDER}" ;; esac
+  STORE_PROVIDER="$(provider_of_endpoint "$SINK_EP")"; STORE_PROVIDER="${STORE_PROVIDER:-$PROVIDER}"
+  if [ "$STORE_PROVIDER" = ovh ]; then
+    [[ "${OVH_SINK_PROJECT_ID:-}" =~ ^[A-Za-z0-9_-]+$ ]] || {
+      echo "✗ $KIND on OVH: the pair of an OVH S3 user reaches EVERY bucket of its project (OVH has no bucket policy), so it is not dedicated" >&2
+      echo "  unless the sink has an OVH project of its own. Create that project and its S3 user, then name it: OVH_SINK_PROJECT_ID=<project id> (infra #393, docs/audit-sink.md, section 4)." >&2
+      exit 2; }
+    [ "$PROVIDER" != ovh ] || [ "${OS_PROJECT_ID:-}" != "$OVH_SINK_PROJECT_ID" ] || {
+      echo "✗ $KIND on OVH: OVH_SINK_PROJECT_ID is OS_PROJECT_ID, the cluster's own project: the sink needs a project of its own (infra #393)." >&2; exit 2; }
+    SINK_PROJECT=" project ${OVH_SINK_PROJECT_ID}"
+  fi ;; esac
 PROJECT="$(oa_project "$CLUSTER" "$(tfv "$TFVARS" bucket_suffix)")"
 STATE="$(oa_state_bucket "$PROJECT" "$PROVIDER" "$ENVN")"; ARTIFACT="$(oa_artifact_bucket "$PROJECT" "$PROVIDER" "$ROLE" "$ENVN")"
 BACKUPS="$(oa_backup_bucket "$PROJECT" "$PROVIDER" "$ENVN")"; LOGS="$(oa_logs_bucket "$PROJECT" "$PROVIDER" "$ENVN")"
@@ -56,7 +68,7 @@ case "$STORE_PROVIDER" in
 esac
 
 OBJ_ACTIONS='["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"]'
-echo "# ${KIND} pair for ${STORE_PROVIDER} (bucket ${OWN})"
+echo "# ${KIND} pair for ${STORE_PROVIDER}${SINK_PROJECT} (bucket ${OWN})"
 echo
 echo "## Rights the pair must hold on ${OWN} (nothing else; apps/base/backup/README.md, 'S3 rights of a dedicated key pair')"
 echo "  bucket:  s3:ListBucket (it is also HeadBucket), s3:GetBucketLocation, s3:ListBucketMultipartUploads"
@@ -75,7 +87,8 @@ esac
 [ "$STORE_PROVIDER" != ovh ] || echo "  OVH: no bucket policy through the S3 API; give the S3 user the same rights through the OVH API (not verified)"
 case "$KIND" in audit-sink*) [ "$STORE_PROVIDER" != ovh ] || {
   echo "  OVH: the key pair of an OVH S3 user CANNOT be isolated per bucket (no bucket policies): it reaches every bucket of that OVH project."
-  echo "       Give the sink its own OVH project and S3 user, so that the only bucket the pair can reach is this one." ; } ;; esac
+  echo "       You named the sink's own project (${OVH_SINK_PROJECT_ID}): the pair is dedicated only if it reaches this one bucket. Prove it, with the pair's keys:"
+  echo "         aws s3api list-buckets --endpoint-url ${SINK_EP}   # must list ${OWN} and nothing else" ; } ;; esac
 if [ "$STORE_PROVIDER" != ovh ]; then
   echo
   echo "## Bucket policy of ${OWN} (apply with the operator's keys: aws s3api put-bucket-policy --bucket ${OWN} --policy file://policy.json)"

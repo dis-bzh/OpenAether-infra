@@ -64,6 +64,15 @@ dep = "cilium"
 ecosystem = "Go"
 package = "github.com/cilium/cilium"
 
+# An anchor Cléa is told NOT to resolve, with the reason (mandatory). It stays in the
+# report's "Not watched" section, so it cannot be forgotten; a row that matches no
+# anchor is a scan error. Cléa has no `docker` reader on purpose: a registry tag list
+# carries no release date, which the age rule above needs. Renovate does watch this
+# anchor (`clea coverage` checks it), and the bump is a cluster-side change (infra #392).
+[[not_watched]]
+dep = "registry.k8s.io/coredns/coredns"
+reason = "coredns_image_tag, bumped by hand on a running cluster (it rolls DNS, docs/resilience.md, infra #392); Renovate proposes it, Cléa has no docker reader (a registry tag list has no release date)."
+
 # Inventories cross-checked against Cléa's own scan. An anchor Cléa can read and
 # an inventory here cannot see is a pin nothing is watching — `clea coverage`
 # fails on it.
