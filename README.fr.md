@@ -124,8 +124,11 @@ continuent de tourner — chaque enfant a son propre Flux.
 
 La voie CAPI **ne remplace pas** OpenTofu : sur OVH, l'essentiel de ce
 qu'OpenTofu crée n'est pas une instance de calcul. C'est une surcouche optionnelle
-et **cette version ne déploie aucun CAPI** — la procédure est conservée pour la
-version qui le fera : **[docs/capi-bootstrap.fr.md](docs/capi-bootstrap.fr.md)**.
+et **OpenTofu ne déploie aucun CAPI** : avec `deploy_flux = true`, le profil `management`
+des apps installe l'opérateur CAPI, ses providers et ORC (quatre Kustomizations ; Running
+1/1, 0 redémarrage au lab du 2026-10-12, apps 0.1.0), et aucun cluster enfant n'existe tant qu'un
+fichier de `apps/clusters/` n'est pas activé. La procédure de pivot depuis un cluster
+jetable est conservée comme option : **[docs/capi-bootstrap.fr.md](docs/capi-bootstrap.fr.md)**.
 
 ## Statut des couches
 
@@ -351,7 +354,7 @@ task security            # contrôles de durcissement
 | Accès API Kubernetes | ACL du LB restreinte à `admin_ip` |
 | Accès API Talos | Tunnel SSH uniquement (port 50000, jamais sur le LB) |
 | Chiffrement inter-nœuds | Cilium WireGuard |
-| Limites | `bastion-harden-check.sh` n'a aucun passage consigné sur un vrai bastion ; le kubeconfig admin (`system:masters`) n'est pas révocable, et `task talosconfig-new`, qui délivre un talosconfig en lecture seule et à durée limitée, n'a tourné que sur un cloud réel, OVH ([docs/admin-access.fr.md](docs/admin-access.fr.md)) |
+| Limites | `bastion-harden-check.sh` a tourné sur de vrais bastions chez les trois clouds (labs 15A, 15B et 16, 2026-10-17 et 18 : 37/37 chez Scaleway et OVH, 38/38 chez Outscale) ; le kubeconfig admin (`system:masters`) n'est pas révocable, et `task talosconfig-new`, qui délivre un talosconfig en lecture seule et à durée limitée, n'a tourné que sur un cloud réel, OVH ([docs/admin-access.fr.md](docs/admin-access.fr.md)) |
 
 ## Roadmap
 

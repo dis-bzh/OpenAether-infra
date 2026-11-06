@@ -149,7 +149,7 @@ $EDITOR management-scaleway.tfvars
 | field | what to put in it |
 |---|---|
 | `cluster_name` | yours. **It has a default, so no checker will tell you to change it** — and its first segment names all the cluster buckets |
-| `bucket_suffix` | **set it unless you are the original author.** S3 bucket names are unique across a whole provider, not per account — Scaleway documents them unique "in our whole platform", OVH "within OVHcloud". Without one you will collide with names somebody already took. `task bucket-suffix` prints one; pick it once, changing it later orphans every bucket you have |
+| `bucket_suffix` | **set it unless you are the original author.** S3 bucket names are unique across a whole provider, not per account — Scaleway documents them unique "in our whole platform", OVH "within OVHcloud". Without one you will collide with names somebody already took. `task bucket-suffix` prints one; pick it once, changing it later orphans every bucket you have and starts an empty Talos image state, so the image is built again ([`upgrade.md`](upgrade.md)) |
 | `environment` | `dev` or `prod`, nothing else. Pick it once: it names the state bucket. `prod` needs the replica on another provider: `task cluster-up` refuses before spending when `s3_replica_endpoint` is the primary's endpoint or the same cloud (an S3 it cannot name only has to be another endpoint). A cluster name that already has a state object is only warned before spending, then `task cluster-up` fails at its verify step; that includes one torn down by `task cluster-down`, which keeps the state bucket. `dev` may share the primary's store |
 | `admin_ip` | `curl -s ifconfig.me` as a `/32`. It is both the SSH allow-list and the apiserver LB ACL |
 | `s3_primary_endpoint` / `_region` | S3 on the same provider as the cluster |
@@ -159,7 +159,7 @@ $EDITOR management-scaleway.tfvars
 | `node_nameservers` / `node_dns_boot_timeout` | optional: the nodes' own resolver over DNS-over-TLS or -HTTPS (Talos 1.14+), all encrypted or all plain. Run on OVH (applies without a reboot); a list no node can reach is only found at the next reboot, and that node then has no Talos API. Rules, trade-offs and how to check a node: `modules/talos/variables.tf` |
 
 `git_repo_url`, `git_ref` and `flux_namespace` tell Flux where to read the platform from (the
-example names the apps release that goes with this one); `apps_profile` is inert. They are
+example names the apps release that goes with this one). They are
 inert altogether when you remove `deploy_flux = true`. Leave them unless you fork the apps.
 
 Before you spend anything: `task preflight`. Lint, render, validate, unit tests
@@ -195,7 +195,7 @@ the phase-2 plan, then `cd infrastructure/opentofu/cluster && tofu apply phase2-
 `task cluster-verify`. Measured on OVH, lab 16: 21 minutes for this path against about 8 of applies. A coding agent whose
 harness refuses a blind apply therefore needs the owner's explicit permission for the `APPROVE=auto` command; that decision is the
 owner's, not the repository's. Copy the `deploy_flux = true` and `deploy_app_lb = true` lines of the example: without them the cluster
-is infrastructure only (the verifier reports flux-system as red by design).
+is infrastructure only, and the verifier then expects no `flux-system` namespace (it reports one as red).
 
 In order it creates the state, artifact, logs and application-backups buckets (the credential check
 above), builds the Talos image and uploads it — **measured at 52 s on Scaleway,

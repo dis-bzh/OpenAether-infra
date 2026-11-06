@@ -5,12 +5,12 @@
 # made a primary unevictable, so nothing shells out to `promote` any more. It
 # stays because `kubectl cnpg status <cluster>` is what you read when a database
 # is the thing holding a drain, and because the promote path may come back once
-# the skew below is understood.
+# the behaviour below is understood.
 #
-# ⚠️ The pinned plugin does NOT match what is deployed: 1.23.6 against a 1.23.1
-# operator on 2026-08-15, where `promote` exited 0, printed "will be promoted"
-# and left `status.targetPrimary` untouched. Same minor, so the mismatch is not
-# obviously the cause — open as a GitHub issue. Keep the minor aligned with the
+# ⚠️ Seen once: plugin 1.23.6 against a 1.23.1 operator on 2026-08-15, where `promote`
+# exited 0, printed "will be promoted" and left `status.targetPrimary` untouched; the
+# cause was never separated (OpenAether-apps #36). The plugin and the operator are both
+# 1.30.1 now, and `promote` was not run again. Keep the minor aligned with the
 # operator in OpenAether-apps (apps/base/cnpg/) when that moves.
 #
 # Usage: install-kubectl-cnpg.sh [bin-dir]   (default: /usr/local/bin, else ~/.local/bin)

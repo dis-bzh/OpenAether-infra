@@ -138,7 +138,10 @@ for each old image the retention destroys (§7, image lane).
 
 - [ ] **deploy from an empty project** under a fresh `bucket_suffix` (`task
       bucket-suffix`; recorded on Scaleway, #68, and on OVH, the failover drill
-      of §7). Record duration and resource count.
+      of §7). Record duration and resource count. A fresh suffix is an empty
+      Talos image state: the image is built again, and an image of the same name
+      left in the project by another suffix is duplicated (not tested) or
+      replaced; delete the old images first (`upgrade.md`, #451).
 - [ ] **`task cluster-verify`** green. A warning is a finding: it now reads each
       control plane's failure domain and each worker's data volume (the volume read
       needs `task tunnels-up`; without a tunnel it warns instead of passing).
@@ -404,11 +407,14 @@ What to run, what `docs/status.md` records (rung and date), and what it does
       guards are mocked only); the rest is in the changelog's Known limits. A
       cluster with no talosconfig and no replica copy is not recoverable here.
 
-Not a row, because there is nothing to run: **rolling an upgrade back** (#270).
+Not a row, because there is no script to run: **rolling an upgrade back** (#270).
 The lane keeps the previous image, which only lets a NEW node boot the previous
 Talos; `converge-versions.sh` refuses a pin below what the fleet runs and no
-script or runbook wraps `talosctl rollback`. The notes say it is unproven.
-#270 names the proof to obtain and the decisions, which are the owner's.
+script wraps `talosctl rollback`. A runbook exists, "Going back" in `upgrade.md`
+(a worker: `talosctl rollback`; control planes across 1.13 to 1.14: a restore of
+the pre-upgrade snapshot), drilled by hand once on Scaleway on 2026-10-12; the
+copy-back of the state is not measured. The supported route, the Kubernetes rule
+and a per-release drill are the owner's decisions (#270, open).
 
 ## 8. Release mechanics
 

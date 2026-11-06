@@ -56,11 +56,10 @@ tofu apply -var talos_bootstrap=true
 
 ## Flux Bootstrap Template Variables
 
-The `flux-bootstrap.yaml.tftpl` template receives:
+The `flux-bootstrap.yaml.tftpl` template receives (the header of the template has the full list, and `main.tf` the values):
 - `git_repo_url` — Apps repository URL (e.g. `https://github.com/dis-bzh/OpenAether-apps.git`)
-- `git_branch` — Branch to track (default: `main`)
+- `git_ref` — fully qualified ref to track: `refs/tags/<version>` or `refs/heads/<branch>` (default: the tag of the apps release that goes with this one)
 - `cluster_role` — `management` or `workload` (routes to correct Flux overlay)
-- `flux_deploy_key_public` — SSH deploy key for private repo access
 
 ## Important Notes
 

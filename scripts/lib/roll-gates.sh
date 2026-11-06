@@ -414,7 +414,7 @@ finish_roll() {
 #     node whose primary had not moved.
 #   * the promote itself does nothing here. `kubectl-cnpg promote` (plugin
 #     1.23.6, operator 1.23.1) exits 0 and prints "will be promoted", and
-#     `status.targetPrimary` does not change. Unexplained; backlog.
+#     `status.targetPrimary` does not change. Unexplained (OpenAether-apps #36; not re-run on 1.30.1).
 #
 # `spec.enablePDB: false` in cnpg_maintenance above removes the budget that made
 # the primary unevictable, which is what the switchover was for. Nothing here

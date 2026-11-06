@@ -117,8 +117,11 @@ own Flux.
 | **CAPI** (optional) | You want the management described like any other cluster, plus CAPI's day-2 tooling | A throwaway cluster creates the management, which then becomes self-managed (`clusterctl move`) |
 
 The CAPI path **does not replace** OpenTofu: on OVH, most of what OpenTofu
-creates is not a compute instance. It is an optional overlay and **this release
-deploys no CAPI** — the procedure is kept for the release that does:
+creates is not a compute instance. It is an optional overlay and **OpenTofu deploys no
+CAPI**: with `deploy_flux = true` the apps `management` profile installs the CAPI
+operator, its providers and ORC (four Kustomizations; Running 1/1, 0 restarts on the
+2026-10-12 lab, apps 0.1.0), and no child cluster exists until a file of `apps/clusters/` is enabled.
+The pivot procedure from a throwaway cluster is kept as an option:
 **[docs/capi-bootstrap.md](docs/capi-bootstrap.md)**.
 
 ## Layer status
@@ -344,7 +347,7 @@ task security            # hardening checks
 | Kubernetes API access | LB ACL restricted to `admin_ip` |
 | Talos API access | SSH tunnel only (port 50000, never on the LB) |
 | Inter-node encryption | Cilium WireGuard |
-| Limits | `bastion-harden-check.sh` has no recorded run on a real bastion; the admin kubeconfig (`system:masters`) cannot be revoked, and `task talosconfig-new`, which issues a read-only talosconfig that expires, has run on one real cloud only, OVH ([docs/admin-access.md](docs/admin-access.md)) |
+| Limits | `bastion-harden-check.sh` ran on real bastions on the three clouds (labs 15A, 15B and 16, 2026-10-17 and 18: 37/37 on Scaleway and OVH, 38/38 on Outscale); the admin kubeconfig (`system:masters`) cannot be revoked, and `task talosconfig-new`, which issues a read-only talosconfig that expires, has run on one real cloud only, OVH ([docs/admin-access.md](docs/admin-access.md)) |
 
 ## Roadmap
 

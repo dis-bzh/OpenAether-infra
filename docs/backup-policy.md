@@ -48,7 +48,7 @@ been timed from an empty account; the sum of the pieces measured above is lower,
 
 **There is no automatic expiry beyond the counts above, unless `backup_immutability` is set.** By default (`off`) no bucket has versioning, a lifecycle rule or an object lock set by this repository: an
 object that left the retention count is deleted, but a **version** of it, if the provider's bucket is versioned, is not; and an attacker holding K7 can delete the lot. Turning the protection on is opt-in
-and **not verified on any provider** (support and cost differ; the lab checklist of the hardening work lists what to try):
+and **tried only in part**: `governance` with a one-day retention, accepted on Scaleway, OVH and Outscale (labs 15A and 15B); a version delete without the bypass refused and allowed with it, read on OVH (15A) and Outscale (15B); on Scaleway the lock was accepted and the bypass was used to empty the buckets, the refusal itself was not asserted; and `compliance` on the three (lab 22, below); long retentions, many versions and the cost over time were not tried (support and cost differ):
 
 | `backup_immutability` | What `ensure-buckets.sh` sets, then reads back | What it gives | What it does not |
 |---|---|---|---|
@@ -67,9 +67,9 @@ and **not verified on any provider** (support and cost differ; the lab checklist
 - **`compliance` tried on the three stores (lab 22, 2026-10-21, one throwaway bucket each, one object, retention 1 day, nothing real in them).** Scaleway, OVH and Outscale all accept a bucket created with object lock and
   `COMPLIANCE:1` as the default retention (read back by `oa_protection_state`), stamp the object with `COMPLIANCE` until 24 h after the write, and answer `AccessDenied` to: deleting that version, shortening its retention, and changing its mode
   to GOVERNANCE (Scaleway: "Access Denied because object protected by object lock."; OVH: "Access Denied."; Outscale: "Access Denied"). Outscale also refuses `PutBucketVersioning` on such a bucket
-  (`InvalidBucketState`, the lock configuration is present): the bucket is already versioned, and the script no longer calls that a failure. Not tried, on purpose: any bypass. Not yet proven: the
-  deletion of the version and the bucket once the retention has ended (the trial buckets are purged by hand after the 24 h, outside the lab teardown). `s3-isolation-check.sh` was not run against them: it needs the cluster's bucket names and
-  dedicated key pairs (exit 2 without).
+  (`InvalidBucketState`, the lock configuration is present): the bucket is already versioned, and the script no longer calls that a failure. Not tried, on purpose: any bypass. After the retention ended (2026-10-22, the trial buckets being purged by hand outside the lab teardown),
+  deleting the locked version and then the bucket succeeded on all three, with no refusal; each bucket held one version, so a long retention, a versioned bucket with many objects and an account-level deletion are not tried.
+  `s3-isolation-check.sh` was not run against them: it needs the cluster's bucket names and dedicated key pairs (exit 2 without); the mode is read by `oa_protection_state`.
 - **A restore from versions is not rehearsed.** After a malicious prune the repository is recovered by restoring the previous versions of its objects, which is not the same as a restic restore and has not been run.
 
 - **Expiry**: generations and snapshots are pruned by the scripts. After a **key change**, delete the old objects yourself
@@ -83,8 +83,8 @@ and **not verified on any provider** (support and cost differ; the lab checklist
 
 ## 4. Who can open which bucket
 
-One identity per store, limited to its bucket by the **operator** (the providers' S3 keys are account-wide by default, and this repository ships no policy: the shape below is what the check expects, not something verified on
-Scaleway, OVH or Outscale). Without the pairs the cluster runs on the operator's keys, which open every bucket of the cluster and may delete in all of them; `seed-openbao.sh` says so.
+One identity per store, limited to its bucket by the **operator** (the providers' S3 keys are account-wide by default, and this repository applies no policy for you: `backup-key-recipe.sh` prints the recipe, and the shape below was measured on
+Scaleway (labs 12 and 19) and, for a replica pair, in part on OVH (lab 19, below); not on Outscale). Without the pairs the cluster runs on the operator's keys, which open every bucket of the cluster and may delete in all of them; `seed-openbao.sh` says so.
 The state and artifact buckets are written only from the operator's machine and CI, so no identity of the cluster is meant to reach them.
 
 | Identity (seed variable, OpenBao path) | May open | Needs | Must be refused |
@@ -105,7 +105,7 @@ is whatever the bucket policies leave open. Lab 12 measured it: with policies on
 management buckets (`s3-isolation-check.sh`: 4 of 8 assertions failed); with an **operator-only policy on every other bucket** of the project
 (state, artifact, management, the `-backup` twins and the image buckets), 10 of 10 held, the delete of a real object version included
 (`OA_ISOLATION_REAL_VERSION=1`). So the recipe for a pair, which this repository does not apply for you (the providers' IAM is the operator's): create the
-application and its IAM policy, put the operator-only policy on every OTHER bucket, the pair's own policy on its bucket, then run the check. OVH and Outscale: not verified.
+application and its IAM policy, put the operator-only policy on every OTHER bucket, the pair's own policy on its bucket, then run the check. OVH: lab 19 (a Scaleway cluster with an OVH replica store) ran `s3-isolation-check.sh` with `OA_ISOLATION_REAL_VERSION=1` on an OVH replica pair, and 2 of 9 assertions failed (the pair reads `tfstate-backup` and `management-backup`, and `DeleteObjectVersion` is allowed on the replica): OVH cannot isolate a pair per bucket (infra #379). Outscale: not verified.
 
 **HeadBucket is the first call of every WAL archive and Loki flush, and its right is separate from list (infra #356, #359).** On Scaleway a pair needs
 BOTH the IAM set `ObjectStorageBucketsRead` AND `s3:ListBucket` in the bucket policy of its own bucket: a pair with only the three object sets lists and writes, yet
@@ -119,13 +119,13 @@ the test once a pair exists.
 The replica pair (`backup/s3-replica`) now carries more than the restic repositories: the CNPG archive copy (`cnpg-store-replicate` writes `cnpg/<cluster>/` into the `-backup` bucket), the etcd snapshot repository, and the reads of the verifier. It is a separate pair on the replica store, never the primary's. To create and prove one:
 
 1. Print the policies for the pair and the bucket: `scripts/ops/backup-key-recipe.sh <tfvars> replica` (the same with `primary` for the primary pair). It writes the bucket policy of the pair's own bucket, the operator-only policy for every other bucket, and the rights the pair must hold, with the real bucket names and without any identifier: you substitute your principal.
-2. Create the pair at the replica provider with the rights of the recipe (Scaleway: an IAM application and policy with `ObjectStorageBucketsRead` and the three object sets, plus the bucket policies of step 1; OVH: the S3 API refuses per-user policies, so the user's policy goes through the OVH API and the recipe lists the rights to give it; Outscale: an EIM user, policy and bucket policy, but the store refused dedicated EIM keys in lab 15B, infra #377: Outscale is a source, not a replica, until that is solved). Only the Scaleway shape is measured; OVH and Outscale are expectations.
+2. Create the pair at the replica provider with the rights of the recipe (Scaleway: an IAM application and policy with `ObjectStorageBucketsRead` and the three object sets, plus the bucket policies of step 1; OVH: the S3 API refuses per-user policies, so the user's policy goes through the OVH API and the recipe lists the rights to give it; Outscale: an EIM user, policy and bucket policy, but the store refused dedicated EIM keys in lab 15B, infra #377: Outscale is a source, not a replica, until that is solved). Measured: the Scaleway shape, and in lab 19 an OVH replica pair, where `check-backup-key-rights.sh` (with the SSE request) passed on the Scaleway primary pair and on the OVH replica pair, the copy job wrote the replica, and a recovery from the replica store alone (primary bucket emptied, 311 versions and markers) worked: the CNPG Cluster healthy in 66 s (INCIDENT, a recovery drill after the primary bucket was emptied, 3 CP + 3 W, the image already cached), the etcd snapshot restored from its restic copy and opened in a local etcd (a restore onto a Talos cluster was not run). Isolation is not possible on OVH (infra #379). The Outscale recipe is an expectation (infra #377).
 3. Prove it before seeding: `S3_ENDPOINT=... S3_BUCKET=<replica bucket> AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... check-backup-key-rights.sh` (the script of the OpenAether-apps repository, `scripts/ops/` there) (it now also tries the `AES256` server-side-encryption request that the copy and the Barman ObjectStores send; a store that refuses it must have the request removed from the ObjectStores), then seed the pair and run `scripts/ops/s3-isolation-check.sh <tfvars>` with the pair in the environment (`OA_BACKUP_REPLICA_S3_*`, and `OA_ISOLATION_REAL_VERSION=1`).
 4. Cluster side, a day later: `oa_backup_verify_ok{dataset=~"cnpg|etcd|openbao|cnpg-dump"}` is 1 for the replica store (`oa_backup_verify_store_ok{store="replica"}`).
 
 ## 5. What is not done
 
-- Object lock and versioning are opt-in, and unverified on any provider; the default leaves a stolen S3 key able to delete backups. No policy for the limited pairs is shipped.
+- Object lock and versioning are opt-in, and tried only in part (section 3); the default leaves a stolen S3 key able to delete backups. The policies for the limited pairs are printed by `backup-key-recipe.sh`, not applied.
 - No copy that the cluster's keys can never reach: an operator-side sync to a third, locked bucket was not built, and `forget --prune` still runs in the cluster, with a key that must keep `DeleteObject`. The logs have no second-provider copy.
 - No scheduled restore test of the infrastructure layer (state, artifacts, tfstate): `task restore-artifacts` and `restore-state` are commands, run by a person. The application layer restores on a schedule since 0.4.0 (CNPG recovery daily and PITR weekly with a canary compare, the dumps loaded daily, a Longhorn canary weekly when the component is on); the OpenBao raft snapshot is restored daily only as far as its sums, never into an OpenBao.
 - The state replication on a changed state and the bastion log pull depend on the operator remembering to schedule them (the etcd snapshot no longer does, unless `etcd_snapshot_api_access` is false). `task check-alerts` and the apps backup alerts watch the application layer and the in-cluster etcd snapshot.

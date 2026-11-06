@@ -297,8 +297,8 @@ directions** (behind and ahead are both a difference; a value that cannot be rea
 | CoreDNS shape | `coredns_ha`, the node count (replicas `min(3, nodes)`, hard spread over nodes) and the zone labels (spread over zones, required with 3 or more) | `task cluster-coredns-ha` (`APPLY=1`); `cluster-up` runs it before its verify; standalone, a patch ends by naming `task cluster-rebalance … APPLY=1` (the zones ended 2, 3, 2 in lab 28B, and the rebalance healed it in 20 s) | "CoreDNS runs the declared replica count and spread" | patch PROVEN by hand on Scaleway (lab 27); the step inside `cluster-up` UNVERIFIED |
 | Forgejo brick (the ROLE path of the root Kustomization) | `path: ./apps/flux/${cluster_role}` of the Talos inline manifest `flux-bootstrap`; the forge overlay is `./apps/flux/management-forge` | NOT converged: a live `kubectl patch` only (below); `cluster-up` neither sets nor reverts it | NOT checked | GAP, not built (no tfvar, by decision of this release; issue FF of lab 27) |
 | `cluster-identity` keys | rendered map (`local.cluster_identity`, output `cluster_identity`) | `task cluster-identity-sync`; `cluster-up` runs its dry run | "The cluster-identity ConfigMap holds the values the config renders" (only with `deploy_flux = true`; infra #409): a rendered key that is missing or has another value is BAD, with the key names (never the values) and the sync command; a key the config does not render is not judged, because the sync leaves it alone | UNVERIFIED (mocked) |
-| Cilium | `CILIUM_VERSION` in `render-bootstrap-manifests.sh`, rendered to `cilium.yaml`, hash in `upstream-artifacts.lock` | no in-place command: **rebuild aside** (below) | "Cilium run the pinned version" (agent and operator image tags) | check UNVERIFIED (mocked); no live upgrade exists |
-| Flux controllers | `FLUX_VERSION`, vendored `flux-install.yaml`, same lock | `task cluster-bootstrap-sync` (`APPLY=1`); the 0.4.2 to 0.4.3 move (2.9.6 to 2.10.0) ran it once for the seven controllers, and it had run once for one controller (the first proof lab of 0.4.1) | "Flux controllers run the pinned version" (the seven Deployments; only with `deploy_flux = true`) | PROVEN once on Scaleway (3 CP + 6 W, the apps branch ref: dry run 20 s, `APPLY=1` 27 s, the seven controllers on the digests of the lock; `CHANGELOG.md` `[0.4.3]`); the refusal paths, the rollback and the red cases of the check UNVERIFIED (mocked) |
+| Cilium | `CILIUM_VERSION` in `render-bootstrap-manifests.sh`, rendered to `cilium.yaml`, hash in `upstream-artifacts.lock` | no in-place command: **rebuild aside** (below) | "Cilium run the pinned version" (agent and operator image tags) | the BEHIND red case PROVEN once on Scaleway by mutation (lab 27: the `cilium-operator` image set one patch below the pin turned the line red, "BEHIND the pin ... rebuild aside", and green once restored); the AHEAD case and the agent image UNVERIFIED (mocked); no live upgrade exists |
+| Flux controllers | `FLUX_VERSION`, vendored `flux-install.yaml`, same lock | `task cluster-bootstrap-sync` (`APPLY=1`); the 0.4.2 to 0.4.3 move (2.9.6 to 2.10.0) ran it once for the seven controllers, and it had run once for one controller (the first proof lab of 0.4.1) | "Flux controllers run the pinned version" (the seven Deployments; only with `deploy_flux = true`) | PROVEN once on Scaleway (3 CP + 6 W, the apps branch ref: dry run 20 s, `APPLY=1` 27 s, the seven controllers on the digests of the lock; `CHANGELOG.md` `[0.4.3]`); the BEHIND red case of the check was seen once by mutation (lab 27, Scaleway: `source-controller` set to v1.9.5 against the pin v1.9.6 turned the line red naming `task cluster-bootstrap-sync`, green once the image was restored); the AHEAD case, the refusal paths and the rollback UNVERIFIED (mocked) |
 | CAPI child clusters | `K8S_VERSION`, `TALOS_VERSION` in `apps/clusters/*.yaml` (OpenAether-apps) | Flux applies the file; Cluster API rolls the machines | none: `check-child-clusters.py` is static; nothing compares a child's running versions | GAP, not built |
 
 `git_ref` is converged by `task cluster-apps-ref`, which `cluster-up` runs as one of its steps (with `deploy_flux = true`: a dry run, then the move once it is approved, `APPROVE=auto` or a typed "yes"; without either it stops and names the command). One `cluster-up` moved the ref in the 0.4.3 lab (3 CP + 6 W, the apps branch ref; `CHANGELOG.md` `[0.4.3]`). What does not move a running cluster is editing `git_ref` alone: that sets the new inline manifest, which Talos does not apply over the existing objects (step 5 of "From 0.4.0 to 0.4.1"). A release channel (a semver range over signed tags that Flux follows) is
@@ -379,6 +379,19 @@ its rules, `LIST=1` and `PRUNE=1` are in
 [`talos-image/README.md`](../infrastructure/opentofu/talos-image/README.md). The
 2026-10-03 climbs ran in that order on all three clouds, on the single-image lane
 this replaces.
+
+**Changing `bucket_suffix` starts an empty image state (infra #451).** The state is kept in the bucket
+`s3-<project>-<provider>-talos-image`, and `<project>` is the first segment of `cluster_name` plus the suffix
+(`oa_project` in `scripts/lib/common.sh`). Under a new suffix there is no state, so the next `cluster-up` builds the
+image again (44 s on Scaleway, one run of the 0.4.3 proof), even though the old images are still in the project. On Scaleway
+a plan-only check (`task talos-image PROVIDER=scaleway ENSURE=1 PLAN_ONLY=1`) read "7 to add": three block snapshots,
+three instance images and the build step, that is a second image of the same name `talos-scaleway-amd64-<version>` in each
+zone. The cluster looks the image up by name, and what that lookup returns with two matches, and which image a server
+boots from, was NOT tested (left untested on purpose). If the old state object was copied to the new bucket by hand, the plan
+reads "7 to add, 0 to change, 7 to destroy", because the snapshot's import bucket name forces a replacement: the install then rebuilt
+the image and replaced the three images instead of reusing them, which a cluster still using them can feel (a replaced image
+broke the next plan of another cluster in infra #93, closed). Keep one suffix per project, or delete the old images first. Rung: one plan-only
+check and one install on Scaleway (3 control planes + 6 workers), n=1; the install was INCIDENT overall (a provider stock-out and the LB-ACL trap, #361).
 
 `talos_version` is the node's Talos, not the machine-config contract: the module renders under a
 capped one (`config_contract` in `modules/talos/main.tf`, which says why). A bump to 1.14 changes
@@ -568,9 +581,11 @@ kubectl get clusters.postgresql.cnpg.io -n <ns> <cluster> \
 kubectl delete pod <targetPrimary> -n <ns>
 ```
 
-`kubectl cnpg promote` is not the answer here: with the plugin this repository
-pins, it exits 0, prints "will be promoted" and leaves `targetPrimary`
-untouched. Open as an issue.
+`kubectl cnpg promote` is not the answer here, as far as it was seen: once (n=1),
+with plugin 1.23.6 against a 1.23.1 operator, it exited 0, printed "will be
+promoted" and left `targetPrimary` untouched, and the cause was never separated.
+The plugin and the operator are both 1.30.1 now and `promote` has not been run
+again since (OpenAether-apps #36, open).
 
 The first apply after a `talos_version` bump used to fail once on OVH and
 Outscale with "Provider produced inconsistent final plan" (upstream

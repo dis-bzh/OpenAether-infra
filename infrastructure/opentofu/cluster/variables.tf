@@ -580,8 +580,8 @@ variable "node_monitor_grace_period_seconds" {
     Default 30 (owner decision 2026-10-26): it sets the controller manager and, below 40, the kubelet heartbeat to match
     (lease duration = this value, status every this value / 4, 4 chances to be heard). 0 changes nothing: the Kubernetes
     default 50 s applies (the opt-out). 20 to 300 otherwise. Why 30: the node power-off write-gap target (75 s) is met only
-    at 30 s (lab 27, Scaleway: 82-86 s at the default, 62-70 s at 30 s, 49-62 s at 20 s), with no NotReady, eviction or
-    failover in a 30 minute nominal soak at 30 s. EVIDENCE FROM ONE PROVIDER: the OVH and Outscale labs are the next
+    at 30 s (lab 27, Scaleway, provider power-off: 82-86 s at the default, 66-70 s at 30 s, 49-62 s at 20 s; lab 27B read
+    62-70 s at 30 s later), with no NotReady, eviction or failover in a 30 minute nominal soak at 30 s. EVIDENCE FROM ONE PROVIDER: the OVH and Outscale labs are the next
     proof, and the default goes back to 0 if they flap. Not measured: a soak during a roll. On an existing cluster the
     next `cluster-up` re-applies the machine config of every node (about 7.5 min per apply in lab 27, no reboot).
     Details on the variable of the same name in modules/talos/variables.tf.
@@ -1030,7 +1030,7 @@ variable "deploy_flux" {
     existing branch goes, in a local — no resource address moves, so flipping it
     cannot replace a node.
 
-    When false, git_repo_url / git_ref / flux_namespace / apps_profile are inert:
+    When false, git_repo_url / git_ref / flux_namespace are inert:
     they exist to fill a template that is never rendered.
   EOT
   type        = bool
