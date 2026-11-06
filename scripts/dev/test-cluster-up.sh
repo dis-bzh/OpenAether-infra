@@ -70,6 +70,7 @@ case "\$(basename "\$0") \$*" in
   cluster-apps-ref.sh*) exit "\${REF_RC:-0}" ;;
   cluster-netcheck.sh*|cluster-security-tests.sh*) echo "\$(basename "\$0") KUBECONFIG=\${KUBECONFIG:-unset}" >>"$W/kc.log" ;;
   talos-image.sh*--retain*) echo "fixture retention \$*"; exit "\${RETAIN_RC:-0}" ;;
+  talos-image.sh*--plan-only*) exit "\${IMAGE_PLAN_RC:-0}" ;;
 esac
 exit 0
 EOF
@@ -515,13 +516,13 @@ PO_LATE='^(tofu apply|adopt-bootstrap|cnpg-presync|cluster-identity-sync|cluster
 [ "$(grep -v 'echo "' "$O" | grep -c 'local Talos tunnels')" = 2 ] \
   && ok "the banners at the start and at the end say that a bootstrapped cluster's plan opens the local Talos tunnels" \
   || bad "the plan-only banners do not both name the local Talos tunnels: $(grep -v 'echo "' "$O" | grep -c 'local Talos tunnels') printed mention(s)"
-# With the Talos image missing the phase-1 plan cannot be read (seen on Scaleway, rc 201; OVH and Outscale look the image up too and were not run):
-# the opening banner must say so, or "stops at the phase-1 plan" is a promise the run does not keep.
+# With the Talos image missing the phase-1 plan cannot be read, and the run stops at the image step (infra #439): the opening banner must say so,
+# and no longer promises the rc 201 of 0.4.3.
 # (captured once and read with here-strings: `grep -v ... | grep -q` under pipefail can die of SIGPIPE when the match comes early)
 BANNER="$(grep -v 'echo "' "$O")"
-{ grep -q 'the plan cannot be read' <<<"$BANNER" && grep -q 'WOULD be built' <<<"$BANNER" && grep -q 'ends rc 201' <<<"$BANNER" \
-  && grep -q 'OVH and Outscale were not run' <<<"$BANNER"; } \
-  && ok "the opening banner says what a missing image does (the plan cannot be read, WOULD be built, ends rc 201) and that only Scaleway was run" \
+{ grep -q 'the plan cannot be read' <<<"$BANNER" && grep -q 'WOULD be built' <<<"$BANNER" && grep -q 'stops there with exit 0' <<<"$BANNER" \
+  && ! grep -q 'rc 201' <<<"$BANNER"; } \
+  && ok "the opening banner says what a missing image does (the plan cannot be read, WOULD be built, stops there with exit 0) and no longer promises rc 201" \
   || bad "the plan-only banner does not say what a missing image does: $(grep -v 'echo "' "$O" | grep -c 'rc 201') mention(s) of rc 201"
 { grep -qx 'talos-image.sh scaleway v0.0.0-fixture --ensure --plan-only' "$W/calls.log" && [ "$(calls '^talos-image.sh')" = 1 ]; } \
   && ok "the image is PLANNED (--ensure --plan-only), once: a missing one is reported, not built" || bad "image calls: $(grep '^talos-image' "$W/calls.log" | tr '\n' '|')"
@@ -544,6 +545,18 @@ EXTRA=GROW_RC=3 run 0 "${UP[@]}" PROVIDER=scaleway PLAN_ONLY=1; rc=$?
   && grep -q '^~ the phase-1 plan is not run' "$O" && ! ls "$C"/up-*.tfplan "$C"/.plan-only-grow-* >/dev/null 2>&1; } \
   && ok "when the grow WOULD create or configure nodes: exit 0, the root plan is not run, and it says why; no plan file or marker left" \
   || bad "plan-only with a pending grow, exit $rc: $(tail_of); files: $(ls -a "$C" | tr '\n' ' ')"
+# The image WOULD be built (the image step ends 3): the phase-1 plan looks it up by name and cannot be read, so it is not taken, and the run
+# ends 0 with the reason, instead of failing on the plan's own "no image found" (infra #439).
+EXTRA=IMAGE_PLAN_RC=3 run 0 "${UP[@]}" PROVIDER=scaleway PLAN_ONLY=1; rc=$?
+{ [ "$rc" = 0 ] && [ "$(calls '^tofu plan -out=up-')" = 0 ] && [ "$(calls "$PO_LATE")" = 0 ] && grep -q '^✓ plan only: nothing was created' "$O" \
+  && grep -q '^~ the phase-1 plan is not run: the Talos image would be built' "$O" && grep -q 'cannot be planned before it exists' "$O" \
+  && ! grep -q '^✓ cluster-up complete' "$O" && ! ls "$C"/up-*.tfplan "$C"/.plan-only-* >/dev/null 2>&1; } \
+  && ok "when the image WOULD be built: exit 0, the root plan is not run, and it says why; no plan file or marker left" \
+  || bad "plan-only with a missing image, exit $rc: $(tail_of); files: $(ls -a "$C" | tr '\n' ' ')"
+# …and when it fails for another reason the failure is not swallowed into that stop.
+EXTRA=IMAGE_PLAN_RC=1 run 0 "${UP[@]}" PROVIDER=scaleway PLAN_ONLY=1; rc=$?
+{ [ "$rc" != 0 ] && [ "$(calls '^tofu plan -out=up-')" = 0 ] && ! grep -q '^~ the phase-1 plan is not run' "$O" && ! grep -q '^✓ plan only' "$O"; } \
+  && ok "an image step that FAILS (exit 1) still fails the run: only exit 3 means 'would be built'" || bad "a failing image step was read as a stop (exit $rc): $(tail_of)"
 # An exported PLAN_ONLY never turns a bare image build into a plan.
 run 0 image-build PROVIDER=scaleway PLAN_ONLY=1; rc=$?
 { [ "$rc" = 0 ] && grep -qx 'talos-image.sh scaleway v0.0.0-fixture' "$W/calls.log"; } \

@@ -127,6 +127,8 @@ infrastructure/opentofu/cluster/.talos-tunnels.pids
 .talos-tunnel-*
 # cluster-up PLAN_ONLY=1 (infra #412): the grow step would act; the plan step reads it and deletes it.
 .plan-only-grow-*
+# cluster-up PLAN_ONLY=1 (infra #439): the Talos image would be built; the plan step reads it and deletes it.
+.plan-only-image-*
 infrastructure/opentofu/.talos-bastion-known-hosts
 infrastructure/opentofu/cluster/.talos-bastion-known-hosts
 # The pinned bastion host key, wherever the script ran from (BASTION_KNOWN_HOSTS, scripts/lib/bastion-hostkey.sh)

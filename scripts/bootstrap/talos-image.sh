@@ -15,7 +15,9 @@
 #
 # --ensure: idempotence gate for `task cluster-up`: plan first, apply only on a real change.
 # --plan-only (with --ensure only; `task cluster-up PLAN_ONLY=1`, infra #412): the same plan and the same refusals ahead of the spend, then it
-#   stops: a missing or changed image is reported as "would be built" and nothing is applied. Exit 0 unless the plan or a refusal fails.
+#   stops: a missing or changed image is reported as "would be built" and nothing is applied. Exit 3 then (like grow-nodes.sh --plan-only:
+#   "it would act"; `task cluster-up` reads it as "what depends on the image cannot be planned yet", infra #439), exit 0 when the image is up
+#   to date, exit 1 when the plan or a refusal fails.
 #   It writes nothing to the state bucket either: the one-time copy of the pre-#69 state is left for a real run (the plan reads that state as it is).
 # --list: the versions this lane holds (one state each); builds nothing and creates no bucket.
 # --prune: destroy ONE version's image set (the only way an image leaves the lane); refused while a tfvars names it.
@@ -482,7 +484,8 @@ if [ "$ENSURE" = true ]; then
        # The refusals above are the ones the real build would meet, so a plan-only run says them before the approval.
        if [ "$PLAN_ONLY" = true ]; then
          echo "~ plan only: the image ${VERSION} on ${TGT} is missing or differs from its plan: it WOULD be built (and was NOT)."
-         exit 0
+         echo "  What looks the image up by name cannot be planned before it exists (exit 3)."
+         exit 3
        fi
        tofu apply "$PLAN" ;;
     *)
