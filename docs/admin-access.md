@@ -218,7 +218,9 @@ the bastion trusts and a closed Internet egress came after; none of them operate
 ⚠️ **The kubeconfig cannot be revoked.** `talosctl kubeconfig` issues a client
 certificate for `O=system:masters`, which bypasses RBAC, and Kubernetes has no
 revocation for client certificates: a leaked kubeconfig is valid until it
-expires, and the only remedy is rotating the cluster CA. Treat the file as the
+expires, and the only remedy is rotating the cluster CA. It expires one year after it is issued and no setting shortens that
+(`key-management.md`, K2); read the date of yours with
+`kubectl config view --raw -o jsonpath='{.users[0].user.client-certificate-data}' | base64 -d | openssl x509 -noout -enddate`. Treat the file as the
 secret it is — it is also in the tfstate and in both artifact stores. For
 read-only work, carry less: `task talosconfig-new PROVIDER=… ` issues an
 `os:reader` talosconfig that expires in hours and cannot mint an admin one
@@ -233,7 +235,7 @@ should not need one.
 `expirationSeconds`, default 8 h, accepted 10 min to 24 h) for `CN=alice`, `O=oa:readers`, and writes a 0600 kubeconfig outside the repository
 (`~/.kube/oa-alice-reader.kubeconfig`; a path inside the repository is refused). `ACCESS=admin` asks for `O=oa:admins` instead (cluster-admin through the
 group). The private key is generated on your machine; the `system:masters` file only files and approves the request, and stays the escrowed break-glass
-credential, not the routine one. What each group may do is the apps `platform-rbac` brick (`oa-admins` to `cluster-admin`, `oa-readers` to `view`): a certificate
+credential, not the routine one. Who holds that credential, where it is escrowed and when it is re-issued is not recorded yet: the owner names them (infra #331, open). What each group may do is the apps `platform-rbac` brick (`oa-admins` to `cluster-admin`, `oa-readers` to `view`): a certificate
 carrying a group no binding names can do nothing. Revoking one person before the certificate expires means deleting or narrowing the binding of their
 group (it takes effect at once, the certificate stays valid but is refused); a group binding cannot single out one holder, so for per-person revocation
 bind the user by name instead (`rbac-review` flags it for you to record). `rbac-review` and `cluster-security` 3.7 allow exactly these two bindings and nothing else under those names.

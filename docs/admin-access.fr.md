@@ -226,7 +226,9 @@ approuve et une sortie Internet fermée sont venues après ; aucune n'opère une
 certificat client pour `O=system:masters`, qui court-circuite RBAC, et
 Kubernetes ne sait pas révoquer un certificat client : un kubeconfig qui fuite
 reste valable jusqu'à son expiration, et le seul remède est de faire tourner la
-CA du cluster. Traiter ce fichier comme le secret qu'il est — il est aussi dans
+CA du cluster. Il expire un an après son émission et aucun réglage ne le raccourcit
+(`key-management.fr.md`, K2) ; lire la date du vôtre avec
+`kubectl config view --raw -o jsonpath='{.users[0].user.client-certificate-data}' | base64 -d | openssl x509 -noout -enddate`. Traiter ce fichier comme le secret qu'il est — il est aussi dans
 le tfstate et dans les deux stores d'artefacts. Pour le travail en lecture
 seule, porter moins : `task talosconfig-new PROVIDER=…` émet un talosconfig
 `os:reader` qui expire en heures et ne peut pas s'en forger un d'admin (prouvé
@@ -241,7 +243,7 @@ réutiliser jusqu'à son expiration plutôt qu'un par exécution : émettre est 
 `expirationSeconds`, 8 h par défaut, de 10 min à 24 h acceptés) pour `CN=alice`, `O=oa:readers`, et écrit un kubeconfig en 0600 hors du dépôt
 (`~/.kube/oa-alice-reader.kubeconfig` ; un chemin dans le dépôt est refusé). `ACCESS=admin` demande `O=oa:admins` (cluster-admin via le
 groupe). La clé privée est générée sur votre machine ; le fichier `system:masters` ne sert qu'à déposer et approuver la demande, et reste le
-credential de secours sous séquestre, pas le routinier. Ce que chaque groupe peut faire est dans la brique apps `platform-rbac` (`oa-admins` vers `cluster-admin`,
+credential de secours sous séquestre, pas le routinier. Qui détient ce credential, où il est mis sous séquestre et quand il est ré-émis n'est pas encore consigné : le propriétaire les nomme (infra #331, ouvert). Ce que chaque groupe peut faire est dans la brique apps `platform-rbac` (`oa-admins` vers `cluster-admin`,
 `oa-readers` vers `view`) : un certificat portant un groupe qu'aucun binding ne nomme ne peut rien faire. Révoquer une personne avant l'expiration du certificat
 = supprimer ou restreindre le binding de son groupe (effet immédiat, le certificat reste valide mais est refusé) ; un binding de groupe ne peut pas viser un seul porteur,
 donc pour une révocation par personne lier l'utilisateur par son nom (`rbac-review` le signale, à consigner). `rbac-review` et `cluster-security` 3.7 autorisent exactement ces deux bindings et rien d'autre sous ces noms.
