@@ -218,8 +218,9 @@ the bastion trusts and a closed Internet egress came after; none of them operate
 ⚠️ **The kubeconfig cannot be revoked.** `talosctl kubeconfig` issues a client
 certificate for `O=system:masters`, which bypasses RBAC, and Kubernetes has no
 revocation for client certificates: a leaked kubeconfig is valid until it
-expires, and the only remedy is rotating the cluster CA. It expires one year after it is issued and no setting shortens that
-(`key-management.md`, K2); read the date of yours with
+expires, and the only remedy is rotating the cluster CA. It expires 365 days and 10 s after it is issued by default; a Talos machine-config key,
+`cluster.adminKubeconfig.certLifetime`, could shorten that, but this repository does not set it and
+whether the provider's kubeconfig then follows was not tried (`key-management.md`, K2); read the date of yours with
 `kubectl config view --raw -o jsonpath='{.users[0].user.client-certificate-data}' | base64 -d | openssl x509 -noout -enddate`. Treat the file as the
 secret it is — it is also in the tfstate and in both artifact stores. For
 read-only work, carry less: `task talosconfig-new PROVIDER=… ` issues an

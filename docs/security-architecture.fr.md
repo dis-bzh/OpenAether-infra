@@ -82,7 +82,7 @@ L'audit a trouvé deux affirmations que le code contredit ; les deux sont corrig
 | Secrets machine livrés par l'API de maintenance de Talos | Conception amont | `first-cluster.fr.md`, « Risque résiduel » |
 | Compte SSH de secours partagé à côté des nominatifs | Automatisation et secours | `key-management.fr.md` |
 | Le groupe de sécurité de Scaleway ne filtre pas le réseau privé : à l'intérieur, les nœuds admettent l'API Talos, le kubelet et etcd depuis tout le sous-réseau, et il n'y a pas de pare-feu d'hôte par défaut (une option `node_firewall_mode = "port_allowlist"` existe ; pas de mode bloquant, infra #322) | Le groupe du provider ne filtre que le trafic public et les nœuds n'ont pas d'adresse publique ; le mTLS ou l'authentification propre à chaque service est la barrière restante | `network.fr.md`, section 6, points 1 et 2 |
-| Verrou d'objet et versionnement des buckets optionnels (`backup_immutability`), essayés en partie seulement (`governance` et `compliance` avec une rétention d'un jour chez les trois stores) ; les clés S3 du cluster sont celles de l'opérateur sauf si des paires dédiées sont données | Le support des providers et la politique de clés ne sont pas décidés | `backup-policy.fr.md`, sections 3 et 4 |
+| Verrou d'objet et versionnement des buckets optionnels (`backup_immutability`), essayés en partie seulement (`governance` avec une rétention d'un jour acceptée chez les trois stores, son refus et son contournement lus chez OVH et Outscale ; `compliance` avec une rétention d'un jour chez les trois) ; les clés S3 du cluster sont celles de l'opérateur sauf si des paires dédiées sont données | Le support des providers et la politique de clés ne sont pas décidés | `backup-policy.fr.md`, sections 3 et 4 |
 
 ## 6. Revue
 

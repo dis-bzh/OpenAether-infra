@@ -226,8 +226,9 @@ approuve et une sortie Internet fermée sont venues après ; aucune n'opère une
 certificat client pour `O=system:masters`, qui court-circuite RBAC, et
 Kubernetes ne sait pas révoquer un certificat client : un kubeconfig qui fuite
 reste valable jusqu'à son expiration, et le seul remède est de faire tourner la
-CA du cluster. Il expire un an après son émission et aucun réglage ne le raccourcit
-(`key-management.fr.md`, K2) ; lire la date du vôtre avec
+CA du cluster. Il expire par défaut 365 jours et 10 s après son émission ; une clé de configuration machine de Talos,
+`cluster.adminKubeconfig.certLifetime`, pourrait le raccourcir, mais ce dépôt ne la définit pas et
+si le kubeconfig du provider la suit n'a pas été essayé (`key-management.fr.md`, K2) ; lire la date du vôtre avec
 `kubectl config view --raw -o jsonpath='{.users[0].user.client-certificate-data}' | base64 -d | openssl x509 -noout -enddate`. Traiter ce fichier comme le secret qu'il est — il est aussi dans
 le tfstate et dans les deux stores d'artefacts. Pour le travail en lecture
 seule, porter moins : `task talosconfig-new PROVIDER=…` émet un talosconfig

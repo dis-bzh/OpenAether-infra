@@ -82,7 +82,7 @@ The audit found two statements that the code contradicts; both are fixed in the 
 | Machine secrets delivered over the Talos maintenance API | Upstream design | `first-cluster.md`, "Residual risk" |
 | Shared break-glass SSH account beside named ones | Automation and break-glass | `key-management.md` |
 | Scaleway's security group does not filter the private network: inside it the nodes admit the Talos API, kubelet and etcd ports from the whole subnet, and there is no host firewall by default (a `node_firewall_mode = "port_allowlist"` opt-in exists; no blocking mode, infra #322) | The provider's group filters public traffic only and the nodes have no public address; each service's own mTLS or authentication is the remaining barrier | `network.md`, section 6, items 1 and 2 |
-| Object lock and versioning on the buckets are opt-in (`backup_immutability`), tried only in part (`governance` and `compliance` with a one-day retention on the three stores); the in-cluster S3 keys are the operator's unless dedicated pairs are given | Provider support and the key policy are not decided | `backup-policy.md`, sections 3 and 4 |
+| Object lock and versioning on the buckets are opt-in (`backup_immutability`), tried only in part (`governance` with a one-day retention accepted on the three stores, its refusal and bypass read on OVH and Outscale; `compliance` with a one-day retention on the three); the in-cluster S3 keys are the operator's unless dedicated pairs are given | Provider support and the key policy are not decided | `backup-policy.md`, sections 3 and 4 |
 
 ## 6. Review
 
