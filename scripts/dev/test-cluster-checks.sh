@@ -1040,6 +1040,13 @@ for c in '-|the output absent (a state written before it existed, or a backend t
     && ok "${c#*|} is UNCHECKED ($(tally 3) unknown), not a pass" \
     || bad "${c#*|} was read as an answer (failed=$(tally 2), unknown=$(tally 3), baseline ${F0}/${U0}): $RUN_OUT"
 done
+# The stub tofu above only returns what the case feeds it: it cannot tell that the real output maps each name to its own variable. A swapped
+# mapping (deploy_flux = var.deploy_app_lb) would pass every case above and make cluster-verify judge Flux on the load balancer switch.
+SWB="$(awk '/^output "applied_switches"/ { w = 1 } w { print } w && /^}/ { exit }' "$ROOT/infrastructure/opentofu/cluster/outputs.tf")"
+{ grep -Eq '^[[:space:]]*deploy_flux[[:space:]]*=[[:space:]]*var\.deploy_flux[[:space:]]*$' <<<"$SWB" \
+    && grep -Eq '^[[:space:]]*deploy_app_lb[[:space:]]*=[[:space:]]*var\.deploy_app_lb[[:space:]]*$' <<<"$SWB" && [ "$(grep -c 'var\.' <<<"$SWB")" = 2 ]; } \
+  && ok "outputs.tf: applied_switches maps deploy_flux to var.deploy_flux and deploy_app_lb to var.deploy_app_lb (read as text; tofu was not run)" \
+  || bad "outputs.tf: the applied_switches output does not map each switch to its own variable: $SWB"
 
 # =============================================================================
 # cluster-upgrade: the path across minors
