@@ -1031,7 +1031,7 @@ echo "=== a bump is offered only if old enough, not withdrawn, not retagged, not
 # OSV has had a look. Offline: PyPI and OSV are a local server that the real HTTP
 # code talks to, and GitHub is a patched `_gh_json`.
 RENOVATE_CFG="${RENOVATE_CFG:-$ROOT/renovate.json5}" CLEA_TOML="${CLEA_TOML:-$ROOT/clea.toml}" ROOT_DIR="$ROOT" COUNTFILE="$TMP/count-offer" python3 - "$CLEA" <<'PY'
-import contextlib, http.server, importlib.util, io, json, os, re, shlex, socket, sys, tempfile, threading
+import contextlib, http.server, importlib.util, io, json, os, re, shlex, socket, sys, tempfile, threading, urllib.parse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -1267,7 +1267,7 @@ check("the memory merged across the rows of a dependency keeps the move, whereve
       clea.tag_memory(prev)["m/n"]["v1"] == {"commit": "b" * 40, "moved": tw})
 
 # --- the network layer: a local server speaking PyPI's and OSV's shapes ------
-SERVER = {"pypi": lambda name: (404, b""), "osv": lambda body: (200, b"{}")}
+SERVER = {"pypi": lambda name: (404, b""), "npm": lambda name: (404, b""), "osv": lambda body: (200, b"{}")}
 POSTS = []
 class Handler(http.server.BaseHTTPRequestHandler):
     def _reply(self, status, body):
@@ -1275,7 +1275,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers(); self.wfile.write(body)
     def do_GET(self):
         m = re.fullmatch(r"/pypi/([^/]+)/json", self.path)
-        self._reply(*(SERVER["pypi"](m.group(1)) if m else (404, b"")))
+        n = re.fullmatch(r"/npm/(.+)", self.path)
+        self._reply(*(SERVER["pypi"](m.group(1)) if m else SERVER["npm"](urllib.parse.unquote(n.group(1))) if n else (404, b"")))
     def do_POST(self):
         raw = self.rfile.read(int(self.headers["Content-Length"]))
         POSTS.append((self.path, self.headers.get("Content-Type"), json.loads(raw)))
@@ -1286,6 +1287,7 @@ httpd = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
 threading.Thread(target=httpd.serve_forever, daemon=True).start()
 BASE = f"http://127.0.0.1:{port}"
 clea.PYPI_API, clea.OSV_QUERY_URL = BASE + "/pypi", BASE + "/osv/v1/query"
+clea.NPM_API = BASE + "/npm"
 sock = socket.socket(); sock.bind(("127.0.0.1", 0)); dead = f"http://127.0.0.1:{sock.getsockname()[1]}/v1/query"; sock.close()
 
 def pypi_file(at, yanked=False, reason=None):
@@ -1737,6 +1739,64 @@ check("report: the section names the dependency, the lag and the limit; a young 
 check("report: no section when nothing is that far behind, or the rule is off",
       "minor release(s)" not in clea.render_report(lag_state(2, d_near))
       and "minor release(s)" not in clea.render_report(lag_state(None, d_far)))
+
+# --- #434: an npm reader, and an anchor Cléa is declared not to read -----------
+def npm_doc(latest, times, deprecated=None):
+    return json.dumps({"name": "acme-js", "dist-tags": ({"latest": latest, "next": "9.0.0-rc.1"} if latest else {}),
+                       "time": times, "versions": ({latest: ({"deprecated": deprecated} if deprecated else {}), "9.0.0-rc.1": {}} if latest else {})}).encode()
+NPMDOC = {"created": ago(days=90), "1.0.0": ago(days=40), "1.1.0": ago(days=3), "9.0.0-rc.1": ago(days=1)}
+NPMPKG = {"acme-js": npm_doc("1.1.0", NPMDOC), "@acme/js": npm_doc("1.1.0", NPMDOC)}
+SERVER["npm"] = lambda name: (200, NPMPKG[name]) if name in NPMPKG else (404, b"")
+got = clea.latest_npm("acme-js", None)
+check("npm: the version is dist-tags.latest (a prerelease above it is not it), dated by `time`",
+      got["tag"] == "1.1.0" and got["released_at"] == NPMDOC["1.1.0"] and got["withdrawn"] is None)
+check("npm: a scoped name is asked as @scope%2Fname", clea.latest_npm("@acme/js", None)["tag"] == "1.1.0")
+NPMPKG["acme-old"] = npm_doc("1.1.0", NPMDOC, "use 2.x\nnow `please`")
+check("npm: a deprecated release is withdrawn, with npm's reason on one line",
+      clea.latest_npm("acme-old", None)["withdrawn"] == "deprecated on npm: use 2.x now 'please'")
+NPMPKG["acme-notime"] = npm_doc("1.1.0", {})
+check("npm: no `time` entry means no date, not today", clea.latest_npm("acme-notime", None)["released_at"] is None)
+NPMPKG["acme-nolatest"] = npm_doc(None, {})
+NPMPKG["acme-html"] = b"<html>maintenance</html>"
+for label, name in (("no dist-tags.latest", "acme-nolatest"), ("an answer that is not JSON", "acme-html"), ("an unknown package", "acme-nope")):
+    try: clea.latest_npm(name, None); check(f"npm: {label} is a Cléa error", False)
+    except clea.CleaError: check(f"npm: {label} is a Cléa error", True)
+
+work3 = tempfile.mkdtemp()
+open(work3 + "/ci.yml", "w").write('env:\n  # clea-test: datasource=npm depName=acme-js\n  JS_VERSION: "1.0.0"\n')
+open(work3 + "/dns.tf", "w").write('variable "dns" {\n  # clea-test: datasource=docker depName=registry.example/acme/dns\n  default = "v1.12.4"\n}\n')
+BASE_TOML = '[scan]\nmarker = "# clea-test:"\n[policy]\nmin_release_age_days = 5\n'
+def toml3(extra=""): open(work3 + "/clea.toml", "w").write(BASE_TOML + extra)
+ROW = lambda dep="registry.example/acme/dns", why="a cluster-side change: it rolls DNS": f'[[not_watched]]\ndep = "{dep}"\nreason = "{why}"\n'
+toml3()
+rc, st, rep, probed, _, said = scan(root=work3, strict=True)
+check("scan: the npm anchor resolves to a real latest", by(st, "acme-js")["latest"] == "1.1.0" and by(st, "acme-js")["behind"])
+check("scan: a docker anchor nobody declares is still an unknown datasource, and --strict fails (the twin of the next check)",
+      rc == 1 and any("unknown datasource 'docker'" in e for e in st["errors"]))
+toml3(ROW())
+rc, st, rep, probed, _, said = scan(root=work3, strict=True)
+check("scan: a declared docker anchor leaves the errors list empty and --strict green", rc == 0 and st["errors"] == [])
+check("scan: …it is kept out of the rows and the probe matrix, so no bump can be made of it",
+      all(d["dep"] != "registry.example/acme/dns" for d in st["deps"]) and "registry.example/acme/dns" not in probed)
+check("scan: …and the state keeps where it is, what it pins and why it is declared",
+      st["declared"] == [{"dep": "registry.example/acme/dns", "file": "dns.tf", "line": 2, "current": "v1.12.4",
+                          "reason": "a cluster-side change: it rolls DNS"}])
+check("report: …the Not watched section names it with the reason, never `Every pin is ... watched`",
+      "`dns.tf:2` — `registry.example/acme/dns` = `v1.12.4`: a cluster-side change: it rolls DNS" in rep
+      and "Every pin is anchored, readable and watched." not in rep)
+toml3(ROW(dep="registry.example/acme/gone"))
+rc, st, *_ = scan(root=work3, strict=True)
+check("scan: a declaration that matches no anchor is an error, so it cannot outlive the pin it excused",
+      rc == 1 and any("registry.example/acme/gone" in e and "matches no anchor" in e for e in st["errors"]))
+for label, body in (("without a reason", '[[not_watched]]\ndep = "registry.example/acme/dns"\n'),
+                    ("with an empty reason", ROW(why="")),
+                    ("without a dep", '[[not_watched]]\nreason = "x"\n'),
+                    ("twice for one dep", ROW() + ROW())):
+    toml3(body)
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+        rc = clea.main(["--root", work3, "scan", "--state", work3 + "/x.json"])
+    check(f"scan: a [[not_watched]] row {label} stops the run, naming the table", rc == 1 and "not_watched" in err.getvalue())
 
 # --- Renovate and Cléa read one number ---------------------------------------
 import tomllib  # the file itself, not load_config: a deleted knob must not hide behind the default
