@@ -73,9 +73,17 @@ assert any(i.endswith("-backups-dev") for i in others) and all(not [s for s in d
 PY
 grep -q "NO delete of any kind" <<<"$out_s" && grep -q "bucket $P-audit-dev" <<<"$out_s" && ok "audit-sink: says why there is no delete, and names the audit bucket" || bad "audit-sink text"
 { cat "$SB/t.tfvars"; printf '%s\n' 'audit_sink_placement = "other_provider"' 'audit_sink_endpoint = "https://s3.gra.io.cloud.ovh.net"' 'audit_sink_region = "gra"'; } >"$SB/ov.tfvars"
-out_ov="$($R "$SB/ov.tfvars" audit-sink 2>&1)"
-{ grep -q "audit-sink pair for ovh" <<<"$out_ov" && grep -q "CANNOT be isolated per bucket" <<<"$out_ov" && ! grep -q '"Version"' <<<"$out_ov"; } \
-  && ok "audit-sink on OVH: no bucket policy, and the missing per-bucket isolation is stated" || bad "OVH sink: $out_ov"
+# infra #393: an OVH key pair reaches every bucket of its project, so the recipe will not call it dedicated until the operator names the sink's own project
+out_ov0="$($R "$SB/ov.tfvars" audit-sink 2>&1)"; rc_ov0=$?
+{ [ "$rc_ov0" = 2 ] && grep -q "OVH_SINK_PROJECT_ID" <<<"$out_ov0" && ! grep -q "Rights the pair must hold" <<<"$out_ov0"; } \
+  && ok "audit-sink on OVH without OVH_SINK_PROJECT_ID: refused (exit 2), nothing printed that reads as a recipe" || bad "OVH sink without a project: rc=$rc_ov0 $out_ov0"
+OVH_SINK_PROJECT_ID="has space" $R "$SB/ov.tfvars" audit-sink >/dev/null 2>&1; [ $? = 2 ] && ok "a project id that is not one word is refused" || bad "odd project id accepted"
+out_ov="$(OVH_SINK_PROJECT_ID=0123abcd $R "$SB/ov.tfvars" audit-sink 2>&1)"
+{ grep -q "audit-sink pair for ovh project 0123abcd" <<<"$out_ov" && grep -q "CANNOT be isolated per bucket" <<<"$out_ov" && ! grep -q '"Version"' <<<"$out_ov"; } \
+  && ok "audit-sink on OVH with its own project: no bucket policy, the missing per-bucket isolation is stated, the project is named" || bad "OVH sink: $out_ov"
+grep -q "aws s3api list-buckets" <<<"$out_ov" && ok "…and the proof that the pair reaches that one bucket only is printed" || bad "no list-buckets proof: $out_ov"
+out_sv="$(OVH_SINK_PROJECT_ID=0123abcd $R "$SB/s.tfvars" audit-sink 2>&1)"
+{ ! grep -q "0123abcd" <<<"$out_sv" && grep -q "audit-sink pair for scaleway (bucket" <<<"$out_sv"; } && ok "a sink that is not on OVH ignores the variable" || bad "non-OVH sink changed: $out_sv"
 $R "$SB/ov.tfvars" audit-sink-secondary >/dev/null 2>&1; [ $? = 2 ] && ok "audit-sink-secondary without a second sink is a usage error" || bad "secondary accepted"
 { cat "$SB/t.tfvars"; printf '%s\n' 'audit_sink_placement = "other_provider"' 'audit_sink_endpoint = "https://s3.fr-par.scw.cloud"' 'audit_sink_region = "gra"'; } >"$SB/bad.tfvars"
 $R "$SB/bad.tfvars" audit-sink >/dev/null 2>&1; [ $? = 2 ] && ok "an incoherent sink choice is refused here too" || bad "incoherent sink accepted"

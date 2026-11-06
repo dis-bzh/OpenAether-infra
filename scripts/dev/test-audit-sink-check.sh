@@ -46,6 +46,7 @@ chunk cp-2 "$TODAY" 303 0 500; chunk cp-2 "$TODAY" 303 500 777
 OUT="$(check)"; RC=$?
 is "exit 0" 0 "$RC"
 grep -q "no gap in the sequence over 8 chunk(s); 1 repeated" <<<"$OUT" && ok "no gap, the repeated range is counted and is not a defect" || bad "summary: $OUT"
+grep -q "no delete marker is the current version of an object under audit/" <<<"$OUT" && ok "a versioned store with no delete marker says so" || bad "no delete-marker line: $OUT"
 grep -q "object lock GOVERNANCE, default retention 365 days" <<<"$OUT" && ok "the lock mode and retention are read back and equal the tfvars" || bad "lock line: $OUT"
 grep -q "all JSON audit events" <<<"$OUT" && ok "a sample is decrypted and parses as audit events" || bad "no sample: $OUT"
 grep -q "fixture-password" <<<"$OUT" && bad "the password was printed" || ok "the password is not printed"
@@ -110,6 +111,24 @@ is "exit 1" 1 "$RC"
 grep -q "cannot open the repository" <<<"$OUT" && ! grep -q "no gap in the sequence" <<<"$OUT" && ok "named, and nothing is claimed about the sequence" || bad "$OUT"
 OUT="$(env -i HOME="$HOME" PATH="$SB:$PATH" OVH_AWS_ACCESS_KEY_ID=A OVH_AWS_SECRET_ACCESS_KEY=B ./scripts/ops/audit-sink-check.sh "$SB/t.tfvars" 2>&1)"; RC=$?
 is "no password given: exit 2" 2 "$RC"
+
+echo "--- delete markers (infra #393): a key that can write one makes the repository look emptied ---"
+marker() { # <key> <IsLatest true|false> — one delete marker in the versioned bucket, appended to what is there
+  local f="$FAKE_S3/buckets/$AUD/versions.json"; [ -s "$f" ] || echo '{"DeleteMarkers":[]}' >"$f"
+  jq -c --arg k "$1" --argjson l "$2" '.DeleteMarkers += [{Key: $k, VersionId: "7", IsLatest: $l, LastModified: "2026-10-22T11:00:00.000Z"}]' "$f" >"$f.new" && mv "$f.new" "$f"
+}
+reset; chunk cp-1 "$TODAY" 101 0 300; marker "audit/cp-1/$TODAY/snapshots/aa11" true
+OUT="$(check)"; RC=$?
+is "a delete marker that is the current version of a repository object: exit 1" 1 "$RC"
+grep -q "1 delete marker(s) are the current version.*audit/cp-1/$TODAY/snapshots/aa11" <<<"$OUT" && ok "it counts them and names the newest key" || bad "$OUT"
+grep -q "no gap in the sequence" <<<"$OUT" && ok "the sequence check still ran (the marker is its own finding)" || bad "$OUT"
+reset; chunk cp-1 "$TODAY" 101 0 300; marker "audit/cp-1/$TODAY/snapshots/aa11" false; marker "other-prefix/x" true
+OUT="$(check)"; RC=$?
+is "a marker the object was re-put over, and one outside the sink's prefix: exit 0" 0 "$RC"
+reset; chunk cp-1 "$TODAY" 101 0 300; : >"$FAKE_S3/refuse/list-object-versions"; echo "AccessDenied" >"$FAKE_S3/refuse/list-object-versions"
+OUT="$(check)"; RC=$?
+is "versions that cannot be listed are not read as 'no marker': exit 1" 1 "$RC"
+grep -q "cannot list the object versions" <<<"$OUT" && ! grep -q "no delete marker is the current" <<<"$OUT" && ok "said, and no all-clear" || bad "$OUT"
 
 echo "--- the lock ---"
 reset; lock COMPLIANCE 365

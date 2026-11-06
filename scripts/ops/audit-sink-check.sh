@@ -3,7 +3,9 @@
 # (infra #318, docs/audit-sink.md, sections 3 and 6). Run it from the operator's machine with the escrowed repository password, at least
 # weekly and after any outage of the sink or of a shipper. Read-only: it lists, reads and decrypts into a scratch directory it removes.
 #
-#   1. LOCK        the bucket's versioning, lock mode and default retention, read back from the store, equal the tfvars.
+#   1. LOCK        the bucket's versioning, lock mode and default retention, read back from the store, equal the tfvars. No delete marker is the
+#                  current version of an object under the prefix: a key that can write one (OVH cannot withhold the right, infra #393) makes
+#                  the repository look emptied to a reader that does not list versions, and the lock does not stop it.
 #   2. SEQUENCE    for every node and every UTC day in the window: the snapshots are ranges `oa-pos=<inode>:<from>:<to>[:eof]` of the apiserver's
 #                  files. Per inode they must start at 0 and chain with no hole (`from` <= what is covered so far; a repeat is counted, not
 #                  a failure), nothing may follow an `eof`, and a new inode must follow a closed one (an inode number reused by a later file, a chunk at 0 after an eof, is a new file). An `oa-gap` snapshot is a LOSS the shipper
@@ -78,6 +80,15 @@ case "$STATE" in
   *"lock=none"*) bad "NO object lock on the bucket [$STATE]: the sink can be emptied by whoever holds a key with the right" ;;
   *) bad "lock is not ${AS_MODE}:${AS_DAYS} [$STATE]" ;;
 esac
+# A store that cannot list the versions proves nothing about markers: that is a defect, not an all-clear.
+if VERS="$(aws s3api list-object-versions --bucket "$BUCKET" --prefix "$AS_PREFIX/" --endpoint-url "$EP" --output json 2>"$SCRATCH/err")"; then
+  MARKS="$(jq '[.DeleteMarkers[]? | select(.IsLatest)]' <<<"$VERS" 2>/dev/null)" || MARKS=""
+  case "$(jq 'length' <<<"$MARKS" 2>/dev/null)" in
+    0) ok "no delete marker is the current version of an object under ${AS_PREFIX}/" ;;
+    [1-9]*) bad "$(jq 'length' <<<"$MARKS") delete marker(s) are the current version of an object under ${AS_PREFIX}/ (newest: $(jq -r 'sort_by(.LastModified) | last | "\(.Key) at \(.LastModified)"' <<<"$MARKS")): a reader that does not list versions sees the repository emptied (infra #393)" ;;
+    *) bad "the list of object versions is not JSON: delete markers not checked" ;;
+  esac
+else bad "cannot list the object versions ($(tail -n 1 "$SCRATCH/err" | cut -c1-160)): delete markers not checked"; fi
 
 # --- 2. sequence ------------------------------------------------------------------------------------------------------
 repo_of() { # <node> <day>

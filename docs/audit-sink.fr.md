@@ -94,7 +94,7 @@ audit-sink-check (Deployment) liste le préfixe toutes les 5 minutes --> oa_audi
   l'opérateur et le dit clairement.
 - **OVH n'a pas de politique de bucket par son API S3** : la paire d'un utilisateur OVH ne peut pas être limitée à un bucket, donc chez OVH
   la paire « dédiée » atteint encore les autres buckets de ce projet OVH. Isolez-la en donnant au puits son propre projet/utilisateur OVH,
-  et lisez les droits dans l'API OVH (non vérifié). La recette l'imprime.
+  et lisez les droits dans l'API OVH (non vérifié). La recette l'imprime, et pour un puits OVH elle sort en code 2 tant que `OVH_SINK_PROJECT_ID` ne nomme pas ce projet ; `audit-sink-check.sh` échoue sur un marqueur de suppression qui est la version courante d'un objet sous le préfixe (infra #393).
 
 ## 5. Comportement en panne
 
