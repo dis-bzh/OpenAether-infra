@@ -484,7 +484,8 @@ if [ "$ENSURE" = true ]; then
        # The refusals above are the ones the real build would meet, so a plan-only run says them before the approval.
        if [ "$PLAN_ONLY" = true ]; then
          echo "~ plan only: the image ${VERSION} on ${TGT} is missing or differs from its plan: it WOULD be built (and was NOT)."
-         echo "  What looks the image up by name cannot be planned before it exists (exit 3)."
+         echo "  Missing: what looks the image up by name cannot be planned before it exists. Changed: a real run rebuilds it first, and the"
+         echo "  plan is better read after the rebuild (exit 3)."
          exit 3
        fi
        tofu apply "$PLAN" ;;

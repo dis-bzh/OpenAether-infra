@@ -515,18 +515,29 @@ echo "--- Scaleway LB-ACL trap: the infrastructure step is retried ONCE, on that
 printf 'Error: Provider produced inconsistent final plan\n\nWhen expanding the plan for %s to include new values learned so far during apply,\nprovider "registry.opentofu.org/scaleway/scaleway" produced an invalid new value for .match[0].ip_subnet: was null.\n' 'scaleway_lb_acl.app_allow["http"]' >"$W/acl.fail"
 sed 's/scaleway_lb_acl.app_allow\["http"\]/scaleway_instance_server.cp[0]/' "$W/acl.fail" >"$W/other-resource.fail"
 printf 'Error: creating server: quota exceeded for scaleway_lb_acl.app_allow\n' >"$W/other-error.fail"
+# The ACL address also appears in ordinary progress lines, and a #352-shape failure (inconsistent plan on the Talos secrets) can come from an apply that
+# created the ACLs: the phrase and the ACL address must be in the SAME error, or the retry would apply a second time over a half-landed #352.
+ACLPROG='module.scw[0].scaleway_lb_acl.app_allow["http"]: Creation complete after 1s [id=fr-par-1/0000]'
+printf '%s\n\033[31m╷\033[0m\n\033[31m│\033[0m \033[1;31mError: \033[0m\033[1mProvider produced inconsistent final plan\033[0m\n│ \n│ When expanding the plan for\n│ talos_machine_secrets.this to include new values learned so far during apply\n╵\n' "$ACLPROG" >"$W/acl-progress-other.fail"
+{ cat "$W/acl-progress-other.fail"; cat "$W/acl.fail"; } >"$W/acl-and-other.fail"
+# …and the real shape: colours, the box, the address wrapped onto the next line, the ACL progress line above it.
+printf '%s\n\033[31m╷\033[0m\n\033[31m│\033[0m \033[1;31mError: \033[0m\033[1mProvider produced inconsistent final plan\033[0m\n│ \n│ When expanding the plan for\n│ module.scw[0].scaleway_lb_acl.app_allow["http"] to include new values learned so far during apply\n╵\n' "$ACLPROG" >"$W/acl-boxed.fail"
 EXTRA="APPLY_FAIL_FILE=$W/acl.fail" run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
 { [ "$rc" = 0 ] && grep -q '^~ the apply failed on the Scaleway load balancer ACL' "$O" && grep -q 'Retrying the infrastructure step ONCE' "$O" \
     && [ "$(calls '^tofu plan -out=up-')" = 2 ] && [ "$(calls '^tofu apply up-')" = 2 ] && grep -q '^✓ cluster-up complete' "$O"; } \
   && ok "the ACL transcript: said so, a new plan and a second apply, and the journey ends rc 0" \
   || bad "ACL retry, exit $rc, plans $(calls '^tofu plan -out=up-'), applies $(calls '^tofu apply up-'): $(tail_of)"
+EXTRA="APPLY_FAIL_FILE=$W/acl-boxed.fail" run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+{ [ "$rc" = 0 ] && [ "$(calls '^tofu plan -out=up-')" = 2 ] && [ "$(calls '^tofu apply up-')" = 2 ]; } \
+  && ok "the ACL error as tofu prints it (colours, the box, the address on the next line, an ACL progress line above): retried once" \
+  || bad "boxed ACL transcript, exit $rc, plans $(calls '^tofu plan -out=up-'), applies $(calls '^tofu apply up-'): $(tail_of)"
 EXTRA="APPLY_FAIL_FILE=$W/acl.fail APPLY_FAIL_N=2" run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
 { [ "$rc" != 0 ] && [ "$(calls '^tofu apply up-')" = 2 ] && [ "$(calls '^tofu plan -out=up-')" = 2 ] && ! grep -q '^✓ cluster-up complete' "$O"; } \
   && ok "a second failure stops the run: one retry, never a loop" || bad "retry twice? exit $rc, applies $(calls '^tofu apply up-')"
-for f in other-error other-resource; do
+for f in other-error other-resource acl-progress-other acl-and-other; do
   EXTRA="APPLY_FAIL_FILE=$W/$f.fail" run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
   { [ "$rc" != 0 ] && [ "$(calls '^tofu apply up-')" = 1 ] && [ "$(calls '^tofu plan -out=up-')" = 1 ] && ! grep -q '^~ the apply failed on the Scaleway load balancer ACL' "$O"; } \
-    && ok "$f: not that trap (the message AND scaleway_lb_acl are both needed): no retry, the run fails as before" \
+    && ok "$f: not that trap (the message AND scaleway_lb_acl in the SAME error are both needed): no retry, the run fails as before" \
     || bad "$f: exit $rc, applies $(calls '^tofu apply up-'), retry line: $(grep -c 'Retrying the infrastructure step' "$O")"
 done
 # The retry goes through the same approval: on a terminal, with APPROVE=ask, the person is asked once more.

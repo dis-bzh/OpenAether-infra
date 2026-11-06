@@ -623,8 +623,9 @@ tasks:
       image the retention destroys. On a 0.3.x cluster the CNPG presync and the apps ref move are ONE step and
       CoreDNS is converged before the verify. APPROVE=auto answers the plans for you, for CI and for a shell that cannot
       be asked, and skips the retention. PLAN_ONLY=1 stops at the phase-1 plan with nothing created: the image is
-      planned and not built (if it would be built the plan cannot be read, because it looks the image up by name: the
-      run says the image WOULD be built and stops there with exit 0, before the plan, nothing created), the grow step
+      planned and not built (if it would be built, missing or changed, the run says the image WOULD be built and
+      stops there with exit 0, before the plan, nothing created; a missing image cannot be planned against, it is
+      looked up by name), the grow step
       only says which nodes it would create, nothing is applied (it still ensures
       the state buckets, renders the manifests and runs `tofu init`, and on a bootstrapped cluster the phase-1 plan
       opens or repairs the local Talos tunnels through the bastion, as `task plan` does: ssh processes on this machine,
@@ -666,7 +667,8 @@ tasks:
           echo "  (the backend needs them), the manifests rendered and tofu inited, as in any run."
           echo "  If the Talos image is missing (a new account, a new version) the plan cannot be read, because it"
           echo "  looks the image up by name. The image step says it WOULD be built, the run stops there with exit 0,"
-          echo "  before the plan, and nothing is created."
+          echo "  before the plan, and nothing is created. The same stop when the image exists but would be rebuilt"
+          echo "  (changed): the plan is then left for after the rebuild."
           echo "  That is the answer, not a fault: a real run builds the image first."
           echo "  On a bootstrapped cluster the plan also opens or repairs the local Talos tunnels, as task plan does"
           echo "  (ssh processes on this machine, nothing in the cloud)."
@@ -792,8 +794,9 @@ tasks:
         if [ -n "{{.PLAN_ONLY_ON}}" ] && [ -e "$IMG" ]; then
           rm -f "$IMG" "$MARK" "infrastructure/opentofu/cluster/$PLANFILE"
           echo "~ the phase-1 plan is not run: the Talos image would be built first (missing or changed)."
-          echo "  The rest of the journey looks the image up by name and cannot be planned before it exists;"
-          echo "  a real run builds it, then plans. Nothing was created."
+          echo "  If it is missing, the rest of the journey looks it up by name and cannot be planned before it exists;"
+          echo "  if it only changed, the plan is left for after the rebuild."
+          echo "  A real run builds it, then plans. Nothing was created."
           exit 0
         fi
         # PLAN_ONLY, and the grow step above WOULD create or configure nodes: the plan taken now would read the
@@ -852,10 +855,16 @@ tasks:
         # scaleway_lb_acl). Everything else of the apply LANDED and the address is in the state now, so the same command
         # converges (every fresh build in the 0.4.1 labs). So, once, and only on that exact transcript of the apply
         # that just failed (infra-apply drops the file before it runs): a new plan, the same approval, the same apply.
-        # Any other failure, and a second one, stop here as before.
+        # Any other failure, and a second one, stop here as before. The ACL must be named in the SAME error as the
+        # phrase (within 6 lines of it): its address is also in ordinary progress lines, and a second apply after a
+        # #352-shape failure (the Talos secrets) reached the nodes and broke them in a lab. EVERY such error must
+        # name the ACL, not only one of them.
         LOG=infrastructure/opentofu/cluster/.tofu-run.log
-        if grep -Fq 'Provider produced inconsistent final plan' "$LOG" 2>/dev/null \
-           && grep -Eq 'scaleway_lb_acl\.app_(allow|deny)' "$LOG" 2>/dev/null; then
+        if [ -f "$LOG" ] && sed -E 's/\x1b\[[0-9;]*m//g' "$LOG" | awk '
+             /Provider produced inconsistent final plan/ { if (w) bad++; w = 1; k = 0; next }
+             w && /scaleway_lb_acl\.app_(allow|deny)/ { good++; w = 0; next }
+             w && (/Error:/ || ++k > 6) { bad++; w = 0 }
+             END { if (w) bad++; exit !(good > 0 && bad == 0) }'; then
           echo "~ the apply failed on the Scaleway load balancer ACL (scaleway_lb_acl, \"Provider produced inconsistent"
           echo "  final plan\"): its allow list holds the NAT gateway's address, unknown before this apply and"
           echo "  in the state now. Retrying the infrastructure step ONCE (a new plan, the same approval)."
