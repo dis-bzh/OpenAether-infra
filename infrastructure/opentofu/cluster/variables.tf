@@ -1030,7 +1030,7 @@ variable "deploy_flux" {
     existing branch goes, in a local — no resource address moves, so flipping it
     cannot replace a node.
 
-    When false, git_repo_url / git_ref / flux_namespace / apps_profile are inert:
+    When false, git_repo_url / git_ref / flux_namespace are inert:
     they exist to fill a template that is never rendered.
   EOT
   type        = bool

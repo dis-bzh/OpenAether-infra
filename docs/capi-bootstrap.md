@@ -2,8 +2,10 @@
 
 🇫🇷 [Version française](capi-bootstrap.fr.md)
 
-Validated end to end on Scaleway, 2026-07-28 — before the re-scope, and **0.2.0
-deploys no CAPI**: this is kept for the release that does. An **optional path**, alongside
+Validated end to end on Scaleway, 2026-07-28 — before the re-scope. **OpenTofu deploys no
+CAPI**; with `deploy_flux = true` the apps `management` profile installs the CAPI operator,
+its providers and ORC (Running 1/1, 0 restarts on the 2026-10-12 lab, apps 0.1.0), and this pivot
+procedure is not part of that deploy. An **optional path**, alongside
 OpenTofu — not a replacement: CAPI creates the machines, OpenTofu still creates
 the substrate (on OVH, ~44 resources of which 3 are instances).
 

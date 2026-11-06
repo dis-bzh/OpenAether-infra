@@ -124,8 +124,11 @@ continuent de tourner — chaque enfant a son propre Flux.
 
 La voie CAPI **ne remplace pas** OpenTofu : sur OVH, l'essentiel de ce
 qu'OpenTofu crée n'est pas une instance de calcul. C'est une surcouche optionnelle
-et **cette version ne déploie aucun CAPI** — la procédure est conservée pour la
-version qui le fera : **[docs/capi-bootstrap.fr.md](docs/capi-bootstrap.fr.md)**.
+et **OpenTofu ne déploie aucun CAPI** : avec `deploy_flux = true`, le profil `management`
+des apps installe l'opérateur CAPI, ses providers et ORC (quatre Kustomizations ; Running
+1/1, 0 redémarrage au lab du 2026-10-12, apps 0.1.0), et aucun cluster enfant n'existe tant qu'un
+fichier de `apps/clusters/` n'est pas activé. La procédure de pivot depuis un cluster
+jetable est conservée comme option : **[docs/capi-bootstrap.fr.md](docs/capi-bootstrap.fr.md)**.
 
 ## Statut des couches
 

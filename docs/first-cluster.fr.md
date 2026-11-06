@@ -164,7 +164,7 @@ $EDITOR management-scaleway.tfvars
 | `node_nameservers` / `node_dns_boot_timeout` | optionnel : le résolveur propre des nœuds en DNS-over-TLS ou -HTTPS (Talos 1.14+), tout chiffré ou tout en clair. Lancé sur OVH (s'applique sans redémarrage) ; une liste qu'aucun nœud n'atteint ne se voit qu'au redémarrage suivant, et ce nœud n'a plus d'API Talos. Règles, compromis et vérification d'un nœud : `modules/talos/variables.tf` |
 
 `git_repo_url`, `git_ref` et `flux_namespace` disent à Flux où lire la plateforme (l'exemple nomme la
-version des apps qui va avec celle-ci) ; `apps_profile` est inerte. Tous sont inertes si tu retires
+version des apps qui va avec celle-ci). Tous sont inertes si tu retires
 `deploy_flux = true`. Laisse-les sauf si tu forkes les apps.
 
 Avant de dépenser quoi que ce soit : `task preflight`. Lint, rendu, validation,
@@ -201,7 +201,7 @@ chacun disant « nothing was applied » : plan de la phase 1 (`task infra-apply 
 puis la phase 2 (`cd infrastructure/opentofu/cluster && tofu apply phase2-<role>-<provider>.tfplan`, puis `task kubeconfig`). Un agent dont
 l'environnement refuse une application à l'aveugle a donc besoin de l'autorisation explicite du propriétaire pour la commande `APPROVE=auto` ;
 cette décision est celle du propriétaire, pas du dépôt. Recopie les lignes `deploy_flux = true` et `deploy_app_lb = true` de l'exemple : sans
-elles le cluster n'a que l'infrastructure (le vérificateur signale flux-system en rouge, par conception).
+elles le cluster n'a que l'infrastructure, et le vérificateur n'attend alors aucun namespace `flux-system` (il en signale un en rouge).
 
 Dans l'ordre, il crée les buckets d'état, d'artefacts, de journaux et de sauvegardes applicatives (le contrôle des
 identifiants ci-dessus), construit l'image Talos et la téléverse — **mesuré à

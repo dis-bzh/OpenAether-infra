@@ -98,9 +98,10 @@ the script prints paths, never values. The restic password, the database passwor
 Longhorn's passphrase are **not** seeded here: `openbao-vault-bootstrap` generates them
 inside OpenBao and prints none.
 
-This is not optional polish: without `backup/s3-primary` alone, six Kustomizations stay
-not-Ready and the DAG never converges (measured on Scaleway: 29 of 35 until seeded, all 35
-within about two minutes after). A deploy is not finished until this has run.
+This is not optional polish: without this seed, six Kustomizations stay not-Ready and the
+DAG does not converge (measured on Scaleway: 29 of 35 until seeded, all 35 within about two
+minutes after; the lab wrote the five paths at once, so no single path was isolated).
+A deploy is not finished until this has run.
 
 ```text
 secret/backup/s3-primary                      endpoint bucket access_key secret_key
@@ -134,12 +135,12 @@ deliberate. Test with `kubectl create job --from=cronjob/openbao-snapshot test -
 
 ```bash
 source .env.sh
-task preflight-quotas PROVIDER=outscale -- --add-vms 7 --add-cores 14 --add-ram-gb 44
+task preflight-quotas PROVIDER=outscale -- --add-vms 6 --add-cores 12 --add-ram-gb 22   # management-outscale example
 ```
 
-Exits non-zero if the topology overflows. It matters: Outscale caps at 40 GB RAM
-while an HA management needs 44, and the overrun is tolerated at creation before
-every later VM is silently refused. OVH caps at 10 instances — management (7)
+Exits non-zero if the topology overflows. It matters: Outscale caps at 40 GB RAM,
+a 3+3 management of `tinav5.c2r7p2` nodes needs 44 (no shipped example does), and
+the overrun is tolerated at creation before every later VM is silently refused. OVH caps at 10 instances — management (7)
 plus one child (2). See `docs/status.md`; the flags for each shipped example
 are in [`capacity.md`](capacity.md).
 

@@ -101,10 +101,10 @@ n'apparaît sur une ligne de commande ; le script affiche des chemins, jamais de
 password restic, les mots de passe des bases et la passphrase Longhorn ne sont **pas** semés
 ici : `openbao-vault-bootstrap` les génère dans OpenBao et n'en affiche aucun.
 
-Ce n'est pas du confort : sans `backup/s3-primary` seul, six Kustomizations restent
-not-Ready et le DAG ne converge jamais (mesuré sur Scaleway : 29 sur 35 tant que ce n'est
-pas semé, les 35 en environ deux minutes après). Un déploiement n'est pas terminé tant que
-ceci n'a pas tourné.
+Ce n'est pas du confort : sans ce semis, six Kustomizations restent not-Ready et le DAG
+ne converge pas (mesuré sur Scaleway : 29 sur 35 tant que ce n'est pas semé, les 35 en
+environ deux minutes après ; le lab a écrit les cinq chemins d'un coup, donc aucun chemin
+seul n'a été isolé). Un déploiement n'est pas terminé tant que ceci n'a pas tourné.
 
 ```text
 secret/backup/s3-primary                      endpoint bucket access_key secret_key
@@ -139,12 +139,13 @@ l'arrêt et Loki ne s'installe pas — c'est voulu. Test :
 
 ```bash
 source .env.sh
-task preflight-quotas PROVIDER=outscale -- --add-vms 7 --add-cores 14 --add-ram-gb 44
+task preflight-quotas PROVIDER=outscale -- --add-vms 6 --add-cores 12 --add-ram-gb 22   # exemple management-outscale
 ```
 
 Sort en erreur si la topologie dépasse. Ça compte : Outscale plafonne à 40 Go de
-RAM alors qu'un management HA en demande 44, et le dépassement est toléré à la
-création avant que toute VM suivante ne soit refusée en silence. OVH plafonne à
+RAM, un management 3+3 de nœuds `tinav5.c2r7p2` en demande 44 (aucun exemple livré
+n'est dans ce cas), et le dépassement est toléré à la création avant que toute VM
+suivante ne soit refusée en silence. OVH plafonne à
 10 instances — le management (7) plus un seul enfant (2). Cf. `docs/status.md` ;
 les options pour chaque exemple livré sont dans [`capacity.fr.md`](capacity.fr.md).
 
