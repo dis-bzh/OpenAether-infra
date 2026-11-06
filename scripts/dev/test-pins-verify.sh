@@ -31,6 +31,11 @@ printf 'variable "git_ref" {\n  default = "refs/tags/0.0.1"\n}\nvariable "talos_
 TFV="$C/envs/management-stub.tfvars"
 oa_artifact_pins flux "$M/flux-install.yaml" >"$W/flux.target"
 oa_artifact_pins cilium "$M/cilium.yaml" >"$W/cilium.target"
+# Derived from the committed pin, not written out: Flux 2.10 moved it to 1.10 and a hard-coded v1.9.6 / v1.9.9 made "ahead" mean "behind".
+KPIN="$(awk '$2 == "kustomize-controller" { print $3 }' "$W/flux.target")"; SPIN="$(awk '$2 == "source-controller" { print $3 }' "$W/flux.target")"
+SAHEAD="${SPIN%.*}.$(( ${SPIN##*.} + 3 ))"
+KBEHIND="$(IFS=. read -r ma mi _ <<<"${KPIN#v}"; echo "v${ma}.$((mi - 1)).5")"  # exactly one minor behind the pin, whatever the pin
+case "$KPIN$SAHEAD$KBEHIND" in *[!0-9v.]*|"") echo "✗ cannot derive the fixture versions from the pin" >&2; exit 1 ;; esac
 
 cat >"$W/stub" <<STUB
 #!/usr/bin/env bash
@@ -142,10 +147,10 @@ reset; printf 'cilium_manifest = <<EOT\nx\nEOT\n' >>"$TFV"; run
 [ -n "$(unkline 'cilium_manifest or flux_manifest is overridden')" ] && ok "an overridden manifest is UNCHECKED" || bad "no override line"
 
 echo "--- mutation: Flux behind / ahead / extra / unreadable ---"
-reset; setlive flux.live kustomize-controller v1.8.5; run
-{ [ -n "$(badline 'Flux controllers: kustomize-controller pinned v1.9.6 running v1.8.5')" ] && has "task cluster-bootstrap-sync PROVIDER=stub ROLE=management APPLY=1" && has "BEHIND"; } && ok "Flux behind: BAD with the command to run" || bad "$(grep Flux "$W/out")"
-reset; setlive flux.live source-controller v1.9.9; run
-{ [ -n "$(badline 'source-controller pinned v1.9.6 running v1.9.9')" ] && has "AHEAD of the pin" && [ "$rc" -ne 0 ]; } && ok "Flux ahead: BAD" || bad "$(grep Flux "$W/out")"
+reset; setlive flux.live kustomize-controller "$KBEHIND"; run
+{ [ -n "$(badline "Flux controllers: kustomize-controller pinned ${KPIN} running ${KBEHIND}")" ] && has "task cluster-bootstrap-sync PROVIDER=stub ROLE=management APPLY=1" && has "BEHIND"; } && ok "Flux behind: BAD with the command to run" || bad "$(grep Flux "$W/out")"
+reset; setlive flux.live source-controller "$SAHEAD"; run
+{ [ -n "$(badline "source-controller pinned ${SPIN} running ${SAHEAD}")" ] && has "AHEAD of the pin" && [ "$rc" -ne 0 ]; } && ok "Flux ahead: BAD" || bad "$(grep Flux "$W/out")"
 reset; echo "flux old-controller v0.1.0" >>"$FX/flux.live"; run
 [ -n "$(badline 'old-controller running v0.1.0 not pinned')" ] && ok "a controller running that the pin does not have is BAD" || bad "$(grep Flux "$W/out")"
 reset; : >"$FX/flux.unreadable"; run
