@@ -31,6 +31,8 @@ printf 'variable "git_ref" {\n  default = "refs/tags/0.0.1"\n}\nvariable "talos_
 TFV="$C/envs/management-stub.tfvars"
 oa_artifact_pins flux "$M/flux-install.yaml" >"$W/flux.target"
 oa_artifact_pins cilium "$M/cilium.yaml" >"$W/cilium.target"
+awk '/^kind: / { w = ($2 == "CustomResourceDefinition"); n = 0; next } w && !n && /^  name: / { print $2; n = 1 }' "$M/flux-install.yaml" >"$W/flux.crds"
+[ "$(wc -l <"$W/flux.crds")" = 15 ] || { echo "✗ the committed artifact does not give 15 Flux CRDs" >&2; exit 1; }
 # Derived from the committed pin, not written out: Flux 2.10 moved it to 1.10 and a hard-coded v1.9.6 / v1.9.9 made "ahead" mean "behind".
 KPIN="$(awk '$2 == "kustomize-controller" { print $3 }' "$W/flux.target")"; SPIN="$(awk '$2 == "source-controller" { print $3 }' "$W/flux.target")"
 SAHEAD="${SPIN%.*}.$(( ${SPIN##*.} + 3 ))"
@@ -55,13 +57,19 @@ if [ "\$n" = aws ]; then echo "Unable to locate credentials" >&2; exit 255; fi
 render() {
   while read -r _ n t; do
     case "\$2" in
-      deploy) jq -nc --arg n "\$n" --arg i "ghcr.io/fluxcd/\$n:\$t" '{metadata:{name:\$n},spec:{template:{spec:{containers:[{image:\$i}]}}}}' ;;
+      deploy) rr=1; grep -qx "\$n" "$FX/flux.notready" 2>/dev/null && rr=0
+              jq -nc --arg n "\$n" --arg i "ghcr.io/fluxcd/\$n:\$t" --argjson rr "\$rr" '{metadata:{name:\$n,generation:1},spec:{replicas:1,template:{spec:{containers:[{image:\$i}]}}},status:{observedGeneration:1,readyReplicas:\$rr}}' ;;
       ds) jq -nc --arg n "\$n" --arg i "quay.io/cilium/\$n:\$t@sha256:abc" '{metadata:{name:\$n},spec:{template:{spec:{containers:[{image:\$i}]}}}}' ;;
     esac
   done <"\$1" | jq -s '{items: .}'
 }
 case "\$*" in
   *"get --raw"*) echo ok ;;
+  *"get crd -l app.kubernetes.io/part-of=flux -o json") # the Flux CRDs, all Established (infra #448)
+    [ -f "$FX/flux.crd.unreadable" ] && exit 1
+    while read -r c; do grep -qx "\$c" "$FX/flux.crd.missing" 2>/dev/null && continue
+      jq -nc --arg n "\$c" '{metadata:{name:\$n},status:{conditions:[{type:"Established",status:"True"}]}}'
+    done <"$W/flux.crds" | jq -s '{items: .}' ;;
   *"custom-columns=V:.status.nodeInfo.osImage"*) echo "Talos (v1.14.4)" ;;
   *"custom-columns=V:.status.nodeInfo.kubeletVersion"*) echo "v1.37.1" ;;
   *"get nodes"*"--no-headers"*) printf 'a Ready cp 1d\nb Ready w 1d\nc Ready w 1d\n' ;;
@@ -157,6 +165,20 @@ reset; : >"$FX/flux.unreadable"; run
 [ -n "$(unkline 'Flux controllers: could not read the running workloads')" ] && ok "unreadable: UNKNOWN" || bad "$(grep Flux "$W/out")"
 reset; printf 'git_ref = "refs/tags/0.4.0"\n' >"$TFV"; run
 ! has "Flux controllers" && ! has "apps ref Flux follows" && ok "deploy_flux not true: neither Flux check runs" || bad "Flux checks ran without deploy_flux"
+
+echo "--- infra #448: the Flux tags are at the pin but the install is not finished (a refused or interrupted apply) ---"
+reset; run
+! has "install is not finished" && has "✓ Flux controllers run the pinned version" && ok "(control) a finished install at the pin raises nothing" || bad "$(grep Flux "$W/out")"
+reset; echo kustomize-controller >"$FX/flux.notready"; run
+{ [ -n "$(badline 'Flux controllers: at the pinned tags, but the install is not finished: deployment/kustomize-controller: 0 of 1 replicas ready')" ] && has "✓ Flux controllers run the pinned version" \
+    && has "task cluster-bootstrap-sync PROVIDER=stub ROLE=management APPLY=1" && [ "$rc" -ne 0 ]; } \
+  && ok "a Deployment at the pinned tag with no ready replica: BAD, run fails, with the command that finishes it" || bad "$(grep Flux "$W/out")"
+reset; sed -n 5p "$W/flux.crds" >"$FX/flux.crd.missing"; run
+{ [ -n "$(badline "customresourcedefinition/$(cat "$FX/flux.crd.missing"): not found")" ] && [ "$rc" -ne 0 ]; } \
+  && ok "a Flux CRD that is not there (refused, never applied): BAD although every tag is at the pin" || bad "$(grep Flux "$W/out")"
+reset; : >"$FX/flux.crd.unreadable"; run
+{ [ -n "$(unkline 'whether the install is finished is UNCHECKED')" ] && [ "$rc" -ne 0 ]; } \
+  && ok "the CRDs unreadable: UNKNOWN, not a pass" || bad "$(grep Flux "$W/out")"
 
 echo "--- mutation: the apps ref, both directions ---"
 reset; mkgr refs/tags/0.3.2; run

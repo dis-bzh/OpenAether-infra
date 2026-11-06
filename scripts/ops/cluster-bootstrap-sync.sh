@@ -17,7 +17,13 @@
 # write: a downgrade of any controller; a controller more than ONE minor ahead of the running one (step through the releases;
 # stricter than upstream's "any v2.x to any v2.x" on purpose); a running controller the artifact no longer has (apply does not
 # prune); a Talos or Kubernetes roll pending or in progress (a node not Ready, cordoned, or a version that differs from the
-# pin or between nodes). Then a rollout wait per Deployment (timeout) and a re-read: "applied" means the cluster runs the pin.
+# pin or between nodes). Then a rollout wait per Deployment (timeout) and a re-read: "applied" means the cluster runs the pin AND the
+# install is finished (infra #448): `kubectl apply` does not stop at the first refused object, so the Deployments can carry the pinned
+# tags while a CRD was refused or a rollout never completed. The tags alone are therefore not the verdict: each Flux Deployment must
+# also have observedGeneration == generation and readyReplicas == replicas, and each CRD of the artifact must exist and be Established
+# (oa_flux_gaps, scripts/lib/pins.sh). A refused apply prints kubectl's WHOLE error and says other objects may have been applied; a re-run
+# then sees the gap (exit 3, or the apply is tried again under --apply) instead of "run exactly the pinned versions". Not seen: a refused
+# UPDATE of a CRD that already exists (the old one stays Established); the apply that refused it printed it.
 #
 # CILIUM (never applied here). The check and the dry run work; --apply on Cilium is REFUSED (exit 5). Reasons, in
 # docs/upgrade.md: the DaemonSets roll with maxUnavailable 2 (the CNI of 2 nodes at once on a 3-node cluster), nothing here
@@ -25,8 +31,8 @@
 # the Cilium values of a live cluster. The documented path is a rebuild aside.
 #
 # Usage: cluster-bootstrap-sync.sh --tfvars FILE [--component flux|cilium|all] [--apply]
-#   exit 0  everything selected runs the pin (or Flux was moved and re-read)
-#   exit 3  dry run: a difference (nothing written)
+#   exit 0  everything selected runs the pin and the Flux install is finished (or Flux was moved and re-read)
+#   exit 3  dry run: a difference, or a Flux install that is at the pinned tags but not finished (nothing written)
 #   exit 4  nothing to compare: the Flux namespace is absent although deploy_flux = true (and Cilium not selected)
 #   exit 5  Cilium differs and this script does not apply Cilium (the rebuild-aside path is documented)
 #   exit 2  refused (downgrade, more than one minor, roll in progress, override manifest, bad argument)
@@ -51,7 +57,7 @@ while [ $# -gt 0 ]; do
     --apply) APPLY=1 ;;
     --component) shift; COMPONENT="${1:-}" ;;
     --tfvars) shift; TFVARS="${1:-}" ;;
-    -h|--help) sed -n '2,36p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "✗ unknown argument: $1 (usage: cluster-bootstrap-sync.sh --tfvars FILE [--component flux|cilium|all] [--apply])" >&2; exit 1 ;;
   esac
   shift
@@ -103,9 +109,15 @@ if [ "$DO_FLUX" -eq 1 ]; then FLUX_LIVE="$(oa_live_pins flux "$NS")" || fail "ca
 if [ "$DO_CILIUM" -eq 1 ]; then CILIUM_LIVE="$(oa_live_pins cilium)" || fail "cannot read the Cilium workloads of kube-system"; [ -n "$CILIUM_LIVE" ] || fail "no cilium DaemonSet in kube-system: the CNI cannot be compared"; fi
 if [ "$DO_FLUX" -eq 1 ] && [ -z "$FLUX_LIVE" ]; then fail "no Flux controller Deployment in $NS: cannot compare"; fi
 
-FLUX_DIFF=""; CILIUM_DIFF=""
+FLUX_DIFF=""; CILIUM_DIFF=""; FLUX_GAPS=""
 [ "$DO_FLUX" -eq 1 ] && FLUX_DIFF="$(oa_pin_diff "$FLUX_PINS" "$FLUX_LIVE")"
 [ "$DO_CILIUM" -eq 1 ] && CILIUM_DIFF="$(oa_pin_diff "$CILIUM_PINS" "$CILIUM_LIVE")"
+# The tags are not the whole verdict (infra #448): a Deployment can carry the pinned tag with no ready replica, and a refused CRD leaves the
+# tags untouched. FLUX_TODO is what makes the run "not done": the tag difference or an unfinished install.
+if [ "$DO_FLUX" -eq 1 ]; then
+  FLUX_GAPS="$(oa_flux_gaps "$NS" "$MANIFESTS/flux-install.yaml")" || fail "cannot tell whether the Flux install is finished: $FLUX_GAPS"
+fi
+FLUX_TODO="$FLUX_DIFF$FLUX_GAPS"
 
 show() { # <label> <pins> <live> <diff>
   echo "$1 (pinned in the artifact / running):"
@@ -120,9 +132,10 @@ show() { # <label> <pins> <live> <diff>
 }
 [ "$DO_FLUX" -eq 1 ] && show "Flux controllers" "$FLUX_PINS" "$FLUX_LIVE" "$FLUX_DIFF"
 [ "$DO_CILIUM" -eq 1 ] && show "Cilium ($CILIUM_FILE)" "$CILIUM_PINS" "$CILIUM_LIVE" "$CILIUM_DIFF"
+[ -z "$FLUX_GAPS" ] || printf 'The Flux install is not finished (a refused or interrupted apply leaves the tags at the pin):\n%s\n' "$(sed 's/^/  ~ /' <<<"$FLUX_GAPS")"
 
-if [ -z "$FLUX_DIFF$CILIUM_DIFF" ]; then
-  echo "✓ the selected components run exactly the pinned versions."
+if [ -z "$FLUX_TODO$CILIUM_DIFF" ]; then
+  echo "✓ the selected components run exactly the pinned versions$([ "$DO_FLUX" -eq 1 ] && echo ", and the Flux install is finished (every rollout complete, every CRD Established)")."
   exit 0
 fi
 
@@ -145,33 +158,46 @@ gate_flux() { # prints the reasons a Flux apply is refused, nothing when it is a
 }
 
 REASONS=""
-if [ -n "$FLUX_DIFF" ]; then REASONS="$(gate_flux)"; fi
+if [ -n "$FLUX_TODO" ]; then REASONS="$(gate_flux)"; fi
 ROLLWHY=""
-if [ -n "$FLUX_DIFF" ]; then ROLLWHY="$(oa_roll_gate "$CLUSTER_DIR" "$TFVARS")"; fi
+if [ -n "$FLUX_TODO" ]; then ROLLWHY="$(oa_roll_gate "$CLUSTER_DIR" "$TFVARS")"; fi
+# Both the dry run and the apply write their stderr here. Created once: a refused apply is read whole from it (infra #448).
+err="$(mktemp)"; trap 'rm -f "$err"' EXIT
 
 if [ "$APPLY" -ne 1 ]; then
   [ -z "$FLUX_DIFF" ] || echo "Flux differs from the pin."
+  [ -n "$FLUX_DIFF" ] || [ -z "$FLUX_GAPS" ] || echo "Flux is at the pinned tags but its install is not finished."
   [ -z "$CILIUM_DIFF" ] || echo "Cilium differs from the pin: this script does not apply Cilium. Rebuild aside (docs/upgrade.md, 'Cilium and Flux on a running cluster')."
   [ -z "$REASONS" ] || printf 'An apply of Flux would be REFUSED:\n%s\n' "$(sed 's/^/  - /' <<<"$REASONS")"
   [ -z "$ROLLWHY" ] || printf 'An apply of Flux would be REFUSED (a roll may be under way):\n%s\n' "$(sed 's/^/  - /' <<<"$ROLLWHY")"
-  if [ -n "$FLUX_DIFF" ] && [ -z "$REASONS$ROLLWHY" ]; then
-    out="$(kubectl apply --server-side --force-conflicts --field-manager=openaether-bootstrap --dry-run=server -f "$MANIFESTS/flux-install.yaml" 2>&1)" \
-      || fail "the API server would refuse flux-install.yaml (server-side dry run): $(head -c 300 <<<"$out")"
+  if [ -n "$FLUX_TODO" ] && [ -z "$REASONS$ROLLWHY" ]; then
+    # stdout (the accepted objects) and stderr (the errors) apart: kubectl does not stop at the first refused object, and the objects it
+    # accepted came first in the old joined text, ahead of the error.
+    out="$(kubectl apply --server-side --force-conflicts --field-manager=openaether-bootstrap --dry-run=server -f "$MANIFESTS/flux-install.yaml" 2>"$err")" || {
+      echo "✗ the API server would refuse part of flux-install.yaml (server-side dry run). kubectl does not stop at the first refused object, so this is the whole error:" >&2
+      cat "$err" >&2
+      exit 1
+    }
     echo "  server-side dry run: the API server accepts $(grep -c . <<<"$out") object(s) of flux-install.yaml."
   fi
   echo "✗ NOTHING was written (dry run)." >&2
-  [ -z "$FLUX_DIFF" ] || echo "  Move Flux: task cluster-bootstrap-sync PROVIDER=… ROLE=… APPLY=1" >&2
+  [ -z "$FLUX_TODO" ] || echo "  Move or finish Flux: task cluster-bootstrap-sync PROVIDER=… ROLE=… APPLY=1" >&2
   exit 3
 fi
 
 # --- --apply (Flux only): every refusal before the first write -----------------------------------------------------------
-if [ -n "$FLUX_DIFF" ]; then
+if [ -n "$FLUX_TODO" ]; then
   [ -z "$REASONS" ] || refuse "Flux is not applied: $(sed 's/^/  - /' <<<"$REASONS" | paste -sd' ' -)"
   [ -z "$ROLLWHY" ] || refuse "Flux is not applied while a Talos or Kubernetes roll may be under way: $(sed 's/^/  - /' <<<"$ROLLWHY" | paste -sd' ' -)"
-  err="$(mktemp)"; trap 'rm -f "$err"' EXIT
   echo "▶ server-side apply of flux-install.yaml (field manager openaether-bootstrap)"
-  kubectl apply --server-side --force-conflicts --field-manager=openaether-bootstrap -f "$MANIFESTS/flux-install.yaml" >/dev/null 2>"$err" \
-    || fail "apply refused: $(head -c 400 "$err")"
+  out="$(kubectl apply --server-side --force-conflicts --field-manager=openaether-bootstrap -f "$MANIFESTS/flux-install.yaml" 2>"$err")" || {
+    # kubectl keeps going after a refused object and returns the errors at the end: the Deployments may be applied, a CRD not. The whole error,
+    # not its first 400 bytes, and no rollout wait: the operator reads it, fixes the cause, and runs this command again (it will not stop at the tags).
+    echo "✗ apply refused. kubectl does not stop at the first refused object: the other objects of flux-install.yaml may have been applied, the Deployments among them ($(grep -c . <<<"$out") reported applied before the end). The whole error:" >&2
+    cat "$err" >&2
+    echo "  Fix the cause and run the same command again: the re-run no longer takes the image tags for the proof, it also checks the rollouts and the CRDs." >&2
+    exit 1
+  }
   while read -r _ n _; do
     kubectl -n "$NS" rollout status "deployment/$n" --timeout="${RTO}s" >/dev/null 2>"$err" \
       || fail "deployment/$n did not finish rolling out within ${RTO}s: $(head -c 300 "$err"). Read: kubectl -n $NS describe deployment $n"
@@ -179,7 +205,9 @@ if [ -n "$FLUX_DIFF" ]; then
   FLUX_LIVE="$(oa_live_pins flux "$NS")" || fail "cannot read the Deployments of $NS after the apply"
   left="$(oa_pin_diff "$FLUX_PINS" "$FLUX_LIVE")"
   [ -z "$left" ] || fail "after the apply the controllers still differ from the pin: $(paste -sd';' - <<<"$left")"
-  echo "✓ the Flux controllers run the pinned versions and every Deployment rolled out."
+  left="$(oa_flux_gaps "$NS" "$MANIFESTS/flux-install.yaml")" || fail "cannot tell, after the apply, whether the Flux install is finished: $left"
+  [ -z "$left" ] || fail "after the apply the Flux install is still not finished: $(paste -sd';' - <<<"$left")"
+  echo "✓ the Flux controllers run the pinned versions, every Deployment rolled out and every CRD is Established."
 fi
 if [ -n "$CILIUM_DIFF" ]; then
   echo "✗ Cilium differs from the pin and was NOT changed: this script does not apply Cilium. Rebuild aside (docs/upgrade.md, 'Cilium and Flux on a running cluster')." >&2
