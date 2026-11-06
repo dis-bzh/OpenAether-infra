@@ -362,19 +362,22 @@ tasks:
   purge-orphans:
     desc: >-
       Last resort: delete resources a teardown left behind, by talking to the provider API
-      directly. Usage: task purge-orphans PROVIDER=scaleway|ovh|outscale [APPLY=1].
-      Dry-run by default. See scripts/ops/purge-orphans/README.md for the scope warning —
-      it targets the WHOLE project, not one cluster.
+      directly. Usage: task purge-orphans PROVIDER=scaleway|ovh|outscale [APPLY=1 PROJECT_ID=<id>].
+      Dry-run by default, and it prints the project it targets; APPLY=1 needs PROJECT_ID to repeat that id.
+      See scripts/ops/purge-orphans/README.md for the scope warning — it targets the WHOLE project, not one cluster.
     # The scripts are the last sentence between a failed teardown and a bill, and
     # they were reachable from prose only: docs/release-checklist.md already told
     # the reader to run `task purge-orphans`, which did not exist.
     vars:
       APPLY: '{{.APPLY | default ""}}'
+      PROJECT_ID: '{{.PROJECT_ID | default ""}}'
     preconditions:
       - sh: 'test -f scripts/ops/purge-orphans/{{.PROVIDER}}.py'
         msg: "PROVIDER must be one of scaleway, ovh, outscale (got: '{{.PROVIDER}}')"
+      - sh: 'test -z "{{.APPLY}}" || test -n "{{.PROJECT_ID}}"'
+        msg: "APPLY=1 deletes the WHOLE project: add PROJECT_ID=<its id>, the one the dry run prints (infra #342)"
     cmds:
-      - python3 scripts/ops/purge-orphans/{{.PROVIDER}}.py {{if .APPLY}}--apply{{end}}
+      - python3 scripts/ops/purge-orphans/{{.PROVIDER}}.py {{if .APPLY}}--apply --project-id="{{.PROJECT_ID}}"{{end}}
 
   egress-probe:
     desc: >-

@@ -257,7 +257,7 @@ main() {
     printf '\n✗ teardown-all: destroyed, but NOT proven clean. Resources may still be billed.\n' >&2
     for p in $LEFT_PROVIDERS; do
       printf '    python3 scripts/ops/purge-orphans/%s.py            # dry-run: what it would delete\n' "$p" >&2
-      printf '    python3 scripts/ops/purge-orphans/%s.py --apply    # deletes it\n' "$p" >&2
+      printf '    python3 scripts/ops/purge-orphans/%s.py --apply --project-id=<the id the dry run prints>   # deletes it\n' "$p" >&2
     done
     printf '  ⚠ purge-orphans targets the WHOLE project, not this cluster: on an account that also\n' >&2
     printf '    holds another cluster (a prod one included) --apply deletes that one too.\n' >&2

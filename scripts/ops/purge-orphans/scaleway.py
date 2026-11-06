@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Purges the Scaleway resources left behind by an orphaned cluster.
 Targets the WHOLE project, like the ovh/outscale scripts.
-Usage: scaleway.py [--apply]   (dry-run by default)
+Usage: scaleway.py [--apply --project-id=<the id it prints>]   (dry-run by default; --apply needs the id)
 
 Block volumes are the reason this exists: a terminated VM can leave its root
 volume behind, and those bill silently. Checking servers/LB/IPs alone made the
@@ -129,6 +129,27 @@ def delete(token, kind, url):
     return call(token, url, 'DELETE')
 
 
+def confirm_target(what, target):
+    """Name the project this run reaches; refuse unless --project-id agrees (infra #342).
+
+    --apply deletes the WHOLE project and the listing never said which one, so a wrong
+    .env.sh went unseen. --apply must repeat the id; one that is given must match.
+    Exit 2 like a missing credential: nothing was asked, which is not the 1 of "leftovers".
+    """
+    argv = sys.argv[1:]
+    given = next((a.split('=', 1)[1] for a in argv if a.startswith('--project-id=')), None)
+    if given is None and '--project-id' in argv[:-1]:
+        given = argv[argv.index('--project-id') + 1]
+    print(f"Target: {what} {target}  (the WHOLE project)")
+    if given is None and '--apply' in argv:
+        print(f"✗ --apply deletes the WHOLE project: repeat its id, --project-id={target}. Nothing was asked.")
+        return 2
+    if given is not None and given != target:
+        print(f"✗ --project-id={given} is not the project these credentials reach ({target}). Nothing was asked.")
+        return 2
+    return 0
+
+
 def main():
     apply = '--apply' in sys.argv
     try:
@@ -137,6 +158,9 @@ def main():
         # Not exit 1: callers read 1 as "leftovers found", and nothing was asked.
         print(f"✗ missing credential {e} — source .env.sh first. Nothing was checked.")
         return 2
+    refused_target = confirm_target('Scaleway project', project)
+    if refused_target:
+        return refused_target
     # Counted, not merely printed: a failed delete used to be one ⚠ line in a run
     # that still ended "purge complete" with exit 0 (Outscale, 2026-08-20).
     total, failed, refused = 0, 0, []
