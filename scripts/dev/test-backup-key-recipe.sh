@@ -84,6 +84,14 @@ out_ov="$(OVH_SINK_PROJECT_ID=0123abcd $R "$SB/ov.tfvars" audit-sink 2>&1)"
 grep -q "aws s3api list-buckets" <<<"$out_ov" && ok "…and the proof that the pair reaches that one bucket only is printed" || bad "no list-buckets proof: $out_ov"
 out_sv="$(OVH_SINK_PROJECT_ID=0123abcd $R "$SB/s.tfvars" audit-sink 2>&1)"
 { ! grep -q "0123abcd" <<<"$out_sv" && grep -q "audit-sink pair for scaleway (bucket" <<<"$out_sv"; } && ok "a sink that is not on OVH ignores the variable" || bad "non-OVH sink changed: $out_sv"
+# The recipe attests, it cannot check: any one word passes. The one value it can know is wrong is the project of an OVH cluster whose sink is on OVH too
+# (OS_PROJECT_ID is that cluster's own). On another cloud OS_PROJECT_ID is the operator's and may well be the sink's: it is not read there.
+sed -E 's#^environment[[:space:]].*#environment = "dev"#; s#^cluster_name.*#cluster_name = "example"#' infrastructure/opentofu/cluster/envs/management-ovh.tfvars.example >"$SB/oc.tfvars"
+printf '%s\n' 'audit_sink_placement = "same_provider_other_region"' 'audit_sink_endpoint = "https://s3.sbg.io.cloud.ovh.net"' 'audit_sink_region = "sbg"' >>"$SB/oc.tfvars"
+out_oc="$(OS_PROJECT_ID=0123abcd OVH_SINK_PROJECT_ID=0123abcd $R "$SB/oc.tfvars" audit-sink 2>&1)"; rc_oc=$?
+{ [ "$rc_oc" = 2 ] && grep -q "the cluster's own project" <<<"$out_oc"; } && ok "an OVH cluster's own project named as the sink's: refused (exit 2)" || bad "same project accepted: rc=$rc_oc $out_oc"
+OS_PROJECT_ID=ffff9999 OVH_SINK_PROJECT_ID=0123abcd $R "$SB/oc.tfvars" audit-sink >/dev/null 2>&1; [ $? = 0 ] && ok "…another project on the same cloud passes" || bad "own project of the sink refused"
+OS_PROJECT_ID=0123abcd OVH_SINK_PROJECT_ID=0123abcd $R "$SB/ov.tfvars" audit-sink >/dev/null 2>&1; [ $? = 0 ] && ok "…a cluster on another cloud: OS_PROJECT_ID is not read" || bad "OS_PROJECT_ID read for a cluster that is not on OVH"
 $R "$SB/ov.tfvars" audit-sink-secondary >/dev/null 2>&1; [ $? = 2 ] && ok "audit-sink-secondary without a second sink is a usage error" || bad "secondary accepted"
 { cat "$SB/t.tfvars"; printf '%s\n' 'audit_sink_placement = "other_provider"' 'audit_sink_endpoint = "https://s3.fr-par.scw.cloud"' 'audit_sink_region = "gra"'; } >"$SB/bad.tfvars"
 $R "$SB/bad.tfvars" audit-sink >/dev/null 2>&1; [ $? = 2 ] && ok "an incoherent sink choice is refused here too" || bad "incoherent sink accepted"

@@ -15,8 +15,9 @@
 # Policy shapes: Scaleway (bucket policy version 2023-04-17, principal {"SCW": "application_id:<id>"}) is the measured one;
 # Outscale uses an AWS-style principal and is an expectation (the store refused dedicated keys in lab 15B, infra #377); OVH's
 # S3 API has no bucket policy, so only the rights are printed and the user's policy goes through the OVH API (not verified).
-# An OVH key pair reaches every bucket of its project (no bucket policy exists to narrow it, infra #393): the recipe calls it
-# dedicated only when the sink has an OVH project of its own, which the operator names in OVH_SINK_PROJECT_ID. Without it, exit 2.
+# An OVH key pair reaches every bucket of its project (no bucket policy exists to narrow it, infra #393). The recipe cannot know
+# whether the sink has a project of its own: it stops (exit 2) until the operator names it in OVH_SINK_PROJECT_ID, and prints the
+# proof to run. That is an attestation, not a check; the one value it refuses is the project of an OVH cluster itself (OS_PROJECT_ID).
 # Exit 0 printed; 2 usage.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
@@ -43,6 +44,8 @@ case "$KIND" in audit-sink | audit-sink-secondary)
       echo "✗ $KIND on OVH: the pair of an OVH S3 user reaches EVERY bucket of its project (OVH has no bucket policy), so it is not dedicated" >&2
       echo "  unless the sink has an OVH project of its own. Create that project and its S3 user, then name it: OVH_SINK_PROJECT_ID=<project id> (infra #393, docs/audit-sink.md, section 4)." >&2
       exit 2; }
+    [ "$PROVIDER" != ovh ] || [ "${OS_PROJECT_ID:-}" != "$OVH_SINK_PROJECT_ID" ] || {
+      echo "✗ $KIND on OVH: OVH_SINK_PROJECT_ID is OS_PROJECT_ID, the cluster's own project: the sink needs a project of its own (infra #393)." >&2; exit 2; }
     SINK_PROJECT=" project ${OVH_SINK_PROJECT_ID}"
   fi ;; esac
 PROJECT="$(oa_project "$CLUSTER" "$(tfv "$TFVARS" bucket_suffix)")"

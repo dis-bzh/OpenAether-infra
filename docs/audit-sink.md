@@ -92,7 +92,7 @@ audit-sink-check (Deployment) lists the prefix every 5 minutes --> oa_audit_sink
   dedicated pair the seed falls back to the operator's keys and says so loudly.
 - **OVH has no bucket policy through its S3 API**: the key pair of an OVH user cannot be limited to one bucket, so on an OVH sink
   the "dedicated" pair still reaches the other buckets of that OVH project. Isolate it by giving the sink its own OVH project/user,
-  and read the rights in the OVH API (not verified). The recipe prints this, and for an OVH sink it exits 2 until `OVH_SINK_PROJECT_ID` names that project; `audit-sink-check.sh` fails on a delete marker that is the current version of an object under the prefix, over the `--days` window like its other checks (a marker on an older day is not looked at) (infra #393). **Measured in lab 23 (OVH, a second EC2 credential of the
+  and read the rights in the OVH API (not verified). The recipe prints this, and for an OVH sink it exits 2 until `OVH_SINK_PROJECT_ID` names that project (an attestation: it cannot check it); `audit-sink-check.sh` fails on a delete marker that is the current version of an object under the prefix, over the `--days` window like its other checks (a marker on an older day is not looked at) (infra #393). **Measured in lab 23 (OVH, a second EC2 credential of the
   same user as the sink pair): it lists and reads every bucket of the project, `delete-object` without a version id is ACCEPTED (it writes a
   delete marker: the version stays, the repository looks emptied to a reader that does not list versions) and `put-object-lock-configuration`
   is ACCEPTED (the bucket's default retention was changed by the pair).** What it cannot do: delete or shorten a locked version, or change
