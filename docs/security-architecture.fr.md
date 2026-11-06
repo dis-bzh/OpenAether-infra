@@ -11,7 +11,7 @@
 
 | Actif | Où il vit | Pire cas s'il est perdu ou exposé | Protections principales |
 |---|---|---|---|
-| La racine de confiance du cluster (PKI Talos, K1) et les identifiants admin (K2) | tfstate, configurations machine, le disque de l'opérateur, les deux buckets d'artefacts | Contrôle total de chaque nœud et de l'API Kubernetes | chiffrement côté client de l'état et des artefacts (K5, K6) ; réseau privé ; bastion ; mTLS |
+| La racine de confiance du cluster (PKI Talos, K1) et les identifiants admin (K2) | tfstate, configurations machine, le disque de l'opérateur, les deux buckets d'artefacts | Contrôle total de chaque nœud et de l'API Kubernetes | chiffrement côté client de l'état et des artefacts (K5, K6) ; réseau privé (chez Scaleway le groupe du provider ne le filtre pas : section 5) ; bastion ; mTLS |
 | Secrets Kubernetes et données des disques des nœuds | etcd (secretbox, K3), volumes LUKS (K4) | Divulgation de chaque valeur de secret | chiffrement au repos ; clés détenues dans l'état et les configurations machine |
 | OpenBao (tous les secrets applicatifs, l'intermédiaire PKI) | 3 réplicas raft sur des volumes de nœuds, snapshots dans restic | Divulgation ou falsification de chaque identifiant et certificat de la plateforme | clé de scellement (K11) en séquestre, parts de récupération par opérateur, rôles Kubernetes-auth à TTL courts, un journal d'audit |
 | Données applicatives (bases Zitadel et Grafana, volumes Longhorn) | CNPG sur volumes local-path, sauvegardes | Perte ou divulgation des identités et des tableaux de bord | chiffrement côté client de restic, archive WAL CNPG (chiffrement côté serveur demandé ; son en-tête `AES256` relu sur les deux stores Scaleway, NON VÉRIFIÉ sur OVH et Outscale : `backup-policy.fr.md`), LUKS sur Longhorn |
@@ -81,7 +81,8 @@ L'audit a trouvé deux affirmations que le code contredit ; les deux sont corrig
 | Opérateur unique : pas de séparation des tâches, pas de second dépositaire | Le projet a un mainteneur | `key-management.fr.md`, section 3 |
 | Secrets machine livrés par l'API de maintenance de Talos | Conception amont | `first-cluster.fr.md`, « Risque résiduel » |
 | Compte SSH de secours partagé à côté des nominatifs | Automatisation et secours | `key-management.fr.md` |
-| Verrou d'objet et versionnement des buckets optionnels (`backup_immutability`), non vérifiés chez aucun provider ; les clés S3 du cluster sont celles de l'opérateur sauf si des paires dédiées sont données | Le support des providers et la politique de clés ne sont pas décidés | `backup-policy.fr.md`, sections 3 et 4 |
+| Le groupe de sécurité de Scaleway ne filtre pas le réseau privé : à l'intérieur, les nœuds admettent l'API Talos, le kubelet et etcd depuis tout le sous-réseau, et il n'y a pas de pare-feu d'hôte par défaut (une option `node_firewall_mode = "port_allowlist"` existe ; pas de mode bloquant, infra #322) | Le groupe du provider ne filtre que le trafic public et les nœuds n'ont pas d'adresse publique ; le mTLS ou l'authentification propre à chaque service est la barrière restante | `network.fr.md`, section 6, points 1 et 2 |
+| Verrou d'objet et versionnement des buckets optionnels (`backup_immutability`), essayés en partie seulement (`governance` et `compliance` avec une rétention d'un jour chez les trois stores) ; les clés S3 du cluster sont celles de l'opérateur sauf si des paires dédiées sont données | Le support des providers et la politique de clés ne sont pas décidés | `backup-policy.fr.md`, sections 3 et 4 |
 
 ## 6. Revue
 

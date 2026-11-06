@@ -11,7 +11,7 @@
 
 | Asset | Where it lives | Worst case if it is lost or exposed | Principal protections |
 |---|---|---|---|
-| The cluster's trust root (Talos PKI, K1) and the admin credentials (K2) | tfstate, machine configs, the operator's disk, both artifact buckets | Full control of every node and the Kubernetes API | client-side encryption of state and artifacts (K5, K6); private network; bastion; mTLS |
+| The cluster's trust root (Talos PKI, K1) and the admin credentials (K2) | tfstate, machine configs, the operator's disk, both artifact buckets | Full control of every node and the Kubernetes API | client-side encryption of state and artifacts (K5, K6); private network (on Scaleway the provider's group does not filter it: section 5); bastion; mTLS |
 | Kubernetes Secrets and the data on node disks | etcd (secretbox, K3), LUKS volumes (K4) | Disclosure of every secret value | encryption at rest; keys held in the state and the machine configs |
 | OpenBao (every application secret, the PKI intermediate) | 3 raft replicas on node volumes, snapshots in restic | Disclosure or forgery of every platform credential and certificate | seal key (K11) in escrow, recovery shares per operator, Kubernetes-auth roles with short TTLs, an audit log |
 | Application data (Zitadel and Grafana databases, Longhorn volumes) | CNPG on local-path volumes, backups | Loss or disclosure of identities and dashboards | restic client-side encryption, CNPG WAL archive (server-side encryption requested; its `AES256` header read on both Scaleway stores, UNVERIFIED on OVH and Outscale: `backup-policy.md`), LUKS on Longhorn |
@@ -81,7 +81,8 @@ The audit found two statements that the code contradicts; both are fixed in the 
 | Single operator: no separation of duties, no second custodian | The project has one maintainer | `key-management.md`, section 3 |
 | Machine secrets delivered over the Talos maintenance API | Upstream design | `first-cluster.md`, "Residual risk" |
 | Shared break-glass SSH account beside named ones | Automation and break-glass | `key-management.md` |
-| Object lock and versioning on the buckets are opt-in (`backup_immutability`), unverified on any provider; the in-cluster S3 keys are the operator's unless dedicated pairs are given | Provider support and the key policy are not decided | `backup-policy.md`, sections 3 and 4 |
+| Scaleway's security group does not filter the private network: inside it the nodes admit the Talos API, kubelet and etcd ports from the whole subnet, and there is no host firewall by default (a `node_firewall_mode = "port_allowlist"` opt-in exists; no blocking mode, infra #322) | The provider's group filters public traffic only and the nodes have no public address; each service's own mTLS or authentication is the remaining barrier | `network.md`, section 6, items 1 and 2 |
+| Object lock and versioning on the buckets are opt-in (`backup_immutability`), tried only in part (`governance` and `compliance` with a one-day retention on the three stores); the in-cluster S3 keys are the operator's unless dedicated pairs are given | Provider support and the key policy are not decided | `backup-policy.md`, sections 3 and 4 |
 
 ## 6. Review
 
