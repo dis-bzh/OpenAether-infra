@@ -1119,6 +1119,10 @@ tasks:
       # runs, so a `#` inside would be printed as the last thing the operator reads.
       - cmd: |
           echo "✓ cluster-up complete: cluster-verify passed."
+          if [ "{{.FLUX_ON}}" = 1 ]; then
+            echo "  deploy_flux = true: Flux stays below its full Kustomization count until the Day-1 secrets"
+            echo "  are seeded: scripts/ops/seed-openbao.sh, docs/admin-access.md section 3 (backup destinations)."
+          fi
           echo "  Run this exact command again to converge again."
           echo "  cluster-up did NOT change, and cluster-verify only compares: the Cilium and Flux controllers"
           echo "  of a running cluster (task cluster-bootstrap-sync moves Flux; Cilium is a rebuild aside),"

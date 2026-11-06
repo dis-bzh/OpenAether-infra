@@ -171,6 +171,11 @@ v="$(line_of "$O" '^fixture verifier')"; s="$(line_of "$O" '^✓ cluster-up comp
   && ok "the success line is printed, after the verifier's verdict" \
   || bad "verifier at line ${v:-none}, success line at ${s:-none}"
 adopted_once workload ovh
+# deploy_flux = true (infra #298): the closing lines name the Day-1 seeding, or Flux's plateau has no pointer at cluster-up time.
+s="$(line_of "$O" '^✓ cluster-up complete')"; d="$(line_of "$O" '^  are seeded: scripts/ops/seed-openbao.sh, docs/admin-access.md section 3')"
+[ -n "$s" ] && [ -n "$d" ] && [ "$d" -gt "$s" ] \
+  && ok "deploy_flux = true: the closing lines point at seed-openbao.sh and admin-access.md section 3, after the success line" \
+  || bad "no Day-1 pointer after the success line (success at ${s:-none}, pointer at ${d:-none}): $(tail_of)"
 # The roll needs a kubeconfig, and so does the verifier after it: every cluster in
 # the checkout writes the same path, so the verifier must not trust the pre-roll copy.
 K='^tofu output -raw kubeconfig'
@@ -489,6 +494,9 @@ for how in "file:ROLE=noflux" "default:ROLE=unset" "env:TF_VAR_deploy_flux=false
   grep -c '^~ deploy_flux is not true' "$O" | grep -qx 1 \
     && ok "deploy_flux false ($name): one line says why the steps are skipped" \
     || bad "deploy_flux false ($name): the skip line is missing or repeated"
+  ! grep -q 'seed-openbao.sh' <(grep -v 'echo "' "$O") \
+    && ok "deploy_flux false ($name): no Day-1 seeding pointer (nothing to seed without Flux)" \
+    || bad "deploy_flux false ($name): the closing lines point at seed-openbao.sh without Flux"
   # What does not depend on Flux stays: the CoreDNS shape (an inline manifest of Talos) and the verifier.
   { [ "$(calls '^cluster-coredns-ha.sh')" -ge 1 ] && [ "$(calls '^infra-verify.sh ')" = 1 ]; } \
     && ok "deploy_flux false ($name): the CoreDNS converge and the verifier still run" \
