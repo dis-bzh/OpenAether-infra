@@ -991,9 +991,10 @@ for c in '-|the output missing' '["z1","z2"]|a list shorter than the control pla
 done
 
 # --- the application load balancer follows deploy_app_lb ---
-applb_verify() { # <app_lb_ip answer> [env assignment…]
-  local ip="$1"; shift
-  plan 'tofu output -raw app_lb_ip\t0\t'"$ip"'\n''tofu output -json control_plane_zones\t0\t["z1","z2","z3"]\n''tofu output -json control_plane_private_ips\t0\t["ip1","ip2","ip3"]\n'\
+applb_verify() { # <app_lb_ip answer> [env assignment…] — APPLIED=<json> adds the answer of `tofu output -json applied_switches`
+  local ip="$1" sw=''; shift
+  [ -n "${APPLIED:-}" ] && sw='tofu output -json applied_switches\t0\t'"$APPLIED"'\n'
+  plan "$sw"'tofu output -raw app_lb_ip\t0\t'"$ip"'\n''tofu output -json control_plane_zones\t0\t["z1","z2","z3"]\n''tofu output -json control_plane_private_ips\t0\t["ip1","ip2","ip3"]\n'\
 'osImage\t0\tTalos (v0.0.1)\n''kubeletVersion\t0\tv0.0.1\n''get nodes -l node-role.kubernetes.io/control-plane\t0\tcp-1 Ready control-plane 9m%%cp-2 Ready control-plane 9m%%cp-3 Ready control-plane 9m\n'"$BASE"
   run env PATH="$TOFU_BIN:$PATH" "$@" "$VERIFY_SH" "$PROVIDER" "$ROLE"
 }
@@ -1010,6 +1011,42 @@ applb_verify 203.0.113.10
   && ok "a load balancer nobody asked for still FAILS (a cluster that should be infra-only)" || bad "an unrequested application load balancer passed"
 applb_verify N/A
 said 'no application load balancer (deploy_app_lb is not true)' && ok "no load balancer and none asked for: passes" || bad "the default app-LB floor changed: $RUN_OUT"
+
+# --- Flux and the application load balancer are judged on what was APPLIED (infra #354) ---
+# The env file on disk may not be the one applied (a lab tfvars with another name, a file edited since): `tofu output applied_switches`
+# is read FIRST. Without it the run is UNCHECKED, never a pass. The tally is read apart from the words: turning `unk` into `ok` leaves the
+# sentence as it is.
+APPLIED='{"deploy_flux":false,"deploy_app_lb":false}' applb_verify N/A
+{ said 'match the config' && ! said 'differs'; } && U0="$(tally 3)" && F0="$(tally 2)" \
+  && ok "(control) the applied switches and the config agree: said so (baseline: ${F0} failed, ${U0} unknown)" \
+  || { U0=0 F0=0; bad "the applied switches were not read, or a match was reported as a difference: $RUN_OUT"; }
+APPLIED='{"deploy_flux":false,"deploy_app_lb":true}' applb_verify 203.0.113.10
+{ said 'deploy_app_lb = true: an application load balancer exists' && ! said 'exists and is billed' && said 'deploy_app_lb is true in the state'; } \
+  && ok "an application load balancer the state says was asked for passes although the file is silent, and the difference is shown" \
+  || bad "the applied deploy_app_lb did not win over the file: $RUN_OUT"
+APPLIED='{"deploy_flux":true,"deploy_app_lb":false}' applb_verify N/A TF_VAR_deploy_flux=false
+{ said 'deploy_flux = true but there is no flux-system namespace' && said 'deploy_flux was applied as true' && said 'deploy_flux is true in the state' && [ "$RUN_RC" -ne 0 ] && [ "$(tally 2)" -eq $((F0 + 1)) ]; } \
+  && ok "applied deploy_flux = true and no Flux FAILS although the file says false: the file does not hide a missing install" \
+  || bad "an applied Flux that is not there passed, or the file won: failed=$(tally 2), baseline ${F0}: $RUN_OUT"
+APPLIED='{"deploy_flux":false,"deploy_app_lb":false}' applb_verify N/A TF_VAR_deploy_flux=true
+{ said 'no flux-system namespace — Talos and Cilium, as scoped' && said 'deploy_flux is false in the state' && [ "$(tally 2)" -eq "$F0" ]; } \
+  && ok "applied false, file true, no Flux: not a false red, and the file's claim is shown as a difference" \
+  || bad "a file that is not the one applied still failed the run: failed=$(tally 2), baseline ${F0}: $RUN_OUT"
+for c in '-|the output absent (a state written before it existed, or a backend that is not initialised)' \
+         '{}|an empty object' 'null|a null output' '{"deploy_flux":"true","deploy_app_lb":false}|a string where a boolean belongs'; do
+  if [ "${c%%|*}" = - ]; then APPLIED='' applb_verify N/A; else APPLIED="${c%%|*}" applb_verify N/A; fi
+  { said 'could not read the applied deploy_flux and deploy_app_lb' && [ "$(tally 3)" -eq $((U0 + 1)) ] && [ "$(tally 2)" -eq "$F0" ] \
+      && [ "$RUN_RC" -ne 0 ] && ! said 'match the config'; } \
+    && ok "${c#*|} is UNCHECKED ($(tally 3) unknown), not a pass" \
+    || bad "${c#*|} was read as an answer (failed=$(tally 2), unknown=$(tally 3), baseline ${F0}/${U0}): $RUN_OUT"
+done
+# The stub tofu above only returns what the case feeds it: it cannot tell that the real output maps each name to its own variable. A swapped
+# mapping (deploy_flux = var.deploy_app_lb) would pass every case above and make cluster-verify judge Flux on the load balancer switch.
+SWB="$(awk '/^output "applied_switches"/ { w = 1 } w { print } w && /^}/ { exit }' "$ROOT/infrastructure/opentofu/cluster/outputs.tf")"
+{ grep -Eq '^[[:space:]]*deploy_flux[[:space:]]*=[[:space:]]*var\.deploy_flux[[:space:]]*$' <<<"$SWB" \
+    && grep -Eq '^[[:space:]]*deploy_app_lb[[:space:]]*=[[:space:]]*var\.deploy_app_lb[[:space:]]*$' <<<"$SWB" && [ "$(grep -c 'var\.' <<<"$SWB")" = 2 ]; } \
+  && ok "outputs.tf: applied_switches maps deploy_flux to var.deploy_flux and deploy_app_lb to var.deploy_app_lb (read as text; tofu was not run)" \
+  || bad "outputs.tf: the applied_switches output does not map each switch to its own variable: $SWB"
 
 # =============================================================================
 # cluster-upgrade: the path across minors
