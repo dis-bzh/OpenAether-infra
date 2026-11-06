@@ -47,7 +47,7 @@ HELM_VERSION="4.3.1"
 # kubectl and aws-cli install from a named URL; the three Python tools via pip.
 # YAMLLINT_VERSION MUST equal the pip pin in ci.yml (check-version-drift.sh).
 # renovate: datasource=github-releases depName=kubernetes/kubernetes extractVersion=^v(?<version>.*)$
-KUBECTL_VERSION="1.37.1"
+KUBECTL_VERSION="1.37.2"
 # renovate: datasource=github-tags depName=aws/aws-cli
 AWSCLI_VERSION="2.37.11"
 # renovate: datasource=pypi depName=checkov
