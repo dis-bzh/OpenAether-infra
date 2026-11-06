@@ -201,3 +201,15 @@ output "cluster_identity" {
   description = "The data of the cluster-identity ConfigMap as the bootstrap manifest renders it (non-sensitive; empty when deploy_flux is off)."
   value       = var.deploy_flux ? local.cluster_identity : {}
 }
+
+# What the LAST APPLY was asked for (infra #354). `tofu output` reads the state, so this is the applied value, not the one in a file on
+# disk that may be another file, or edited since. scripts/dev/infra-verify.sh reads it before the tfvars and TF_VAR_*: Flux and the
+# application load balancer are judged on what was built. Two booleans, nothing sensitive. A state written before 0.4.4 has no such output
+# until the next apply, and the verifier then says it cannot check, instead of trusting the file.
+output "applied_switches" {
+  description = "deploy_flux and deploy_app_lb as the last apply set them (read by cluster-verify before the env file)."
+  value = {
+    deploy_flux   = var.deploy_flux
+    deploy_app_lb = var.deploy_app_lb
+  }
+}

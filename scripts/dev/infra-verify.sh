@@ -212,6 +212,32 @@ cfg_value() { # <key> — TF_VAR_<key>, else the env file, else empty
 }
 WANT_FLUX=false; [ "$(cfg_value deploy_flux)" = true ] && WANT_FLUX=true
 WANT_APP_LB=false; [ "$(cfg_value deploy_app_lb)" = true ] && WANT_APP_LB=true
+# What was APPLIED comes first (infra #354): the env file read here may be another file, or edited since, and `tofu output` reads the state.
+# The output `applied_switches` carries both switches. Read, it overrides the two values above and a difference with the config is shown
+# (a warning, not a failure: the verdict is about the cluster that was built). Absent or malformed (a state written before 0.4.4 has none
+# until its next apply, or the backend is not initialised), the file values stand AND the run says it cannot check: UNKNOWN, never a pass.
+# The local lane has no such output (its root is opentofu-local) and keeps the file.
+SW_APPLIED=false
+FLUX_WHY="deploy_flux is not true in ${VER_TFVARS##*/} or TF_VAR_deploy_flux"; LB_WHY="deploy_app_lb is not true in ${VER_TFVARS##*/} or TF_VAR_deploy_app_lb"
+if [ "$PROVIDER" != local ]; then
+  info "Flux and the application load balancer are judged on what was applied"
+  if SW_JSON="$(cd "$CLUSTER_DIR" && timeout 60 tofu output -json applied_switches 2>/dev/null)" \
+     && jq -e 'type == "object" and (.deploy_flux | type) == "boolean" and (.deploy_app_lb | type) == "boolean"' <<<"$SW_JSON" >/dev/null 2>&1; then
+    SW_APPLIED=true
+    WANT_FLUX="$(jq -r '.deploy_flux' <<<"$SW_JSON")"; WANT_APP_LB="$(jq -r '.deploy_app_lb' <<<"$SW_JSON")"
+    FLUX_WHY="deploy_flux was applied as false (the state)"; LB_WHY="deploy_app_lb was applied as false (the state)"
+    SW_DIFF=0
+    for sw in deploy_flux:"$WANT_FLUX" deploy_app_lb:"$WANT_APP_LB"; do
+      declared=false; [ "$(cfg_value "${sw%%:*}")" = true ] && declared=true
+      [ "$declared" = "${sw#*:}" ] && continue
+      SW_DIFF=1
+      warn "${sw%%:*} is ${sw#*:} in the state (applied) but $([ "$declared" = true ] && echo true || echo 'not true') in TF_VAR_${sw%%:*} or ${VER_TFVARS##*/}: judged on the applied value. Either the file was edited after the last apply (task cluster-up applies it) or it is not the file this cluster was built from"
+    done
+    [ "$SW_DIFF" -eq 1 ] || ok "the applied switches match the config (deploy_flux = ${WANT_FLUX}, deploy_app_lb = ${WANT_APP_LB})"
+  else
+    unk "could not read the applied deploy_flux and deploy_app_lb from the state (tofu output applied_switches: absent in a state written before 0.4.4, which the next task cluster-up apply writes, or the backend is not initialised) — Flux and the application load balancer are judged on ${VER_TFVARS##*/} or TF_VAR_*, which may not be what was applied: UNCHECKED"
+  fi
+fi
 
 # The CoreDNS HA of 0.4.0 is an inline manifest, and Talos creates an inline manifest's objects only when they are absent (lab 26,
 # K2): on a cluster built by an older release the Talos-created Deployment stays at 2 replicas with no spread, while the budget (new)
@@ -278,14 +304,18 @@ FLUX_NS="$(cfg_value flux_namespace)"; FLUX_NS="${FLUX_NS:-flux-system}"
 # release validated. And the other way round: deploy_flux = true must find Flux, or the install did not land.
 if [ "$WANT_FLUX" = true ]; then
   if ! K get ns "$FLUX_NS" >/dev/null 2>&1; then
-    bad "deploy_flux = true but there is no ${FLUX_NS} namespace — Flux was not installed (bootstrap-phase2 of cluster-up), or the file read here (${VER_TFVARS##*/}) is not the one applied"
+    if [ "$SW_APPLIED" = true ]; then
+      bad "deploy_flux = true but there is no ${FLUX_NS} namespace — Flux was not installed (bootstrap-phase2 of cluster-up); deploy_flux was applied as true (the state)"
+    else
+      bad "deploy_flux = true but there is no ${FLUX_NS} namespace — Flux was not installed (bootstrap-phase2 of cluster-up), or the file read here (${VER_TFVARS##*/}) is not the one applied"
+    fi
   elif K -n "$FLUX_NS" wait --for=condition=Available deploy --all --timeout=60s >/dev/null 2>&1; then
     ok "deploy_flux = true: ${FLUX_NS} exists and every Flux controller is Available"
   else
     bad "deploy_flux = true: ${FLUX_NS} exists but a Flux controller is not Available (kubectl -n ${FLUX_NS} get deploy)"
   fi
 elif K get ns "$FLUX_NS" >/dev/null 2>&1; then
-  bad "${FLUX_NS} exists — this is not a pure-infra cluster, and deploy_flux is not true in ${VER_TFVARS##*/} or TF_VAR_deploy_flux. If Flux is meant to be here, set deploy_flux = true there (this check then asks for it instead); otherwise something re-enabled it"
+  bad "${FLUX_NS} exists — this is not a pure-infra cluster, and ${FLUX_WHY}. If Flux is meant to be here, set deploy_flux = true in the config and apply it (this check then asks for it instead); otherwise something re-enabled it"
 else
   ok "no ${FLUX_NS} namespace — Talos and Cilium, as scoped (deploy_flux is not true)"
 fi
@@ -309,7 +339,7 @@ if [ "$PROVIDER" != local ]; then
           ok "deploy_app_lb = true: an application load balancer exists"
           [ "$WANT_FLUX" = true ] || warn "deploy_app_lb = true without deploy_flux: the load balancer points at Gateway NodePorts nothing serves"
         else
-          bad "an application load balancer exists and is billed, and deploy_app_lb is not true in ${VER_TFVARS##*/} or TF_VAR_deploy_app_lb: on an infra-only cluster it points at Gateway NodePorts nothing serves. Set deploy_app_lb = true there if it is meant to be, or remove it"
+          bad "an application load balancer exists and is billed, and ${LB_WHY}: on an infra-only cluster it points at Gateway NodePorts nothing serves. Set deploy_app_lb = true in the config and apply it if it is meant to be, or remove it"
         fi ;;
     esac
   else
