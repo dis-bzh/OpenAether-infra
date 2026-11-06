@@ -129,6 +129,18 @@ reset; chunk cp-1 "$TODAY" 101 0 300; : >"$FAKE_S3/refuse/list-object-versions";
 OUT="$(check)"; RC=$?
 is "versions that cannot be listed are not read as 'no marker': exit 1" 1 "$RC"
 grep -q "cannot list the object versions" <<<"$OUT" && ! grep -q "no delete marker is the current" <<<"$OUT" && ok "said, and no all-clear" || bad "$OUT"
+# Cost: only the --days window is listed, as for every other check (the whole prefix grows for the whole retention). The boundary is one day.
+YDAY="$(date -u -d '-1 day' +%F)"
+reset; chunk cp-1 "$TODAY" 101 0 300; marker "audit/cp-1/$YDAY/snapshots/bb22" true
+OUT="$(check)"; RC=$?
+is "a current marker on yesterday, inside the default 2 days: exit 1" 1 "$RC"
+OUT="$(check --days 1)"; RC=$?
+is "the same marker with --days 1, outside the window: not looked at, exit 0" 0 "$RC"
+# The nodes come from the versions, not only from the current objects: a node whose every object is marked has none left to list.
+reset; chunk cp-1 "$TODAY" 101 0 300; marker "audit/cp-9/$TODAY/snapshots/cc33" true
+OUT="$(check)"; RC=$?
+is "a marker on a node with no current object left: exit 1" 1 "$RC"
+grep -q "audit/cp-9/$TODAY/snapshots/cc33" <<<"$OUT" && ok "and it is named" || bad "$OUT"
 
 echo "--- the lock ---"
 reset; lock COMPLIANCE 365

@@ -3,13 +3,14 @@
 # (infra #318, docs/audit-sink.md, sections 3 and 6). Run it from the operator's machine with the escrowed repository password, at least
 # weekly and after any outage of the sink or of a shipper. Read-only: it lists, reads and decrypts into a scratch directory it removes.
 #
-#   1. LOCK        the bucket's versioning, lock mode and default retention, read back from the store, equal the tfvars. No delete marker is the
-#                  current version of an object under the prefix: a key that can write one (OVH cannot withhold the right, infra #393) makes
-#                  the repository look emptied to a reader that does not list versions, and the lock does not stop it.
+#   1. LOCK        the bucket's versioning, lock mode and default retention, read back from the store, equal the tfvars.
 #   2. SEQUENCE    for every node and every UTC day in the window: the snapshots are ranges `oa-pos=<inode>:<from>:<to>[:eof]` of the apiserver's
 #                  files. Per inode they must start at 0 and chain with no hole (`from` <= what is covered so far; a repeat is counted, not
 #                  a failure), nothing may follow an `eof`, and a new inode must follow a closed one (an inode number reused by a later file, a chunk at 0 after an eof, is a new file). An `oa-gap` snapshot is a LOSS the shipper
 #                  recorded (the apiserver deleted a file before it was shipped).
+#   2b. MARKERS    no delete marker is the current version of an object of a repository in the window: a key that can write one (OVH cannot
+#                  withhold the right, infra #393) makes the repository look emptied to a reader that does not list versions, and the
+#                  lock does not stop it. Only the window is listed (a marker on an older day is not looked at), as for every other check.
 #   3. READABLE    the newest chunks (--sample, default 3) are decrypted with the password and every line must be a JSON audit Event.
 #
 # Usage: audit-sink-check.sh <cluster.tfvars> [--sink primary|secondary] [--days N] [--sample N]
@@ -80,15 +81,6 @@ case "$STATE" in
   *"lock=none"*) bad "NO object lock on the bucket [$STATE]: the sink can be emptied by whoever holds a key with the right" ;;
   *) bad "lock is not ${AS_MODE}:${AS_DAYS} [$STATE]" ;;
 esac
-# A store that cannot list the versions proves nothing about markers: that is a defect, not an all-clear.
-if VERS="$(aws s3api list-object-versions --bucket "$BUCKET" --prefix "$AS_PREFIX/" --endpoint-url "$EP" --output json 2>"$SCRATCH/err")"; then
-  MARKS="$(jq '[.DeleteMarkers[]? | select(.IsLatest)]' <<<"$VERS" 2>/dev/null)" || MARKS=""
-  case "$(jq 'length' <<<"$MARKS" 2>/dev/null)" in
-    0) ok "no delete marker is the current version of an object under ${AS_PREFIX}/" ;;
-    [1-9]*) bad "$(jq 'length' <<<"$MARKS") delete marker(s) are the current version of an object under ${AS_PREFIX}/ (newest: $(jq -r 'sort_by(.LastModified) | last | "\(.Key) at \(.LastModified)"' <<<"$MARKS")): a reader that does not list versions sees the repository emptied (infra #393)" ;;
-    *) bad "the list of object versions is not JSON: delete markers not checked" ;;
-  esac
-else bad "cannot list the object versions ($(tail -n 1 "$SCRATCH/err" | cut -c1-160)): delete markers not checked"; fi
 
 # --- 2. sequence ------------------------------------------------------------------------------------------------------
 repo_of() { # <node> <day>
@@ -149,6 +141,38 @@ for node in $NODES; do
 done
 [ "$GAPS$LOSSES" = 00 ] && [ -n "$NODES" ] && [ "$FAIL" = "$FAIL_BEFORE_SEQ" ] && ok "no gap in the sequence over ${CHUNKS} chunk(s); ${DUPS} repeated range(s) (a lost acknowledgement, harmless)"
 for n in "${NOTE[@]+"${NOTE[@]}"}"; do echo "  ~ $n"; done
+
+# --- 2b. delete markers -----------------------------------------------------------------------------------------------
+# Listed per node and per day of the window, never the whole prefix: current versions are never expired, so the prefix grows for the whole
+# retention (a year of three control planes is about 950 000 versions). The nodes come from the VERSIONS (one delimiter listing), not only
+# from the current objects: a node whose every object is marked has no current object left, and would vanish from the list above.
+# A store that cannot list the versions proves nothing about markers: that is a defect, not an all-clear.
+echo "▶ 2b. No delete marker over the same window"
+MERR=""; MNODES=""; : >"$SCRATCH/marks"
+vlist() { # <prefix> [aws args] -> the store's answer in $SCRATCH/v; sets MERR and fails if it cannot list or does not answer JSON
+  aws s3api list-object-versions --bucket "$BUCKET" --prefix "$1" "${@:2}" --endpoint-url "$EP" --output json >"$SCRATCH/v" 2>"$SCRATCH/err" ||
+    { MERR="cannot list the object versions ($(tail -n 1 "$SCRATCH/err" | cut -c1-160))"; return 1; }
+  jq empty "$SCRATCH/v" 2>/dev/null || { MERR="the list of object versions is not JSON"; return 1; }
+}
+if vlist "$AS_PREFIX/" --delimiter /; then
+  # shellcheck disable=SC2086  # NODES is a list of names
+  MNODES="$({ printf '%s\n' $NODES; jq -r '.CommonPrefixes[]?.Prefix' "$SCRATCH/v" | sed -E 's#/$##; s#.*/##'; } | sed '/^$/d' | sort -u)"
+  for node in $MNODES; do
+    for day in $WANT_DAYS; do
+      vlist "$AS_PREFIX/$node/$day/" || break 2
+      jq -c '.DeleteMarkers[]? | select(.IsLatest)' "$SCRATCH/v" >>"$SCRATCH/marks"   # only the current markers are kept
+    done
+  done
+fi
+if [ -n "$MERR" ]; then bad "$MERR: delete markers not checked"
+elif [ -z "$MNODES" ]; then echo "  ~ no node, so no delete marker to look for"
+else
+  MARKS="$(jq -s '.' "$SCRATCH/marks")"
+  case "$(jq 'length' <<<"$MARKS")" in
+    0) ok "no delete marker is the current version of an object under ${AS_PREFIX}/ in the window" ;;
+    *) bad "$(jq 'length' <<<"$MARKS") delete marker(s) are the current version of an object under ${AS_PREFIX}/ in the window (newest: $(jq -r 'sort_by(.LastModified) | last | "\(.Key) at \(.LastModified)"' <<<"$MARKS")): a reader that does not list versions sees the repository emptied (infra #393)" ;;
+  esac
+fi
 
 # --- 3. readable ------------------------------------------------------------------------------------------------------
 echo "▶ 3. The newest chunks decrypt and are audit events"
