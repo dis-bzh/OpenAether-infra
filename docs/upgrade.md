@@ -380,6 +380,19 @@ its rules, `LIST=1` and `PRUNE=1` are in
 2026-10-03 climbs ran in that order on all three clouds, on the single-image lane
 this replaces.
 
+**Changing `bucket_suffix` starts an empty image state (infra #451).** The state is kept in the bucket
+`s3-<project>-<provider>-talos-image`, and `<project>` is the first segment of `cluster_name` plus the suffix
+(`oa_project` in `scripts/lib/common.sh`). Under a new suffix there is no state, so the next `cluster-up` builds the
+image again (44 s on Scaleway, one run of the 0.4.3 proof), even though the old images are still in the project. On Scaleway
+a plan-only check (`task talos-image PROVIDER=scaleway ENSURE=1 PLAN_ONLY=1`) read "7 to add": three block snapshots,
+three instance images and the build step, that is a second image of the same name `talos-scaleway-amd64-<version>` in each
+zone. The cluster looks the image up by name, and what that lookup returns with two matches, and which image a server
+boots from, was NOT tested (left untested on purpose). If the old state object was copied to the new bucket by hand, the plan
+reads "7 to add, 0 to change, 7 to destroy", because the snapshot's import bucket name forces a replacement: the install then rebuilt
+the image and replaced the three images instead of reusing them, which a cluster still using them can feel (a replaced image
+broke the next plan of another cluster in infra #93, closed). Keep one suffix per project, or delete the old images first. Rung: one plan-only
+check and one install on Scaleway (3 control planes + 6 workers), n=1; the install was INCIDENT overall (a provider stock-out and the LB-ACL trap, #361).
+
 `talos_version` is the node's Talos, not the machine-config contract: the module renders under a
 capped one (`config_contract` in `modules/talos/main.tf`, which says why). A bump to 1.14 changes
 the installer image in the config; offline renders under provider 0.12.0 show nothing else, but

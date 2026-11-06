@@ -138,7 +138,10 @@ for each old image the retention destroys (§7, image lane).
 
 - [ ] **deploy from an empty project** under a fresh `bucket_suffix` (`task
       bucket-suffix`; recorded on Scaleway, #68, and on OVH, the failover drill
-      of §7). Record duration and resource count.
+      of §7). Record duration and resource count. A fresh suffix is an empty
+      Talos image state: the image is built again, and an image of the same name
+      left in the project by another suffix is duplicated (not tested) or
+      replaced; delete the old images first (`upgrade.md`, #451).
 - [ ] **`task cluster-verify`** green. A warning is a finding: it now reads each
       control plane's failure domain and each worker's data volume (the volume read
       needs `task tunnels-up`; without a tunnel it warns instead of passing).

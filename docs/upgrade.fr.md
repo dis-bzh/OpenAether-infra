@@ -390,6 +390,20 @@ détruit les autres images (`cluster-up` le lance, `cluster-upgrade` non) ; ses 
 montées du 2026-10-03 ont suivi cet ordre sur les trois clouds, sur la voie à
 image unique que ceci remplace.
 
+**Changer `bucket_suffix` démarre un état d'image vide (infra #451).** L'état est gardé dans le bucket
+`s3-<projet>-<provider>-talos-image`, et `<projet>` est le premier segment de `cluster_name` plus le suffixe
+(`oa_project` dans `scripts/lib/common.sh`). Sous un nouveau suffixe il n'y a aucun état : le prochain `cluster-up`
+construit l'image de nouveau (44 s sur Scaleway, un passage de la preuve 0.4.3), alors que les anciennes images sont toujours dans
+le projet. Sur Scaleway, une vérification en plan seul (`task talos-image PROVIDER=scaleway ENSURE=1 PLAN_ONLY=1`) a lu
+« 7 to add » : trois snapshots de bloc, trois images d'instance et l'étape de build, soit une seconde image du même nom
+`talos-scaleway-amd64-<version>` dans chaque zone. Le cluster cherche l'image par son nom ; ce que cette recherche renvoie avec
+deux résultats, et l'image sur laquelle un serveur démarre, n'a PAS été testé (laissé non testé exprès). Si l'ancien objet d'état a été
+copié à la main vers le nouveau bucket, le plan lit « 7 to add, 0 to change, 7 to destroy », parce que le nom du bucket d'import du
+snapshot force un remplacement : l'installation a alors reconstruit l'image et remplacé les trois images au lieu de les réutiliser, ce
+que ressent un cluster qui les utilise encore (une image remplacée a cassé le plan suivant d'un autre cluster dans infra #93, fermée).
+Garder un seul suffixe par projet, ou supprimer d'abord les anciennes images. Barreau : une vérification en plan seul et une
+installation sur Scaleway (3 plans de contrôle + 6 workers), n=1 ; l'installation était INCIDENT dans l'ensemble (une rupture de stock du fournisseur et le piège LB-ACL, #361).
+
 `talos_version` est le Talos du nœud, pas le contrat de configuration machine : le module génère
 sous un contrat plafonné (`config_contract` dans `modules/talos/main.tf`, qui dit pourquoi). Un
 bump vers 1.14 change l'image d'installation dans la configuration ; les rendus hors ligne sous
