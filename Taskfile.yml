@@ -824,24 +824,47 @@ tasks:
           echo "  (without PLAN_ONLY)."
           exit 0
         fi
-        if [ "{{.APPROVE}}" != auto ]; then
-          if [ -t 0 ]; then
-            printf '\nApply this plan? Only "yes" is accepted: '
-            read -r reply
-            [ "$reply" = yes ] || {
-              echo "✗ not applied. The plan is kept at cluster/$PLANFILE"; exit 1; }
-          else
-            echo "✗ no terminal, and no APPROVE=auto — nothing was applied." >&2
-            echo "  The plan above is saved. Read it, then land exactly it:" >&2
-            echo "    task infra-apply ROLE={{.ROLE}} PROVIDER={{.PROVIDER}} KEY={{.KEY}} PLAN=$PLANFILE" >&2
-            echo "  Then phase 2 (do NOT re-run cluster-up: it stops here again, even on No changes):" >&2
-            echo "    task bootstrap-phase2 ROLE={{.ROLE}} PROVIDER={{.PROVIDER}} KEY={{.KEY}}" >&2
-            echo "  If the plan above says No changes, skip the apply: run task bootstrap-phase2 directly." >&2
-            echo "  Or run the whole journey unattended: task cluster-up … APPROVE=auto" >&2
-            exit 1
+        # The question and the apply, in a function: the Scaleway ACL retry below goes through the same approval.
+        land() {
+          if [ "{{.APPROVE}}" != auto ]; then
+            if [ -t 0 ]; then
+              printf '\nApply this plan? Only "yes" is accepted: '
+              read -r reply
+              [ "$reply" = yes ] || {
+                echo "✗ not applied. The plan is kept at cluster/$PLANFILE"; exit 1; }
+            else
+              echo "✗ no terminal, and no APPROVE=auto — nothing was applied." >&2
+              echo "  The plan above is saved. Read it, then land exactly it:" >&2
+              echo "    task infra-apply ROLE={{.ROLE}} PROVIDER={{.PROVIDER}} KEY={{.KEY}} PLAN=$PLANFILE" >&2
+              echo "  Then phase 2 (do NOT re-run cluster-up: it stops here again, even on No changes):" >&2
+              echo "    task bootstrap-phase2 ROLE={{.ROLE}} PROVIDER={{.PROVIDER}} KEY={{.KEY}}" >&2
+              echo "  If the plan above says No changes, skip the apply: run task bootstrap-phase2 directly." >&2
+              echo "  Or run the whole journey unattended: task cluster-up … APPROVE=auto" >&2
+              exit 1
+            fi
           fi
+          task infra-apply ROLE={{.ROLE}} PROVIDER={{.PROVIDER}} KEY={{.KEY}} PLAN="$PLANFILE"
+        }
+        rc=0; land || rc=$?
+        [ "$rc" = 0 ] && exit 0
+        # Scaleway, first install with app_lb_allowed_cidrs (infra #361): the allow list holds the NAT gateway's public
+        # address, unknown before the apply, and the provider mis-plans it ("Provider produced inconsistent final plan",
+        # scaleway_lb_acl). Everything else of the apply LANDED and the address is in the state now, so the same command
+        # converges (every fresh build in the 0.4.1 labs). So, once, and only on that exact transcript of the apply
+        # that just failed (infra-apply drops the file before it runs): a new plan, the same approval, the same apply.
+        # Any other failure, and a second one, stop here as before.
+        LOG=infrastructure/opentofu/cluster/.tofu-run.log
+        if grep -Fq 'Provider produced inconsistent final plan' "$LOG" 2>/dev/null \
+           && grep -Eq 'scaleway_lb_acl\.app_(allow|deny)' "$LOG" 2>/dev/null; then
+          echo "~ the apply failed on the Scaleway load balancer ACL (scaleway_lb_acl, \"Provider produced inconsistent"
+          echo "  final plan\"): its allow list holds the NAT gateway's address, unknown before this apply and"
+          echo "  in the state now. Retrying the infrastructure step ONCE (a new plan, the same approval)."
+          echo "  A second failure is not this trap."
+          task infra-plan ROLE={{.ROLE}} PROVIDER={{.PROVIDER}} KEY={{.KEY}} OUT="$PLANFILE" || exit 1
+          land
+          exit $?
         fi
-        task infra-apply ROLE={{.ROLE}} PROVIDER={{.PROVIDER}} KEY={{.KEY}} PLAN="$PLANFILE"
+        exit "$rc"
       - task: bootstrap-phase2
         if: '[ -z "{{.PLAN_ONLY_ON}}" ]'
         vars:

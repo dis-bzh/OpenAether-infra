@@ -35,6 +35,10 @@ cat >"$W/stub" <<EOF
 echo "\$(basename "\$0") \$*" >>"$W/calls.log"
 case "\$(basename "\$0") \$*" in
   "tofu plan"*) for a in "\$@"; do case "\$a" in -out=*) : >"\${a#-out=}" ;; esac; done ;;
+  # APPLY_FAIL_FILE: the first APPLY_FAIL_N (default 1) applies print that transcript and fail, as a provider error does.
+  "tofu apply"*)
+    n=\$(cat "$W/apply.n" 2>/dev/null || echo 0); echo \$((n + 1)) >"$W/apply.n"
+    if [ -n "\${APPLY_FAIL_FILE:-}" ] && [ "\$n" -lt "\${APPLY_FAIL_N:-1}" ]; then cat "\$APPLY_FAIL_FILE"; exit 1; fi ;;
   "tofu output -raw "*) echo "fixture-\$3" ;;
   # The real tofu, in a cluster directory whose backend was not initialised in THIS shell (lab 26, F1): it refuses unless
   # the task env (TF_DATA_DIR and the S3 credentials of *provider-env) is there.
@@ -96,7 +100,7 @@ O="$W/out"
 run() { # PCHK=<mode> sets OA_PASSPHRASE_CHECK; <verifier rc> <task args...> — combined output in $O, calls in calls.log; EXTRA="NAME=value [NAME=value]" sets env vars, last, so it overrides the defaults; TTY=1 gives it a terminal that answers "yes" to every question
   local rc="$1"; shift
   local -a xtra=(); [ -n "${EXTRA:-}" ] && read -ra xtra <<<"$EXTRA"
-  : >"$W/calls.log"; : >"$W/receipts.log"; rm -f "$W/presync.applied" "$W/presync.undone" "$W/presync.args" "$W/coredns.applied"
+  : >"$W/calls.log"; : >"$W/receipts.log"; rm -f "$W/presync.applied" "$W/presync.undone" "$W/presync.args" "$W/coredns.applied" "$W/apply.n"
   local cmd=(env -i PATH="$W/bin:$PATH" HOME="$W" VERIFY_RC="$rc" NO_COLOR=1
       TF_VAR_encryption_passphrase=fixture-passphrase-of-at-least-32-characters
       SCW_ACCESS_KEY=scw-access-key SCW_SECRET_KEY=scw-secret-key
@@ -506,6 +510,32 @@ done
 EXTRA="$BREAK" run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
 [ "$rc" != 0 ] && ok "control: deploy_flux true and the same failing stubs fail the run" || bad "control: exit $rc, the Flux steps did not run"
 
+
+echo "--- Scaleway LB-ACL trap: the infrastructure step is retried ONCE, on that transcript only, and says so (infra #361) ---"
+printf 'Error: Provider produced inconsistent final plan\n\nWhen expanding the plan for %s to include new values learned so far during apply,\nprovider "registry.opentofu.org/scaleway/scaleway" produced an invalid new value for .match[0].ip_subnet: was null.\n' 'scaleway_lb_acl.app_allow["http"]' >"$W/acl.fail"
+sed 's/scaleway_lb_acl.app_allow\["http"\]/scaleway_instance_server.cp[0]/' "$W/acl.fail" >"$W/other-resource.fail"
+printf 'Error: creating server: quota exceeded for scaleway_lb_acl.app_allow\n' >"$W/other-error.fail"
+EXTRA="APPLY_FAIL_FILE=$W/acl.fail" run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+{ [ "$rc" = 0 ] && grep -q '^~ the apply failed on the Scaleway load balancer ACL' "$O" && grep -q 'Retrying the infrastructure step ONCE' "$O" \
+    && [ "$(calls '^tofu plan -out=up-')" = 2 ] && [ "$(calls '^tofu apply up-')" = 2 ] && grep -q '^✓ cluster-up complete' "$O"; } \
+  && ok "the ACL transcript: said so, a new plan and a second apply, and the journey ends rc 0" \
+  || bad "ACL retry, exit $rc, plans $(calls '^tofu plan -out=up-'), applies $(calls '^tofu apply up-'): $(tail_of)"
+EXTRA="APPLY_FAIL_FILE=$W/acl.fail APPLY_FAIL_N=2" run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+{ [ "$rc" != 0 ] && [ "$(calls '^tofu apply up-')" = 2 ] && [ "$(calls '^tofu plan -out=up-')" = 2 ] && ! grep -q '^✓ cluster-up complete' "$O"; } \
+  && ok "a second failure stops the run: one retry, never a loop" || bad "retry twice? exit $rc, applies $(calls '^tofu apply up-')"
+for f in other-error other-resource; do
+  EXTRA="APPLY_FAIL_FILE=$W/$f.fail" run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+  { [ "$rc" != 0 ] && [ "$(calls '^tofu apply up-')" = 1 ] && [ "$(calls '^tofu plan -out=up-')" = 1 ] && ! grep -q '^~ the apply failed on the Scaleway load balancer ACL' "$O"; } \
+    && ok "$f: not that trap (the message AND scaleway_lb_acl are both needed): no retry, the run fails as before" \
+    || bad "$f: exit $rc, applies $(calls '^tofu apply up-'), retry line: $(grep -c 'Retrying the infrastructure step' "$O")"
+done
+# The retry goes through the same approval: on a terminal, with APPROVE=ask, the person is asked once more.
+TTY=1 run 0 "${ASK[@]}" PROVIDER=scaleway; rc=$?
+Q0="$(grep -c 'Apply this plan?' "$O")"
+TTY=1 EXTRA="APPLY_FAIL_FILE=$W/acl.fail" run 0 "${ASK[@]}" PROVIDER=scaleway; rc2=$?
+{ [ "$rc" = 0 ] && [ "$rc2" = 0 ] && [ "$(grep -c 'Apply this plan?' "$O")" = $((Q0 + 1)) ]; } \
+  && ok "APPROVE=ask: the second plan is asked about again (${Q0} questions without the trap, $((Q0 + 1)) with it)" \
+  || bad "ask mode: exits $rc/$rc2, questions $(grep -c 'Apply this plan?' "$O") against $Q0: $(tail_of)"
 
 echo "--- PLAN_ONLY=1: the journey as far as the plan, nothing created and nothing applied (infra #412) ---"
 # The default flow does not move: the build and the grow are called as before, and the journey records its receipt.
