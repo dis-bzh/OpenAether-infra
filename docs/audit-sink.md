@@ -43,7 +43,8 @@ Rules the tooling enforces (`scripts/lib/audit-sink.sh`, read by `ensure-buckets
 - Outscale is accepted as a sink **only after infra #377** (dedicated key pairs were refused by the store in lab 15B); until then
   the operator's own keys would be the only ones that work there, which defeats the dedicated pair.
 - COMPLIANCE was proven to be enforced on Scaleway, OVH and Outscale (lab 22, part B: delete of a version and both retention
-  changes refused). That a locked bucket can be emptied once the retention ends was not proven.
+  changes refused). Once a one-day retention had ended, deleting the version and then the bucket succeeded on all three (2026-10-22,
+  one version per bucket); a long retention and a bucket with many versions were not tried.
 
 ## 3. The data path
 

@@ -354,7 +354,7 @@ task security            # contrôles de durcissement
 | Accès API Kubernetes | ACL du LB restreinte à `admin_ip` |
 | Accès API Talos | Tunnel SSH uniquement (port 50000, jamais sur le LB) |
 | Chiffrement inter-nœuds | Cilium WireGuard |
-| Limites | `bastion-harden-check.sh` n'a aucun passage consigné sur un vrai bastion ; le kubeconfig admin (`system:masters`) n'est pas révocable, et `task talosconfig-new`, qui délivre un talosconfig en lecture seule et à durée limitée, n'a tourné que sur un cloud réel, OVH ([docs/admin-access.fr.md](docs/admin-access.fr.md)) |
+| Limites | `bastion-harden-check.sh` a tourné sur de vrais bastions chez les trois clouds (labs 15A, 15B et 16, 2026-10-17 et 18 : 37/37 chez Scaleway et OVH, 38/38 chez Outscale) ; le kubeconfig admin (`system:masters`) n'est pas révocable, et `task talosconfig-new`, qui délivre un talosconfig en lecture seule et à durée limitée, n'a tourné que sur un cloud réel, OVH ([docs/admin-access.fr.md](docs/admin-access.fr.md)) |
 
 ## Roadmap
 

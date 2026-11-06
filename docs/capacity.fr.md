@@ -192,4 +192,7 @@ Augmenter la valeur Scaleway sur un cluster existant redimensionne le `sbs_volum
 Talos agrandit EPHEMERAL au redémarrage suivant du nœud : drainer et redémarrer les workers un par un ensuite (15,6 Go vers 35,6 Go ; voir l'avertissement RWX
 de [`upgrade.fr.md`](upgrade.fr.md)). Un cluster construit à 20 sans l'épingler dans son tfvars verra ce redimensionnement au prochain plan ; épingler
 `scw_root_volume_size_gb = 20` garde l'ancienne taille (la pile complète n'y tient pas). Chez Outscale et Proxmox ce code ne redimensionne pas le disque
-racine sur place : remplacer les nœuds un par un (`task cluster-roll`). Non mesuré : l'espace utile d'Outscale et d'OVH avec la pile complète.
+racine sur place : remplacer les nœuds un par un (`task cluster-roll`). Mesuré une fois sur Outscale (lab 15B, cluster 1, 3 plans de contrôle + 3 workers,
+`outscale_root_volume_size_gb = 50`) : 44,1 Go de stockage éphémère allouable par nœud, DiskPressure False sur 6 nœuds sur 6, 0 éviction. Ce cluster ne portait pas
+toute la pile (Zitadel, vmstorage-1 et alloy-audit sont restés Pending faute de CPU), et la limite vue chez Outscale dans ce lab n'était pas la taille mais les IOPS des racines gp2 à 150 IOPS (infra #376).
+Non mesuré : l'espace utile d'OVH avec la pile complète (infra #378) ; le lab 12 n'a fait tourner la pile complète que sur Scaleway.

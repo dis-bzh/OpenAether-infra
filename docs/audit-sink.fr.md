@@ -45,7 +45,8 @@ Règles appliquées par l'outillage (`scripts/lib/audit-sink.sh`, lu par `ensure
 - Outscale n'est accepté comme puits **qu'après infra #377** (les paires dédiées ont été refusées par le magasin au lab 15B) ; d'ici là
   seules les clés de l'opérateur y fonctionneraient, ce qui annule la paire dédiée.
 - COMPLIANCE a été prouvé appliqué chez Scaleway, OVH et Outscale (lab 22, partie B : suppression d'une version et deux changements de
-  rétention refusés). Qu'un bucket verrouillé puisse être vidé une fois la rétention écoulée n'a pas été prouvé.
+  rétention refusés). Une fois une rétention d'un jour écoulée, supprimer la version puis le bucket a réussi chez les trois (2026-10-22,
+  une version par bucket) ; une longue rétention et un bucket à nombreuses versions n'ont pas été essayés.
 
 ## 3. Le chemin des données
 

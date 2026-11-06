@@ -347,7 +347,7 @@ task security            # hardening checks
 | Kubernetes API access | LB ACL restricted to `admin_ip` |
 | Talos API access | SSH tunnel only (port 50000, never on the LB) |
 | Inter-node encryption | Cilium WireGuard |
-| Limits | `bastion-harden-check.sh` has no recorded run on a real bastion; the admin kubeconfig (`system:masters`) cannot be revoked, and `task talosconfig-new`, which issues a read-only talosconfig that expires, has run on one real cloud only, OVH ([docs/admin-access.md](docs/admin-access.md)) |
+| Limits | `bastion-harden-check.sh` ran on real bastions on the three clouds (labs 15A, 15B and 16, 2026-10-17 and 18: 37/37 on Scaleway and OVH, 38/38 on Outscale); the admin kubeconfig (`system:masters`) cannot be revoked, and `task talosconfig-new`, which issues a read-only talosconfig that expires, has run on one real cloud only, OVH ([docs/admin-access.md](docs/admin-access.md)) |
 
 ## Roadmap
 
