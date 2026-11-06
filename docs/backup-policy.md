@@ -48,7 +48,7 @@ been timed from an empty account; the sum of the pieces measured above is lower,
 
 **There is no automatic expiry beyond the counts above, unless `backup_immutability` is set.** By default (`off`) no bucket has versioning, a lifecycle rule or an object lock set by this repository: an
 object that left the retention count is deleted, but a **version** of it, if the provider's bucket is versioned, is not; and an attacker holding K7 can delete the lot. Turning the protection on is opt-in
-and **tried only in part**: `governance` with a one-day retention, accepted on Scaleway, OVH and Outscale (labs 15A and 15B); a version delete without the bypass refused and allowed with it, read on OVH (15A) and Outscale (15B); on Scaleway the lock was accepted and the bypass was used to empty the buckets, the refusal itself was not asserted and `compliance` on the three (lab 22, below); long retentions, many versions and the cost over time were not tried (support and cost differ):
+and **tried only in part**: `governance` with a one-day retention, accepted on Scaleway, OVH and Outscale (labs 15A and 15B); a version delete without the bypass refused and allowed with it, read on OVH (15A) and Outscale (15B); on Scaleway the lock was accepted and the bypass was used to empty the buckets, the refusal itself was not asserted; and `compliance` on the three (lab 22, below); long retentions, many versions and the cost over time were not tried (support and cost differ):
 
 | `backup_immutability` | What `ensure-buckets.sh` sets, then reads back | What it gives | What it does not |
 |---|---|---|---|
