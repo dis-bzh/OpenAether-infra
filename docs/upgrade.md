@@ -581,9 +581,11 @@ kubectl get clusters.postgresql.cnpg.io -n <ns> <cluster> \
 kubectl delete pod <targetPrimary> -n <ns>
 ```
 
-`kubectl cnpg promote` is not the answer here: with the plugin this repository
-pins, it exits 0, prints "will be promoted" and leaves `targetPrimary`
-untouched. Open as an issue.
+`kubectl cnpg promote` is not the answer here, as far as it was seen: once (n=1),
+with plugin 1.23.6 against a 1.23.1 operator, it exited 0, printed "will be
+promoted" and left `targetPrimary` untouched, and the cause was never separated.
+The plugin and the operator are both 1.30.1 now and `promote` has not been run
+again since (OpenAether-apps #36, open).
 
 The first apply after a `talos_version` bump used to fail once on OVH and
 Outscale with "Provider produced inconsistent final plan" (upstream
