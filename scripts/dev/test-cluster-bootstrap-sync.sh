@@ -99,6 +99,7 @@ reset() {
   jq -nc '{items: [range(3) | {metadata:{name:"n\(.)"},spec:{},status:{conditions:[{type:"Ready",status:"True"}]}}]}' >"$FX/nodes.json"
   printf 'deploy_flux = true\ntalos_version = "v1.14.4"\nkubernetes_version = "v1.37.1"\n' >"$TFV"
   cp "$REAL_M"/{cilium.yaml,cilium-hubble-drops.yaml,flux-install.yaml,upstream-artifacts.lock} "$M/"
+  rm -f "$C"/.flux-apply-unfinished-*
 }
 run() { ( cd "$C" && env -i PATH="$W/bin:$PATH" HOME="$W" KUBECONFIG=/nonexistent/other OA_ROLLOUT_TIMEOUT=5 "$BASH_BIN" "$A" --tfvars "$TFV" "$@" ) </dev/null >"$W/out" 2>"$W/err"; }
 calls() { grep -c -- "$1" "$W/calls.log"; }
@@ -199,6 +200,35 @@ run --apply; rc=$?
 [ "$rc" = 0 ] && [ "$(writes)" = 3 ] && ok "cause removed: the next --apply finishes it (exit 0)" || bad "third run, rc $rc writes $(writes): $(cat "$W/err")"
 run; rc=$?
 [ "$rc" = 0 ] && said 'run exactly the pinned versions' && [ "$(writes)" = 3 ] && ok "and then the plain re-run is clean and writes nothing" || bad "converged re-run, rc $rc"
+# A refused UPDATE of a CRD that already exists: every CRD is there and Established, so the cluster shows nothing. The script remembers the
+# refused apply in a marker file (gitignored, in the cluster directory) and treats the install as not finished until a clean --apply.
+reset; setlive flux.live source-controller "$B1S"; mkerr; : >"$FX/apply.partial"
+run --apply; rc=$?
+[ "$rc" = 1 ] && said 'a stored version cannot be removed' && [ "$(writes)" = 1 ] && ls "$C"/.flux-apply-unfinished-management-stub >/dev/null 2>&1 \
+  && ok "an UPDATE of an existing CRD refused (the old one stays Established): exit 1, the whole error, and a marker is left" || bad "refused update, first run: rc $rc writes $(writes) marker: $(ls -a "$C" | tr '\n' ' ')"
+run; rc=$?
+[ "$rc" = 3 ] && said 'refused or interrupted' && ! said 'run exactly the pinned versions' && [ "$(writes)" = 1 ] \
+  && ok "the plain re-run: tags at the pin and every CRD Established, yet exit 3 and no 'run exactly the pinned versions' (the marker)" || bad "refused update, re-run, rc $rc: $(cat "$W/out" "$W/err")"
+run --apply; rc=$?
+[ "$rc" = 1 ] && [ "$(writes)" = 2 ] && ls "$C"/.flux-apply-unfinished-management-stub >/dev/null 2>&1 \
+  && ok "--apply applies again while the cause stays (exit 1), and the marker stays" || bad "refused update, second --apply: rc $rc writes $(writes)"
+rm -f "$FX/apply.partial"
+run --apply; rc=$?
+[ "$rc" = 0 ] && [ "$(writes)" = 3 ] && ! ls "$C"/.flux-apply-unfinished-* >/dev/null 2>&1 \
+  && ok "cause removed: a clean --apply exits 0 and deletes the marker" || bad "refused update, clean --apply: rc $rc writes $(writes) marker: $(ls -a "$C" | tr '\n' ' ')"
+run; rc=$?
+[ "$rc" = 0 ] && said 'run exactly the pinned versions' && [ "$(writes)" = 3 ] && ok "and then the plain re-run is clean and writes nothing" || bad "refused update, converged re-run, rc $rc"
+# No marker where nothing was tried: a refusal before the first write, and a dry run, leave none.
+reset; setlive flux.live kustomize-controller "$B2K"; run --apply; rc=$?
+[ "$rc" = 2 ] && ! ls "$C"/.flux-apply-unfinished-* >/dev/null 2>&1 && ok "a refusal before any write (two minors) leaves no marker" || bad "refusal left a marker or rc $rc"
+reset; setlive flux.live source-controller "$B1S"; run; rc=$?
+[ "$rc" = 3 ] && ! ls "$C"/.flux-apply-unfinished-* >/dev/null 2>&1 && ok "a dry run leaves no marker" || bad "dry run left a marker or rc $rc"
+# A tag difference together with a CRD the new artifact adds (the normal n-1 to n dry run): the gap is listed, but not under the claim that the
+# tags are at the pin, and nothing was refused.
+reset; setlive flux.live kustomize-controller "$B1K"; echo "$CRDX" >"$FX/crd.missing"
+run; rc=$?
+[ "$rc" = 3 ] && said "$CRDX" && said 'Also not in place yet' && ! said 'leaves the tags at the pin' \
+  && ok "tags one minor behind and a CRD the cluster does not have yet: exit 3, the CRD is listed as not in place yet, not as a refused apply" || bad "tag diff with a missing CRD, rc $rc: $(cat "$W/out" "$W/err")"
 # A CRD that exists but is not Established.
 reset; echo "$CRDX" >"$FX/crd.notest"
 run; rc=$?

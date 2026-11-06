@@ -22,8 +22,11 @@
 # tags while a CRD was refused or a rollout never completed. The tags alone are therefore not the verdict: each Flux Deployment must
 # also have observedGeneration == generation and readyReplicas == replicas, and each CRD of the artifact must exist and be Established
 # (oa_flux_gaps, scripts/lib/pins.sh). A refused apply prints kubectl's WHOLE error and says other objects may have been applied; a re-run
-# then sees the gap (exit 3, or the apply is tried again under --apply) instead of "run exactly the pinned versions". Not seen: a refused
-# UPDATE of a CRD that already exists (the old one stays Established); the apply that refused it printed it.
+# then sees the gap (exit 3, or the apply is tried again under --apply) instead of "run exactly the pinned versions". One gap the cluster
+# cannot show: a refused UPDATE of a CRD that already exists (the old one stays Established). So the script writes a marker file before an
+# apply (.flux-apply-unfinished-<config name>, in the cluster directory, gitignored) and deletes it once an apply was accepted WHOLE; while
+# it exists the install is "not finished" (exit 3, or the apply is tried again) and `task cluster-verify` fails the Flux line. The limit
+# left: the marker is local to this checkout, so an apply made by hand or from another checkout leaves no trace here.
 #
 # CILIUM (never applied here). The check and the dry run work; --apply on Cilium is REFUSED (exit 5). Reasons, in
 # docs/upgrade.md: the DaemonSets roll with maxUnavailable 2 (the CNI of 2 nodes at once on a 3-node cluster), nothing here
@@ -114,8 +117,9 @@ FLUX_DIFF=""; CILIUM_DIFF=""; FLUX_GAPS=""
 [ "$DO_CILIUM" -eq 1 ] && CILIUM_DIFF="$(oa_pin_diff "$CILIUM_PINS" "$CILIUM_LIVE")"
 # The tags are not the whole verdict (infra #448): a Deployment can carry the pinned tag with no ready replica, and a refused CRD leaves the
 # tags untouched. FLUX_TODO is what makes the run "not done": the tag difference or an unfinished install.
+MARK="$(oa_flux_marker "$CLUSTER_DIR" "$TFVARS")"
 if [ "$DO_FLUX" -eq 1 ]; then
-  FLUX_GAPS="$(oa_flux_gaps "$NS" "$MANIFESTS/flux-install.yaml")" || fail "cannot tell whether the Flux install is finished: $FLUX_GAPS"
+  FLUX_GAPS="$(oa_flux_gaps "$NS" "$MANIFESTS/flux-install.yaml" "$MARK")" || fail "cannot tell whether the Flux install is finished: $FLUX_GAPS"
 fi
 FLUX_TODO="$FLUX_DIFF$FLUX_GAPS"
 
@@ -132,7 +136,12 @@ show() { # <label> <pins> <live> <diff>
 }
 [ "$DO_FLUX" -eq 1 ] && show "Flux controllers" "$FLUX_PINS" "$FLUX_LIVE" "$FLUX_DIFF"
 [ "$DO_CILIUM" -eq 1 ] && show "Cilium ($CILIUM_FILE)" "$CILIUM_PINS" "$CILIUM_LIVE" "$CILIUM_DIFF"
-[ -z "$FLUX_GAPS" ] || printf 'The Flux install is not finished (a refused or interrupted apply leaves the tags at the pin):\n%s\n' "$(sed 's/^/  ~ /' <<<"$FLUX_GAPS")"
+# Tags at the pin: the gaps are what a refused or interrupted apply left. Tags behind: nothing was refused (the normal n-1 to n dry run), the
+# gaps are what applying the new artifact would create or finish (a CRD it adds, a rollout still under way).
+if [ -n "$FLUX_GAPS" ]; then
+  if [ -z "$FLUX_DIFF" ]; then printf 'The Flux install is not finished (a refused or interrupted apply leaves the tags at the pin):\n%s\n' "$(sed 's/^/  ~ /' <<<"$FLUX_GAPS")"
+  else printf 'Also not in place yet (what applying the new artifact would create or finish):\n%s\n' "$(sed 's/^/  ~ /' <<<"$FLUX_GAPS")"; fi
+fi
 
 if [ -z "$FLUX_TODO$CILIUM_DIFF" ]; then
   echo "✓ the selected components run exactly the pinned versions$([ "$DO_FLUX" -eq 1 ] && echo ", and the Flux install is finished (every rollout complete, every CRD Established)")."
@@ -190,14 +199,20 @@ if [ -n "$FLUX_TODO" ]; then
   [ -z "$REASONS" ] || refuse "Flux is not applied: $(sed 's/^/  - /' <<<"$REASONS" | paste -sd' ' -)"
   [ -z "$ROLLWHY" ] || refuse "Flux is not applied while a Talos or Kubernetes roll may be under way: $(sed 's/^/  - /' <<<"$ROLLWHY" | paste -sd' ' -)"
   echo "▶ server-side apply of flux-install.yaml (field manager openaether-bootstrap)"
+  # The marker first: a refused update of an existing CRD leaves nothing in the cluster, and a kill leaves nothing either. Deleted below once the
+  # apply was accepted whole.
+  : >"$MARK" || fail "cannot write $MARK: nothing was applied"
   out="$(kubectl apply --server-side --force-conflicts --field-manager=openaether-bootstrap -f "$MANIFESTS/flux-install.yaml" 2>"$err")" || {
     # kubectl keeps going after a refused object and returns the errors at the end: the Deployments may be applied, a CRD not. The whole error,
     # not its first 400 bytes, and no rollout wait: the operator reads it, fixes the cause, and runs this command again (it will not stop at the tags).
     echo "✗ apply refused. kubectl does not stop at the first refused object: the other objects of flux-install.yaml may have been applied, the Deployments among them ($(grep -c . <<<"$out") reported applied before the end). The whole error:" >&2
     cat "$err" >&2
-    echo "  Fix the cause and run the same command again: the re-run no longer takes the image tags for the proof, it also checks the rollouts and the CRDs." >&2
+    echo "  Fix the cause and run the same command again. The re-run no longer takes the image tags for the proof: it checks the rollouts and the CRDs, and a marker file" >&2
+    echo "  (${MARK##*/}, in the cluster directory) makes it apply again even where the cluster shows nothing, as after a refused UPDATE of a CRD that already exists" >&2
+    echo "  (the old one stays Established). The marker goes away after the first apply that is accepted whole." >&2
     exit 1
   }
+  rm -f "$MARK"
   while read -r _ n _; do
     kubectl -n "$NS" rollout status "deployment/$n" --timeout="${RTO}s" >/dev/null 2>"$err" \
       || fail "deployment/$n did not finish rolling out within ${RTO}s: $(head -c 300 "$err"). Read: kubectl -n $NS describe deployment $n"

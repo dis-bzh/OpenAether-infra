@@ -129,6 +129,8 @@ infrastructure/opentofu/cluster/.talos-tunnels.pids
 .plan-only-grow-*
 # cluster-up PLAN_ONLY=1 (infra #439): the Talos image would be built; the plan step reads it and deletes it.
 .plan-only-image-*
+# cluster-bootstrap-sync.sh (infra #448): a Flux apply was refused or interrupted; the re-run and cluster-verify read it, a clean apply deletes it.
+.flux-apply-unfinished-*
 infrastructure/opentofu/.talos-bastion-known-hosts
 infrastructure/opentofu/cluster/.talos-bastion-known-hosts
 # The pinned bastion host key, wherever the script ran from (BASTION_KNOWN_HOSTS, scripts/lib/bastion-hostkey.sh)

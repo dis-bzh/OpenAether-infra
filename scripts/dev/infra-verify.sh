@@ -435,10 +435,12 @@ pins_check() { # <label> <artifact file> <kind> <fix-when-behind> <fix-when-ahea
     ok "${label} run the pinned version ($(awk '{print $3}' <<<"$want" | sort -u | paste -sd, -))"
     # The tags are not the whole story (infra #448): kubectl apply does not stop at the first refused object, so a CRD can be missing
     # or a rollout unfinished while every Deployment carries the pinned tag. Flux only (Cilium is never applied in place).
+    # No grace period here: a rollout that started after the Available wait above reads as unfinished, which it is at that instant; the message
+    # says to run the verify again. (A recheck after a pause was judged heavier than the risk: reviewer note, not seen on a healthy install.)
     if [ "$kind" = flux ]; then
-      if gaps="$(oa_flux_gaps "${6:-flux-system}" "$file")"; then
+      if gaps="$(oa_flux_gaps "${6:-flux-system}" "$file" "$(oa_flux_marker "$CLUSTER_DIR" "$VER_TFVARS")")"; then
         while read -r line; do
-          [ -z "$line" ] || bad "${label}: at the pinned tags, but the install is not finished: ${line}. Finish it: task cluster-bootstrap-sync PROVIDER=${PROVIDER} ROLE=${ROLE} APPLY=1 (it applies again and waits for the rollouts)"
+          [ -z "$line" ] || bad "${label}: at the pinned tags, but the install is not finished: ${line}. Finish it: task cluster-bootstrap-sync PROVIDER=${PROVIDER} ROLE=${ROLE} APPLY=1 (it applies again and waits for the rollouts). If a rollout is only still under way, run cluster-verify again once it ends"
         done <<<"$gaps"
       else
         unk "${label}: ${gaps} — whether the install is finished is UNCHECKED"

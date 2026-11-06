@@ -69,14 +69,23 @@ oa_live_pins() {
   esac
 }
 
+# The marker of a refused or interrupted Flux apply (infra #448), one per config file: oa_flux_marker <cluster dir> <tfvars file>
+oa_flux_marker() { printf '%s/.flux-apply-unfinished-%s' "$1" "$(basename "$2" .tfvars)"; }
+
 # Is the Flux install FINISHED, not only at the pinned tags? (infra #448) `kubectl apply` does not stop at the first refused object: the
 # Deployments can carry the pinned tags while a CRD was refused, or a rollout never completed, and the tags alone then read "all is well".
 # Prints one line per gap, nothing when every pinned Deployment has observedGeneration == generation and readyReplicas == replicas AND every
 # CRD of the artifact exists and is Established. Returns 1, printing the reason, when the API cannot be read (the caller says UNKNOWN).
-# Limit: a refused UPDATE of a CRD that already exists is not seen (the old CRD stays Established); the apply that refused it printed it.
-# Usage: oa_flux_gaps <namespace> <flux-install.yaml>
+# A refused UPDATE of a CRD that already exists is NOT visible in the cluster (the old CRD stays Established): the optional marker file is
+# what remembers it. cluster-bootstrap-sync.sh creates it before an apply and deletes it once an apply was accepted whole; while it exists
+# the install is "not finished", whatever the cluster shows. It lives in the cluster directory of one checkout (gitignored): an apply made
+# elsewhere, or by hand, leaves no trace here.
+# Usage: oa_flux_gaps <namespace> <flux-install.yaml> [marker file]
 oa_flux_gaps() {
-  local ns="$1" file="$2" names dj cj est c s
+  local ns="$1" file="$2" marker="${3:-}" names dj cj est c s
+  if [ -n "$marker" ] && [ -e "$marker" ]; then
+    echo "the last apply of flux-install.yaml was refused or interrupted (marker ${marker##*/}): some of its objects, an UPDATE of an existing CRD among them, may not be applied, and the cluster cannot show it"
+  fi
   names="$(oa_artifact_pins flux "$file" | awk '{ print $2 }' | paste -sd' ' -)"
   [ -n "$names" ] || { echo "no controller in $(basename "$file")"; return 1; }
   dj="$(timeout 60 kubectl -n "$ns" get deployments -o json 2>/dev/null)" || { echo "the Deployments of $ns cannot be read"; return 1; }
@@ -95,7 +104,7 @@ oa_flux_gaps() {
     [ -n "$c" ] || continue
     s="$(awk -v c="$c" '$1 == c { print $2 }' <<<"$est")"
     [ "$s" = True ] && continue
-    if [ -z "$s" ]; then echo "customresourcedefinition/$c: not found (never applied, or refused)"
+    if [ -z "$s" ]; then echo "customresourcedefinition/$c: not found (not applied yet, or refused)"
     else echo "customresourcedefinition/$c: not Established ($s)"; fi
   done < <(awk '/^kind: / { w = ($2 == "CustomResourceDefinition"); n = 0; next } w && !n && /^  name: / { print $2; n = 1 }' "$file")
   return 0

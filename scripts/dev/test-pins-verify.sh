@@ -125,7 +125,7 @@ reset() {
   echo '{"items":[]}' >"$FX/cnpg.json"; echo '{"items":[]}' >"$FX/cnpgp.json"
   printf '%s' "$IDMAP" >"$FX/identity.want"; mkid "$IDMAP"
   printf 'git_ref = "refs/tags/0.4.0"\ndeploy_flux = true\ncluster_name = "c"\nenvironment = "dev"\n' >"$TFV"
-  cp "$REAL_M"/{cilium.yaml,cilium-hubble-drops.yaml,flux-install.yaml} "$M/"
+  cp "$REAL_M"/{cilium.yaml,cilium-hubble-drops.yaml,flux-install.yaml} "$M/"; rm -f "$C"/.flux-apply-unfinished-*
 }
 setlive() { awk -v n="$2" -v t="$3" '$2 == n { $3 = t } { print }' "$FX/$1" >"$FX/x" && mv "$FX/x" "$FX/$1"; }
 run() { ( env -i PATH="$W/bin:$PATH" HOME="$W" API_TIMEOUT=2 NODES_TIMEOUT=2 DNS_TIMEOUT=2 ${EXTRA:-} "$BASH_BIN" "$W/scripts/dev/infra-verify.sh" "${1:-stub}" management ) </dev/null >"$W/raw" 2>&1; rc=$?
@@ -179,6 +179,10 @@ reset; sed -n 5p "$W/flux.crds" >"$FX/flux.crd.missing"; run
 reset; : >"$FX/flux.crd.unreadable"; run
 { [ -n "$(unkline 'whether the install is finished is UNCHECKED')" ] && [ "$rc" -ne 0 ]; } \
   && ok "the CRDs unreadable: UNKNOWN, not a pass" || bad "$(grep Flux "$W/out")"
+# A refused UPDATE of an existing CRD leaves nothing in the cluster: the marker cluster-bootstrap-sync.sh writes is the only trace.
+reset; : >"$C/.flux-apply-unfinished-management-stub"; run
+{ [ -n "$(badline 'Flux controllers: at the pinned tags, but the install is not finished: the last apply of flux-install.yaml was refused or interrupted')" ] && [ "$rc" -ne 0 ]; } \
+  && ok "the marker of a refused or interrupted apply: BAD although every tag, rollout and CRD looks right" || bad "$(grep Flux "$W/out")"
 
 echo "--- mutation: the apps ref, both directions ---"
 reset; mkgr refs/tags/0.3.2; run
