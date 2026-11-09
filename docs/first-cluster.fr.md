@@ -154,7 +154,7 @@ $EDITOR management-scaleway.tfvars
 | champ | ce qu'il faut y mettre |
 |---|---|
 | `cluster_name` | le tien. **Il a une valeur par défaut, donc aucun contrôle ne te dira de le changer** — et son premier segment nomme tous les buckets du cluster |
-| `bucket_suffix` | **à renseigner sauf si tu es l'auteur d'origine.** Les noms de bucket S3 sont uniques à l'échelle d'un fournisseur entier, pas d'un compte — Scaleway les documente uniques « in our whole platform », OVH « within OVHcloud ». Sans lui tu entreras en collision avec des noms déjà pris. `task bucket-suffix` en imprime un ; choisis-le une fois, le changer ensuite orpheline tous tes buckets |
+| `bucket_suffix` | **à renseigner sauf si tu es l'auteur d'origine.** Les noms de bucket S3 sont uniques à l'échelle d'un fournisseur entier, pas d'un compte — Scaleway les documente uniques « in our whole platform », OVH « within OVHcloud ». Sans lui tu entreras en collision avec des noms déjà pris. `task bucket-suffix` en imprime un ; choisis-le une fois, le changer ensuite orpheline tous tes buckets et démarre un état d'image Talos vide, donc l'image est reconstruite ([`upgrade.fr.md`](upgrade.fr.md)) |
 | `environment` | `dev` ou `prod`, rien d'autre. Choisis-le une fois : il nomme le bucket d'état. `prod` exige le réplica chez un autre provider : `task cluster-up` refuse avant de dépenser si `s3_replica_endpoint` est l'endpoint du primaire ou le même cloud (un S3 qu'il ne sait pas nommer doit seulement être un autre endpoint). Un nom de cluster qui a déjà un objet d'état est seulement averti avant la dépense, puis `task cluster-up` échoue à son étape de vérification ; y compris un cluster détruit par `task cluster-down`, qui garde le bucket d'état. `dev` peut partager le magasin du primaire |
 | `admin_ip` | `curl -s ifconfig.me` en `/32`. C'est à la fois la liste d'autorisation SSH et l'ACL du LB apiserver |
 | `s3_primary_endpoint` / `_region` | le S3 sur le même provider que le cluster |
@@ -164,7 +164,7 @@ $EDITOR management-scaleway.tfvars
 | `node_nameservers` / `node_dns_boot_timeout` | optionnel : le résolveur propre des nœuds en DNS-over-TLS ou -HTTPS (Talos 1.14+), tout chiffré ou tout en clair. Lancé sur OVH (s'applique sans redémarrage) ; une liste qu'aucun nœud n'atteint ne se voit qu'au redémarrage suivant, et ce nœud n'a plus d'API Talos. Règles, compromis et vérification d'un nœud : `modules/talos/variables.tf` |
 
 `git_repo_url`, `git_ref` et `flux_namespace` disent à Flux où lire la plateforme (l'exemple nomme la
-version des apps qui va avec celle-ci) ; `apps_profile` est inerte. Tous sont inertes si tu retires
+version des apps qui va avec celle-ci). Tous sont inertes si tu retires
 `deploy_flux = true`. Laisse-les sauf si tu forkes les apps.
 
 Avant de dépenser quoi que ce soit : `task preflight`. Lint, rendu, validation,
@@ -186,7 +186,7 @@ recalculé à cet instant. Une fois vérifié, il lance aussi la rétention des 
 où tofu demande son propre oui pour chaque ancienne image détruite. Pour un run non
 supervisé, ajoute `APPROVE=auto` : il répond aux deux plans et saute la rétention.
 (Pour lire le plan sans rien créer, ajoute `PLAN_ONLY=1` : il s'arrête au plan de la
-phase 1, et sur un cluster déjà amorcé ce plan ouvre les tunnels Talos locaux (simulé seulement et NON VÉRIFIÉ sur un cluster). Avec l'image Talos absente, comme sur un compte neuf, le plan ne peut pas être lu : sur Scaleway, le seul fournisseur exécuté, l'exécution a dit que l'image SERAIT construite, puis s'est terminée en rc 201 sur le « no image found » du plan, sans rien créer (OVH et Outscale non exécutés) ; voir
+phase 1, et sur un cluster déjà amorcé ce plan ouvre les tunnels Talos locaux (simulé seulement et NON VÉRIFIÉ sur un cluster). Avec l'image Talos absente, comme sur un compte neuf, le plan ne peut pas être lu, car il cherche l'image par son nom : depuis la 0.4.4 l'exécution dit que l'image SERAIT construite et s'arrête là avec le code 0, avant le plan, sans créer de serveur, de volume ni d'image (simulé, et lu une fois dans un labo Scaleway avec l'image Talos absente, n=1 : code 0 en 1:04, les neuf buckets d'état étant déjà créés à ce moment, par conception ; OVH et Outscale non joués ; en 0.4.3 et avant, elle continuait et, sur Scaleway, le seul fournisseur exécuté, se terminait en rc 201 sur le « no image found » du plan) ; voir
 [`upgrade.fr.md`](upgrade.fr.md#ajouter-des-nœuds--cluster-up-crée-la-machine-avant-de-poser-la-question-conception-03x-inchangée).
 Pour relire à part un plan de la phase 1,
 enregistre-le : `task infra-plan ROLE=management PROVIDER=scaleway OUT=tfplan`,
@@ -201,7 +201,7 @@ chacun disant « nothing was applied » : plan de la phase 1 (`task infra-apply 
 puis la phase 2 (`cd infrastructure/opentofu/cluster && tofu apply phase2-<role>-<provider>.tfplan`, puis `task kubeconfig`). Un agent dont
 l'environnement refuse une application à l'aveugle a donc besoin de l'autorisation explicite du propriétaire pour la commande `APPROVE=auto` ;
 cette décision est celle du propriétaire, pas du dépôt. Recopie les lignes `deploy_flux = true` et `deploy_app_lb = true` de l'exemple : sans
-elles le cluster n'a que l'infrastructure (le vérificateur signale flux-system en rouge, par conception).
+elles le cluster n'a que l'infrastructure, et le vérificateur n'attend alors aucun namespace `flux-system` (il en signale un en rouge).
 
 Dans l'ordre, il crée les buckets d'état, d'artefacts, de journaux et de sauvegardes applicatives (le contrôle des
 identifiants ci-dessus), construit l'image Talos et la téléverse — **mesuré à

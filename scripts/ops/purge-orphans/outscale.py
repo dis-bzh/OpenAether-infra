@@ -3,7 +3,7 @@
 Order imposed by Outscale: LBU → NAT → route tables → internet service →
 security groups → subnets → net. Also REPORTS (never deletes) leftover
 snapshots and images — see the ARTIFACTS block below.
-Usage: purge-orphans-osc.py [--apply]"""
+Usage: purge-orphans-osc.py [--apply --project-id=<the id it prints>]   (--apply needs the id; Outscale has no project, the id is the access key id)"""
 import datetime
 import hashlib
 import hmac
@@ -13,10 +13,35 @@ import sys
 import urllib.request
 
 APPLY = '--apply' in sys.argv
+
+
+def confirm_target(what, target):
+    """Name the project this run reaches; refuse unless --project-id agrees (infra #342).
+
+    --apply deletes the WHOLE project and the listing never said which one, so a wrong
+    .env.sh went unseen. --apply must repeat the id; one that is given must match.
+    Exit 2 like a missing credential: nothing was asked, which is not the 1 of "leftovers".
+    """
+    argv = sys.argv[1:]
+    given = next((a.split('=', 1)[1] for a in argv if a.startswith('--project-id=')), None)
+    if given is None and '--project-id' in argv[:-1]:
+        given = argv[argv.index('--project-id') + 1]
+    print(f"Target: {what} {target}  (the WHOLE project)")
+    if given is None and '--apply' in argv:
+        print(f"✗ --apply deletes the WHOLE project: repeat its id, --project-id={target}. Nothing was asked.")
+        return 2
+    if given is not None and given != target:
+        print(f"✗ --project-id={given} is not the project these credentials reach ({target}). Nothing was asked.")
+        return 2
+    return 0
+
+
 try:
     AK, SK = os.environ['OUTSCALE_ACCESS_KEY_ID'], os.environ['OUTSCALE_SECRET_KEY']
 except KeyError as e:   # not exit 1, which callers read as "leftovers found"
     print(f"✗ missing credential {e} — source .env.sh first. Nothing was checked.")
+    sys.exit(2)
+if confirm_target('Outscale account (access key id)', AK):   # Outscale has no project: the keys name the account
     sys.exit(2)
 REGION, SERVICE = os.environ.get('OSC_REGION', 'eu-west-2'), 'api'
 HOST = f"api.{REGION}.outscale.com"

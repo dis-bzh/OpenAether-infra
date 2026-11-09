@@ -28,7 +28,7 @@ account.
 
 ## Version
 
-**Current release: 0.4.3**, a security-hygiene release: Flux 2.9.6 to 2.10.0, for brotli-libs CVE-2026-111497 in the `kustomize-controller` image of 2.9.6 (infra #444). No OpenTofu logic changed, and no Talos, Kubernetes or provider version; the one behaviour that did change is the `git_ref` default (and the tfvars examples), which now follows OpenAether-apps `refs/tags/0.4.3`, so a tfvars that leaves it unset inherits it. **Moving a running 0.4.2 cluster takes two commands, not one**: `task cluster-bootstrap-sync` (a dry run, then `APPLY=1`), then `task cluster-up` (`docs/upgrade.md`, "From 0.4.2 to 0.4.3"); the lab saw HelmReleases not Ready for up to 1 minute (`SourceNotReady`, and `DependencyNotReady` for `ztunnel`) and Kustomizations not Ready for about 2 minutes after the sync. Pairs with OpenAether-apps 0.4.3, which also closes a forge `//metrics` exposure (measured at 0.4.2 with the forge brick on, by inference also 0.4.1; in the sweeps only the forge host answered with metrics). Measured on Scaleway, 3 control planes + 6 workers, one run per figure, on the apps branch ref and not on the tag: `CHANGELOG.md`, `[0.4.3]`, with its WORSE rows and what is not proven. 0.4.2 (released 2026-11-04) was the 0.4.1 release plus one fix: the `SBOM` workflow attaches the inventory to a DRAFT release (`[0.4.2]`). 0.4.1 (released 2026-11-03) was a hardening patch of the 0.4.0 resilience release (roll gates that refuse early, Talos tunnels that retry a busy port, a `PLAN_ONLY` run, a disaster-recovery chain re-proved on a cluster with its WORSE times stated; `CHANGELOG.md`, `[0.4.1]`). The description below is that of 0.3.0, which 0.3.1, 0.3.2, 0.4.0, 0.4.1, 0.4.2 and 0.4.3 build on.
+**Current release: 0.4.4**, a debt release of 0.4.3 with no feature, the infra half of the pair with OpenAether-apps 0.4.4 (which also changes the PostgreSQL image). No resource, module or input variable changed (the one OpenTofu addition is the root output `applied_switches`, which `task cluster-verify` reads), and no Talos, Kubernetes, Cilium, Flux or provider version moved: the Flux manifests and `flux-image-digests.lock` are byte-identical to 0.4.3, so `task cluster-bootstrap-sync` is not needed. **One CLI contract changed: `task purge-orphans ... APPLY=1` now needs `PROJECT_ID=<id>`** (#342). The `git_ref` default (and the tfvars examples) now follows OpenAether-apps `refs/tags/0.4.4`, so a tfvars that leaves it unset inherits it. **Moving a running 0.4.3 cluster takes one `task cluster-up`** (`docs/upgrade.md`, "From 0.4.3 to 0.4.4", and "Upgrade from 0.4.3" in `CHANGELOG.md`, `[0.4.4]`): run it once before a standalone `task cluster-verify`; the first Flux sync after the ref move rolls every PostgreSQL Cluster, and `cluster-up` does not wait for that roll. Measured on Scaleway, 3 control planes + 6 workers, one run per figure, on moving apps branch refs and **not on the tag 0.4.4**: `CHANGELOG.md`, `[0.4.4]`, with its WORSE rows and what is not proven. 0.4.3 (released 2026-11-05) was a security-hygiene release: Flux 2.9.6 to 2.10.0, for brotli-libs CVE-2026-111497 in the `kustomize-controller` image of 2.9.6 (infra #444), moved with two commands, `task cluster-bootstrap-sync` then `task cluster-up` (`[0.4.3]`). 0.4.2 (released 2026-11-04) was the 0.4.1 release plus one fix: the `SBOM` workflow attaches the inventory to a DRAFT release (`[0.4.2]`). 0.4.1 (released 2026-11-03) was a hardening patch of the 0.4.0 resilience release (roll gates that refuse early, Talos tunnels that retry a busy port, a `PLAN_ONLY` run, a disaster-recovery chain re-proved on a cluster with its WORSE times stated; `CHANGELOG.md`, `[0.4.1]`). The description below is that of 0.3.0, which 0.3.1, 0.3.2, 0.4.0, 0.4.1, 0.4.2, 0.4.3 and 0.4.4 build on.
 
 **0.3.0** (released 2026-10-19; `CHANGELOG.md`, `[0.3.0]`) — a security hardening wave, every option off by default, and a 50 GB default system disk on Scaleway. It is the infra half of the pair with OpenAether-apps 0.3.0 (the component upgrades are in the apps repository). It follows ANSSI recommendations as far as possible and claims no compliance with any ANSSI document. Run on real clouds once by hand or script on Scaleway, OVH and Outscale (labs 11 to 15c); the history is unsigned for now. The CHANGELOG lists the known limitations and what was not run.
 
@@ -117,8 +117,11 @@ own Flux.
 | **CAPI** (optional) | You want the management described like any other cluster, plus CAPI's day-2 tooling | A throwaway cluster creates the management, which then becomes self-managed (`clusterctl move`) |
 
 The CAPI path **does not replace** OpenTofu: on OVH, most of what OpenTofu
-creates is not a compute instance. It is an optional overlay and **this release
-deploys no CAPI** — the procedure is kept for the release that does:
+creates is not a compute instance. It is an optional overlay and **OpenTofu deploys no
+CAPI**: with `deploy_flux = true` the apps `management` profile installs the CAPI
+operator, its providers and ORC (four Kustomizations; Running 1/1, 0 restarts on the
+2026-10-12 lab, apps 0.1.0), and no child cluster exists until a file of `apps/clusters/` is enabled.
+The pivot procedure from a throwaway cluster is kept as an option:
 **[docs/capi-bootstrap.md](docs/capi-bootstrap.md)**.
 
 ## Layer status
@@ -344,7 +347,7 @@ task security            # hardening checks
 | Kubernetes API access | LB ACL restricted to `admin_ip` |
 | Talos API access | SSH tunnel only (port 50000, never on the LB) |
 | Inter-node encryption | Cilium WireGuard |
-| Limits | `bastion-harden-check.sh` has no recorded run on a real bastion; the admin kubeconfig (`system:masters`) cannot be revoked, and `task talosconfig-new`, which issues a read-only talosconfig that expires, has run on one real cloud only, OVH ([docs/admin-access.md](docs/admin-access.md)) |
+| Limits | `bastion-harden-check.sh` ran on real bastions on the three clouds (labs 15A, 15B and 16, 2026-10-17 and 18: 37/37 on Scaleway and OVH, 38/38 on Outscale); the admin kubeconfig (`system:masters`) cannot be revoked, and `task talosconfig-new`, which issues a read-only talosconfig that expires, has run on one real cloud only, OVH ([docs/admin-access.md](docs/admin-access.md)) |
 
 ## Roadmap
 

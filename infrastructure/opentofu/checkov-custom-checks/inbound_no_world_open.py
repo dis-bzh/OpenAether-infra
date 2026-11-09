@@ -3,9 +3,10 @@ the whole Internet by a LITERAL range.
 
 CKV_OA_2 cannot cover Outscale (its security groups have no default-policy
 attribute), so a hand-written `ip_range = "0.0.0.0/0"` on an Inbound rule would
-pass the hard gate unseen. Admin and LB ranges here come from variables
-(`var.admin_ip` is allowed to hold /0 by an explicit, documented choice made in
-tfvars, not in code); a literal /0 in the module is always a mistake.
+pass the hard gate unseen. Admin and LB ranges here come from variables, which
+this check does not judge: `var.admin_ip` rejects /0 at plan time (its own
+validation), and `var.app_lb_allowed_cidrs` accepts 0.0.0.0/0 as an explicit,
+documented rollout stage; a literal /0 in the module is always a mistake.
 Egress rules are out of scope: a /0 there is the normal internet path.
 """
 

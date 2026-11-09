@@ -229,10 +229,12 @@ is "and nothing was applied" 0 "$(calls apply)"
 
 echo "--- --ensure --plan-only (cluster-up PLAN_ONLY=1, infra #412): the same plan, never the apply ---"
 OUT="$(run 2 --ensure --plan-only)"; RC=$?
-is "a missing image: the script completes" 0 "$RC"
+# Exit 3, like grow-nodes.sh --plan-only: "would act". cluster-up reads it as "the image would be built, so the rest cannot be planned" (infra #439).
+is "a missing image: the script ends 3 (would build), not 0" 3 "$RC"
 is "…with exactly one plan" 1 "$(calls plan)"
 is "…and NO apply: nothing is built" 0 "$(calls apply)"
-grep -q 'WOULD be built' <<<"$OUT" && ok "…and it says the image WOULD be built, and was not" || bad "plan-only said nothing of the build it skipped: $OUT"
+grep -q 'WOULD be built' <<<"$OUT" && grep -q 'cannot be planned before it exists' <<<"$OUT" \
+  && ok "…and it says the image WOULD be built, was not, and that what depends on it cannot be planned yet" || bad "plan-only said nothing of the build it skipped: $OUT"
 OUT="$(run 0 --ensure --plan-only)"; RC=$?
 { [ "$RC" = 0 ] && [ "$(calls apply)" = 0 ] && grep -q 'already up to date' <<<"$OUT"; } \
   && ok "an image up to date: said so, nothing applied" || bad "plan-only on an up-to-date image (rc=$RC): $OUT"
@@ -434,7 +436,7 @@ grep -q 'stays its authority' <<<"$OUT" && ok "and says whose it stays" || bad "
 
 # --plan-only (cluster-up PLAN_ONLY=1) writes nothing to the state bucket: the copy of the legacy state is a write, so it waits for a real run.
 OUT="$(run 2 --ensure --plan-only)"; RC=$?
-{ [ "$RC" -eq 0 ] && [ "$(calls 'state push')" = 0 ] && [ "$(acalls 's3 mv')" = 0 ] && [ "$(acalls 's3 rm')" = 0 ] \
+{ [ "$RC" -eq 3 ] && [ "$(calls 'state push')" = 0 ] && [ "$(acalls 's3 mv')" = 0 ] && [ "$(acalls 's3 rm')" = 0 ] \
   && [ "$(initkeys)" = "$LEG" ] && [ "$(calls plan)" = 1 ] && [ "$(calls apply)" = 0 ]; } \
   && ok "--plan-only on a lane the legacy state holds: nothing pushed, renamed or removed, and the plan reads the legacy state itself" \
   || bad "plan-only wrote to the state bucket or planned another state (rc=$RC, keys: $(initkeys), pushes: $(calls 'state push')): ${OUT:0:300}"

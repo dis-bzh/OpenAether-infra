@@ -2,6 +2,8 @@
 # A stand-in for `aws` that behaves like an S3 store with versioning, lifecycle and object lock, for the offline tests of
 # ensure-buckets.sh and s3-isolation-check.sh. State is files under $FAKE_S3:
 #   buckets/<name>/{lock_enabled,versioning,lifecycle.json,lock.json}   the bucket and what was set on it
+#   buckets/<name>/versions.json   what list-object-versions answers: {"DeleteMarkers": [{Key, IsLatest, LastModified}]}, filtered by --prefix;
+#                                  with --delimiter / it answers the CommonPrefixes of those keys instead
 #   id/<ACCESS_KEY>   no file = full access; else lines: "bucket <name>" (the only buckets it may touch),
 #                     "no-version-delete" (DeleteObjectVersion refused), "invalid" (the store does not know the key)
 #   refuse/<op> or refuse/<op>.<bucket>   the error text this call answers with (the provider "not supporting" it)
@@ -20,7 +22,7 @@ if [ "$kind" = s3 ]; then
 else
   op="$1"; shift; bucket=""
 fi
-cfg="" key="" vid="" lockflag=0 ep=""
+cfg="" key="" vid="" lockflag=0 ep="" prefix="" delim=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --bucket) bucket="$2"; shift 2 ;;
@@ -33,7 +35,9 @@ while [ $# -gt 0 ]; do
     --key) key="$2"; shift 2 ;;
     --version-id) vid="$2"; shift 2 ;;
     --endpoint-url) ep="$2"; shift 2 ;;
-    --max-keys | --region | --output | --prefix | --query) shift 2 ;;
+    --prefix) prefix="$2"; shift 2 ;;
+    --delimiter) delim="$2"; shift 2 ;;
+    --max-keys | --region | --output | --query) shift 2 ;;
     *) shift ;;
   esac
 done
@@ -76,6 +80,10 @@ case "$op" in
     if [ -s "$B/lock.json" ]; then jq -c '{ObjectLockConfiguration: .}' "$B/lock.json"
     else echo '{"ObjectLockConfiguration":{"ObjectLockEnabled":"Enabled"}}'; fi ;;
   list-objects-v2) echo '{}' ;;
+  list-object-versions)
+    if [ ! -s "$B/versions.json" ]; then echo '{}'
+    elif [ -n "$delim" ]; then jq -c --arg p "$prefix" '{CommonPrefixes: ([.DeleteMarkers[]? | .Key | select(startswith($p)) | ltrimstr($p) | select(contains("/")) | split("/")[0] | $p + . + "/"] | unique | map({Prefix: .}))}' "$B/versions.json"
+    else jq -c --arg p "$prefix" '{DeleteMarkers: [.DeleteMarkers[]? | select(.Key | startswith($p))]}' "$B/versions.json"; fi ;;
   # The real CLI has no `delete-object-version`: it exits 252 with this message (a probe that used it passed its test here and
   # failed on Scaleway, 2026-10-16). A version is deleted with `delete-object --version-id`, and a store that allows it answers
   # success for a version that does not exist; a non-numeric id is refused as InvalidArgument (Scaleway).

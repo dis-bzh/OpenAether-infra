@@ -115,7 +115,7 @@ def run(api, dry=False, wait=300, sleep=time.sleep, image='Ubuntu 22.04', flavor
     left += [x for x in api.call('network', 'GET', '/v2.0/routers')['routers'] if x['name'].startswith(PREFIX)]
     if left:
         raise Fail('a leftover of an earlier probe exists (' + ', '.join(sorted({x['name'] for x in left})) +
-                   '): delete it (task purge-orphans PROVIDER=ovh APPLY=1) before probing again')
+                   '): delete it (task purge-orphans PROVIDER=ovh APPLY=1 PROJECT_ID=<the id the dry run prints>) before probing again')
     if dry:
         out(f'dry run: would create (prefix {name}):')
         for p in plan(name):
@@ -143,7 +143,7 @@ def run(api, dry=False, wait=300, sleep=time.sleep, image='Ubuntu 22.04', flavor
                 else:
                     api.call('network', 'DELETE', f'/v2.0/{kind}s/{ident}')
             except Fail as e:
-                out(f'  ! cleanup of {kind} {ident} failed: {e}  (run: task purge-orphans PROVIDER=ovh APPLY=1)')
+                out(f'  ! cleanup of {kind} {ident} failed: {e}  (run: task purge-orphans PROVIDER=ovh APPLY=1 PROJECT_ID=<the id the dry run prints>)')
         made.clear()
 
     def on_signal(sig, _frame):

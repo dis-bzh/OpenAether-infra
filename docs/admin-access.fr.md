@@ -101,10 +101,10 @@ n'apparaît sur une ligne de commande ; le script affiche des chemins, jamais de
 password restic, les mots de passe des bases et la passphrase Longhorn ne sont **pas** semés
 ici : `openbao-vault-bootstrap` les génère dans OpenBao et n'en affiche aucun.
 
-Ce n'est pas du confort : sans `backup/s3-primary` seul, six Kustomizations restent
-not-Ready et le DAG ne converge jamais (mesuré sur Scaleway : 29 sur 35 tant que ce n'est
-pas semé, les 35 en environ deux minutes après). Un déploiement n'est pas terminé tant que
-ceci n'a pas tourné.
+Ce n'est pas du confort : sans ce semis, six Kustomizations restent not-Ready et le DAG
+ne converge pas (mesuré sur Scaleway : 29 sur 35 tant que ce n'est pas semé, les 35 en
+environ deux minutes après ; le lab a écrit les cinq chemins d'un coup, donc aucun chemin
+seul n'a été isolé). Un déploiement n'est pas terminé tant que ceci n'a pas tourné.
 
 ```text
 secret/backup/s3-primary                      endpoint bucket access_key secret_key
@@ -139,12 +139,13 @@ l'arrêt et Loki ne s'installe pas — c'est voulu. Test :
 
 ```bash
 source .env.sh
-task preflight-quotas PROVIDER=outscale -- --add-vms 7 --add-cores 14 --add-ram-gb 44
+task preflight-quotas PROVIDER=outscale -- --add-vms 6 --add-cores 12 --add-ram-gb 22   # exemple management-outscale
 ```
 
 Sort en erreur si la topologie dépasse. Ça compte : Outscale plafonne à 40 Go de
-RAM alors qu'un management HA en demande 44, et le dépassement est toléré à la
-création avant que toute VM suivante ne soit refusée en silence. OVH plafonne à
+RAM, un management 3+3 de nœuds `tinav5.c2r7p2` en demande 44 (aucun exemple livré
+n'est dans ce cas), et le dépassement est toléré à la création avant que toute VM
+suivante ne soit refusée en silence. OVH plafonne à
 10 instances — le management (7) plus un seul enfant (2). Cf. `docs/status.md` ;
 les options pour chaque exemple livré sont dans [`capacity.fr.md`](capacity.fr.md).
 
@@ -225,7 +226,10 @@ approuve et une sortie Internet fermée sont venues après ; aucune n'opère une
 certificat client pour `O=system:masters`, qui court-circuite RBAC, et
 Kubernetes ne sait pas révoquer un certificat client : un kubeconfig qui fuite
 reste valable jusqu'à son expiration, et le seul remède est de faire tourner la
-CA du cluster. Traiter ce fichier comme le secret qu'il est — il est aussi dans
+CA du cluster. Il expire par défaut 365 jours et 10 s après son émission ; une clé de configuration machine de Talos,
+`cluster.adminKubeconfig.certLifetime`, pourrait le raccourcir, mais ce dépôt ne la définit pas et
+si le kubeconfig du provider la suit n'a pas été essayé (`key-management.fr.md`, K2) ; lire la date du vôtre avec
+`kubectl config view --raw -o jsonpath='{.users[0].user.client-certificate-data}' | base64 -d | openssl x509 -noout -enddate`. Traiter ce fichier comme le secret qu'il est — il est aussi dans
 le tfstate et dans les deux stores d'artefacts. Pour le travail en lecture
 seule, porter moins : `task talosconfig-new PROVIDER=…` émet un talosconfig
 `os:reader` qui expire en heures et ne peut pas s'en forger un d'admin (prouvé
@@ -240,7 +244,7 @@ réutiliser jusqu'à son expiration plutôt qu'un par exécution : émettre est 
 `expirationSeconds`, 8 h par défaut, de 10 min à 24 h acceptés) pour `CN=alice`, `O=oa:readers`, et écrit un kubeconfig en 0600 hors du dépôt
 (`~/.kube/oa-alice-reader.kubeconfig` ; un chemin dans le dépôt est refusé). `ACCESS=admin` demande `O=oa:admins` (cluster-admin via le
 groupe). La clé privée est générée sur votre machine ; le fichier `system:masters` ne sert qu'à déposer et approuver la demande, et reste le
-credential de secours sous séquestre, pas le routinier. Ce que chaque groupe peut faire est dans la brique apps `platform-rbac` (`oa-admins` vers `cluster-admin`,
+credential de secours sous séquestre, pas le routinier. Qui détient ce credential, où il est mis sous séquestre et quand il est ré-émis n'est pas encore consigné : le propriétaire les nomme (infra #331, ouvert). Ce que chaque groupe peut faire est dans la brique apps `platform-rbac` (`oa-admins` vers `cluster-admin`,
 `oa-readers` vers `view`) : un certificat portant un groupe qu'aucun binding ne nomme ne peut rien faire. Révoquer une personne avant l'expiration du certificat
 = supprimer ou restreindre le binding de son groupe (effet immédiat, le certificat reste valide mais est refusé) ; un binding de groupe ne peut pas viser un seul porteur,
 donc pour une révocation par personne lier l'utilisateur par son nom (`rbac-review` le signale, à consigner). `rbac-review` et `cluster-security` 3.7 autorisent exactement ces deux bindings et rien d'autre sous ces noms.

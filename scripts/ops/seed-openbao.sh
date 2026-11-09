@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Seed the Day-1 secrets a fresh cluster cannot converge without (S3 keys of the two backup stores and of Loki, the
-# alerting URLs). Without them the Flux DAG sits at 29 of 35: six Kustomizations wait for `backup/s3-primary` alone.
+# alerting URLs). Without them the Flux DAG sits at 29 of 35: six Kustomizations stay not-Ready (`cnpg` waits on
+# `backup/s3-primary`; the lab wrote all five paths at once, so no single path was isolated).
 #
 # CREATE-ONLY. The secrets are written with `cas=0`, so a re-run can never overwrite one (a rotated value does not
 # fail, it just breaks whatever holds the old one). The application secrets (restic password, database passwords,
