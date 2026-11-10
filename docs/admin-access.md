@@ -98,9 +98,10 @@ the script prints paths, never values. The restic password, the database passwor
 Longhorn's passphrase are **not** seeded here: `openbao-vault-bootstrap` generates them
 inside OpenBao and prints none.
 
-This is not optional polish: without `backup/s3-primary` alone, six Kustomizations stay
-not-Ready and the DAG never converges (measured on Scaleway: 29 of 35 until seeded, all 35
-within about two minutes after). A deploy is not finished until this has run.
+This is not optional polish: without this seed, six Kustomizations stay not-Ready and the
+DAG does not converge (measured on Scaleway: 29 of 35 until seeded, all 35 within about two
+minutes after; the lab wrote the five paths at once, so no single path was isolated).
+A deploy is not finished until this has run.
 
 ```text
 secret/backup/s3-primary                      endpoint bucket access_key secret_key
@@ -134,12 +135,12 @@ deliberate. Test with `kubectl create job --from=cronjob/openbao-snapshot test -
 
 ```bash
 source .env.sh
-task preflight-quotas PROVIDER=outscale -- --add-vms 7 --add-cores 14 --add-ram-gb 44
+task preflight-quotas PROVIDER=outscale -- --add-vms 6 --add-cores 12 --add-ram-gb 22   # management-outscale example
 ```
 
-Exits non-zero if the topology overflows. It matters: Outscale caps at 40 GB RAM
-while an HA management needs 44, and the overrun is tolerated at creation before
-every later VM is silently refused. OVH caps at 10 instances — management (7)
+Exits non-zero if the topology overflows. It matters: Outscale caps at 40 GB RAM,
+a 3+3 management of `tinav5.c2r7p2` nodes needs 44 (no shipped example does), and
+the overrun is tolerated at creation before every later VM is silently refused. OVH caps at 10 instances — management (7)
 plus one child (2). See `docs/status.md`; the flags for each shipped example
 are in [`capacity.md`](capacity.md).
 
@@ -217,7 +218,10 @@ the bastion trusts and a closed Internet egress came after; none of them operate
 ⚠️ **The kubeconfig cannot be revoked.** `talosctl kubeconfig` issues a client
 certificate for `O=system:masters`, which bypasses RBAC, and Kubernetes has no
 revocation for client certificates: a leaked kubeconfig is valid until it
-expires, and the only remedy is rotating the cluster CA. Treat the file as the
+expires, and the only remedy is rotating the cluster CA. It expires 365 days and 10 s after it is issued by default; a Talos machine-config key,
+`cluster.adminKubeconfig.certLifetime`, could shorten that, but this repository does not set it and
+whether the provider's kubeconfig then follows was not tried (`key-management.md`, K2); read the date of yours with
+`kubectl config view --raw -o jsonpath='{.users[0].user.client-certificate-data}' | base64 -d | openssl x509 -noout -enddate`. Treat the file as the
 secret it is — it is also in the tfstate and in both artifact stores. For
 read-only work, carry less: `task talosconfig-new PROVIDER=… ` issues an
 `os:reader` talosconfig that expires in hours and cannot mint an admin one
@@ -232,7 +236,7 @@ should not need one.
 `expirationSeconds`, default 8 h, accepted 10 min to 24 h) for `CN=alice`, `O=oa:readers`, and writes a 0600 kubeconfig outside the repository
 (`~/.kube/oa-alice-reader.kubeconfig`; a path inside the repository is refused). `ACCESS=admin` asks for `O=oa:admins` instead (cluster-admin through the
 group). The private key is generated on your machine; the `system:masters` file only files and approves the request, and stays the escrowed break-glass
-credential, not the routine one. What each group may do is the apps `platform-rbac` brick (`oa-admins` to `cluster-admin`, `oa-readers` to `view`): a certificate
+credential, not the routine one. Who holds that credential, where it is escrowed and when it is re-issued is not recorded yet: the owner names them (infra #331, open). What each group may do is the apps `platform-rbac` brick (`oa-admins` to `cluster-admin`, `oa-readers` to `view`): a certificate
 carrying a group no binding names can do nothing. Revoking one person before the certificate expires means deleting or narrowing the binding of their
 group (it takes effect at once, the certificate stays valid but is refused); a group binding cannot single out one holder, so for per-person revocation
 bind the user by name instead (`rbac-review` flags it for you to record). `rbac-review` and `cluster-security` 3.7 allow exactly these two bindings and nothing else under those names.

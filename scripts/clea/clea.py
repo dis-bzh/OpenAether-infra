@@ -59,6 +59,7 @@ except ModuleNotFoundError:  # pragma: no cover - only on very old interpreters
 USER_AGENT = "clea/1 (+https://github.com/dis-bzh/OpenAether-infra)"
 # Module attributes, not literals at the call site, so a test can point them at a local server.
 PYPI_API = "https://pypi.org/pypi"
+NPM_API = "https://registry.npmjs.org"
 OSV_QUERY_URL = "https://api.osv.dev/v1/query"
 DEFAULT_MIN_AGE_DAYS = 7  # test-clea.sh keeps it equal to clea.toml
 MAX_MIN_AGE_DAYS = 3650  # beyond this the date arithmetic overflows: a typo, not a policy
@@ -649,6 +650,26 @@ def latest_pypi(dep: str, _token: str | None, **_) -> dict:
             "withdrawn": ("yanked on PyPI" + (f": {reason}" if reason else "")) if yanked else None}
 
 
+def latest_npm(dep: str, _token: str | None, **_) -> dict:
+    """The `latest` dist-tag of an npm package, dated by the registry's `time` map.
+
+    `latest` is the maintainers' own pointer, so a prerelease on `next` cannot win; the
+    full document is read because the abbreviated one carries no per-version date, which
+    the age rule needs. A scoped name travels as `@scope%2Fname`.
+    """
+    try:
+        data = json.loads(http_get(f"{NPM_API}/{urllib.parse.quote(dep, safe='@')}"))
+    except ValueError as exc:
+        raise CleaError(f"npm {dep}: the answer is not JSON ({exc})") from exc
+    version = (data.get("dist-tags") or {}).get("latest") if isinstance(data, dict) else None
+    if not version:
+        raise CleaError(f"npm {dep}: no dist-tags.latest")
+    reason = ((data.get("versions") or {}).get(version) or {}).get("deprecated")
+    return {"tag": version, "released_at": (data.get("time") or {}).get(version),
+            "notes_url": f"https://www.npmjs.com/package/{dep}/v/{version}",
+            "withdrawn": ("deprecated on npm: " + _clean(reason)) if reason else None}
+
+
 def latest_helm(dep: str, _token: str | None, registry_url: str | None = None, **_) -> dict:
     """Newest chart version in a Helm repository index.
 
@@ -779,6 +800,7 @@ DATASOURCES = {
     "github-releases": latest_github_releases,
     "github-tags": latest_github_tags,
     "pypi": latest_pypi,
+    "npm": latest_npm,
     "helm": latest_helm,
     "terraform-provider": latest_terraform_provider,
     "url-text": latest_url_text,
@@ -829,6 +851,21 @@ def osv_rows(cfg: dict) -> dict[str, tuple[str, str]]:
         if got[0] in rows:
             raise CleaError(f"clea.toml: two [[osv]] rows for {got[0]}")
         rows[got[0]] = (got[1], got[2])
+    return rows
+
+
+def not_watched_rows(cfg: dict) -> dict[str, str]:
+    """clea.toml's `[[not_watched]]` rows as {dep: reason}: an anchor Cléa is told not to
+    resolve, and why. The reason is mandatory, a malformed row stops the run."""
+    rows: dict[str, str] = {}
+    for row in cfg.get("not_watched", []):
+        got = [row.get(k) if isinstance(row, dict) else None for k in ("dep", "reason")]
+        if not all(isinstance(v, str) and v.strip() for v in got):
+            raise CleaError("clea.toml: a [[not_watched]] row needs dep and reason as "
+                            f"non-empty strings, the reason says why (got {row!r})")
+        if got[0] in rows:
+            raise CleaError(f"clea.toml: two [[not_watched]] rows for {got[0]}")
+        rows[got[0]] = " ".join(got[1].split())
     return rows
 
 
@@ -915,6 +952,7 @@ DEFAULT_CONFIG = {
               "bot_login": "github-actions[bot]"},
     "policy": {"min_release_age_days": DEFAULT_MIN_AGE_DAYS},
     "osv": [],
+    "not_watched": [],
     "inventory": [],
     "tool": [],
     "unpinned": [],
@@ -1152,10 +1190,17 @@ def cmd_scan(args) -> int:
                         f"of minor releases, 0 (off) to {MAX_MINORS_BEHIND} (got {max_minors!r})")
     errors: list[str] = []
     osv = Osv(errors, osv_rows(cfg))
+    not_watched = not_watched_rows(cfg)
     anchors, novalue = scan_anchors(root, scan["marker"], scan["exclude"], scan["include"])
     if not anchors:
         print("✗ no readable anchor — nothing to scan", file=sys.stderr)
         return 1
+    # Declared, not skipped quietly: the state and the report carry each one with its
+    # reason, and a row that matches no anchor is an error, so it cannot outlive its pin.
+    declared = [{"dep": a.dep, "file": a.path, "line": a.line, "current": a.value,
+                 "reason": not_watched[a.dep]} for a in anchors if a.dep in not_watched]
+    errors += [f"clea.toml: [[not_watched]] row for {dep} matches no anchor — delete the row "
+               "or fix its name" for dep in not_watched if not any(a.dep == dep for a in anchors)]
     if not token:
         print("⚠ no GITHUB_TOKEN: 60 requests an hour from a shared runner IP. "
               "This will rate-limit, loudly.", file=sys.stderr)
@@ -1188,6 +1233,8 @@ def cmd_scan(args) -> int:
         return got
 
     for anchor in anchors:
+        if anchor.dep in not_watched:
+            continue
         entry = {
             "dep": anchor.dep,
             "datasource": anchor.datasource,
@@ -1276,6 +1323,7 @@ def cmd_scan(args) -> int:
         "novalue": [{"dep": a.dep, "file": a.path, "line": a.line,
                      "reason": a.reason} for a in novalue],
         "unwatched": [],
+        "declared": declared,
         # Deduplicated: one rate limit fails once per anchor, and the state is
         # carried in an issue body with a hard size limit.
         "errors": list(dict.fromkeys(errors)),
@@ -1611,13 +1659,19 @@ def render_report(state: dict) -> str:
 
     unwatched = state.get("unwatched", [])
     novalue = state.get("novalue", [])
+    declared = state.get("declared", [])
     lines += ["## Not watched", ""]
-    if unwatched or novalue or unpinned:
+    if unwatched or novalue or unpinned or declared:
         if unwatched:
             lines += ["**Anchored, but no inventory can see it** — the pin exists, "
                       "the bot that should propose the bump never reads it:", ""]
             lines += [f"- `{u['file']}:{u['line']}` — `{u['dep']}` = `{u['current']}`"
                       for u in unwatched] + [""]
+        if declared:
+            lines += ["**Declared not watched** — Cléa does not resolve these on purpose; "
+                      "the reason is written in `clea.toml`:", ""]
+            lines += [f"- `{d['file']}:{d['line']}` — `{d['dep']}` = `{d['current']}`: {d['reason']}"
+                      for d in declared] + [""]
         if novalue:
             lines += ["**Anchor marking no version** — it can never be bumped, and it "
                       "reads to a human as if it could:", ""]

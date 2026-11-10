@@ -1,8 +1,8 @@
-# Release checklist — 0.4.3 (0.4.2 plus the Flux 2.10.0 security bump)
+# Release checklist — 0.4.4 (a debt release of 0.4.3)
 
 English only: rewritten each release, and two copies would drift.
 
-What to run before tagging 0.4.3 (0.4.2 plus Flux 2.9.6 to 2.10.0, no OpenTofu logic change: the tables below are those of 0.3.0 unless a line says 0.4.0, 0.4.1, 0.4.2 or 0.4.3; its evidence is in `CHANGELOG.md` `[0.4.3]`, and `[0.4.1]` for the code of the resilience hardening) and telling anyone about it. Ordered by what
+What to run before tagging 0.4.4 (a debt release of 0.4.3: no resource, module or input variable changed and no Talos, Kubernetes, Cilium, Flux or provider pin moved; the tables below are those of 0.3.0 unless a line says 0.4.0, 0.4.1, 0.4.2, 0.4.3 or 0.4.4; its evidence is in `CHANGELOG.md` `[0.4.4]`, and `[0.4.1]` for the code of the resilience hardening) and telling anyone about it. Ordered by what
 fails cheapest. **Stop at the first red** — every later step assumes the earlier
 ones held.
 
@@ -25,7 +25,7 @@ completion.
 | §4–§6 clouds | Labs 11 to 15c (2026-10-16 to 2026-10-18): Scaleway, OVH, Outscale, each once; see the `[0.3.0]` section of `CHANGELOG.md` for what ran and what did not. Run again with the **tags** pinned before tagging. |
 | §7 upgrade, growth, removal | Scaleway lifecycle from 0.2.1 + apps 0.2.0 (lab 15c); the etcd restore and real node replacement through the roll were **not run**. |
 | §8 mechanics, §9 stranger | To run at the cut. |
-| Before the tag | 0.4.3: `git_ref` of the tfvars examples and of `variables.tf` points at `refs/tags/0.4.3` of OpenAether-apps (0.4.2 pinned `refs/tags/0.4.2`), which must exist first (released first), and the examples, `variables.tf` (default and the comment above it) and `tests/flux-git-verify.tftest.hcl` agree: `git grep -n 'refs/tags/0\.4\.3' -- infrastructure` lists the twelve examples, the default, its comment and the one tftest line (unscoped, it also lists `CHANGELOG.md`, the two READMEs, this row and `docs/upgrade*.md`), and `git grep -n 'refs/tags/0\.4\.2'` lists nothing outside `CHANGELOG.md`, the "From 0.4.1 to 0.4.2" sections and the lab read-back of "From 0.4.2 to 0.4.3" in `docs/upgrade.md` (and its French twin) and this row. The cloud proof covers infra d1d268c and apps e8ca37f, with Flux following the apps BRANCH ref, and the release heads differ from them by the version cut, the docs and the CHANGELOG only: `git diff --stat d1d268c <infra release head>` here and `git diff --stat e8ca37f <apps release head>` in OpenAether-apps must show those and nothing else (here the twelve examples, `variables.tf`, the tftest, the two READMEs, `docs/` and `CHANGELOG.md`: no script, no resource, no manifest), and a path outside that list is read before the tag, not waved through. A tag-pinned install or move is NOT proven by the proof lab; say so in the notes. The proof and its results are written in `CHANGELOG.md` `[0.4.3]`, in one place. Fresh receipts for the release head (`task receipts`, about 25 minutes) and the apps CI come before the merge. The `SBOM` procedure of §8 ran on a tag for the first time at 0.4.2; 0.4.3 is its second run. The branch history is unsigned (squash merge, signed by GitHub; #332, #333). |
+| Before the tag | 0.4.4: `git_ref` of the tfvars examples and of `variables.tf` points at `refs/tags/0.4.4` of OpenAether-apps (0.4.3 pinned `refs/tags/0.4.3`), which must exist first (released first), and the examples, `variables.tf` (default and the comment above it) and `tests/flux-git-verify.tftest.hcl` agree: `git grep -n 'refs/tags/0\.4\.4' -- infrastructure` lists the twelve examples, the default, its comment and the one tftest line (unscoped, it also lists `CHANGELOG.md`, the two READMEs and this row), and `git grep -n 'refs/tags/0\.4\.3'` lists nothing outside `CHANGELOG.md`, the "From 0.4.2 to 0.4.3" sections of `docs/upgrade.md` (and its French twin) and this row. The cloud proof covers infra e387f06 with apps dd301f1 (lab 35 move 1) and 77e5410 (the rest of labs 35 and 36), with Flux following the apps BRANCH refs, never the tag, and the release heads differ from them by the version cut, the docs and the CHANGELOG only: `git diff --stat e387f06 <infra release head>` here and `git diff --stat 77e5410 <apps release head>` in OpenAether-apps must show those and nothing else (here the twelve examples, `variables.tf`, the tftest, the two READMEs, `docs/status.md`, this checklist and `CHANGELOG.md`: no script, no resource, no manifest), and a path outside that list is read before the tag, not waved through. A tag-pinned install or move is NOT proven by the proof labs; say so in the notes. The proof and its results are written in `CHANGELOG.md` `[0.4.4]`, in one place. Fresh receipts for the release head (`task receipts`, about 25 minutes) and the apps CI come before the merge. The `SBOM` procedure of §8 ran on a tag for the first time at 0.4.2; 0.4.4 is its third run. The branch history is unsigned (squash merge, signed by GitHub; #332, #333). |
 
 ---|---|
 | §1 clean machine | Run at the release commit (the stranger clone of §9). |
@@ -138,7 +138,10 @@ for each old image the retention destroys (§7, image lane).
 
 - [ ] **deploy from an empty project** under a fresh `bucket_suffix` (`task
       bucket-suffix`; recorded on Scaleway, #68, and on OVH, the failover drill
-      of §7). Record duration and resource count.
+      of §7). Record duration and resource count. A fresh suffix is an empty
+      Talos image state: the image is built again, and an image of the same name
+      left in the project by another suffix is duplicated (not tested) or
+      replaced; delete the old images first (`upgrade.md`, #451).
 - [ ] **`task cluster-verify`** green. A warning is a finding: it now reads each
       control plane's failure domain and each worker's data volume (the volume read
       needs `task tunnels-up`; without a tunnel it warns instead of passing).
@@ -404,11 +407,14 @@ What to run, what `docs/status.md` records (rung and date), and what it does
       guards are mocked only); the rest is in the changelog's Known limits. A
       cluster with no talosconfig and no replica copy is not recoverable here.
 
-Not a row, because there is nothing to run: **rolling an upgrade back** (#270).
+Not a row, because there is no script to run: **rolling an upgrade back** (#270).
 The lane keeps the previous image, which only lets a NEW node boot the previous
 Talos; `converge-versions.sh` refuses a pin below what the fleet runs and no
-script or runbook wraps `talosctl rollback`. The notes say it is unproven.
-#270 names the proof to obtain and the decisions, which are the owner's.
+script wraps `talosctl rollback`. A runbook exists, "Going back" in `upgrade.md`
+(a worker: `talosctl rollback`; control planes across 1.13 to 1.14: a restore of
+the pre-upgrade snapshot), drilled by hand once on Scaleway on 2026-10-12; the
+copy-back of the state is not measured. The supported route, the Kubernetes rule
+and a per-release drill are the owner's decisions (#270, open).
 
 ## 8. Release mechanics
 
@@ -424,7 +430,7 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       out, including what you chose not to fix (`CLAUDE.md`: an audit is not a
       PR). Never write a closing keyword before an issue number in a commit, PR
       or the notes: GitHub reads prose, and an open issue was closed that way.
-- [ ] `CHANGELOG.md`: `[0.4.3]` carries its date and anything merged since
+- [ ] `CHANGELOG.md`: `[0.4.4]` carries its date and anything merged since
       the text was written is folded into it (`[Unreleased]` stays empty), in the
       voice of 0.1.0: what it claims **and** what it does not, each with its rung,
       no hand-typed counts. Upgrade notes: unset pins inherit the new default and
@@ -509,17 +515,18 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       and the SBOM run's image scans on the tag are green
       or each red one is in `.vex/openaether-infra.openvex.json`. `docs/supply-chain.md`
       says what the inventory covers and what it does not.
-      For 0.4.3 there is no exception: the Flux pin is 2.10.0, and `flux-image-digests.lock` names kustomize-controller v1.10.1 for
-      the scan (`python3 scripts/dev/gen-sbom.py --images` lists it) while `.vex/openaether-infra.openvex.json` holds no statement,
-      so that scan has nothing to hide behind. Whether it is green is to be confirmed by the tag-run scan: no scan of that image was
-      run when this line was written, only its package database was read (CHANGELOG `[0.4.3]`). A red scan is a finding for the
-      lead, not a waiver; any open issue needs its own recorded decision.
+      For 0.4.4 there is no exception: the Flux pin is that of 0.4.3 (2.10.0), and `flux-image-digests.lock` names
+      kustomize-controller v1.10.1 for the scan (`python3 scripts/dev/gen-sbom.py --images` lists it) while
+      `.vex/openaether-infra.openvex.json` holds no statement, so that scan has nothing to hide behind. The `SBOM` run of the
+      0.4.3 tag concluded `success` (run 42104233252, 2026-11-05, read with `gh run view`), so the scan of that image is expected
+      green; read the run of the 0.4.4 tag, do not assume it. A red scan is a finding for the lead, not a waiver; any open issue
+      needs its own recorded decision.
 - [ ] no retest marker is left, in either repository or in the notes. `git grep -n 'RETEST-PENDIN[G]'` prints nothing
-      here (`CHANGELOG.md` `[0.4.3]` carries no marker, its cloud results are written; the bracket keeps
+      here (`CHANGELOG.md` `[0.4.4]` carries no marker, its cloud results are written; the bracket keeps
       this line from matching itself), prints nothing in OpenAether-apps either
-      (`git -C ../OpenAether-apps grep -n 'RETEST-PENDIN[G]'`: its `CHANGELOG.md` `[0.4.3]` is held to the same rule, and apps is
+      (`git -C ../OpenAether-apps grep -n 'RETEST-PENDIN[G]'`: its `CHANGELOG.md` `[0.4.4]` is held to the same rule, and apps is
       tagged first, so run it before the apps tag), and `grep -n 'RETEST-PENDIN[G]' notes.md` prints nothing. The date on
-      the `[0.4.3]` heading is the day of the tag: re-confirm it then, because the cut was written before the tag day.
+      the `[0.4.4]` heading is the day of the tag: re-confirm it then, because the cut was written before the tag day.
 - [ ] the examples and the default pin the apps tag, and it exists. OpenAether-apps
       is tagged and released first (`git ls-remote --tags
       https://github.com/dis-bzh/OpenAether-apps refs/tags/0.2.0` prints it).

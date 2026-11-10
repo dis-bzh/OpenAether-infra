@@ -106,7 +106,7 @@ def fake(req, *a, **k):
                                  io.BytesIO(b'{"Errors":[{"Code":"9092"}]}'))
 
 urllib.request.urlopen = fake
-sys.argv = [sys.argv[1], '--apply']
+sys.argv = [sys.argv[1], '--apply', '--project-id=stub']
 try:
     runpy.run_path(sys.argv[0], run_name='__main__')
 except SystemExit as e:
@@ -321,7 +321,7 @@ fi
 # 3. Net resources purged successfully AND a snapshot is left over — the
 #    "N resource(s) deleted. The account is clean." branch must not lie either.
 DELETED_PLUS_SNAPSHOT='{"ReadNets": {"Nets": [{"NetId": "vpc-stub", "IpRange": "10.0.0.0/16"}]}, "ReadSnapshots": {"Snapshots": [{"SnapshotId": "snap-leftover", "State": "completed", "VolumeSize": 5}]}}'
-out="$(run_osc_canned "$DELETED_PLUS_SNAPSHOT" --apply)"; rc=$?
+out="$(run_osc_canned "$DELETED_PLUS_SNAPSHOT" --apply --project-id=stub)"; rc=$?
 if [ "$rc" -ne 0 ]; then
   ok "outscale.py --apply: resources deleted but a snapshot remains still exits non-zero (rc=${rc})"
 else
@@ -344,7 +344,7 @@ fi
 #    "account is clean" message, because the unreachable-artifacts check only
 #    guarded the TOTAL==0 branch.
 ONE_NET='{"ReadNets": {"Nets": [{"NetId": "vpc-stub", "IpRange": "10.0.0.0/16"}]}}'
-out="$(run_osc_canned_fail "$ONE_NET" "['ReadSnapshots']" --apply)"; rc=$?
+out="$(run_osc_canned_fail "$ONE_NET" "['ReadSnapshots']" --apply --project-id=stub)"; rc=$?
 if [ "$rc" -ne 0 ]; then
   ok "outscale.py --apply: net purged + ReadSnapshots refused still exits non-zero (rc=${rc})"
 else
@@ -365,7 +365,7 @@ fi
 #    deletion (exit 3) must win over the milder "leftover snapshot" wording
 #    (exit 1): FAILED is checked first in outscale.py on purpose.
 NET_PLUS_SNAPSHOT='{"ReadNets": {"Nets": [{"NetId": "vpc-stub", "IpRange": "10.0.0.0/16"}]}, "ReadSnapshots": {"Snapshots": [{"SnapshotId": "snap-alongside", "State": "completed", "VolumeSize": 5}]}}'
-out="$(run_osc_canned_fail "$NET_PLUS_SNAPSHOT" "['DeleteNet']" --apply)"; rc=$?
+out="$(run_osc_canned_fail "$NET_PLUS_SNAPSHOT" "['DeleteNet']" --apply --project-id=stub)"; rc=$?
 if [ "$rc" -eq 3 ]; then
   ok "outscale.py --apply: a failed deletion alongside a leftover snapshot exits 3, not 1"
 else
@@ -428,7 +428,7 @@ out="$(run_osc_canned "$PAGED")"; rc=$?
   || bad "outscale.py: an image on page 2 was missed (rc=${rc})"
 
 # 12. A failed deletion still wins over a leftover image (exit 3, not 1).
-out="$(run_osc_canned_fail "{\"ReadNets\": {\"Nets\": [{\"NetId\": \"vpc-stub\", \"IpRange\": \"10.0.0.0/16\"}]}, \"ReadImages\": {\"Images\": [$MINE]}}" "['DeleteNet']" --apply)"; rc=$?
+out="$(run_osc_canned_fail "{\"ReadNets\": {\"Nets\": [{\"NetId\": \"vpc-stub\", \"IpRange\": \"10.0.0.0/16\"}]}, \"ReadImages\": {\"Images\": [$MINE]}}" "['DeleteNet']" --apply --project-id=stub)"; rc=$?
 [ "$rc" -eq 3 ] && ok "outscale.py --apply: a failed deletion beside an own image exits 3" \
   || bad "outscale.py --apply: expected exit 3 beside an image, got rc=${rc}"
 
@@ -542,13 +542,13 @@ out="$(OVH_REGION=GRA9 run_403_ovh_partial)"; expect_2 "ovh.py, region absent fr
 
 # --apply that deleted what it could see while another endpoint refused: not
 # clean, and the same exit 2 as scaleway.py below (both said "clean", rc 0).
-out="$(run_403_ovh_partial --apply)"; rc=$?
+out="$(run_403_ovh_partial --apply --project-id=stub)"; rc=$?
 expect_2 "ovh.py --apply, an endpoint refused after a deletion" $rc "$out" "refused"
 if grep -qi 'is clean' <<<"$out"; then bad "ovh.py --apply: it called the project clean past a refusal"
   else ok "ovh.py --apply: it does not call the project clean past a refusal"
 fi
 out="$(run_osc_canned_fail '{"ReadLoadBalancers": {"LoadBalancers": [{"LoadBalancerName": "lb-1"}]}}' \
-       "['ReadNets']" --apply)"; rc=$?
+       "['ReadNets']" --apply --project-id=stub)"; rc=$?
 expect_2 "outscale.py --apply, ReadNets refused after a deletion" $rc "$out" "refused"
 if grep -qi 'is clean' <<<"$out"; then bad "outscale.py --apply: it called the account clean past a refusal"
   else ok "outscale.py --apply: it does not call the account clean past a refusal"
@@ -563,7 +563,7 @@ expect_2 "verify-provider-clean scaleway, every call refused" $? "$out" "refused
 # could see is not a clean project, since the load balancers were never asked.
 FAKE_SCW='{"instance/v1/zones/fr-par-1/servers": {"servers": [{"id": "srv-1", "name": "edge-1-cp-0"}]}}'
 FAKE_REFUSE='lb/'
-out="$(run_scw purge-orphans/scaleway.py --apply)"; rc=$?
+out="$(run_scw purge-orphans/scaleway.py --apply --project-id=stub)"; rc=$?
 if [ "$rc" -eq 2 ] && ! grep -qi 'is clean' <<<"$out"
   then ok "scaleway.py --apply: one product refused after a deletion exits 2, not clean"
   else bad "scaleway.py --apply: one product refused, rc=${rc}: $(tail -1 <<<"$out")"
@@ -608,7 +608,7 @@ done
 # Deleted through the right call: servers terminate (their local volumes go too)
 # and an LB releases its IP; the rest is a DELETE on the listed object.
 FAKE_SCW="{$ALL}"
-out="$(run_scw purge-orphans/scaleway.py --apply)"; rc=$?
+out="$(run_scw purge-orphans/scaleway.py --apply --project-id=stub)"; rc=$?
 missing_calls=()
 for call in "POST $Z/servers/srv-1/action" "DELETE lb/v1/zones/fr-par-1/lbs/lb-1?release_ip=true" \
             "DELETE $Z/ips/ip-1" "DELETE lb/v1/zones/fr-par-1/ips/lbip-1" \
@@ -709,7 +709,7 @@ for total in without with; do
   FAKE_PAGE=2 FAKE_TOTAL=''; [ "$total" = with ] && FAKE_TOTAL=1
   shape="$total total_count"
   FAKE_SCW="{$GWIPS}"
-  out="$(run_scw purge-orphans/scaleway.py --apply)"; rc=$?
+  out="$(run_scw purge-orphans/scaleway.py --apply --project-id=stub)"; rc=$?
   if [ "$rc" -eq 0 ] && grep -qF '3 resource(s) deleted' <<<"$out"
     then ok "scaleway.py --apply: 3 items over 2 pages are all deleted, $shape"
     else bad "scaleway.py --apply: only page 1 was seen, $shape (rc=${rc}): $(tail -1 <<<"$out")"
@@ -812,6 +812,59 @@ if grep -qF 'missing credential' <<<"$out"
   else ok "verify-provider-clean scaleway: an item with no id is not a missing credential"
 fi
 FAKE_SCW=''
+
+# --- infra #342: a purge names the project it targets, and --apply must repeat it ---------------------
+# --apply deletes the WHOLE project, and nothing printed which one: an operator with the wrong .env.sh could not see it.
+echo
+echo "=== the project is named, and --apply must repeat it (infra #342) ==="
+GUARD_ENV_scaleway=(SCW_SECRET_KEY=stub SCW_DEFAULT_PROJECT_ID=proj-A SCW_DEFAULT_REGION=fr-par SCW_ZONES=fr-par-1)
+GUARD_ENV_ovh=(OS_AUTH_URL=https://stub.invalid/v3 OS_USERNAME=stub OS_PASSWORD=stub OS_PROJECT_ID=proj-A OS_REGION_NAME=stub)
+GUARD_ENV_outscale=(OUTSCALE_ACCESS_KEY_ID=proj-A OUTSCALE_SECRET_KEY=stub OSC_REGION=eu-west-2)
+run_guard() { # <provider> [args...] — every HTTP call is counted and refused 403; the output ends with CALLS=<n>
+  local p="$1"; shift
+  local -n genv="GUARD_ENV_$p"
+  env "${genv[@]}" python3 - "$ROOT/scripts/ops/purge-orphans/$p.py" "$@" <<'PY' 2>&1
+import io, runpy, sys, urllib.error, urllib.request
+CALLS = 0
+def refuse(*a, **k):
+    global CALLS
+    CALLS += 1
+    raise urllib.error.HTTPError('https://stub.invalid/x', 403, 'Forbidden', {}, io.BytesIO(b'{}'))
+urllib.request.urlopen = refuse
+sys.argv = sys.argv[1:]
+rc = 0
+try:
+    runpy.run_path(sys.argv[0], run_name='__main__')
+except SystemExit as e:
+    rc = e.code if isinstance(e.code, int) else 1
+print(f"CALLS={CALLS}")
+sys.exit(rc)
+PY
+}
+calls_of() { sed -n 's/^CALLS=//p' <<<"$1" | tail -1; }
+for p in scaleway ovh outscale; do
+  out="$(run_guard "$p")"; rc=$?
+  if grep -qF "Target:" <<<"$out" && grep -qF "proj-A" <<<"$out"; then ok "$p.py, dry run: it prints the project it targets"
+    else bad "$p.py, dry run: no target printed: $(head -3 <<<"$out" | tr '\n' ' ')"; fi
+  out="$(run_guard "$p" --apply)"; rc=$?
+  if [ "$rc" = 2 ] && [ "$(calls_of "$out")" = 0 ] && grep -qF -- "--project-id=proj-A" <<<"$out"; then
+    ok "$p.py --apply alone: refused (exit 2) before any API call, and it says what to repeat"
+    else bad "$p.py --apply alone: rc=$rc calls=$(calls_of "$out"): $(head -3 <<<"$out" | tr '\n' ' ')"; fi
+  out="$(run_guard "$p" --apply --project-id=proj-B)"; rc=$?
+  if [ "$rc" = 2 ] && [ "$(calls_of "$out")" = 0 ] && grep -qF "proj-B" <<<"$out" && grep -qF "proj-A" <<<"$out"; then
+    ok "$p.py --apply with another project's id: refused (exit 2) before any API call, both ids named"
+    else bad "$p.py --apply --project-id=proj-B: rc=$rc calls=$(calls_of "$out"): $(head -3 <<<"$out" | tr '\n' ' ')"; fi
+  out="$(run_guard "$p" --project-id=proj-B)"; rc=$?
+  if [ "$rc" = 2 ] && [ "$(calls_of "$out")" = 0 ]; then ok "$p.py dry run with a wrong --project-id: refused too (a given id must match)"
+    else bad "$p.py dry run --project-id=proj-B: rc=$rc calls=$(calls_of "$out")"; fi
+  for form in "--project-id=proj-A" "--project-id proj-A"; do
+    # shellcheck disable=SC2086  # the two spellings are two words on purpose
+    out="$(run_guard "$p" --apply $form)"; rc=$?
+    if [ "$(calls_of "$out")" -ge 1 ] && ! grep -qF "deletes the WHOLE project" <<<"$out"; then
+      ok "$p.py --apply $form: past the guard, it reaches the API"
+      else bad "$p.py --apply $form: stopped at the guard: rc=$rc calls=$(calls_of "$out"): $(head -3 <<<"$out" | tr '\n' ' ')"; fi
+  done
+done
 
 echo
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"

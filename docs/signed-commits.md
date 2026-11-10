@@ -71,8 +71,10 @@ and a duplicate. Fingerprints are **not** checked by tofu: compare each key to t
    a block on one side only is added or removed at the first reconcile.
 2. Mode is `HEAD`. `Tag` and `TagAndHEAD` wait until the release flow signs tags.
 3. Watch `kubectl -n flux-system get gitrepository openaether -o yaml` (condition `SourceVerified`). A rejected commit
-   makes the object NotReady and Flux keeps the last good artifact. Alerting on that is the apps side
-   (`FluxObjectNotReady`, 20 minutes).
+   makes the object NotReady and Flux keeps the last good artifact. Alerting on that is the apps side:
+   `FluxSourceNotVerified` (critical, 5 minutes, read from the `SourceVerified` condition; `OpenAether-apps/docs/runbooks.md`)
+   says why, and `FluxObjectNotReady` (20 minutes) only that the source is not Ready. The rule has a unit test on a synthetic
+   series; that the condition reaches the metric and the alert fires was never seen on a cluster (the unsigned-push drill is not run).
 4. Changing `public_keys` on a running cluster changes the bootstrap manifest: whether Talos re-applies an inline
    manifest on a config apply is a lab question (lab 22 saw, for the CoreDNS Deployment, Talos update its manifest and run its controller
    but leave the existing object unchanged: do not count on it, update the Secret with `kubectl apply`; not tried on a Flux object).

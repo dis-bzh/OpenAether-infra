@@ -78,7 +78,7 @@ fixtures as dependencies of the repository under test.
 | `clea pick-issue --issues <file>` | no | of a fetched, label-matched issue list, which one is Cléa's own report — see below. |
 | `clea prune` | no | name the probe branches whose bump has already landed. |
 
-Datasources: `github-releases`, `github-tags`, `pypi`, `helm`,
+Datasources: `github-releases`, `github-tags`, `pypi`, `npm`, `helm`,
 `terraform-provider`, and `url-text` for a tool installed from a moving target
 such as `https://dl.k8s.io/release/stable.txt`.
 
@@ -119,7 +119,7 @@ four hold. Otherwise it sits under **Held back**, with every reason:
 OSV is asked by package only where it can be: a GitHub release with no `[[osv]]` row is
 asked by commit, which matches git ranges only. It can find an advisory but an empty
 answer clears nothing, so it reads `advisories unknown`, like helm charts without a row,
-`terraform-provider` and `url-text`, which are never asked.
+`npm`, `terraform-provider` and `url-text`, which are never asked.
 
 An advisory against the pin you run **now** is a line of its own. A candidate that clears
 one skips the age rule (Renovate's security updates skip `minimumReleaseAge` too); a
@@ -180,6 +180,10 @@ max_minors_behind = 2           # optional, 0/absent = off: report pins further 
 dep = "owner/tool"
 ecosystem = "Go"
 package = "example.com/owner/tool"
+
+[[not_watched]]                 # an anchor Cléa is told not to resolve (no reader for its
+dep = "registry.example/tool"   # datasource, say). The reason is mandatory and is printed in the
+reason = "why it is not read"   # report's "Not watched" section; a row matching no anchor is an error.
 
 [[inventory]]                   # what to cross-check against
 kind = "renovate"

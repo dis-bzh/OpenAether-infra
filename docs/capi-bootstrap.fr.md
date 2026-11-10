@@ -2,9 +2,10 @@
 
 🇬🇧 [English version](capi-bootstrap.md)
 
-Validé de bout en bout sur Scaleway le 2026-07-28 — avant le recentrage, et **la
-0.2.0 ne déploie aucun CAPI** : ceci est conservé pour la version qui le fera.
-Chemin **optionnel**, à côté
+Validé de bout en bout sur Scaleway le 2026-07-28 — avant le recentrage. **OpenTofu ne
+déploie aucun CAPI** ; avec `deploy_flux = true`, le profil `management` des apps installe
+l'opérateur CAPI, ses providers et ORC (Running 1/1, 0 redémarrage au lab du 2026-10-12, apps 0.1.0), et
+cette procédure de pivot ne fait pas partie de ce déploiement. Chemin **optionnel**, à côté
 d'OpenTofu — pas un remplacement : CAPI crée les machines, OpenTofu garde le
 substrat (sur OVH, ~44 ressources dont 3 instances).
 

@@ -220,14 +220,15 @@ variable "coredns_ha" {
     not-ready/unreachable toleration) as an inline manifest and set cluster.coreDNS.disabled = true, instead of the
     2-replica Deployment that Talos owns (infra #388: lab 21 had 4 min 46 s without DNS when both replicas shared a
     worker). False keeps the Talos one. The ClusterIP is 10.96.0.10 (Talos's default service range 10.96.0.0/12).
-    Enabling it on a running cluster replaces the Deployment in place at the next apply (docs/resilience.md, Talos upgrades).
+    Enabling it on a running cluster does not replace the Deployment Talos already owns (an inline manifest's objects are
+    applied only when absent): see docs/resilience.md, Talos upgrades, for the one-time patch (task cluster-coredns-ha).
   EOT
   type        = bool
   default     = true
 }
 
 variable "coredns_image_tag" {
-  description = "CoreDNS image tag of the shipped manifest (registry.k8s.io/coredns/coredns). Talos no longer upgrades it when coredns_ha is on: bump it here."
+  description = "CoreDNS image tag of the shipped manifest (registry.k8s.io/coredns/coredns). Changing it does NOT roll the running Deployment (docs/resilience.md, changing the CoreDNS version): roll it by hand with kubectl set image. Not settable from a tfvars."
   type        = string
   # renovate: datasource=docker depName=registry.k8s.io/coredns/coredns
   default = "v1.12.4"

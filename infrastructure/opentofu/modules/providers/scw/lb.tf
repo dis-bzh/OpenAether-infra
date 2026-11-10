@@ -56,8 +56,9 @@ resource "scaleway_lb_backend" "http" {
 
   # Explicit TCP health check. Without these lines the backend carries the provider defaults (delay 60s, timeout 30s,
   # 2 retries): a worker whose network is black-holed stays in rotation for a minute and more (lab 27 sitting 3, partition
-  # of a node holding a Gateway pod: 41 of 327 probes failed, longest run 14 s). Worst case to take a dead node out:
-  # one check interval + 2 failed checks of 3 s, about 13 s (UNVERIFIED on a real partition, see docs/resilience.md).
+  # of a node holding a Gateway pod: 41 of 327 probes failed, longest run 14 s). Worst case to take a dead node out,
+  # from the interval model (2 x 5 s interval + 3 s timeout = 13 s), not read from the provider; the backend also has
+  # health_check_transient_delay (unset here), so UNVERIFIED on a real partition (docs/resilience.md, infra #424).
   # The API LB below is another object with another check, left alone on purpose.
   health_check_delay       = "5s"
   health_check_timeout     = "3s"
@@ -90,8 +91,9 @@ resource "scaleway_lb_backend" "https" {
 
   # Explicit TCP health check. Without these lines the backend carries the provider defaults (delay 60s, timeout 30s,
   # 2 retries): a worker whose network is black-holed stays in rotation for a minute and more (lab 27 sitting 3, partition
-  # of a node holding a Gateway pod: 41 of 327 probes failed, longest run 14 s). Worst case to take a dead node out:
-  # one check interval + 2 failed checks of 3 s, about 13 s (UNVERIFIED on a real partition, see docs/resilience.md).
+  # of a node holding a Gateway pod: 41 of 327 probes failed, longest run 14 s). Worst case to take a dead node out,
+  # from the interval model (2 x 5 s interval + 3 s timeout = 13 s), not read from the provider; the backend also has
+  # health_check_transient_delay (unset here), so UNVERIFIED on a real partition (docs/resilience.md, infra #424).
   # The API LB below is another object with another check, left alone on purpose.
   health_check_delay       = "5s"
   health_check_timeout     = "3s"

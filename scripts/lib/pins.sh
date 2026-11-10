@@ -69,6 +69,47 @@ oa_live_pins() {
   esac
 }
 
+# The marker of a refused or interrupted Flux apply (infra #448), one per config file: oa_flux_marker <cluster dir> <tfvars file>
+oa_flux_marker() { printf '%s/.flux-apply-unfinished-%s' "$1" "$(basename "$2" .tfvars)"; }
+
+# Is the Flux install FINISHED, not only at the pinned tags? (infra #448) `kubectl apply` does not stop at the first refused object: the
+# Deployments can carry the pinned tags while a CRD was refused, or a rollout never completed, and the tags alone then read "all is well".
+# Prints one line per gap, nothing when every pinned Deployment has observedGeneration == generation and readyReplicas == replicas AND every
+# CRD of the artifact exists and is Established. Returns 1, printing the reason, when the API cannot be read (the caller says UNKNOWN).
+# A refused UPDATE of a CRD that already exists is NOT visible in the cluster (the old CRD stays Established): the optional marker file is
+# what remembers it. cluster-bootstrap-sync.sh creates it before an apply and deletes it once an apply was accepted whole; while it exists
+# the install is "not finished", whatever the cluster shows. It lives in the cluster directory of one checkout (gitignored): an apply made
+# elsewhere, or by hand, leaves no trace here.
+# Usage: oa_flux_gaps <namespace> <flux-install.yaml> [marker file]
+oa_flux_gaps() {
+  local ns="$1" file="$2" marker="${3:-}" names dj cj est c s
+  if [ -n "$marker" ] && [ -e "$marker" ]; then
+    echo "the last apply of flux-install.yaml was refused or interrupted (marker ${marker##*/}): some of its objects, an UPDATE of an existing CRD among them, may not be applied, and the cluster cannot show it"
+  fi
+  names="$(oa_artifact_pins flux "$file" | awk '{ print $2 }' | paste -sd' ' -)"
+  [ -n "$names" ] || { echo "no controller in $(basename "$file")"; return 1; }
+  dj="$(timeout 60 kubectl -n "$ns" get deployments -o json 2>/dev/null)" || { echo "the Deployments of $ns cannot be read"; return 1; }
+  cj="$(timeout 60 kubectl get crd -l app.kubernetes.io/part-of=flux -o json 2>/dev/null)" || { echo "the Flux CRDs cannot be read"; return 1; }
+  jq -r --arg names "$names" '
+    ($names | split(" ")) as $w
+    | .items[] | select(.metadata.name as $n | $w | index($n)) | (.spec.replicas // 1) as $r
+    | if (.status.observedGeneration // 0) != (.metadata.generation // 0)
+      then "deployment/\(.metadata.name): the controller has not observed generation \(.metadata.generation // 0) (observedGeneration \(.status.observedGeneration // 0)): the rollout is unfinished"
+      elif (.status.readyReplicas // 0) != $r
+      then "deployment/\(.metadata.name): \(.status.readyReplicas // 0) of \($r) replicas ready: the rollout is unfinished"
+      else empty end' <<<"$dj" 2>/dev/null || { echo "the Deployments of $ns cannot be parsed"; return 1; }
+  est="$(jq -r '.items[] | "\(.metadata.name) \([.status.conditions[]? | select(.type == "Established") | .status][0] // "Unknown")"' <<<"$cj" 2>/dev/null)" \
+    || { echo "the Flux CRDs cannot be parsed"; return 1; }
+  while read -r c; do
+    [ -n "$c" ] || continue
+    s="$(awk -v c="$c" '$1 == c { print $2 }' <<<"$est")"
+    [ "$s" = True ] && continue
+    if [ -z "$s" ]; then echo "customresourcedefinition/$c: not found (not applied yet, or refused)"
+    else echo "customresourcedefinition/$c: not Established ($s)"; fi
+  done < <(awk '/^kind: / { w = ($2 == "CustomResourceDefinition"); n = 0; next } w && !n && /^  name: / { print $2; n = 1 }' "$file")
+  return 0
+}
+
 # Compare two pin lists (declared, live): prints one line per difference, nothing when they are the same.
 #   "<kind> <name> pinned <a> running <b>"  /  "... not running" / "... not pinned"
 # Both directions: a component that runs and is not pinned is a difference too.

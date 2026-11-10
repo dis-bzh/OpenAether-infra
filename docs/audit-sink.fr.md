@@ -45,7 +45,8 @@ Règles appliquées par l'outillage (`scripts/lib/audit-sink.sh`, lu par `ensure
 - Outscale n'est accepté comme puits **qu'après infra #377** (les paires dédiées ont été refusées par le magasin au lab 15B) ; d'ici là
   seules les clés de l'opérateur y fonctionneraient, ce qui annule la paire dédiée.
 - COMPLIANCE a été prouvé appliqué chez Scaleway, OVH et Outscale (lab 22, partie B : suppression d'une version et deux changements de
-  rétention refusés). Qu'un bucket verrouillé puisse être vidé une fois la rétention écoulée n'a pas été prouvé.
+  rétention refusés). Une fois une rétention d'un jour écoulée, supprimer la version puis le bucket a réussi chez les trois (2026-10-22,
+  une version par bucket) ; une longue rétention et un bucket à nombreuses versions n'ont pas été essayés.
 
 ## 3. Le chemin des données
 
@@ -94,7 +95,7 @@ audit-sink-check (Deployment) liste le préfixe toutes les 5 minutes --> oa_audi
   l'opérateur et le dit clairement.
 - **OVH n'a pas de politique de bucket par son API S3** : la paire d'un utilisateur OVH ne peut pas être limitée à un bucket, donc chez OVH
   la paire « dédiée » atteint encore les autres buckets de ce projet OVH. Isolez-la en donnant au puits son propre projet/utilisateur OVH,
-  et lisez les droits dans l'API OVH (non vérifié). La recette l'imprime.
+  et lisez les droits dans l'API OVH (non vérifié). La recette l'imprime, et pour un puits OVH elle sort en code 2 tant que `OVH_SINK_PROJECT_ID` ne nomme pas ce projet (une attestation : elle ne peut pas le vérifier) ; `audit-sink-check.sh` échoue sur un marqueur de suppression qui est la version courante d'un objet sous le préfixe, sur la fenêtre `--days` comme ses autres contrôles (un marqueur sur un jour plus ancien n'est pas regardé) (infra #393).
 
 ## 5. Comportement en panne
 

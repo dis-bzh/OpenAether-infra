@@ -196,5 +196,7 @@ Raising Scaleway's value on a running cluster is an in-place resize of the `sbs_
 replaced); Talos grows the EPHEMERAL partition at the node's next reboot, so drain and reboot the workers one at a time afterwards (lab 12:
 15.6 GB to 35.6 GB; see the RWX warning in [`upgrade.md`](upgrade.md)). A cluster built at 20 and not pinning it in its tfvars shows that resize at its
 next plan; pin `scw_root_volume_size_gb = 20` to keep the old size (a full stack will not fit). On Outscale and Proxmox the OMI root volume is not resized
-in place by this code: replace the nodes one at a time (`task cluster-roll`). Not measured: Outscale's usable space and OVH's, with the full stack
-(lab 12 ran the full stack on Scaleway only; the Outscale run was the reduced profile).
+in place by this code: replace the nodes one at a time (`task cluster-roll`). Measured once on Outscale (lab 15B, cluster 1, 3 control planes + 3 workers,
+`outscale_root_volume_size_gb = 50`): 44.1 GB of allocatable ephemeral storage per node, DiskPressure False on 6 of 6 nodes, 0 evictions. That cluster did not carry
+the whole stack (Zitadel, vmstorage-1 and alloy-audit stayed Pending on CPU), and the limit seen on Outscale in that lab was not size but the IOPS of the 150-IOPS gp2 roots (infra #376).
+Not measured: OVH's usable space with the full stack (infra #378); lab 12 ran the full stack on Scaleway only.
