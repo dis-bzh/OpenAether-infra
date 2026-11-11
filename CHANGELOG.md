@@ -17,8 +17,9 @@ in git. 0.1.0 is the first entry describing something proven.
 ### Changed
 
 - **Kubernetes v1.37.1 → v1.37.2** (Cléa #91, probed green in a bare container, released 2026-10-28): the default `kubernetes_version` of the `cluster` root and of the local Docker lane, and `KUBECTL_VERSION` in `scripts/setup.sh`.
-  This moves the default pin of new clusters; a running cluster only moves when its owner runs `task cluster-upgrade`. Left out: Talos v1.14.5, OpenTofu v1.13.9, tflint v0.66.0, renovate 44.223.1, plumber v0.7.23, aws-cli 2.39.6 and checkov 3.4.3 (not probed, most of them also too young),
-  cilium 1.20.4 and feint v0.14.0 (probe failed). Rung: mocked.
+  This moves the default pin of new clusters; a running cluster only moves when its owner runs `task cluster-upgrade`. Rung: mocked.
+- **checkov 3.3.30 → 3.4.3** (Cléa #91, probed green in a bare container, released 2026-11-02): `scripts/setup.sh`. Left out of both entries: Talos v1.14.5, OpenTofu v1.13.9, tflint v0.66.0, renovate 44.226.0, plumber v0.7.23 and aws-cli 2.39.7
+  (not probed, most of them also too young), cilium 1.20.4 and feint v0.14.0 (probe failed). Rung: mocked.
 
 ## [0.4.4] — 2026-11-08
 
