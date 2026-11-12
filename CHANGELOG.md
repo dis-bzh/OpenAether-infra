@@ -16,6 +16,9 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **`Feint Evidence (scaleway)` and `(outscale)` no longer carry a job-level `continue-on-error`.** The flag never made these required checks pass: a failed job still concludes `failure`
+  (25 failed jobs in the 1,100 CI runs since 2026-08-30: 22 in `task feint-evidence`, 3 in the OpenTofu setup, none in `task feint-evidence-verify` in 1,652 executions); it only kept the whole `CI` run green over a red required check, and the comments called a required check informational.
+  The run now fails with its check. The pin check runs last, after the baseline artifact is uploaded, so a red leaves the exact bytes to commit as the new `.feint-evidence-<provider>.json`.
 - **Editing a pull request body or title no longer restarts CI.** `Rung receipt` moves from `ci.yml` to its own workflow, `.github/workflows/rung.yml` (same check name, same GitHub Actions app, so the ruleset is unchanged); it is the only one that runs on `edited`.
   `ci.yml` and `security.yml` drop `edited` from their `pull_request` types. Pasting a receipt used to cancel and restart every job; it now re-runs one short check. A change of the base branch makes `Rung receipt` fail with the way out (push, or close and reopen), since no test re-runs on the new base.
   `Rung: mocked` with nothing pasted passes when the diff is not docs-only and fails on a docs-only diff: a workflow of its own cannot wait for a `ci.yml` job, and the test jobs are required checks of their own.
