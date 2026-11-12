@@ -97,7 +97,27 @@
             "integration_id": 15368
           },
           {
+            "context": "OpenTofu Unit Tests",
+            "integration_id": 15368
+          },
+          {
             "context": "Pipeline audit",
+            "integration_id": 15368
+          },
+          {
+            "context": "Script Tests (1/4)",
+            "integration_id": 15368
+          },
+          {
+            "context": "Script Tests (2/4)",
+            "integration_id": 15368
+          },
+          {
+            "context": "Script Tests (3/4)",
+            "integration_id": 15368
+          },
+          {
+            "context": "Script Tests (4/4)",
             "integration_id": 15368
           },
           {
