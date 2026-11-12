@@ -1,0 +1,67 @@
+name: Rung
+
+# The rung a pull request declares, against the receipt it pastes (#120). Required
+# on main: a ruleset setting, which repo-settings.yml compares with what reports.
+# Renovate, Dependabot and docs-only diffs may declare nothing; a rung they do
+# declare is checked.
+#
+# Its own workflow, and the only one that reacts to `edited`: a receipt is pasted,
+# or a Rung line fixed, by editing the body, and in ci.yml that edit cancelled and
+# restarted every job. Here it re-runs this one short check. The check name, `Rung
+# receipt`, and the app that reports it are the ones the ruleset requires. The
+# test jobs are no part of it: they are required checks of their own (the rung
+# mocked is what they run, and needs no pasted receipt, see CONTRIBUTING.md).
+on:
+  # No `branches` filter, as in ci.yml: a PR based on another PR's branch must get
+  # this check too.
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+# One run per pull request: the latest body is the one that counts.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  rung:
+    name: Rung receipt
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # ci.yml and security.yml do not run on `edited`, so a retargeted PR is not
+      # tested against its new base and nothing else would say so. This is the one
+      # place an edit can still turn the PR red: a deliberate trade for cheap edits.
+      - name: A new base branch is not tested until a push or a reopen
+        if: github.event.action == 'edited' && github.event.changes.base.ref.from != ''
+        run: |
+          echo "::error::The base branch changed and an edit does not re-run the tests:" \
+            "push a commit, or close and reopen this pull request."
+          exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
+          # The diff against the base, for the docs-only rule.
+          fetch-depth: 0
+
+      # The rule the job `changes` of ci.yml applies, from the same script:
+      # a docs-only diff declares nothing.
+      - name: Classify the diff
+        id: classify
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: ./scripts/dev/classify-changes.sh "origin/${BASE_REF}" >> "$GITHUB_OUTPUT"
+
+      # The body is whatever the PR author typed: it reaches the script as data,
+      # through env, and never as an expression inside `run:`. The script is the
+      # one of the PR's own tree, as it was in ci.yml.
+      - name: The declared rung has a green receipt for this head
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          DOCS_ONLY: ${{ steps.classify.outputs.code == 'false' }}
+        run: python3 scripts/dev/rung-receipt.py check

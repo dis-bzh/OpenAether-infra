@@ -7,13 +7,14 @@ Taskfile.yml calls `record` from a defer, so a red run leaves a receipt too.
 
   record <target> <provider> <rc> <start>   append to .receipts/<rung>.jsonl (Taskfile only)
   show                                      the latest receipt per target for HEAD, to paste
-  check                                     CI: PR_BODY, PR_HEAD_SHA, PR_AUTHOR, DOCS_ONLY, CI_MOCKED_RESULT
+  check                                     CI: PR_BODY, PR_HEAD_SHA, PR_AUTHOR, DOCS_ONLY
 
 `check` passes when a target that can stand for the declared rung has a green
 receipt for the PR head, started on a clean tree, and no pasted run at or below
-that rung is red. The rung mocked needs no pasted receipt when the CI job that
-runs its targets (CI_STANDS) is green on the same head: CI is the receipt, and
-a pasted one is still judged as for every other rung. A receipt makes the claim
+that rung is red. The rung mocked needs no pasted receipt on a diff that is not
+docs-only: CI runs its targets (`test-scripts`, `test`) as required checks of
+their own, so this check does not wait for them, and a pasted receipt is still
+judged as for every other rung. A receipt makes the claim
 falsifiable, not unforgeable: nothing offline can prove a line was not typed by
 hand. Nor can `check` tell what a green run exercised: a verify or teardown
 target backs its rung like any other (a plan does not), and the pasted lines
@@ -74,12 +75,6 @@ EXCLUDED = {
     "local-render-manifests": "renders a manifest, proves nothing about a change",
     "local-down": "tears the local cluster down, proves nothing about a change",
 }
-# The rungs the CI jobs of the same pull request head prove, so no receipt is pasted for them:
-# rung -> (the env variable that carries `needs.<job>.result` into the `rung` job of
-# .github/workflows/ci.yml, the job's check name). Only mocked: the emulated jobs cannot stand
-# for their rung (Feint Evidence is continue-on-error, CI never runs feint-apply-root).
-# test-rung-receipts.sh fails when ci.yml and this constant disagree: rename the job there and here.
-CI_STANDS = {"mocked": ("CI_MOCKED_RESULT", "OpenTofu Tests")}
 FIELDS = ("rung", "target", "tool", "version", "rc", "sha", "dirty", "utc", "provider")
 
 # They cannot run a rung, so they may declare none: CI's own jobs are their evidence.
@@ -442,9 +437,8 @@ def rung_of(label):
     return next((r for r, text in RUNGS.items() if word in (r, text.lower())), None)
 
 
-def verdict(body, head, author, docs_only, ci=None):
-    """(ok, message) for a PR body. Pure, so the self-test drives it without a PR.
-    ci: {rung: result of the CI job that stands for it}, "" or absent where none was given."""
+def verdict(body, head, author, docs_only):
+    """(ok, message) for a PR body. Pure, so the self-test drives it without a PR."""
     body, why = visible(re.sub(r"\r\n?", "\n", body))  # CRLF and a lone CR end a line too
     if why:
         return False, why
@@ -457,7 +451,7 @@ def verdict(body, head, author, docs_only, ci=None):
     lines = [s for b in BLOCK.findall(body) for s in map(str.strip, b.splitlines()) if s]
     if not declared and not lines:
         if author in BOTS:
-            return True, f"no rung declared by {author}: this run's test and emulated jobs stand in"
+            return True, f"no rung declared by {author}: the test and emulated jobs of CI stand in"
         if docs_only:
             return True, "no rung declared, and a docs-only diff has none to reach"
         return False, "no rung declared, no receipt pasted (.github/pull_request_template.md)"
@@ -468,15 +462,14 @@ def verdict(body, head, author, docs_only, ci=None):
     if want is None:
         return False, f"Rung: {q(label)} is not one of {', '.join(RUNGS.values())}"
     if not lines:
-        result, job = (ci or {}).get(want, ""), CI_STANDS.get(want, ("", ""))[1]
-        if job and result == "success":
-            return True, f"{RUNGS[want]} at {head[:12]}: no receipt pasted, {job} is green on this head"
-        if job and result == "skipped":
-            return False, (f"{RUNGS[want]} declared, no receipt pasted, and {job} was skipped (a docs-only diff, or a job "
-                           "it needs failed): paste a receipt, or write `Rung: none (docs-only diff)` on a docs-only diff")
-        if job and result:
-            return False, (f"{RUNGS[want]} declared, no receipt pasted, and {job} did not pass on this head "
-                           f"(result {q(result)}): fix it, or paste a receipt")
+        # Mocked is what the CI test jobs run, and they are required checks of their own: red, they block the merge
+        # whatever this says. So nothing is pasted for it, and nothing is waited for. A docs-only diff runs none of
+        # them, and declares nothing.
+        if want == "mocked" and docs_only:
+            return False, ("mocked declared, no receipt pasted, and a docs-only diff runs no CI test job: paste a receipt, "
+                           "or write `Rung: none (docs-only diff)`")
+        if want == "mocked":
+            return True, f"mocked at {head[:12]}: no receipt pasted, the CI test jobs are separate required checks"
         return False, f"{RUNGS[want]} declared, no receipt pasted: `task receipts` in a ```receipts block"
     receipts = []
     for n, line in enumerate(lines, 1):
@@ -516,9 +509,8 @@ def check():
     head = os.environ.get("PR_HEAD_SHA", "")
     if not re.fullmatch(r"[0-9a-f]{40}", head):
         sys.exit(f"✗ PR_HEAD_SHA is not a commit sha: {q(head)}")
-    ci = {rung: os.environ.get(var, "") for rung, (var, _) in CI_STANDS.items()}
     ok, message = verdict(os.environ.get("PR_BODY", ""), head, os.environ.get("PR_AUTHOR", ""),
-                          os.environ.get("DOCS_ONLY") == "true", ci)
+                          os.environ.get("DOCS_ONLY") == "true")
     print(("✓ " if ok else "✗ ") + message)
     return 0 if ok else 1
 
