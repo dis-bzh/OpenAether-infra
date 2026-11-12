@@ -496,13 +496,13 @@ jobs:
         if: always() && needs.changes.outputs.code == 'true'
         run: task feint-down
 
-  # First trial of a machine runtime in this repo's CI (#151): `feint evidence
-  # baseline` refuses to pin anything captured under metadata-only machines
-  # (every `dataplane` verdict would be a hardcoded `false`), and this is the
-  # only way to earn a real one. Kept off the required path with
-  # continue-on-error while this is unproven here — not a signal it may be
-  # ignored, just that a still-flaky Incus recipe should not block unrelated
-  # work the first few times.
+  # The machine-runtime lane (#151): `feint evidence baseline` refuses to pin
+  # anything captured under metadata-only machines (every `dataplane` verdict
+  # would be a hardcoded `false`), and this is the only way to earn a real one.
+  #
+  # Required: no job-level `continue-on-error`. A failed job still concludes
+  # `failure` and blocks the required check, so the flag only hid the red behind
+  # a green `CI` run.
   #
   # No job-level `if:` either, same reason as `validate`/`emulated` above: a
   # matrix job skipped by its own `if:` collapses every combination into one
@@ -512,7 +512,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     needs: [validate, changes]
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -586,14 +585,6 @@ jobs:
         if: needs.changes.outputs.code == 'true'
         run: task feint-evidence PROVIDER=${{ matrix.provider }}
 
-      # Has what `.feint-evidence-<provider>.json` pins stopped being true?
-      # `continue-on-error` on the job (above) is what keeps this from blocking
-      # unrelated PRs on the startup race measured on this job's first runs
-      # (#151) — not a signal this check may be ignored.
-      - name: task feint-evidence-verify
-        if: needs.changes.outputs.code == 'true'
-        run: task feint-evidence-verify PROVIDER=${{ matrix.provider }}
-
       # `evidence baseline` only reads the file `feint evidence` already wrote,
       # so this needs no live emulator — safe to run after `feint-down`. A
       # log line is not a build artifact: exact bytes, not a hand transcription
@@ -615,6 +606,17 @@ jobs:
           name: feint-evidence-${{ matrix.provider }}
           path: /tmp/feint-evidence-${{ matrix.provider }}.json
           retention-days: 7
+
+      # Has what `.feint-evidence-<provider>.json` pins stopped being true?
+      # Last on purpose: a red here must still leave the uploaded baseline, the
+      # exact bytes to commit as the new pin when the change is intended (a
+      # feint bump, a fixture that drives other operations). It compares two
+      # local files, reads no network and needs no emulator, and it blocks like
+      # every step above: a pull request that shrinks what the fixture drives
+      # must not merge unseen. It reads `REGRESSED: <operation> <axis>`.
+      - name: task feint-evidence-verify
+        if: needs.changes.outputs.code == 'true'
+        run: task feint-evidence-verify PROVIDER=${{ matrix.provider }}
 
   talos:
     name: Talos Config Validation
