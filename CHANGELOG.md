@@ -14,6 +14,12 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ## [Unreleased]
 
+### Changed
+
+- **CI runs the self-test of the custom checks** (#396): the `IaC Security Scan` job installs checkov at the `setup.sh` pin and runs `scripts/dev/test-checkov-custom-checks.sh`,
+  which proves each CKV_OA_* rule still fires on a mutated tree. Only `task security` ran it before, so a custom check that silently stopped firing left CI green.
+  `check-version-drift.sh` now compares the two checkov pins. Rung: mocked (the self-test run in CI, red when a check is neutered and green when restored: see the PR).
+
 ## [0.4.5] — 2026-11-12
 
 0.4.5 is a **hotfix release** of 0.4.4 (supply chain: what the weekly scan sees, what it finds, what the waivers say; no feature), the infra half of the pair with OpenAether-apps 0.4.5 (tagged first; its scope, its scan counts and the rungs of its changes are in its own CHANGELOG). A bare `#N` is an issue of this repository. **This repository has no code change.** The version cut moves the apps pin to `refs/tags/0.4.5` (the default of `git_ref` and the comment above it, the twelve `envs/*.tfvars.example`, the assertion of `tests/flux-git-verify.tftest.hcl`) and carries documentation. No resource, module, output, script or workflow changed; no Talos, Kubernetes, Cilium, Flux or provider version moved, and the Flux manifests and `flux-image-digests.lock` are those of 0.4.4, so `task cluster-bootstrap-sync` is not needed and no node rolled in any move. **What an operator on 0.4.4 must read before the move: it restarts every PostgreSQL pod once, both platform Clusters together, and `cluster-up` returns before they are whole** ("Upgrade from 0.4.4", item 1).
