@@ -337,6 +337,7 @@ tasks:
       # The contract's own rules (#123), as checks (CKV_OA_1, CKV_OA_2) — proof
       # each one actually fires: mutates real tracked files under a trap that
       # always restores them, never left in the working tree either way.
+      # CI's IaC Security Scan job runs it too.
       - ./scripts/dev/test-checkov-custom-checks.sh
       # Only what git can see. Scanning the raw tree flagged .env.sh and the
       # *.kubeconfig files — gitignored on purpose — so this gate could never be

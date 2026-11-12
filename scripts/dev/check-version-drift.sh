@@ -42,6 +42,8 @@ HELM_CI="$(sed -nE 's/^[[:space:]]*HELM_VERSION:[[:space:]]*"([^"]+)".*/\1/p' .g
 TOFU_SETUP="$(pin scripts/setup.sh TOFU_VERSION)"
 YAMLLINT_SETUP="$(pin scripts/setup.sh YAMLLINT_VERSION)"
 YAMLLINT_CI="$(sed -nE 's/.*pip install yamllint==([^[:space:]"]+).*/\1/p' .github/workflows/ci.yml | head -1)"
+CHECKOV_SETUP="$(pin scripts/setup.sh CHECKOV_VERSION)"
+CHECKOV_CI="$(sed -nE 's/.*pip install checkov==([^[:space:]"]+).*/\1/p' .github/workflows/ci.yml | head -1)"
 TOFU_CI="$(sed -nE 's/^[[:space:]]*tofu_version:[[:space:]]*"([^"]+)".*/\1/p' .github/workflows/ci.yml | head -1)"
 # Talos has no second pin to compare: ci.yml installs it through
 # scripts/internal/install-talosctl.sh, which reads the cluster's own. So the
@@ -62,7 +64,7 @@ PLUMBER_CI="$(sed -nE 's/.*getplumber\/plumber@[0-9a-f]+[[:space:]]*#[[:space:]]
 # ZERO FLOOR. If the extractors return nothing the comparisons below all pass
 # vacuously, and this file becomes a green line that proves nothing — the exact
 # shape it is written against.
-for v in CILIUM HELM_MAJOR FEINT HELM_SETUP HELM_CI TOFU_SETUP TOFU_CI YAMLLINT_SETUP YAMLLINT_CI TALOS_CLUSTER GITLEAKS_INSTALL GITLEAKS_PRECOMMIT PLUMBER_INSTALL PLUMBER_CI; do
+for v in CILIUM HELM_MAJOR FEINT HELM_SETUP HELM_CI TOFU_SETUP TOFU_CI YAMLLINT_SETUP YAMLLINT_CI CHECKOV_SETUP CHECKOV_CI TALOS_CLUSTER GITLEAKS_INSTALL GITLEAKS_PRECOMMIT PLUMBER_INSTALL PLUMBER_CI; do
   [ -n "${!v}" ] || { echo "✗ could not extract ${v} — the extractor is broken, not the repository" >&2; exit 1; }
 done
 
@@ -94,6 +96,14 @@ if [ "$YAMLLINT_SETUP" = "$YAMLLINT_CI" ]; then
   ok "yamllint ${YAMLLINT_SETUP}: setup.sh and ci.yml agree"
 else
   bad "yamllint: setup.sh installs ${YAMLLINT_SETUP}, ci.yml pins ${YAMLLINT_CI} — a contributor and CI would not lint with the same rules"
+fi
+
+# checkov: setup.sh for a contributor's `task security`, ci.yml for the custom-check self-test (#396). The scan
+# itself runs the checkov action's own build, so this pin is the one the self-test proves the rules with.
+if [ "$CHECKOV_SETUP" = "$CHECKOV_CI" ]; then
+  ok "checkov ${CHECKOV_SETUP}: setup.sh and ci.yml agree"
+else
+  bad "checkov: setup.sh installs ${CHECKOV_SETUP}, ci.yml pins ${CHECKOV_CI} — a contributor and CI would not self-test the custom checks with the same build"
 fi
 
 # Talos: the drift here was invisible for a different reason than the others —

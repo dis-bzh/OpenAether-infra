@@ -45,7 +45,7 @@ FLUX_SCHEMA_VERSION="0.17.0"
 HELM_VERSION="4.3.1"
 # Five more, pinned so Cléa compares a version instead of "whatever is newest today".
 # kubectl and aws-cli install from a named URL; the three Python tools via pip.
-# YAMLLINT_VERSION MUST equal the pip pin in ci.yml (check-version-drift.sh).
+# CHECKOV_VERSION and YAMLLINT_VERSION MUST equal their pip pins in ci.yml (check-version-drift.sh).
 # renovate: datasource=github-releases depName=kubernetes/kubernetes extractVersion=^v(?<version>.*)$
 KUBECTL_VERSION="1.37.2"
 # renovate: datasource=github-tags depName=aws/aws-cli
