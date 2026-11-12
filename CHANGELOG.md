@@ -19,6 +19,8 @@ in git. 0.1.0 is the first entry describing something proven.
 - **CI runs the self-test of the custom checks** (#396): the `IaC Security Scan` job installs checkov at the `setup.sh` pin and runs `scripts/dev/test-checkov-custom-checks.sh`,
   which proves each CKV_OA_* rule still fires on a mutated tree. Only `task security` ran it before, so a custom check that silently stopped firing left CI green.
   `check-version-drift.sh` now compares the two checkov pins. Rung: mocked (the self-test run in CI, red when a check is neutered and green when restored: see the PR).
+- **checkov 3.3.30 → 3.4.3** (Cléa #91, probed green in a bare container, released 2026-11-02): `scripts/setup.sh` and, since the self-test runs in CI, `ci.yml`. Left out: checkov 3.4.5 (released 2026-11-12, not probed, too young),
+  Talos v1.14.6, OpenTofu v1.13.9, tflint v0.66.0, renovate 44.235.4, plumber v0.7.23, feint v0.15.0 and aws-cli 2.40.1 (not probed, most of them also too young), cilium 1.20.4 (probe failed). Kubernetes v1.37.2 is cluster-side and waits in its own PR. Rung: mocked.
 
 ## [0.4.5] — 2026-11-12
 

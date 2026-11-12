@@ -656,7 +656,7 @@ jobs:
       # files of this throw-away checkout and expects each rule to catch its mutation (#396).
       - name: Install checkov
         # renovate: datasource=pypi depName=checkov
-        run: pip install checkov==3.3.30
+        run: pip install checkov==3.4.3
 
       - name: Self-test the custom checks
         run: ./scripts/dev/test-checkov-custom-checks.sh
