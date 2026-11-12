@@ -40,9 +40,9 @@ jobs:
   # match the per-matrix required-check names branch protection expects, so
   # the PR sits "blocked" forever — measured live on PR #146, the first
   # genuinely docs-only PR to hit this path. So: non-matrix gated jobs
-  # (manifests, test, talos, security) gate at the JOB level; matrix jobs
-  # (validate, emulated) MUST gate at the STEP level instead, so the job
-  # itself always runs, the matrix always fully expands, and every
+  # (manifests, unit-tests, talos, security) gate at the JOB level; matrix jobs
+  # (validate, script-tests, emulated) MUST gate at the STEP level instead, so
+  # the job itself always runs, the matrix always fully expands, and every
   # per-combination check name always exists — just fast and empty when
   # code == 'false'.
   #
@@ -370,11 +370,53 @@ jobs:
           AWS_SECRET_ACCESS_KEY: mock
           TF_VAR_encryption_passphrase: ci-mock-passphrase-for-validation-only-ci
 
-  test:
-    name: OpenTofu Tests
+  # Rung zero, the shell harnesses, on four runners at once: one sequential loop of them took 15 minutes of a 19-minute
+  # pipeline. Four JOBS, not four loops in one: the harnesses bind fixed local ports (infra #431). Which harness runs
+  # where is scripts/dev/script-shard.sh's table; `task test-scripts SHARD=k/4` runs one quarter and the preface checks
+  # run in shard 1. No `needs: validate`: nothing here uses what it produced.
+  #
+  # No job-level `if:` here, same reason as `validate` above: a skipped matrix job
+  # never expands and collapses to one unexpanded `Script Tests (${{ matrix.shard }}/4)`
+  # check, which satisfies none of the four required names. Steps are gated instead.
+  script-tests:
+    name: Script Tests (${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    needs: [validate, changes]
+    timeout-minutes: 15
+    needs: changes
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
+
+      # Some harnesses run a real tofu (test-cluster-up.sh), as before the split.
+      - name: Setup OpenTofu
+        if: needs.changes.outputs.code == 'true'
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4  # v2
+        with:
+          # renovate: datasource=github-releases depName=opentofu/opentofu extractVersion=^v(?<version>.*)$
+          tofu_version: "1.13.2"
+
+      - name: Setup Task
+        if: needs.changes.outputs.code == 'true'
+        run: ./scripts/internal/install-task.sh
+
+      # The shell gates against a stub kubectl: seconds rather than the 25-90
+      # minutes a real cloud roll took to surface the same class of defect.
+      - name: task test-scripts (shard ${{ matrix.shard }}/4)
+        if: needs.changes.outputs.code == 'true'
+        run: task test-scripts SHARD=${{ matrix.shard }}/4
+
+  # `tofu test`, mocked provider: the cluster root, modules/talos, the Proxmox image module and the talos-image root.
+  # Non-matrix, so it gates at the job level like `manifests`.
+  unit-tests:
+    name: OpenTofu Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: changes
     if: needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
@@ -390,12 +432,6 @@ jobs:
       - name: Setup Task
         run: ./scripts/internal/install-task.sh
 
-      # Rung zero, and it runs first because it is the cheap one: the shell
-      # gates against a stub kubectl, seconds rather than the 25-90 minutes a
-      # real cloud roll took to surface the same class of defect.
-      - name: task test-scripts
-        run: task test-scripts
-
       - name: task test
         run: task test
         env:
@@ -403,6 +439,32 @@ jobs:
           AWS_ACCESS_KEY_ID: mock
           AWS_SECRET_ACCESS_KEY: mock
           TF_VAR_encryption_passphrase: ci-mock-passphrase-for-validation-only-ci
+
+  # The name this job had when it was one job, kept alive while the ruleset still requires it: rename, phase A. It
+  # reports the verdict of the five checks that replaced it, so nothing that waits for `OpenTofu Tests` waits for ever
+  # (the `Rung receipt` job reads its result, scripts/dev/rung-receipt.py CI_STANDS).
+  # It runs only when the change touches code, like the job it replaces: on a docs-only diff the script shards report
+  # success with their steps skipped, and an alias that said success there would let `Rung: mocked` pass with NOTHING
+  # run. `!cancelled()` and not the implicit success(): a red shard must turn this job red, not skip it (a skipped
+  # required check counts as passed). Both needs must be exactly `success`.
+  test:
+    name: OpenTofu Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [changes, script-tests, unit-tests]
+    if: ${{ !cancelled() && needs.changes.outputs.code == 'true' }}
+    steps:
+      - name: Script Tests and OpenTofu Unit Tests passed
+        env:
+          SCRIPT_TESTS: ${{ needs.script-tests.result }}
+          UNIT_TESTS: ${{ needs.unit-tests.result }}
+        run: |
+          set -uo pipefail
+          echo "Script Tests: ${SCRIPT_TESTS}, OpenTofu Unit Tests: ${UNIT_TESTS}"
+          if [ "${SCRIPT_TESTS}" != success ] || [ "${UNIT_TESTS}" != success ]; then
+            echo "✗ a needed job did not succeed" >&2
+            exit 1
+          fi
 
   # No job-level `if:` here either, same reason as `validate` above: a
   # skipped matrix job collapses `Emulated Cloud (scaleway)` / `(outscale)`

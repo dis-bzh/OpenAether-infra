@@ -20,7 +20,8 @@ bad() { printf '  \033[31m✗\033[0m %s\n' "$*"; FAIL=$((FAIL + 1)); }
 repo="$TMP/repo"
 mkdir -p "$repo/scripts/dev" "$TMP/bin"
 cp "$ROOT/Taskfile.yml" "$ROOT/.gitignore" "$ROOT/.pre-commit-config.yaml" "$repo/"
-cp "$ROOT/scripts/dev/rung-receipt.py" "$ROOT/scripts/dev/feint.sh" "$ROOT/scripts/dev/ssh-ca-check.sh" "$repo/scripts/dev/"
+cp "$ROOT/scripts/dev/rung-receipt.py" "$ROOT/scripts/dev/feint.sh" "$ROOT/scripts/dev/ssh-ca-check.sh" \
+  "$ROOT/scripts/dev/script-shard.sh" "$repo/scripts/dev/"
 g() { git -C "$repo" -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false "$@"; }
 
 cat >"$TMP/bin/tofu" <<'EOF'
@@ -108,7 +109,7 @@ done
 g add -A && g commit -q -m stubs
 envs="infrastructure/opentofu/cluster/envs"
 export RUN_LOG="$TMP/run.log"
-ts() { : >"$RUN_LOG"; PATH="$TMP/bin:$PATH" WRITER="$new_harness" WRITE="$1" FAIL_ON="${2:-}" task --dir "$repo" test-scripts >"$TMP/out" 2>&1; }
+ts() { : >"$RUN_LOG"; PATH="$TMP/bin:$PATH" WRITER="$new_harness" WRITE="$1" FAIL_ON="${2:-}" task --dir "$repo" test-scripts ${3:+SHARD=$3} >"$TMP/out" 2>&1; }
 ts true; rc=$?
 [ "$rc" -eq 0 ] && ok "no step writes under envs/: test-scripts passes (rc=$rc)" || bad "clean run failed (rc=$rc): $(tail -5 "$TMP/out")"
 # The expected set is computed here from the list, not copied from the Taskfile: every harness minus the excluded.
@@ -133,6 +134,53 @@ rm -f "$repo/$envs/leftover.tmp"
 ts "printf x >$envs/scratch.tmp; rm $envs/scratch.tmp"; rc=$?
 [ "$rc" -ne 0 ] && grep -q 'a step wrote under envs/' "$TMP/out" && ok "…and so does one written and deleted again" \
   || bad "a file written then deleted (rc=$rc): $(tail -5 "$TMP/out")"
+
+echo "=== test-scripts SHARD=k/4: the four quarters are one run, CI runs them on four runners ==="
+# (script-shard.sh decides the split; its table is balanced on CI timings and a harness it does not list goes by checksum.)
+mocked="$repo/.receipts/mocked.jsonl"
+before="$(wc -l <"$mocked" 2>/dev/null || echo 0)"
+: >"$TMP/shards.log"
+sharded_ok=1
+for k in 1 2 3 4; do
+  ts true "" "$k/4"; rc=$?
+  [ "$rc" -eq 0 ] || { sharded_ok=0; bad "SHARD=$k/4 failed (rc=$rc): $(tail -5 "$TMP/out")"; }
+  cp "$RUN_LOG" "$TMP/shard$k.log"
+  cat "$RUN_LOG" >>"$TMP/shards.log"
+done
+[ "$sharded_ok" -eq 1 ] && [ "$(sort "$TMP/shards.log")" = "$got" ] \
+  && ok "SHARD=1/4..4/4 ran exactly what the unsharded task ran, each harness (new one included) in exactly one shard" \
+  || bad "the four shards differ from the unsharded run: $(diff <(echo "$got") <(sort "$TMP/shards.log") | head -12)"
+smallest="$(wc -l <"$TMP/shard1.log")"; largest="$smallest"
+for k in 2 3 4; do
+  c="$(wc -l <"$TMP/shard$k.log")"; [ "$c" -lt "$smallest" ] && smallest="$c"; [ "$c" -gt "$largest" ] && largest="$c"
+done
+[ "$smallest" -gt 2 ] && [ "$largest" -lt "$(wc -l <<<"$got")" ] \
+  && ok "every shard runs a share of the harnesses (smallest $smallest, largest $largest of $(wc -l <<<"$got"))" \
+  || bad "a shard runs (almost) nothing or everything: $smallest..$largest"
+head -n1 "$TMP/shard1.log" | grep -q '^check-jsonpath.sh$' && grep -qx 'check-required-checks.sh --self-test' "$TMP/shard1.log" \
+  && ! grep -qE '^check-(jsonpath|required-checks)' "$TMP/shard2.log" "$TMP/shard3.log" "$TMP/shard4.log" \
+  && ok "the two preface checks run first, in shard 1 only" || bad "the preface checks are not in shard 1 alone"
+[ "$(wc -l <"$mocked" 2>/dev/null || echo 0)" -eq "$before" ] && ok "a SHARD run records no receipt: a quarter of the harnesses is not the mocked rung" \
+  || bad "a SHARD run wrote a receipt: $(tail -n1 "$mocked")"
+[ "$before" -gt 0 ] && ok "…while the unsharded runs above did record theirs ($before)" || bad "no unsharded run recorded a receipt: the check above proves nothing"
+for odd in 0/4 5/4 1/3 x 1/; do
+  ts true "" "$odd"; rc=$?
+  [ "$rc" -ne 0 ] && ! grep -q '^test-' "$RUN_LOG" && ok "SHARD=$odd is refused before any harness runs" \
+    || bad "SHARD=$odd (rc=$rc) ran harnesses: $(grep -c '^test-' "$RUN_LOG")"
+done
+cp "$repo/scripts/dev/script-shard.sh" "$TMP/script-shard.good"
+sed -i '/^test-cluster-up.sh /a test-gone.sh 2' "$repo/scripts/dev/script-shard.sh"
+ts true "" 1/4; rc=$?
+[ "$rc" -ne 0 ] && grep -q 'test-gone.sh' "$TMP/out" && ! grep -q '^test-' "$RUN_LOG" \
+  && ok "a table line naming no harness fails the shard before it runs one" || bad "a stale table line (rc=$rc): $(tail -3 "$TMP/out")"
+cp "$TMP/script-shard.good" "$repo/scripts/dev/script-shard.sh"
+sed -i '/^test-cluster-up.sh /a test-cluster-up.sh 2' "$repo/scripts/dev/script-shard.sh"
+ts true "" 1/4; rc=$?
+[ "$rc" -ne 0 ] && grep -q 'twice' "$TMP/out" && ok "a harness listed twice fails the shard" || bad "a duplicate table line (rc=$rc): $(tail -3 "$TMP/out")"
+cp "$TMP/script-shard.good" "$repo/scripts/dev/script-shard.sh"
+out="$("$ROOT/scripts/dev/script-shard.sh" --check 2>&1)"; rc=$?
+[ "$rc" -eq 0 ] && ok "this tree's table names real harnesses and every one is in exactly one shard: $(tail -n1 <<<"$out")" \
+  || bad "script-shard.sh --check on this tree (rc=$rc): $out"
 
 echo "=== infra-down-plan plans a destroy although the image the tfvars pin is gone ==="
 # The provider modules' image lookups are read on a destroy plan too: a data source

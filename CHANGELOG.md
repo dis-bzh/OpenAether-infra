@@ -16,6 +16,12 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **CI splits `OpenTofu Tests` into five checks that run side by side**: `Script Tests (1/4)` to `Script Tests (4/4)` (the shell harnesses of `task test-scripts`, one quarter each) and `OpenTofu Unit Tests` (`task test`, `tofu test`).
+  Before, one job ran both in sequence: 917 s of harnesses, then 241 s of `tofu test`. `task test-scripts SHARD=k/4` runs quarter k; unset it runs everything, as before. `scripts/dev/script-shard.sh` is the split: a table of the 16 slowest
+  harnesses (balanced on the durations of one CI run), and every other harness by the checksum of its name, so a new `scripts/dev/test-*.sh` still needs no line anywhere and lands in exactly one shard. It refuses a table line
+  that names no harness or one listed twice. The two preface checks (`check-jsonpath.sh`, the `check-required-checks.sh` self-test) run in shard 1. A `SHARD` run records no `mocked` receipt: a quarter of the harnesses is not the rung.
+  The job named `OpenTofu Tests` stays as an alias that reports the verdict of the five (rename, phase A: it is deleted once `.github/rulesets/main.json` no longer requires it). The ruleset lists the old name and the five new ones.
+  Rung: mocked (`test-task-guards.sh` runs the real Taskfile with stub harnesses: the four shards together run exactly what the unsharded task runs, each harness once; what a CI run shows is in the PR).
 - **A document a harness reads is code, not documentation, for CI.** A diff made only of Markdown skipped the heavy jobs, although `test-flow-matrix.sh`, `test-evidence-age.sh`, `test-rung-receipts.sh` and `test-bootstrap-in-state.sh` assert on
   `docs/network.md` and its French twin, `docs/status.md`, `CONTRIBUTING.md`, the PR template and the cluster README. The docs-only rule moves from `ci.yml` into `scripts/dev/classify-changes.sh`, which lists those six files as code and compares moved files by both names (`git diff --no-renames`);
   `scripts/dev/test-docs-only-rule.sh` holds it. Replayed over the 194 commits since 2026-08-15: 22 were docs-only and 7 of them now run the tests, all 7 because of `docs/status.md` (the other five listed files flip none by themselves). A PR that edits only one of these files declares a rung like a code PR. Rung: mocked.

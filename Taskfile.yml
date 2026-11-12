@@ -409,12 +409,16 @@ tasks:
       PLAN_ONLY_RUN: >-
         {{if and (eq .TARGET "cluster-up") (or (eq (.PLAN_ONLY | default "") "1")
         (eq (.PLAN_ONLY | default "") "true"))}}1{{end}}
+      PARTIAL_RUN: '{{if and (eq .TARGET "test-scripts") .SHARD}}1{{end}}'
     cmds:
       # A dry run (DRY_RUN=1, or `-- --dry-run`) resolves and stops: it is no observation, and a
       # `real-cloud rc=0` receipt for it would satisfy the rung check with nothing run. So is a `cluster-up PLAN_ONLY=1`
       # (infra #412): it stops at the plan, and a `cluster-up rc=0` receipt for it would claim a journey that never ran.
+      #
+      # Nor is `test-scripts SHARD=k/4`: it runs one quarter of the harnesses, and a `test-scripts rc=0` receipt for it
+      # would vouch for the other three.
       - >-
-        {{if or .DRY_RUN (contains "--dry-run" .CLI_ARGS) .PLAN_ONLY_RUN}}true{{else}}python3
+        {{if or .DRY_RUN (contains "--dry-run" .CLI_ARGS) .PLAN_ONLY_RUN .PARTIAL_RUN}}true{{else}}python3
         scripts/dev/rung-receipt.py record "{{.TARGET}}" "{{.PROVIDER}}" "{{.RC}}" "{{.START}}"{{end}}
 
   receipts:
@@ -452,6 +456,8 @@ tasks:
       name resolving to the wrong CRD, an error read as an empty list, an rc
       capture `set -e` never reached. Seconds here instead of 25-90 minutes there.
       Runs every scripts/dev/test-*.sh except those scripts/dev/exclude-from-test-scripts.txt names.
+      SHARD=k/4 runs only the k-th quarter of them (scripts/dev/script-shard.sh decides which): CI runs the four
+      quarters on four runners. Unset, it runs everything, as it always did, and records its receipt.
     vars:
       # Made when the task starts. The last step fails on anything under envs/
       # newer than it: a file written there, even one deleted again (#191).
@@ -460,26 +466,35 @@ tasks:
       - defer: *receipt
       - defer: rm -f {{.ENVS_STAMP}}
       # jsonpath first: a query kubectl cannot parse makes every assertion below
-      # it meaningless, and this costs milliseconds.
-      - ./scripts/dev/check-jsonpath.sh
+      # it meaningless, and this costs milliseconds. With SHARD set, these two preface checks run in shard 1 only.
+      - cmd: ./scripts/dev/check-jsonpath.sh
+        if: '{{or (not .SHARD) (hasPrefix "1/" .SHARD)}}'
       # Each refusal of a check seen red and green against a canned API, not its HTTP layer; live, it runs in
       # repo-settings.yml and in an admin's release-checklist run (bypass actors need an admin token).
-      - ./scripts/dev/check-required-checks.sh --self-test
+      - cmd: ./scripts/dev/check-required-checks.sh --self-test
+        if: '{{or (not .SHARD) (hasPrefix "1/" .SHARD)}}'
       # Every harness, by glob (infra #400): a new scripts/dev/test-*.sh runs here without anyone remembering to
       # list it, which is the failure mode this target exists for ("a harness nobody invokes"). What it leaves out
       # is listed, each with its reason, in scripts/dev/exclude-from-test-scripts.txt; check-script-reachability.sh
       # holds every name there to a task that runs it. Alphabetical order, first failure stops (as the hand-kept
-      # list did).
+      # list did). With SHARD=k/4 the same loop skips what scripts/dev/script-shard.sh puts in another shard; that
+      # script refuses a malformed SHARD, so a typo cannot run nothing and pass.
       - |
         skip="$(sed -E 's/[[:space:]]*#.*//; /^[[:space:]]*$/d' scripts/dev/exclude-from-test-scripts.txt)" || exit 1
+        shard="{{.SHARD}}"
+        mine=""
+        if [ -n "$shard" ]; then
+          mine="$(./scripts/dev/script-shard.sh "$shard")" || exit 1
+        fi
         n=0
         for t in ./scripts/dev/test-*.sh; do
           if grep -qxF "${t#./scripts/dev/}" <<<"$skip"; then continue; fi
+          if [ -n "$shard" ] && ! grep -qxF "${t#./scripts/dev/}" <<<"$mine"; then continue; fi
           echo "task: [test-scripts] $t" >&2
           "$t" || { echo "✗ $t failed" >&2; exit 1; }
           n=$((n + 1))
         done
-        echo "$n harnesses ran under test-scripts"
+        echo "$n harnesses ran under test-scripts${shard:+ (shard $shard)}"
       - |
         written="$(find infrastructure/opentofu/cluster/envs -newer {{.ENVS_STAMP}})" || exit 1
         [ -z "$written" ] || { echo "✗ a step wrote under envs/:" $written >&2; exit 1; }
