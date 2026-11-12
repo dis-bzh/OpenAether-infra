@@ -415,8 +415,8 @@ jobs:
           AWS_SECRET_ACCESS_KEY: mock
           TF_VAR_encryption_passphrase: ci-mock-passphrase-for-validation-only-ci
 
-  # The name this job had when it was one job, kept alive while the ruleset still requires it: rename, phase A. It
-  # reports the verdict of the five checks that replaced it.
+  # The name this job had when it was one job. It stays for good as a required check (owner decision of 2026-11-12:
+  # no phase B, the ruleset keeps this name). It reports the verdict of the five checks that replaced it.
   # It runs only when the change touches code, like the job it replaces: on a docs-only diff the script shards report
   # success with their steps skipped, and an alias that said success there would claim tests ran.
   # `!cancelled()` and not the implicit success(): a red shard must turn this job red, not skip it (a skipped
