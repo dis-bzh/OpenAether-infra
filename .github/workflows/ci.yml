@@ -131,10 +131,18 @@ jobs:
   # (#120). Renovate, Dependabot and docs-only diffs may declare nothing; a rung
   # they do declare is checked. Required on main: a ruleset setting, which
   # repo-settings.yml compares with what reports.
+  #
+  # The rung mocked needs no pasted receipt when `test` (the job that runs
+  # `task test-scripts` and `task test`) is green on this head: CI is the
+  # receipt. So this job waits for `test`, and `!cancelled()` keeps it running
+  # when `test` is red or skipped: a skipped required check would let the PR
+  # through, and the script must say why a mocked claim has nothing behind it.
+  # scripts/dev/rung-receipt.py (CI_STANDS) names the job and the variable;
+  # test-rung-receipts.sh fails when they and this job disagree.
   rung:
     name: Rung receipt
-    if: github.event_name == 'pull_request'
-    needs: changes
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+    needs: [changes, test]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -150,6 +158,7 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           DOCS_ONLY: ${{ needs.changes.outputs.code == 'false' }}
+          CI_MOCKED_RESULT: ${{ needs.test.result }}
         run: python3 scripts/dev/rung-receipt.py check
 
   # Environment data — real IPs, account ids, bucket names — is what actually
