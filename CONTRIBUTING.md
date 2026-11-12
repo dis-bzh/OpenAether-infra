@@ -67,7 +67,9 @@ Renovate, Dependabot and docs-only diffs may declare
 nothing (an empty `Rung:` line, or `Rung: none (docs-only diff)`; the reason
 goes in brackets or after a dash, with a space before the bracket or the dash,
 `Rung: none — docs only`, not after a comma or a colon, nor glued to the word);
-a rung they declare is checked. Which targets record, and what a
+a rung they declare is checked. A diff that edits a document a harness reads (`docs/status.md`, for one;
+[`scripts/dev/classify-changes.sh`](scripts/dev/classify-changes.sh) lists them) is not docs-only: it declares a rung like any code change.
+Which targets record, and what a
 receipt proves and cannot: [`scripts/dev/rung-receipt.py`](scripts/dev/rung-receipt.py).
 
 The credentialed rung has no automatic CI lane: it is run by hand, by someone

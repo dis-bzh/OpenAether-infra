@@ -16,6 +16,9 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **A document a harness reads is code, not documentation, for CI.** A diff made only of Markdown skipped the heavy jobs, although `test-flow-matrix.sh`, `test-evidence-age.sh`, `test-rung-receipts.sh` and `test-bootstrap-in-state.sh` assert on
+  `docs/network.md` and its French twin, `docs/status.md`, `CONTRIBUTING.md`, the PR template and the cluster README. The docs-only rule moves from `ci.yml` into `scripts/dev/classify-changes.sh`, which lists those six files as code and compares moved files by both names (`git diff --no-renames`);
+  `scripts/dev/test-docs-only-rule.sh` holds it. Replayed over the 194 commits since 2026-08-15: 22 were docs-only and 7 of them now run the tests, all 7 because of `docs/status.md` (the other five listed files flip none by themselves). A PR that edits only one of these files declares a rung like a code PR. Rung: mocked.
 - **The rung `mocked` needs no pasted receipt: CI is the receipt.** The `Rung receipt` job of `ci.yml` now waits for `OpenTofu Tests` (`task test-scripts`, `task test`) and passes its result to `scripts/dev/rung-receipt.py`,
   which accepts `Rung: mocked` with nothing pasted when that job is green on the PR head; red, cancelled or skipped it fails and says which. A pasted receipt is judged as before for every rung, and emulated, local Docker and real cloud
   still need one (Feint Evidence is `continue-on-error` and CI never runs `feint-apply-root`, so CI cannot stand for emulated). `CI_STANDS` in the script is the one job-to-rung constant, and `test-rung-receipts.sh` fails when it and `ci.yml` disagree.
