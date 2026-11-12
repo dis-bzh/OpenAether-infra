@@ -523,8 +523,8 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       fix in the Alpine package, 10.3_p1-r2), and no fixed Flux image exists upstream on 2026-11-12. This release moves no image,
       so the run of the 0.4.5 tag is expected RED on `kustomize-controller:v1.10.1` and green on the nine other images; read it
       (`gh run view`), do not assume it. A red scan is a finding for the lead, not a waiver: tagging with it needs its own
-      recorded owner decision (hold for a fixed image, or accept the red with an issue open for it), and `CHANGELOG.md` `[0.4.5]`
-      "Known open" says so first.
+      recorded owner decision (hold for a fixed image, or accept the red with an issue open for it: #455, which carries the exposure read: no `sshd`
+      in the image), and `CHANGELOG.md` `[0.4.5]` "Known open" says so first.
 - [ ] no retest marker is left, in either repository or in the notes. `git grep -n 'RETEST-PENDIN[G]'` prints nothing
       here (`CHANGELOG.md` `[0.4.5]` carries no marker, its cloud results are written; the bracket keeps
       this line from matching itself), prints nothing in OpenAether-apps either
