@@ -466,6 +466,8 @@ degraded. Recreating the child (`task edge-down`, then re-enable its file) is
 faster and safer. The correct values are already in `apps/clusters/*.yaml` and
 `task apps-validate` checks that alignment.
 
+*One exception was measured, once (OpenAether-apps 0.4.5, Scaleway, one live 2-node child, 1 control plane + 1 worker, n=1):* a values change that touches only the rollout strategy (`updateStrategy.rollingUpdate.maxUnavailable: 1` on the agent DaemonSet and under `envoy.updateStrategy`) went through the Helm upgrade without restarting any pod, and the child API kept answering. **A change that alters the pod template or the ConfigMap was NOT tested**: it would roll the agents (one at a time since 0.4.5, so a rollout takes about twice as long), and the 2026-07-26 degradation is not known to have been strategy-only. The rule above stands for it.
+
 A healthy child on the `workload` profile shows **19/19 Kustomizations**. That
 count moves with every brick added to the DAG — check it with
 `python3 scripts/pick.py vault eso certs gateway`, do not read a change as a
