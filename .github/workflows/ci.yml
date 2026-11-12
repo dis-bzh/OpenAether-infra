@@ -651,3 +651,12 @@ jobs:
           # justified exceptions in .checkov.yaml (skip-check) rather than
           # silencing every finding.
           config_file: .checkov.yaml
+
+      # A custom check (CKV_OA_*) that silently stops firing leaves the scan above green. This mutates tracked
+      # files of this throw-away checkout and expects each rule to catch its mutation (#396).
+      - name: Install checkov
+        # renovate: datasource=pypi depName=checkov
+        run: pip install checkov==3.3.30
+
+      - name: Self-test the custom checks
+        run: ./scripts/dev/test-checkov-custom-checks.sh

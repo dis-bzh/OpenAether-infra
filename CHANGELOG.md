@@ -14,6 +14,12 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ## [Unreleased]
 
+### Changed
+
+- **CI runs the self-test of the custom checks** (#396): the `IaC Security Scan` job installs checkov at the `setup.sh` pin and runs `scripts/dev/test-checkov-custom-checks.sh`,
+  which proves each CKV_OA_* rule still fires on a mutated tree. Only `task security` ran it before, so a custom check that silently stopped firing left CI green.
+  `check-version-drift.sh` now compares the two checkov pins. Rung: mocked (the self-test run in CI, red when a check is neutered and green when restored: see the PR).
+
 ## [0.4.4] — 2026-11-08
 
 0.4.4 is a **debt release** of 0.4.3 (no feature), the infra half of the pair with OpenAether-apps 0.4.4 (tagged first; its scope, among it the PostgreSQL image change, dis-bzh/OpenAether-apps#162 and dis-bzh/OpenAether-apps#163, is in its own CHANGELOG). A bare `#N` is an issue of this repository. **No resource, module or input variable changed**: the one OpenTofu addition is a root output, `applied_switches`; the other `.tf` edits are comments and descriptions (identical to 0.4.3 once stripped, for `lb.tf` and the two `variables.tf`). No Talos, Kubernetes, Cilium, Flux or provider version moved and the Flux manifests and `flux-image-digests.lock` are byte-identical to 0.4.3, so `task cluster-bootstrap-sync` is not needed and no node rolled in any lab move. **CLI CONTRACT CHANGE: `task purge-orphans ... APPLY=1` now needs `PROJECT_ID=<id>`** (#342). The version cut moves the apps pin to `refs/tags/0.4.4`.
