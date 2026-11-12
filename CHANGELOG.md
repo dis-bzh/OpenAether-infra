@@ -14,6 +14,10 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ## [Unreleased]
 
+### Added
+
+- **`scripts/ops/flux-timeline.py`, the per-Kustomization / HelmRelease timeline of an install (0.5.0, M0, apps #128).** It reads `kubectl get kustomizations.kustomize.toolkit.fluxcd.io,helmreleases.helm.toolkit.fluxcd.io -A -o json` (a file or standard input; no cluster call of its own) and prints, per object, the seconds from the first creation to its creation and to Ready, the wait, and `dependsOn`, then the `dependsOn` chain that ends last with the time each link added. Ready is the last transition, so run it once the install has settled. Offline harness `test-flux-timeline.sh`. Rung: mocked.
+
 ### Changed
 
 - **`Feint Evidence (scaleway)` and `(outscale)` no longer carry a job-level `continue-on-error`.** The flag never made these required checks pass: a failed job still concludes `failure`
