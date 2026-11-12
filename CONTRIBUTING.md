@@ -50,9 +50,20 @@ tree was clean (untracked files count), UTC time, provider. `task receipts`
 prints the ones for `HEAD`; paste them under `Rung:` in the pull request
 ([template](.github/pull_request_template.md)). The **Rung receipt** job fails
 unless a target that stands for the declared rung has a green receipt for the
-PR's head commit, started on a clean tree, and fails on any pasted red run at or
-below that rung. A plan alone does not stand for real cloud. After a push,
-re-run and paste again. Renovate, Dependabot and docs-only diffs may declare
+PR's head commit (mocked has another way, below), started on a clean tree, and
+fails on any pasted red run at or below that rung. A plan alone does not stand for real cloud. After a push,
+re-run and paste again.
+
+**Mocked needs no pasted receipt: CI is the receipt.** With `Rung: mocked` and
+nothing pasted, the **Rung receipt** job waits for **OpenTofu Tests** (it runs
+`task test-scripts` and `task test`) and passes when that job is green on the
+PR's head commit; red, cancelled or skipped, it fails and says which (the tests
+do not run on a docs-only diff, which declares nothing, below). A receipt
+pasted for mocked is judged like any other. Emulated, local Docker and real
+cloud still need a pasted receipt: no CI job stands for them (the Feint
+Evidence jobs are `continue-on-error` and CI never runs `feint-apply-root`).
+
+Renovate, Dependabot and docs-only diffs may declare
 nothing (an empty `Rung:` line, or `Rung: none (docs-only diff)`; the reason
 goes in brackets or after a dash, with a space before the bracket or the dash,
 `Rung: none — docs only`, not after a comma or a colon, nor glued to the word);

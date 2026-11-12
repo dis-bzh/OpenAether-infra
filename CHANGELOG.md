@@ -16,6 +16,10 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **The rung `mocked` needs no pasted receipt: CI is the receipt.** The `Rung receipt` job of `ci.yml` now waits for `OpenTofu Tests` (`task test-scripts`, `task test`) and passes its result to `scripts/dev/rung-receipt.py`,
+  which accepts `Rung: mocked` with nothing pasted when that job is green on the PR head; red, cancelled or skipped it fails and says which. A pasted receipt is judged as before for every rung, and emulated, local Docker and real cloud
+  still need one (Feint Evidence is `continue-on-error` and CI never runs `feint-apply-root`, so CI cannot stand for emulated). `CI_STANDS` in the script is the one job-to-rung constant, and `test-rung-receipts.sh` fails when it and `ci.yml` disagree.
+  `CONTRIBUTING.md`, the PR template and `docs/release-checklist.md` say so. Rung: mocked (`test-rung-receipts.sh`: 25 new cases and the `ci.yml` guard; see the PR for its own `Rung receipt` run).
 - **CI runs the self-test of the custom checks** (#396): the `IaC Security Scan` job installs checkov at the `setup.sh` pin and runs `scripts/dev/test-checkov-custom-checks.sh`,
   which proves each CKV_OA_* rule still fires on a mutated tree. Only `task security` ran it before, so a custom check that silently stopped firing left CI green.
   `check-version-drift.sh` now compares the two checkov pins. Rung: mocked (the self-test run in CI, red when a check is neutered and green when restored: see the PR).
