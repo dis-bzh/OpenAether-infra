@@ -39,7 +39,6 @@ signé ou inconnu à partir de la 1.0.0.
 |---|---|---|---|
 | Clé de release du VPS (Vincent Dislaire, ed25519, expire le 2028-10-17) | `1D5895FDC14F5BAD6D1B170B5CA26229559044A2` | `docs/signers/release-vps.asc` | tags de release et commits des branches de release |
 | GitHub `web-flow` (clé de signature des commits) | `968479A1AFF927E37D1A566BB5690EEEBB952194` | `docs/signers/web-flow.asc` | squash et merges web. Prise sur `https://github.com/web-flow.gpg` (qui liste aussi une ancienne clé, expirée le 2024-01-16, non gardée) |
-| Clé propre du mainteneur | **À REMPLIR : le propriétaire donne l'empreinte (l'ancienne clé a été supprimée)** | le fichier `maintainer.asc` dans `docs/signers/` une fois donnée | commits |
 
 `docs/signers/signers.txt` contient les empreintes sous forme lisible par machine (lu par `scripts/dev/check-release-tag.sh`) ; les fichiers `.asc`
 sont les clés publiques seules (`gpg --armor --export <empreinte>`), à passer à `flux_git_verify.public_keys` avec `file()`. Comparer une empreinte
@@ -52,7 +51,7 @@ appliqué (le dernier artefact sain reste) ; le source-controller vendu n'a pas 
 d'avertissement de la 0.4.0 se compose donc de ce que le dépôt a : le job CI `commits` signale les commits non signés ou mal signés
 (`check-commit-signatures.sh`, sans `--strict`), le ruleset de `main` exige les signatures une fois activé par le propriétaire (#333), et
 `flux_git_verify` reste `enabled = false` par défaut. Pour essayer la vérification elle-même avant la 1.0.0, l'activer sur un cluster de dev seulement,
-avec les trois clés, et lire `SourceVerified` ; une erreur coûte une source NotReady que la section « Bris de glace » défait. Le manque (pas de vrai mode
+avec les deux clés ci-dessus, et lire `SourceVerified` ; une erreur coûte une source NotReady que la section « Bris de glace » défait. Le manque (pas de vrai mode
 avertissement dans Flux) est consigné sur #332 ; « refuser » est simplement `enabled = true` en production à la 1.0.0.
 
 ## Étape 2 - côté cluster (désactivé par défaut)
@@ -60,7 +59,7 @@ avertissement dans Flux) est consigné sur #332 ; « refuser » est simplement `
 ```hcl
 flux_git_verify = {
   enabled     = true
-  public_keys = [file("maintainer.asc"), file("web-flow.asc")]   # gpg --armor --export <id> ; clés publiques seulement
+  public_keys = [file("release-vps.asc"), file("web-flow.asc")]   # gpg --armor --export <id> ; clés publiques seulement
 }
 ```
 

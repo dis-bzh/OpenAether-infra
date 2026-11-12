@@ -36,7 +36,6 @@ from 1.0.0.
 |---|---|---|---|
 | VPS release key (Vincent Dislaire, ed25519, expires 2028-10-17) | `1D5895FDC14F5BAD6D1B170B5CA26229559044A2` | `docs/signers/release-vps.asc` | release tags and the commits of the release branches |
 | GitHub `web-flow` (commit signing key) | `968479A1AFF927E37D1A566BB5690EEEBB952194` | `docs/signers/web-flow.asc` | squash and web merges. Taken from `https://github.com/web-flow.gpg` (which also lists an older key, expired 2024-01-16, not kept) |
-| Maintainer's own key | **TO FILL: the owner gives the fingerprint (the previous key was deleted)** | a file `maintainer.asc` in `docs/signers/` once given | commits |
 
 `docs/signers/signers.txt` holds the fingerprints in a machine-readable form (read by `scripts/dev/check-release-tag.sh`); the `.asc` files are the
 public keys only (`gpg --armor --export <fingerprint>`), the ones to pass to `flux_git_verify.public_keys` with `file()`. Check a fingerprint
@@ -48,7 +47,7 @@ Flux has **no warning mode**: with `spec.verify` set, a commit that fails verifi
 good artifact stays); there is no "log and apply anyway" setting in the vendored source-controller. So the warning period of 0.4.0 is made of what this
 repository does have: the `commits` CI job reports unsigned or badly signed commits as warnings (`check-commit-signatures.sh`, without `--strict`), the
 ruleset on `main` requires signatures once the owner enables it (#333), and `flux_git_verify` stays `enabled = false` by default. To try the verification
-itself before 1.0.0, enable it on a dev cluster only, with the three keys above, and read `SourceVerified`; the cost of a mistake there is a NotReady
+itself before 1.0.0, enable it on a dev cluster only, with the two keys above, and read `SourceVerified`; the cost of a mistake there is a NotReady
 source that the break-glass section below undoes. The gap (no real warning mode in Flux) is recorded on #332; `Refuse` is simply `enabled = true` in production at 1.0.0.
 
 ## Stage 2 - the cluster side (default off)
@@ -56,7 +55,7 @@ source that the break-glass section below undoes. The gap (no real warning mode 
 ```hcl
 flux_git_verify = {
   enabled     = true
-  public_keys = [file("maintainer.asc"), file("web-flow.asc")]   # gpg --armor --export <id>; public keys only
+  public_keys = [file("release-vps.asc"), file("web-flow.asc")]   # gpg --armor --export <id>; public keys only
 }
 ```
 
