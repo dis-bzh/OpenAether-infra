@@ -55,13 +55,21 @@ fails on any pasted red run at or below that rung. A plan alone does not stand f
 re-run and paste again.
 
 **Mocked needs no pasted receipt: CI is the receipt.** With `Rung: mocked` and
-nothing pasted, the **Rung receipt** job waits for **OpenTofu Tests** (it runs
-`task test-scripts` and `task test`) and passes when that job is green on the
-PR's head commit; red, cancelled or skipped, it fails and says which (the tests
-do not run on a docs-only diff, which declares nothing, below). A receipt
-pasted for mocked is judged like any other. Emulated, local Docker and real
-cloud still need a pasted receipt: no CI job stands for them (the Feint
-Evidence jobs are `continue-on-error` and CI never runs `feint-apply-root`).
+nothing pasted, the **Rung receipt** job passes on a diff that is not docs-only:
+the CI test jobs (`task test-scripts`, `task test`) are required checks of their
+own, a red one blocks the merge whatever this job says, and this job does not
+wait for them. A docs-only diff runs none of them and declares nothing, below,
+so `Rung: mocked` with nothing pasted fails there. A receipt pasted for mocked is
+judged like any other. Emulated, local Docker and real cloud still need a pasted
+receipt: no CI job stands for them (CI never runs
+`feint-apply-root`, and the Feint Evidence jobs run the reduced fixture).
+
+**Editing the pull request does not re-run CI.** A change of the body or the
+title re-runs only **Rung receipt**, which has its own workflow
+([`rung.yml`](.github/workflows/rung.yml)): pasting a receipt costs seconds, not
+a new run of every job. A change of the **base branch** turns that job red, since
+no test re-runs on the new base: push a commit, or close and reopen the pull
+request.
 
 Renovate, Dependabot and docs-only diffs may declare
 nothing (an empty `Rung:` line, or `Rung: none (docs-only diff)`; the reason

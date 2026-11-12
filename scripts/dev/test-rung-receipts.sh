@@ -54,33 +54,84 @@ sys.exit(1 if problems else 0)
 PY
 )"; then ok "$out"; else bad "$out"; fi
 
-# CI_STANDS names the job that stands for a rung and the variable that carries its result: the `rung` job of
-# ci.yml must wait for that job (so its result exists), keep running when it is red or skipped (a skipped
-# required check passes the PR), and pass the result under that name.
+# `Rung receipt` is the one check that reads the PR body, so it is its own workflow (rung.yml): the only one that runs
+# on `edited`, and the only one that reads the body. ci.yml and rung.yml must agree on what is left: one job of that
+# name, one place that reports it, the variables the script reads, and no other workflow restarted by an edit.
 if out="$(python3 - "$ROOT" <<'PY'
-import importlib.util, re, sys
+import glob, json, os, re, sys
+import yaml
 root = sys.argv[1]
-spec = importlib.util.spec_from_file_location("rr", f"{root}/scripts/dev/rung-receipt.py")
-rr = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(rr)
-ci = open(f"{root}/.github/workflows/ci.yml").read()
-job = re.search(r"^  rung:\n(.*?)(?=^  \S)", ci, re.M | re.S)
-problems = [] if job else ["ci.yml has no `rung` job"]
-if job:
-    block = job.group(1)
-    needs = re.search(r"^    needs: \[([^\]]*)\]", block, re.M)
-    needed = {n.strip() for n in needs.group(1).split(",")} if needs else set()
-    if not re.search(r"^    if: .*!cancelled\(\)", block, re.M):
-        problems.append("the `rung` job has no `!cancelled()` in its `if:`: a red or skipped job it needs would skip it")
-    for rung, (var, name) in rr.CI_STANDS.items():
-        ids = re.findall(rf"^  ([\w-]+):\n    name: {re.escape(name)}\n", ci, re.M)
-        if len(ids) != 1:
-            problems.append(f"{rung}: CI_STANDS names {name!r}, ci.yml has {len(ids)} such jobs")
-        elif ids[0] not in needed:
-            problems.append(f"{rung}: the `rung` job does not need `{ids[0]}` ({name})")
-        elif not re.search(rf"^ +{var}: \$\{{\{{ needs\.{ids[0]}\.result \}}\}}$", block, re.M):
-            problems.append(f"{rung}: the `rung` job does not pass `needs.{ids[0]}.result` as {var}")
-print("\n".join(problems) or f"{len(rr.CI_STANDS)} rung(s) stood for by a CI job: ci.yml waits for it and passes its result")
+NAME, APP = "Rung receipt", 15368
+src = open(f"{root}/scripts/dev/rung-receipt.py").read()
+wf, raw = {}, {}
+for path in sorted(glob.glob(f"{root}/.github/workflows/*.y*ml")):
+    f = os.path.basename(path)
+    raw[f] = open(path).read()
+    wf[f] = yaml.safe_load(raw[f])
+    wf[f]["on"] = wf[f].pop(True, wf[f].get("on"))  # YAML 1.1 reads a bare `on` as true
+pr = lambda f: (wf[f]["on"] or {}).get("pull_request") or {}
+problems = []
+
+holders = [f"{f}:{j}" for f, d in wf.items() for j, v in d["jobs"].items() if v.get("name") == NAME]
+if [h.split(":")[0] for h in holders] != ["rung.yml"]:
+    problems.append(f"{NAME!r} is the name of {holders or 'no job'}: exactly one job of rung.yml must carry it")
+ruleset = json.load(open(f"{root}/.github/rulesets/main.json"))
+required = [c for r in ruleset["rules"] if r["type"] == "required_status_checks"
+            for c in r["parameters"]["required_status_checks"] if c["context"] == NAME]
+if len(required) != 1 or required[0].get("integration_id") != APP:
+    problems.append(f"the ruleset must require {NAME!r} once, from GitHub Actions ({APP}): {required}")
+
+rung = wf.get("rung.yml")
+if rung is None:
+    problems.append("no .github/workflows/rung.yml")
+else:
+    if set(rung["on"] or {}) != {"pull_request"}:
+        problems.append("rung.yml must run on pull_request only")
+    if set(pr("rung.yml").get("types") or []) != {"opened", "synchronize", "reopened", "edited"}:
+        problems.append("rung.yml must run on opened, synchronize, reopened and edited")
+    if set(pr("rung.yml")) != {"types"}:
+        problems.append("rung.yml filters pull_request: a PR on another branch would get no `Rung receipt`")
+    if len(rung["jobs"]) != 1:
+        problems.append("rung.yml must hold one job: a second one is a second check to require")
+    if rung.get("permissions") != {"contents": "read"}:
+        problems.append("rung.yml must grant contents: read and nothing else")
+    c = rung.get("concurrency") or {}
+    if c.get("cancel-in-progress") is not True or "pull_request.number" not in str(c.get("group")):
+        problems.append("rung.yml must cancel a superseded run, one group per pull request")
+    job = next(iter(rung["jobs"].values()), {})
+    if {"if", "continue-on-error", "permissions"} & set(job):
+        problems.append("rung.yml: the job has no `if`, `continue-on-error` or job-level permissions: a skipped or soft required check passes")
+    steps = [s for j in rung["jobs"].values() for s in j["steps"]]
+    for n, s in enumerate(steps):
+        if "continue-on-error" in s or (n and "if" in s):
+            problems.append(f"rung.yml: step {s.get('name')!r} must not be conditional or soft (only the base-change guard may be)")
+    for s in steps:
+        if "${{" in str(s.get("run", "")):
+            problems.append(f"rung.yml: an expression inside `run:` ({s.get('name')}): pass it through env")
+        if "uses" in s and not re.fullmatch(r"[\w./-]+@[0-9a-f]{40}", s["uses"]):
+            problems.append(f"rung.yml: {s['uses']} is not pinned to a commit")
+    check = [s for s in steps if "rung-receipt.py check" in str(s.get("run"))]
+    if len(check) != 1:
+        problems.append(f"rung.yml runs `rung-receipt.py check` {len(check)} times, want once")
+    else:
+        read, passed = set(re.findall(r'os\.environ\.get\("(\w+)"', src)), set(check[0].get("env") or {})
+        if read != passed:
+            problems.append(f"the step passes {sorted(passed)}, rung-receipt.py reads {sorted(read)}")
+        if (check[0].get("env") or {}).get("DOCS_ONLY") != "${{ steps.classify.outputs.code == 'false' }}":
+            problems.append("rung.yml: DOCS_ONLY must be the verdict of the classify step, code == 'false'")
+    guard = [n for n, s in enumerate(steps) if "github.event.changes.base" in str(s.get("if"))]
+    if guard != [0] or "'edited'" not in steps[0]["if"] or "exit 1" not in steps[0]["run"]:
+        problems.append("rung.yml: the first step must fail on an `edited` event that changes the base branch")
+
+for f in wf:
+    if f != "rung.yml" and "edited" in (pr(f).get("types") or []):
+        problems.append(f"{f} runs on `edited`: an edit of a body would restart it, and only rung.yml may")
+    if f != "rung.yml" and re.search(r"github\.event\.pull_request\.(body|title)", raw[f]):
+        problems.append(f"{f} reads the PR body or title: only rung.yml re-runs on an edit")
+if "rung-receipt.py" in raw["ci.yml"] or "rung" in wf["ci.yml"]["jobs"]:
+    problems.append("ci.yml still holds the rung job: it moved to rung.yml")
+print("\n".join(problems) or f"{NAME!r} is one job of rung.yml (required, GitHub Actions), reads the {len(read)} variables "
+      "the script reads, and no other workflow runs on `edited` or reads the body")
 sys.exit(1 if problems else 0)
 PY
 )"; then ok "$out"; else bad "$out"; fi
@@ -208,11 +259,10 @@ echo
 echo "=== the PR check: declared rung against the pasted receipt ==="
 
 # <name> <want rc> <want text> <author> <docs_only> <head> <body>. Any body is judged
-# within 2 s: rc 124 is the timeout. `ci_result=<result> expect …` is what ci.yml's `rung` job passes as
-# the result of the test job (success, failure, cancelled, skipped); none by default, as outside CI.
+# within 2 s: rc 124 is the timeout.
 expect() {
   local name="$1" want="$2" text="$3" out rc
-  out="$(PR_AUTHOR="$4" DOCS_ONLY="$5" PR_HEAD_SHA="$6" PR_BODY="$7" CI_MOCKED_RESULT="${ci_result:-}" \
+  out="$(PR_AUTHOR="$4" DOCS_ONLY="$5" PR_HEAD_SHA="$6" PR_BODY="$7" \
     timeout 2 python3 "$ROOT/scripts/dev/rung-receipt.py" check 2>&1)"; rc=$?
   if [ "$rc" -eq "$want" ] && grep -qF -- "$text" <<<"$out" && [ "$(wc -l <<<"$out")" -eq 1 ]; then
     ok "$name"
@@ -437,46 +487,31 @@ done < <(grep -ohE '`(Rung: )?none[^`]+`' "$ROOT/CONTRIBUTING.md" "$ROOT/.github
   || bad "CONTRIBUTING.md and the PR template give $n examples of 'Rung: none' with a reason, want at least 2"
 expect "a head that is not a sha is refused" 1 "not a commit sha" h false "" "$(body emulated "$GREEN")"
 
-# CI is the receipt for the rung mocked: the result of the job that runs `task test-scripts` and `task test` on
-# this head (CI_STANDS). Every other rung, and any pasted receipt, is judged as without it.
-green_ci="mocked at ${sha:0:12}: no receipt pasted, OpenTofu Tests is green on this head"
-ci_result=success expect "CI: mocked declared, no receipt, the test job is green: passes" 0 "$green_ci" h false "$sha" "$(body mocked)"
-ci_result=success expect "CI: …with no receipts block at all" 0 "$green_ci" h false "$sha" "$(printf 'Rung: mocked\n')"
-ci_result=success expect "CI: …the template's label 'mocked' in capitals" 0 "$green_ci" h false "$sha" "$(body MOCKED)"
-ci_result=failure expect "CI: mocked declared, no receipt, the test job is red: refused" 1 \
-  'OpenTofu Tests did not pass on this head (result "failure")' h false "$sha" "$(body mocked)"
-ci_result=cancelled expect "CI: mocked declared, no receipt, the test job was cancelled: refused" 1 \
-  'OpenTofu Tests did not pass on this head (result "cancelled")' h false "$sha" "$(body mocked)"
-ci_result=skipped expect "CI: mocked declared, no receipt, the test job was skipped: refused" 1 \
-  "OpenTofu Tests was skipped" h false "$sha" "$(body mocked)"
-ci_result=skipped expect "CI: …and on a docs-only diff too, with the way out in the message" 1 \
-  'Rung: none (docs-only diff)' h true "$sha" "$(body mocked)"
-ci_result= expect "CI: mocked declared, no result passed (outside CI): the pasted receipt is asked for" 1 \
-  "no receipt pasted: \`task receipts\`" h false "$sha" "$(body mocked)"
-ci_result=$'x\n::error::y' expect "CI: a hostile result stays on one log line" 1 'did not pass on this head (result "x\n::error::y")' \
-  h false "$sha" "$(body mocked)"
-ci_result=success expect "CI: green CI does not stand for emulated" 1 "emulated declared, no receipt pasted" h false "$sha" "$(body emulated)"
-ci_result=success expect "CI: …nor for local Docker" 1 "local Docker declared, no receipt pasted" h false "$sha" "$(body 'local Docker')"
-ci_result=success expect "CI: …nor for real cloud" 1 "real cloud declared, no receipt pasted" h false "$sha" "$(body 'real cloud')"
-ci_result=success expect "CI: …nor for 'emulated (Feint)' from the template" 1 "emulated declared, no receipt pasted" h false "$sha" "$(body 'emulated (Feint)')"
-ci_result=success expect "CI: a green job is no declaration: a code PR with none is refused" 1 "no rung declared" h false "$sha" "Fixes a thing."
-ci_result=success expect "CI: …and the untouched template declares nothing" 1 "no rung declared" h false "$sha" "$template"
-ci_result=success expect "CI: …and a word that is no rung" 1 "is not one of" h false "$sha" "$(body tested)"
-ci_result=success expect "CI: mocked declared, only an emulated receipt pasted: still refused" 1 "no receipt is for it" h false "$sha" \
+# The rung mocked is what the CI test jobs run, and they are required checks of their own: on a diff that is not docs-only
+# the rung needs no pasted receipt and waits for nothing. Every other rung, and any pasted receipt, is judged as ever.
+green="mocked at ${sha:0:12}: no receipt pasted, the CI test jobs are separate required checks"
+expect "mocked declared, no receipt: passes, the test jobs are required checks of their own" 0 "$green" h false "$sha" "$(body mocked)"
+expect "mocked, …with no receipts block at all" 0 "$green" h false "$sha" "$(printf 'Rung: mocked\n')"
+expect "mocked, …the template's label in capitals" 0 "$green" h false "$sha" "$(body MOCKED)"
+expect "mocked, …as the template's own line with nothing else filled in" 0 "$green" h false "$sha" "$(printf '%s\n' "$template" | sed 's/^Rung:$/Rung: mocked/')"
+expect "mocked on a docs-only diff, no receipt: refused, with the way out in the message" 1 'Rung: none (docs-only diff)' h true "$sha" "$(body mocked)"
+expect "emulated declared, no receipt: still refused" 1 "emulated declared, no receipt pasted" h false "$sha" "$(body emulated)"
+expect "…so is local Docker" 1 "local Docker declared, no receipt pasted" h false "$sha" "$(body 'local Docker')"
+expect "…so is real cloud" 1 "real cloud declared, no receipt pasted" h false "$sha" "$(body 'real cloud')"
+expect "…and the template's 'emulated (Feint)'" 1 "emulated declared, no receipt pasted" h false "$sha" "$(body 'emulated (Feint)')"
+expect "a code PR that declares nothing is refused, mocked is no default" 1 "no rung declared" h false "$sha" "Fixes a thing."
+expect "…and so is the untouched template" 1 "no rung declared" h false "$sha" "$template"
+expect "…and a word that is no rung" 1 "is not one of" h false "$sha" "$(body tested)"
+expect "mocked declared, only an emulated receipt pasted: still refused" 1 "no receipt is for it" h false "$sha" \
   "$(body mocked "$GREEN")"
-ci_result=success expect "CI: a pasted mocked receipt still passes, and is the one named" 0 "mocked at ${sha:0:12}: test green" h false "$sha" \
+expect "a pasted mocked receipt passes, and is the one named" 0 "mocked at ${sha:0:12}: test green" h false "$sha" \
   "$(body mocked "$MOCKED")"
-ci_result=failure expect "CI: a pasted green mocked receipt passes whatever the job says (it is judged as ever)" 0 "mocked at ${sha:0:12}: test green" \
-  h false "$sha" "$(body mocked "$MOCKED")"
-ci_result=skipped expect "CI: …a skipped job too" 0 "mocked at ${sha:0:12}: test green" h true "$sha" "$(body mocked "$MOCKED")"
-ci_result=success expect "CI: a pasted red mocked receipt fails beside a green job" 1 "is red: test-scripts" h false "$sha" \
-  "$(body mocked "$MOCKED_RED")"
-ci_result=success expect "CI: a pasted receipt for another commit fails beside a green job" 1 "the PR head is" h false "$other" \
+expect "a pasted mocked receipt is judged on a docs-only diff too" 0 "mocked at ${sha:0:12}: test green" h true "$sha" \
   "$(body mocked "$MOCKED")"
-ci_result=success expect "CI: a pasted red run below the declared rung fails beside a green job" 1 "is red: test-scripts" h false "$sha" \
+expect "a pasted red mocked receipt fails" 1 "is red: test-scripts" h false "$sha" "$(body mocked "$MOCKED_RED")"
+expect "a pasted receipt for another commit fails" 1 "the PR head is" h false "$other" "$(body mocked "$MOCKED")"
+expect "a pasted red run below the declared rung fails" 1 "is red: test-scripts" h false "$sha" \
   "$(body emulated "$GREEN" "$MOCKED_RED")"
-ci_result=success expect "CI: renovate[bot] with nothing declared still passes on its own rule" 0 "renovate[bot]" "renovate[bot]" false "$sha" "Bumps a pin."
-ci_result=skipped expect "CI: …and a docs-only diff declaring nothing too" 0 "docs-only" h true "$sha" "$template"
 
 echo
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"

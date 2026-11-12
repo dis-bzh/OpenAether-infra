@@ -3,12 +3,15 @@ name: Security
 on:
   push:
     branches: [main]
-  # No `branches` filter and `edited` added, both measured on PR #100: a PR
-  # based on another PR's branch got NO run at all (not a red one — none), and
-  # retargeting it to main fired only `edited`, which the default types skip.
-  # An unvalidated stacked PR looks exactly like a green one in the list.
+  # No `branches` filter, measured on PR #100: a PR based on another PR's branch
+  # got NO run at all (not a red one — none). An unvalidated stacked PR looks
+  # exactly like a green one in the list.
+  #
+  # GitHub's default types, written out on purpose: neither job reads the PR, so
+  # an edit of its body or title has nothing to re-check. A changed base branch
+  # turns `Rung receipt` (rung.yml) red until a push or a reopen runs this again.
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -59,8 +62,8 @@ jobs:
   # 0.1.0 deleted the credentialed lane: no workflow that runs on a pull request
   # touches a cloud account (real-cloud-regression.yml is manual-only, dormant).
   # That removes the worst blast radius and removes nothing else: these
-  # two workflows still run on every pull request, with a token, against a
-  # public repository.
+  # workflows (ci, security, rung) still run on every pull request, with a token,
+  # against a public repository.
   # ---------------------------------------------------------------------------
   pipeline-audit:
     name: Pipeline audit

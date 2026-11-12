@@ -16,6 +16,10 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **Editing a pull request body or title no longer restarts CI.** `Rung receipt` moves from `ci.yml` to its own workflow, `.github/workflows/rung.yml` (same check name, same GitHub Actions app, so the ruleset is unchanged); it is the only one that runs on `edited`.
+  `ci.yml` and `security.yml` drop `edited` from their `pull_request` types. Pasting a receipt used to cancel and restart every job; it now re-runs one short check. A change of the base branch makes `Rung receipt` fail with the way out (push, or close and reopen), since no test re-runs on the new base.
+  `Rung: mocked` with nothing pasted passes when the diff is not docs-only and fails on a docs-only diff: a workflow of its own cannot wait for a `ci.yml` job, and the test jobs are required checks of their own.
+  `test-rung-receipts.sh` guards that `rung.yml` is the one job of that name and the one workflow that reads the body or runs on `edited`. Rung: mocked.
 - **CI splits `OpenTofu Tests` into five checks that run side by side**: `Script Tests (1/4)` to `Script Tests (4/4)` (the shell harnesses of `task test-scripts`, one quarter each) and `OpenTofu Unit Tests` (`task test`, `tofu test`).
   Before, one job ran both in sequence: 917 s of harnesses, then 241 s of `tofu test`. `task test-scripts SHARD=k/4` runs quarter k; unset it runs everything, as before. `scripts/dev/script-shard.sh` is the split: a table of the 16 slowest
   harnesses (balanced on the durations of one CI run), and every other harness by the checksum of its name, so a new `scripts/dev/test-*.sh` still needs no line anywhere and lands in exactly one shard. It refuses a table line
@@ -25,10 +29,9 @@ in git. 0.1.0 is the first entry describing something proven.
 - **A document a harness reads is code, not documentation, for CI.** A diff made only of Markdown skipped the heavy jobs, although `test-flow-matrix.sh`, `test-evidence-age.sh`, `test-rung-receipts.sh` and `test-bootstrap-in-state.sh` assert on
   `docs/network.md` and its French twin, `docs/status.md`, `CONTRIBUTING.md`, the PR template and the cluster README. The docs-only rule moves from `ci.yml` into `scripts/dev/classify-changes.sh`, which lists those six files as code and compares moved files by both names (`git diff --no-renames`);
   `scripts/dev/test-docs-only-rule.sh` holds it. Replayed over the 194 commits since 2026-08-15: 22 were docs-only and 7 of them now run the tests, all 7 because of `docs/status.md` (the other five listed files flip none by themselves). A PR that edits only one of these files declares a rung like a code PR. Rung: mocked.
-- **The rung `mocked` needs no pasted receipt: CI is the receipt.** The `Rung receipt` job of `ci.yml` now waits for `OpenTofu Tests` (`task test-scripts`, `task test`) and passes its result to `scripts/dev/rung-receipt.py`,
-  which accepts `Rung: mocked` with nothing pasted when that job is green on the PR head; red, cancelled or skipped it fails and says which. A pasted receipt is judged as before for every rung, and emulated, local Docker and real cloud
-  still need one (Feint Evidence is `continue-on-error` and CI never runs `feint-apply-root`, so CI cannot stand for emulated). `CI_STANDS` in the script is the one job-to-rung constant, and `test-rung-receipts.sh` fails when it and `ci.yml` disagree.
-  `CONTRIBUTING.md`, the PR template and `docs/release-checklist.md` say so. Rung: mocked (`test-rung-receipts.sh`: 25 new cases and the `ci.yml` guard; see the PR for its own `Rung receipt` run).
+- **The rung `mocked` needs no pasted receipt: CI is the receipt.** `scripts/dev/rung-receipt.py` accepts `Rung: mocked` with nothing pasted when the diff is not docs-only (the test jobs run `task test-scripts` and `task test`, and they are required checks of their own); on a docs-only diff it fails and says so.
+  A pasted receipt is judged as before for every rung, and emulated, local Docker and real cloud still need one (CI never runs `feint-apply-root`, so CI cannot stand for emulated).
+  `CONTRIBUTING.md`, the PR template and `docs/release-checklist.md` say so. Rung: mocked (`test-rung-receipts.sh`).
 - **CI runs the self-test of the custom checks** (#396): the `IaC Security Scan` job installs checkov at the `setup.sh` pin and runs `scripts/dev/test-checkov-custom-checks.sh`,
   which proves each CKV_OA_* rule still fires on a mutated tree. Only `task security` ran it before, so a custom check that silently stopped firing left CI green.
   `check-version-drift.sh` now compares the two checkov pins. Rung: mocked (the self-test run in CI, red when a check is neutered and green when restored: see the PR).

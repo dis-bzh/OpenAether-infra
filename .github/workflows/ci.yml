@@ -3,12 +3,17 @@ name: CI
 on:
   push:
     branches: [main]
-  # No `branches` filter and `edited` added, both measured on PR #100: a PR
-  # based on another PR's branch got NO run at all (not a red one — none), and
-  # retargeting it to main fired only `edited`, which the default types skip.
-  # An unvalidated stacked PR looks exactly like a green one in the list.
+  # No `branches` filter, measured on PR #100: a PR based on another PR's branch
+  # got NO run at all (not a red one — none). An unvalidated stacked PR looks
+  # exactly like a green one in the list.
+  #
+  # The types are GitHub's default set, written out on purpose: with `edited`, a
+  # change of the body or the title (how a receipt is pasted) cancelled and
+  # restarted every job here. `Rung receipt`, the one check that reads the body,
+  # is rung.yml and reacts to edits alone. It also goes red when an edit changes
+  # the base branch, which this workflow no longer re-tests either.
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened]
 
 # All jobs here are read-only validation — always safe to cancel a superseded run.
 concurrency:
@@ -126,39 +131,9 @@ jobs:
             "./$check" "$RUNNER_TEMP/msg"
           done
 
-  # The rung a PR declares, against the receipt the harness wrote on its head
-  # (#120). Renovate, Dependabot and docs-only diffs may declare nothing; a rung
-  # they do declare is checked. Required on main: a ruleset setting, which
-  # repo-settings.yml compares with what reports.
-  #
-  # The rung mocked needs no pasted receipt when `test` (the job that runs
-  # `task test-scripts` and `task test`) is green on this head: CI is the
-  # receipt. So this job waits for `test`, and `!cancelled()` keeps it running
-  # when `test` is red or skipped: a skipped required check would let the PR
-  # through, and the script must say why a mocked claim has nothing behind it.
-  # scripts/dev/rung-receipt.py (CI_STANDS) names the job and the variable;
-  # test-rung-receipts.sh fails when they and this job disagree.
-  rung:
-    name: Rung receipt
-    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
-    needs: [changes, test]
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
-        with:
-          persist-credentials: false
-
-      # The body is whatever the PR author typed: it reaches the script as data,
-      # through env, and never as an expression inside `run:`.
-      - name: The declared rung has a green receipt for this head
-        env:
-          PR_BODY: ${{ github.event.pull_request.body }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          DOCS_ONLY: ${{ needs.changes.outputs.code == 'false' }}
-          CI_MOCKED_RESULT: ${{ needs.test.result }}
-        run: python3 scripts/dev/rung-receipt.py check
+  # `Rung receipt` (the rung a PR declares, against the receipt the harness wrote on
+  # its head, #120) is rung.yml: it reads the PR body, and a body edit must not
+  # restart the jobs below. Its name and the app that reports it are unchanged.
 
   # Environment data — real IPs, account ids, bucket names — is what actually
   # leaked here, and the credential rules gitleaks ships do not look for it.
@@ -441,11 +416,10 @@ jobs:
           TF_VAR_encryption_passphrase: ci-mock-passphrase-for-validation-only-ci
 
   # The name this job had when it was one job, kept alive while the ruleset still requires it: rename, phase A. It
-  # reports the verdict of the five checks that replaced it, so nothing that waits for `OpenTofu Tests` waits for ever
-  # (the `Rung receipt` job reads its result, scripts/dev/rung-receipt.py CI_STANDS).
+  # reports the verdict of the five checks that replaced it.
   # It runs only when the change touches code, like the job it replaces: on a docs-only diff the script shards report
-  # success with their steps skipped, and an alias that said success there would let `Rung: mocked` pass with NOTHING
-  # run. `!cancelled()` and not the implicit success(): a red shard must turn this job red, not skip it (a skipped
+  # success with their steps skipped, and an alias that said success there would claim tests ran.
+  # `!cancelled()` and not the implicit success(): a red shard must turn this job red, not skip it (a skipped
   # required check counts as passed). Both needs must be exactly `success`.
   test:
     name: OpenTofu Tests
