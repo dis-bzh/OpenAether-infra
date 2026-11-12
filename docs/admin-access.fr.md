@@ -487,6 +487,8 @@ edges en sont sortis dégradés. Recréer l'enfant (`task edge-down`, puis
 réactiver son fichier) est plus rapide et plus sûr. Les bonnes valeurs sont déjà
 dans `apps/clusters/*.yaml` et `task apps-validate` contrôle cet alignement.
 
+*Une exception a été mesurée, une fois (OpenAether-apps 0.4.5, Scaleway, un enfant vivant à 2 nœuds, 1 plan de contrôle + 1 worker, n=1) :* un changement de values limité à la stratégie de mise à jour (`updateStrategy.rollingUpdate.maxUnavailable: 1` sur le DaemonSet des agents et sous `envoy.updateStrategy`) a traversé l'upgrade Helm sans redémarrer aucun pod, et l'API de l'enfant a continué de répondre. Les DaemonSets vivants portaient déjà une annotation `kubectl.kubernetes.io/restartedAt` issue d'un redémarrage manuel antérieur ; la variante sans elle, et un autre fournisseur, n'ont pas été jouées. **Un changement qui modifie le modèle de pod ou la ConfigMap n'a PAS été testé** : il ferait rouler les agents (un à la fois depuis la 0.4.5, donc une mise à jour deux fois plus longue), et la dégradation du 2026-07-26 n'est pas connue pour avoir été limitée à la stratégie. La règle ci-dessus tient pour lui.
+
 Un enfant sain sur le profil `workload` affiche **19/19 Kustomizations**. Ce
 compte bouge à chaque brique ajoutée au DAG — le vérifier avec
 `python3 scripts/pick.py vault eso certs gateway`, ne pas lire un changement
