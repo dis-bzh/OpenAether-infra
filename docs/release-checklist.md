@@ -515,12 +515,16 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       and the SBOM run's image scans on the tag are green
       or each red one is in `.vex/openaether-infra.openvex.json`. `docs/supply-chain.md`
       says what the inventory covers and what it does not.
-      For 0.4.5 there is no exception: the Flux pin is that of 0.4.3 and 0.4.4 (2.10.0), and `flux-image-digests.lock` names
-      kustomize-controller v1.10.1 for the scan (`python3 scripts/dev/gen-sbom.py --images` lists it) while
-      `.vex/openaether-infra.openvex.json` holds no statement, so that scan has nothing to hide behind. The `SBOM` run of the
-      0.4.4 tag concluded `success` (run 42588131306, 2026-11-09, read with `gh run view`), so the scan of that image is expected
-      green; read the run of the 0.4.5 tag, do not assume it. A red scan is a finding for the lead, not a waiver; any open issue
-      needs its own recorded decision.
+      For 0.4.5 the line above is NOT met, and that is known before the tag: the Flux pin is that of 0.4.3 and 0.4.4 (2.10.0),
+      and `flux-image-digests.lock` names kustomize-controller v1.10.1 for the scan (`python3 scripts/dev/gen-sbom.py --images`
+      lists it) while `.vex/openaether-infra.openvex.json` holds no statement, so that scan has nothing to hide behind. The
+      `SBOM` run of the 0.4.4 tag concluded `success` (run 42588131306, 2026-11-09), but the scheduled run of 2026-11-10 (run
+      42824218453, `main`, the 0.4.4 code) concluded `failure` on that very image: CVE-2026-123158 (OpenSSH, CRITICAL with a
+      fix in the Alpine package, 10.3_p1-r2), and no fixed Flux image exists upstream on 2026-11-12. This release moves no image,
+      so the run of the 0.4.5 tag is expected RED on `kustomize-controller:v1.10.1` and green on the nine other images; read it
+      (`gh run view`), do not assume it. A red scan is a finding for the lead, not a waiver: tagging with it needs its own
+      recorded owner decision (hold for a fixed image, or accept the red with the issue open), and `CHANGELOG.md` `[0.4.5]`
+      "Known open" says so first.
 - [ ] no retest marker is left, in either repository or in the notes. `git grep -n 'RETEST-PENDIN[G]'` prints nothing
       here (`CHANGELOG.md` `[0.4.5]` carries no marker, its cloud results are written; the bracket keeps
       this line from matching itself), prints nothing in OpenAether-apps either
