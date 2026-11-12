@@ -49,7 +49,9 @@ jobs:
   # Errs toward "code": classifies by exclusion (docs/**, *.md, README*,
   # CHANGELOG.md, CONTRIBUTING.md, LICENSE), so any path this doesn't
   # recognise as documentation — a new top-level file type, say — runs the
-  # full suite until someone deliberately adds it to the docs list below.
+  # full suite until someone deliberately adds it to the docs list. The rule
+  # is scripts/dev/classify-changes.sh; a document a harness reads counts as
+  # code there, and test-docs-only-rule.sh holds it.
   changes:
     name: Detect change scope
     runs-on: ubuntu-latest
@@ -65,19 +67,16 @@ jobs:
 
       - name: Classify the diff
         id: classify
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           set -uo pipefail
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
+          if [ "${EVENT}" != "pull_request" ]; then
             echo "code=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          git diff --name-only "origin/${{ github.base_ref }}...HEAD" > "$RUNNER_TEMP/changed.txt"
-          docs_pattern='^(docs/|README|CHANGELOG\.md$|CONTRIBUTING\.md$|LICENSE$|.*\.md$)'
-          if grep -vEq "$docs_pattern" "$RUNNER_TEMP/changed.txt"; then
-            echo "code=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "code=false" >> "$GITHUB_OUTPUT"
-          fi
+          ./scripts/dev/classify-changes.sh "origin/${BASE_REF}" >> "$GITHUB_OUTPUT"
 
   # The commit-msg hooks that enforce this live in .git/hooks/, which no clone
   # carries — so the same checks run here on every subject a PR adds.
