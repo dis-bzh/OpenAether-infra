@@ -178,8 +178,9 @@ when it is empty; naming the model was never a hard requirement there either.
 
 `Co-Authored-By` and `Signed-off-by` from a tool are **forbidden**: those
 trailers assert authorship and certify origin, and a model can do neither. The
-human submitting is the author and takes responsibility for every line,
-licensing included. Refused by the `commit-msg` hook and again in CI, which
+human submitting takes responsibility for every line, licensing included. A
+commit whose git author is the tool is accepted (no CI check on the author
+field) as long as it carries `Assisted-by:`. Refused by the `commit-msg` hook and again in CI, which
 scopes itself by the tree — a commit is checked only if
 `scripts/dev/check-commit-trailers.sh` already existed in it, so history from
 before the rule does not fail the build. Skip the trailer entirely
