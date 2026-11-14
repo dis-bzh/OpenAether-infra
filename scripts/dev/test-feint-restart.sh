@@ -49,7 +49,11 @@ case "$1" in
   version) printf 'v%s\n' "$OA_STUB_VERSION"; exit 0 ;;
   start) [ ! -f "$st" ] || { echo "feint: already running on $addr; stop it first"; exit 1; }
          date +%s >"$st"; exit 0 ;;
-  stop)  rm -f "$st"; exit 0 ;;
+  stop)  rm -f "$st" "$st.cp"; exit 0 ;;
+  # Like feint: a reset needs a checkpoint of THIS emulator, and says so when it has none.
+  checkpoint) [ -f "$st" ] && touch "$st.cp"; exit 0 ;;
+  doctor) echo "{\"verdict\":\"${OA_STUB_VERDICT:-compatible}\"}"; exit 0 ;;
+  reset) [ -f "$st.cp" ] || { echo "feint reset: no checkpoint recorded for $addr"; exit 1; }; exit 0 ;;
   proxy) [ ! -f "$st" ] || { echo "feint: listen tcp $addr: bind: address already in use"; exit 1; }
          exec sleep 10 ;;
   status)
@@ -144,7 +148,7 @@ ALT=127.0.0.1:4699
 on_alt() { # <feint.sh args...>
   env -i PATH="$SB:$PATH" HOME="$SB" TMPDIR="$SB" OA_STUB_VERSION="$PIN" OA_STUB_LOG="$LOG" \
       OA_STUB_STATE="$STATE" OA_STUB_DELAY=0 FEINT_RESTART_TIMEOUT=2 FEINT_ENDPOINT="http://$ALT" \
-      OA_STUB_TOFU_PASS="${OA_STUB_TOFU_PASS:-0}" "$FEINT" "$@" </dev/null 2>&1
+      OA_STUB_TOFU_PASS="${OA_STUB_TOFU_PASS:-0}" OA_STUB_VERDICT="${OA_STUB_VERDICT:-compatible}" "$FEINT" "$@" </dev/null 2>&1
 }
 stray() { grep -E '^feint:(start|stop|status)' "$LOG" | grep -vF -- "--addr $ALT"; }
 fresh
@@ -167,6 +171,18 @@ grep -q '^tofu:init' "$LOG" && ok "an apply lane on $ALT gets past its reset" ||
 [ "$(cat "$STATE/127.0.0.1:4599" 2>/dev/null)" = 1 ] && ok "…without stopping or restarting the one on 4599" \
                                                      || bad "the reset stopped or restarted the emulator on 4599"
 [ -z "$(stray)" ] && ok "…with every call aimed at $ALT" || bad "calls not aimed at $ALT: $(stray)"
+
+echo "--- an apply lane on $ALT whose emulator holds a checkpoint: reset in place, no restart ---"
+fresh; seed_up "$ALT"; touch "$STATE/$ALT.cp"
+OUT="$(on_alt apply scaleway)"
+grep -q '^tofu:init' "$LOG" && ok "the lane gets past its reset" || bad "reset on $ALT failed: $OUT"
+grep -q "^feint:reset openaether-empty" "$LOG" && ! grep -qE '^feint:(stop|start)' "$LOG" \
+  && ok "…by feint reset, without stopping or starting anything" || bad "no in-place reset: $(grep '^feint:' "$LOG" | tr '\n' ' ')"
+
+echo "--- an apply lane whose fixture the preflight does not call compatible stops before tofu ---"
+fresh; seed_up "$ALT"
+OUT="$(OA_STUB_VERDICT=unknown on_alt apply scaleway)"; RC=$?
+{ [ "$RC" -ne 0 ] && ! grep -q '^tofu:' "$LOG"; } && ok "an unknown verdict refuses the lane before any tofu call (rc=$RC)" || bad "unknown verdict went through (rc=$RC): $OUT"
 
 echo "--- a record lane on $ALT, with 4600 taken: its proxy follows the endpoint ---"
 fresh; seed_up "$ALT"; seed_up 127.0.0.1:4600
