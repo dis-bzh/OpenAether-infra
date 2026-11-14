@@ -21,7 +21,7 @@ Exit codes: 0 clean, 1 leftovers found (printed to stdout), 2 could not verify
 
 Usage:
     source .env.sh
-    python3 scripts/ops/verify-provider-clean.py <cluster> openstack|outscale|scaleway
+    python3 scripts/ops/verify-provider-clean.py <cluster> openstack|ovh|outscale|scaleway
 """
 from __future__ import annotations
 
@@ -261,9 +261,10 @@ UNCHECKED["scaleway"] = "snapshots, images and buckets"
 
 def main() -> int:
     if len(sys.argv) != 3:
-        print("usage: verify-provider-clean.py <cluster> openstack|outscale|scaleway", file=sys.stderr)
+        print("usage: verify-provider-clean.py <cluster> openstack|ovh|outscale|scaleway", file=sys.stderr)
         return 2
     cluster, provider = sys.argv[1], sys.argv[2]
+    provider = {"ovh": "openstack"}.get(provider, provider)   # OVH is the OpenStack check (fleet-down maps it the same way); the name `ovh` used to answer "no check implemented"
 
     check = CHECKS.get(provider)
     if check is None:

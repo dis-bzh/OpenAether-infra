@@ -56,8 +56,8 @@ IPs, LBs or security groups.
 |---|---|---|---|---|---|---|
 | `management-`, `failover-scaleway` | 3+4 × `POP2-4C-16G` (4 / 16 GB) | 8 | 30 | 114 GB | Yes; rollable, see the arithmetic below | no Scaleway backend: the command says so and checks nothing (exit 2) |
 | `workload-scaleway` | 3+4 × `POP2-4C-16G` | 8 | 30 | 114 GB | Yes | no Scaleway backend: the command says so and checks nothing (exit 2) |
-| `management-`, `failover-ovh` | 3+4 × `c3-8` (4 / 8 GB) | 8 | 30 | 64 GB | Yes; rollable, see the arithmetic below | `--add-vms 8 --add-cores 30 --add-ram-gb 64` |
-| `workload-ovh` | 3+4 × `c3-8` | 8 | 30 | 64 GB | Yes | `--add-vms 8 --add-cores 30 --add-ram-gb 64` |
+| `management-`, `failover-ovh` | 3+3 × `b3-16` (4 / 15 GB) | 7 | 26 | 97 GB | Yes; rollable, see the arithmetic below | `--add-vms 7 --add-cores 26 --add-ram-gb 97` |
+| `workload-ovh` | 3+3 × `b3-16` | 7 | 26 | 97 GB | Yes | `--add-vms 7 --add-cores 26 --add-ram-gb 97` |
 | `management-`, `failover-outscale` | 3+2 × `tinav5.c2r4p1` (2 / 4 GB) | 6 | 12 | 22 GB | **No, on purpose** — see below | `--add-vms 6 --add-cores 12 --add-ram-gb 22` |
 | `workload-outscale` | 3+3 × `tinav5.c2r4p1` | 7 | 14 | 26 GB | **No, on purpose** | `--add-vms 7 --add-cores 14 --add-ram-gb 26` |
 | `*-proxmox` | 1+1 × 4 vCPU / 8 GiB, 20 GiB disk | 2 | 8 | 16 GiB | Type yes; one worker cannot be drained without downtime | host capacity, not a quota |
@@ -167,7 +167,7 @@ The platform (the apps repository at its default) asks about **9 vCPU of request
 | Provider | Supported shape with the platform | vCPU with the bastion | Note |
 |---|---|---|---|
 | Scaleway | 3 CP + 4 W of `POP2-4C-16G` (the examples) | 30 | rollable, see the arithmetic above |
-| OVH | 3 CP + 4 W of `c3-8` (4 vCPU / 8 GB) (the examples) | 30 | rollable, see the arithmetic above |
+| OVH | 3 CP + 3 W of `b3-16` (4 vCPU / 15 GB) (the examples) | 26 | rollable, see the arithmetic above |
 | Outscale | 3 CP + 4 W of `tinav5.c4r8p2` (4 vCPU / 8 GB) | 30 | **needs a quota raise first** (30 vCPU / 64 GB, 8 VMs) |
 | Proxmox | 3 CP + 4 W, 4 vCPU / 8 GB at least | yours | |
 

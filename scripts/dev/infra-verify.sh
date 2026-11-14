@@ -850,9 +850,11 @@ fi
 # cnpg-store-replicate copies the CNPG archive there every 15 minutes; with no bucket it fails with NoSuchBucket and the second
 # copy does not exist (infra #391, lab 28B). Absent is a failure; a store that cannot answer is UNCHECKED, never a false red.
 # shellcheck disable=SC2069  # the CLI's stderr is the point, its stdout is not
-app_backups_replica_check() { # <bucket> <endpoint> <access key> <secret key>
+app_backups_replica_check() { # <bucket> <endpoint> <access key> <secret key> [region]
+  # The region is passed when the tfvars name one: on OVH, with the checksum variables the Taskfile exports and no region, HeadBucket
+  # answers 400 Bad Request for a bucket that exists or not (measured lab 45, aws-cli 2.37.4: 404 with a region), which was read as UNCHECKED.
   local err rc=0
-  err="$(AWS_ACCESS_KEY_ID="$3" AWS_SECRET_ACCESS_KEY="$4" timeout 90 aws s3api head-bucket --bucket "$1" --endpoint-url "$2" 2>&1 >/dev/null)" || rc=$?
+  err="$(AWS_ACCESS_KEY_ID="$3" AWS_SECRET_ACCESS_KEY="$4" timeout 90 aws s3api head-bucket --bucket "$1" --endpoint-url "$2" ${5:+--region "$5"} 2>&1 >/dev/null)" || rc=$?
   if [ "$rc" -eq 0 ]; then
     ok "the application-backups replica bucket exists: ${1} (the second copy of the CNPG archive goes there)"
   elif grep -qE '\(404\)|NoSuchBucket|Not Found' <<<"$err"; then
@@ -923,7 +925,7 @@ else
     APP_REPL="$(oa_backup_bucket "$(oa_project "$CN" "$(tfv "$TFVARS" bucket_suffix)")" "$PROVIDER" "$ENVN")-backup"
     REPL_AK="$("$ROOT/scripts/internal/resolve-s3-cred.sh" "$PROVIDER" ak backup "${REPL_EP:-$PRIM_EP}")"
     REPL_SK="$("$ROOT/scripts/internal/resolve-s3-cred.sh" "$PROVIDER" sk backup "${REPL_EP:-$PRIM_EP}")"
-    app_backups_replica_check "$APP_REPL" "${REPL_EP:-$PRIM_EP}" "$REPL_AK" "$REPL_SK"
+    app_backups_replica_check "$APP_REPL" "${REPL_EP:-$PRIM_EP}" "$REPL_AK" "$REPL_SK" "$(tfv "$TFVARS" s3_replica_region)"
   fi
   # Cross-provider is a PRODUCTION rule, and variables.tf says so in as many
   # words ("Prod: a different provider"). Failing a dev cluster for it is a

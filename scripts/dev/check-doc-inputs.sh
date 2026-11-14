@@ -110,7 +110,11 @@ if [ "${STRICT_EXAMPLES:-1}" = "1" ]; then
   echo "=== the Scaleway and OVH examples can be rolled (4 workers), the Outscale ones set the root size ==="
   for ex in "$ENVS"/{management,failover,workload}-{scaleway,ovh}.tfvars.example; do
     w="$(grep -E '^[[:space:]]*workers[[:space:]]*=' "$ex" | head -1 | sed -E 's/^[^=]*=[[:space:]]*([0-9]+).*/\1/')"
-    if [ "${w:-0}" -ge 4 ]; then ok "$(basename "$ex") — $w workers"; else bad "$(basename "$ex") — ${w:-no} workers: the full platform measured ~9 vCPU of requests (lab 21), more than 3 workers leave the gate; ship 4 (#378, docs/capacity.md)"; fi
+    fl="$(grep -E '^[[:space:]]*flavor_name[[:space:]]*=' "$ex" | head -1 | sed -E 's/^[^"]*"([^"]*)".*/\1/')"
+    # 0.5.0 owner rule (2026-11-14): one worker per zone, bigger nodes rather than a fourth worker. 3 workers are shipped only on an OVH flavour of 4 vCPU and 15 GB or more.
+    if [ "${w:-0}" -ge 4 ]; then ok "$(basename "$ex") — $w workers"
+    elif [ "${w:-0}" -eq 3 ] && case "$ex" in *-ovh.*) case "$fl" in b3-16 | b3-32 | b3-64 | c3-16 | c3-32) true ;; *) false ;; esac ;; *) false ;; esac; then ok "$(basename "$ex") — 3 workers of $fl (one per zone, 4 vCPU / 15 GB or more)"
+    else bad "$(basename "$ex") — ${w:-no} workers: the full platform measured ~9 vCPU of requests (lab 21), more than 3 workers leave the gate; ship 4 (#378, docs/capacity.md)"; fi
   done
   # 0.4.0 owner rule 2026-10-22: the third grafana-db instance (synchronous replication) adds ~100 m of CPU requests to that arithmetic;
   # the capacity pages must say so, in both languages, instead of keeping the figures from before it.
