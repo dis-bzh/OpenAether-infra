@@ -4,6 +4,7 @@
 # What the emulated lane proves and what it does not: docs/emulated-cloud.md.
 #
 # Usage: feint.sh install|start|stop|status|guard [endpoint]
+#        feint.sh preflight
 #        feint.sh plan|apply|apply-root|record scaleway|outscale
 #        feint.sh evidence|evidence-baseline|evidence-verify scaleway|outscale
 set -euo pipefail
@@ -454,6 +455,20 @@ print(sum(1 for v in json.load(sys.stdin).get("Vms", []) if v.get("State") not i
 # The empty second plan is the actual assertion: it holds only if every attribute
 # the provider sent comes back identical, which is where an invented or dropped
 # field shows up.
+# preflight_stack refuses a fixture declaring a resource type no recorded run has
+# applied here, in milliseconds and before anything is created: `unknown` is as
+# fatal as `declined`, since an unmeasured type is what a green lane would
+# otherwise be vouching for. Only the fixture — the real roots declare OVH and
+# Proxmox types no pack serves, so they are never `compatible`.
+preflight_stack() {
+  local dir="$1" verdict
+  verdict="$(feint doctor --stack "$dir" --engine opentofu --stack-json 2>/dev/null | jq -rn 'input.verdict')" || verdict=unreadable
+  [ "$verdict" = compatible ] && return 0
+  echo "✗ preflight of ${dir#"$REPO_ROOT"/}: ${verdict}, not compatible" >&2
+  feint doctor --stack "$dir" --engine opentofu 2>&1 | sed -n '/^Feint preflight/,/^Result/p' >&2
+  exit 1
+}
+
 apply_fixture() {
   local expected live rc refs
   # Globals, like `override` above: the EXIT trap fires after this function has
@@ -466,6 +481,7 @@ apply_fixture() {
   # leaves resources whose names this fixture reuses — the create then answers
   # 409 and the failure reads like a provider bug.
   reset_emulator
+  preflight_stack "$root"
   # Destroy on the error path too: an apply that dies half-way leaves resources
   # behind, and the next run then starts from a poisoned emulator.
   # `|| true`: a failing command inside an EXIT trap aborts the rest of it under
@@ -539,6 +555,7 @@ case "${1:-}" in
     ;;
   status) feint_cli status ;;
   guard) guard_local "${2:-$FEINT_ENDPOINT}" ;;
+  preflight) preflight_stack "$REPO_ROOT/infrastructure/opentofu-feint" && echo "✓ the fixture declares only types a recorded run applied here" ;;
   plan)
     guard_local "$FEINT_ENDPOINT"
     require_emulator
