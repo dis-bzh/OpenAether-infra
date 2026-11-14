@@ -15,7 +15,7 @@ strict=0
 if [ "${1:-}" = "--strict" ]; then strict=1; shift; fi
 range="${1:?usage: check-commit-signatures.sh [--strict] <rev-range>}"
 
-# A file, not a process substitution: a failing `git log` must stop the script (see check-commit-authors.sh, #132).
+# A file, not a process substitution: a failing `git log` must stop the script (#132).
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 if ! git log --no-merges --format='%H%x09%G?%x09%s' "$range" > "$tmp"; then

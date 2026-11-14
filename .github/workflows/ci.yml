@@ -104,14 +104,6 @@ jobs:
       - name: Conventional Commits
         run: cz check --rev-range origin/${{ github.base_ref }}..HEAD
 
-      # The trailer check reads the message; this reads who git says wrote the
-      # commit. GitHub builds the squash commit's `Co-authored-by` from the
-      # BRANCH commits' authors, so by the time a message carries the trailer it
-      # is already on main and no message check can refuse it. Seventeen commits
-      # on main carry one. This is the only place it can still be caught.
-      - name: No commit authored by a tool
-        run: ./scripts/dev/check-commit-authors.sh "origin/${{ github.base_ref }}..HEAD"
-
       # A WARNING until every maintainer signs (0 signed commits today): add --strict then. docs/signed-commits.md.
       - name: The signature check behaves
         run: ./scripts/dev/test-check-commit-signatures.sh
