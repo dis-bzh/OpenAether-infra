@@ -20,6 +20,7 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **OpenTofu 1.13.2 → 1.13.9** (Cléa #91, probed green in a bare container, released 2026-11-05): the six `tofu_version` pins of `ci.yml`, the one of `real-cloud-regression.yml` and `TOFU_VERSION` in `scripts/setup.sh`. Left out of this cycle: renovate, helm, checkov, plumber, talos, feint, tflint and aws-cli (not probed), cilium 1.20.4 (probe failed).
 - **`Feint Evidence (scaleway)` and `(outscale)` no longer carry a job-level `continue-on-error`.** The flag never made these required checks pass: a failed job still concludes `failure`
   (25 failed jobs in the 1,100 CI runs since 2026-08-30: 22 in `task feint-evidence`, 3 in the OpenTofu setup, none in `task feint-evidence-verify` in 1,652 executions); it only kept the whole `CI` run green over a red required check, and the comments called a required check informational.
   The run now fails with its check. The pin check runs last, after the baseline artifact is uploaded, so a red leaves the exact bytes to commit as the new `.feint-evidence-<provider>.json`.
