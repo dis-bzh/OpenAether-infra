@@ -99,9 +99,8 @@ later: record what happened, not a pass.
 
 ## 3. Emulated cloud — no account, real provider binaries
 
-The lane is pinned to Feint 0.13.0, running against the same Scaleway provider
-version the clusters run — except the lanes that destroy (the fixture and
-`feint-apply-root`), capped below 2.83.0 (#179, open: Feint's fix is unreleased).
+The lane is pinned to Feint 0.16.0, running against the same Scaleway provider
+version the clusters run (uncapped since Feint 0.14.0 serves the NIC detach, #179).
 
 ```bash
 task feint-up                          # idempotent: feint-test below reuses it

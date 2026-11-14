@@ -121,12 +121,12 @@ régressions de câblage avant de dépenser.
 
 ## Manques connus
 
-Épinglé sur **Feint 0.13.0** (`scripts/dev/feint.sh`). Ce que cette voie ne peut
+Épinglé sur **Feint 0.16.0** (`scripts/dev/feint.sh`). Ce que cette voie ne peut
 toujours pas porter, tout consigné dans [les issues ouvertes](https://github.com/dis-bzh/OpenAether-infra/issues) :
 
 | Non exercé | Pourquoi |
 |---|---|
-| Destroy d'une NIC privée Scaleway, provider ≥ 2.83.0 | Le provider appelle alors `instance/v2alpha1/.../detach-private-network-interface`, auquel Feint répond 501 (toujours en 0.13.0). Les voies qui détruisent (la fixture, et `feint-apply-root` via son override) plafonnent le provider sous 2.83.0 ; le vrai root non (#179). |
+| `feint-apply-root` sur Outscale | L'apply des VM du root échoue sur `volume_size` (« requis si le volume n'est pas créé depuis un snapshot »), à l'identique en 0.13.0 et 0.16.0 ; la fixture Outscale et les deux voies plan passent. Hors CI. |
 | Résolution d'image par nom, Outscale | Les tfvars Outscale pointent `image_name` sur une entrée fixe du catalogue, ce qui exerce le mécanisme de recherche sans résoudre un nom publié par notre propre pipeline — voir #150 pour ce qu'il faudrait. |
 
 Trois choses ont quitté cette liste en premier. `outscale_volume_link` en

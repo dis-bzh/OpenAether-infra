@@ -109,15 +109,6 @@
       matchDepTypes: ["uses-with"],
       enabled: false,
     },
-    // #179: scaleway/scaleway >= 2.83.0 makes a call Feint answers 501. The Feint lane only: the real roots stay
-    // `~> 2.68` on purpose. Delete with the cap in opentofu-feint/versions.tf and scripts/dev/feint.sh.
-    {
-      description: "Hold the Feint lane's Scaleway provider below 2.83.0, the cap in its versions.tf; left alone, Renovate rewrites that cap upward.",
-      matchDatasources: ["terraform-provider"],
-      matchPackageNames: ["scaleway/scaleway"],
-      matchFileNames: ["infrastructure/opentofu-feint/**"],
-      allowedVersions: "< 2.83.0",
-    },
     // #241: the provider renders the machine config and mocked CI cannot see that text change. Provider only: the
     // Talos OS release has the same package name (github-releases) and keeps the cluster-version rule above.
     {

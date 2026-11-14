@@ -6,10 +6,9 @@ terraform {
   required_providers {
     scaleway = {
       source = "scaleway/scaleway"
-      # Tracks the real lanes (~> 2.68), capped below 2.83.0: from that release
-      # destroying a private NIC calls instance/v2alpha1 detach-private-network-interface,
-      # which Feint answers 501, 0.13.0 included (#179). Drop the cap once it is served.
-      version = "~> 2.68, < 2.83.0"
+      # Tracks the real lanes. No cap: Feint serves the detach a private NIC
+      # destroy calls from 0.14.0 (#179).
+      version = "~> 2.68"
     }
     outscale = {
       source  = "outscale/outscale"
