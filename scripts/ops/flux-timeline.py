@@ -61,8 +61,11 @@ def main(argv):
         print(__doc__, file=sys.stderr)
         return 2
     try:
-        src = sys.stdin if not argv or argv[0] == "-" else open(argv[0])
-        objs = collect(json.load(src))
+        if not argv or argv[0] == "-":
+            objs = collect(json.load(sys.stdin))
+        else:
+            with open(argv[0]) as f:
+                objs = collect(json.load(f))
     except (OSError, ValueError, KeyError) as e:
         print("✗ flux-timeline: cannot read the input: %s" % e, file=sys.stderr)
         return 2
