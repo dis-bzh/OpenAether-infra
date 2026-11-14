@@ -28,13 +28,13 @@ deploy_app_lb   = true
 node_distribution = {
   ovh = {
     control_planes     = 3
-    workers            = 4 # 4 workers of 4 vCPU keep `cluster-roll` passable with the full platform, docs/capacity.md
+    workers            = 3 # 3 workers, one per zone, of 4 vCPU / 15 GB: size the NODES up rather than adding a fourth (docs/capacity.md; 0.5.0 sizing labs)
     region             = "EU-WEST-PAR"
     # c3-8 (4 vCPU / 8 GB), not b3-8 (2 vCPU): measured 2026-08-15, three b3-8
     # workers sit at ~99% of CPU requests with the platform on them, so no node
     # can be drained and `rolling-replace --upgrade` cannot finish. A rolling
     # upgrade needs one node's worth of spare capacity — see docs/upgrade.md.
-    flavor_name        = "c3-8"
+    flavor_name        = "b3-16"  # 4 vCPU / 15 GB (c3-8 has 7 GB: the platform memory does not fit on two workers after a zone loss)
     # image_id optional — defaults to looking up "talos-ovh-amd64-<talos_version>" by
     # name (published by talos-image). Override only if you use a different name/UUID:
     # image_id           = "TALOS_IMAGE_ID"

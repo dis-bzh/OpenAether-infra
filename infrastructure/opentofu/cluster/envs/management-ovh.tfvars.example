@@ -52,20 +52,24 @@ deploy_app_lb   = true
 node_distribution = {
   ovh = {
     control_planes     = 3
-    workers            = 4
-    # 4 workers, not 3 (nor 2): lab 16 measured 82% + 91% = 172% of one worker's CPU requested on 2 c3-8, and `cluster-roll`
-    # refuses above (workers - 1) x 100%. The full platform measured about 9 vCPU (223-228% of a worker) on Scaleway in lab 21,
-    # above the 8 vCPU that 3 workers of 4 vCPU leave; with 4 it is about 75% of that limit (docs/capacity.md).
+    workers            = 3
+    # 3 workers, one per availability zone, each with 4 vCPU / 15 GB (b3-16): the zones stay balanced and a lost zone leaves two
+    # workers. Measured on Scaleway with the same 4 vCPU / 16 GB nodes (0.5.0 sizing labs 38-44, with the reduced requests of apps #232):
+    # 3 workers carry the platform at about 166% of one worker's CPU requested and a lost zone needs about 80% of the CPU left;
+    # with the older requests (lab 16: 172% on 2; lab 21: 223-228% on 4) 4 workers split 2 + 1 + 1 were needed and the zone holding
+    # two could not be lost. If you need more capacity, size the NODES up (b3-32) rather than adding a fourth worker (docs/capacity.md).
     # "5 workers zone-HA" profile (infra #389): set `workers = 5` and nothing else. Workers go round-robin over `availability_zones`, so 5 land
     # 2 + 2 + 1 on eu-west-par-a/b/c and the loss of ANY ONE zone leaves 3 workers (300%) for about 245% requested (measured on Scaleway, lab 22). With 4 (this example)
     # the zone holding two workers cannot be lost: 2 stay (200%) for 224%. `task failure-domain-check PROVIDER=ovh` says which
     # (script test: scripts/dev/test-failure-domain-check.sh). Costs one more instance; check your quota first (docs/capacity.md).
     region             = "EU-WEST-PAR"
-    # c3-8 (4 vCPU / 8 GB), not b3-8 (2 vCPU): measured 2026-08-15, three b3-8
+    # b3-16 (4 vCPU / 15 GB), not b3-8 (2 vCPU) nor c3-8 (4 vCPU / 7 GB): measured 2026-08-15, three b3-8
     # workers sit at ~99% of CPU requests with the platform on them, so no node
     # can be drained and `rolling-replace --upgrade` cannot finish. A rolling
     # upgrade needs one node's worth of spare capacity — see docs/upgrade.md.
-    flavor_name        = "c3-8"
+    # The platform requests about 13.5 GiB of memory: on the two workers left after a zone loss that does not fit in 7 GB nodes
+    # (c3-8), it fits in 15 GB ones (lab 45 on OVH read 44% of the memory left).
+    flavor_name        = "b3-16"
     # image_id optional — defaults to looking up "talos-ovh-amd64-<talos_version>" by
     # name (published by talos-image). Override only if you use a different name/UUID:
     # image_id           = "TALOS_IMAGE_ID"
