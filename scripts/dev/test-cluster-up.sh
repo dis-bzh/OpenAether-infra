@@ -548,6 +548,29 @@ TTY=1 EXTRA="APPLY_FAIL_FILE=$W/acl.fail" run 0 "${ASK[@]}" PROVIDER=scaleway; r
   && ok "APPROVE=ask: the second plan is asked about again (${Q0} questions without the trap, $((Q0 + 1)) with it)" \
   || bad "ask mode: exits $rc/$rc2, questions $(grep -c 'Apply this plan?' "$O") against $Q0: $(tail_of)"
 
+echo "--- provider out of stock at install: a BOUNDED retry, only while every error names the stock (infra #438) ---"
+printf 'Error: creating server: resource POP2-4C-16G is out of stock\n' >"$W/stock.fail"
+printf '\033[31m\xe2\x95\xb7\033[0m\n\033[31m\xe2\x94\x82\033[0m \033[1;31mError: \033[0m\033[1mcreating server\033[0m\n\xe2\x94\x82 \n\xe2\x94\x82 resource POP2-4C-16G is out of stock\n\xe2\x95\xb5\n' >"$W/stock-boxed.fail"
+{ cat "$W/stock.fail"; cat "$W/other-error.fail"; } >"$W/stock-and-other.fail"
+EXTRA="APPLY_FAIL_FILE=$W/stock.fail APPLY_FAIL_N=3 OA_STOCK_WAIT=0" run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+{ [ "$rc" = 0 ] && grep -q 'retry 3 of 3' "$O" && [ "$(calls '^tofu plan -out=up-')" = 4 ] && [ "$(calls '^tofu apply up-')" = 4 ] && grep -q '^\xe2\x9c\x93 cluster-up complete' "$O" 2>/dev/null || grep -q '^✓ cluster-up complete' "$O"; } \
+  && ok "out of stock three times, then the capacity is back: three retries (a new plan and a new apply each) and the journey ends rc 0" \
+  || bad "stock retry, exit $rc, plans $(calls '^tofu plan -out=up-'), applies $(calls '^tofu apply up-'): $(tail_of)"
+EXTRA="APPLY_FAIL_FILE=$W/stock-boxed.fail APPLY_FAIL_N=2 OA_STOCK_WAIT=0" run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+{ [ "$rc" = 0 ] && [ "$(calls '^tofu apply up-')" = 3 ]; } \
+  && ok "the out-of-stock error as tofu prints it (colours, the box, the phrase on the next line): retried" \
+  || bad "boxed stock transcript, exit $rc, applies $(calls '^tofu apply up-'): $(tail_of)"
+EXTRA="APPLY_FAIL_FILE=$W/stock.fail APPLY_FAIL_N=4 OA_STOCK_WAIT=0" run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+{ [ "$rc" != 0 ] && [ "$(calls '^tofu apply up-')" = 4 ] && grep -q 'still out of stock after 3 retries' "$O" && ! grep -q '^✓ cluster-up complete' "$O"; } \
+  && ok "still out of stock after the third retry: the run stops, with the reason, never a loop" \
+  || bad "unbounded stock retry? exit $rc, applies $(calls '^tofu apply up-')"
+for f in stock-and-other other-error; do
+  EXTRA="APPLY_FAIL_FILE=$W/$f.fail OA_STOCK_WAIT=0" run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
+  { [ "$rc" != 0 ] && [ "$(calls '^tofu apply up-')" = 1 ] && ! grep -q 'retry [0-9] of 3' "$O"; } \
+    && ok "$f: a second cause in the failed apply (or no stock error): no retry, the run fails as before" \
+    || bad "$f: exit $rc, applies $(calls '^tofu apply up-'), stock retry lines $(grep -c 'retry [0-9] of 3' "$O")"
+done
+
 echo "--- PLAN_ONLY=1: the journey as far as the plan, nothing created and nothing applied (infra #412) ---"
 # The default flow does not move: the build and the grow are called as before, and the journey records its receipt.
 run 0 "${UP[@]}" PROVIDER=scaleway; rc=$?
