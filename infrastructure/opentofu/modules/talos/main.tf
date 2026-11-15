@@ -619,10 +619,8 @@ data "talos_machine_configuration" "worker" {
           # 127.0.0.1 because Phase 2 reaches every node through an SSH tunnel on
           # localhost. Without this the tunneled apply fails TLS verification
           # ("certificate is valid for <node IP>, not 127.0.0.1").
-          certSANs = concat(
-            ["127.0.0.1", "localhost"],
-            var.worker_ips
-          )
+          # Its own address only: listing every worker changed each worker's config on every grow (infra #420).
+          certSANs = ["127.0.0.1", "localhost", var.worker_ips[count.index]]
           features = merge({
             diskQuotaSupport = true
             kubePrism = {
