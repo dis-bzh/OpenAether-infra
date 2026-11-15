@@ -337,19 +337,21 @@ printf '%s' "$WPLAN" >"$ST/plan.scope.json"; run scaleway --plan
 refuses "no Node for the IP while the machine still answers: the outputs are wrong, refused" 'does not read as down'
 OVHCP="$(change 'module.ovh[0].openstack_compute_instance_v2.control_plane[2]' openstack_compute_instance_v2 control_plane 2 '["delete"]')"
 OVHPORT="$(change 'module.ovh[0].openstack_networking_port_v2.control_plane[2]' openstack_networking_port_v2 control_plane 2 '["delete"]')"
-OVHMEM="$(change 'module.ovh[0].openstack_lb_member_v2.k8s_api[2]' openstack_lb_member_v2 k8s_api 2 '["delete"]')"
+OVHSET="$(change 'module.ovh[0].openstack_lb_members_v2.k8s_api[0]' openstack_lb_members_v2 k8s_api 0 '["update"]')"
 ovh_state() { # a real OVH control plane is a port and an instance
   setup; : >"$ST/state.list"
   for i in 0 1 2; do for t in openstack_networking_port_v2 openstack_compute_instance_v2; do echo "module.ovh[0].$t.control_plane[$i]" >>"$ST/state.list"; done; done
   for i in 0 1; do echo "module.ovh[0].openstack_compute_instance_v2.worker[$i]" >>"$ST/state.list"; done
 }
-ovh_state; printf '%s' "$(plan_of "$OVHCP" "$OVHPORT" "$OVHMEM" "$(change 'module.ovh[0].openstack_lb_member_v2.http[1]' openstack_lb_member_v2 http 1 '["delete"]')" "${RIDERS[@]}")" >"$ST/plan.scope.json"
+# A state from before #418: its first plan forgets the per-member resources and creates the sets; that is cluster-up's, not a removal's.
+ovh_state; printf '%s' "$(plan_of "$OVHCP" "$OVHPORT" "$(change 'module.ovh[0].openstack_lb_member_v2.k8s_api[2]' openstack_lb_member_v2 k8s_api 2 '["forget"]')" \
+  "$(change 'module.ovh[0].openstack_lb_members_v2.k8s_api[0]' openstack_lb_members_v2 k8s_api 0 '["create"]')" "${RIDERS[@]}")" >"$ST/plan.scope.json"
 run ovh --plan --allow-below-ha
-refuses "on OVH a control plane and a worker's pool member are classed by type: both classes, refused" 'together'
-ovh_state; printf '%s' "$(plan_of "$OVHCP" "$OVHPORT" "$OVHMEM" "${RIDERS[@]}")" >"$ST/plan.scope.json"
+refuses "on OVH a plan that still adopts the pool members (a pre-#418 state) is not a removal: cluster-up first" 'changes more than the removal'
+ovh_state; printf '%s' "$(plan_of "$OVHCP" "$OVHPORT" "$OVHSET" "${RIDERS[@]}")" >"$ST/plan.scope.json"
 run ovh --plan --allow-below-ha
-{ [ "$RC" = 0 ] && jq -e '.class == "cp" and .old == 3 and (.addresses | any(test("lb_member_v2.k8s_api")))' "$C/shrink-management-ovh.json" >/dev/null; } \
-  && ok "…and an OVH control plane (a port AND an instance in the state) counts once, its pool member in its bundle" || bad "OVH cp bundle (rc ${RC}): ${OUT}"
+{ [ "$RC" = 0 ] && jq -e '.class == "cp" and .old == 3 and (.addresses | length == 2) and (.addresses | all(test("lb_members") | not))' "$C/shrink-management-ovh.json" >/dev/null; } \
+  && ok "…and an OVH control plane (a port AND an instance in the state) counts once, its pool's member set updated, not in its bundle" || bad "OVH cp bundle (rc ${RC}): ${OUT}"
 rm -f "$C"/shrink-*.json
 
 echo "=== --apply: the order is the safety ==="

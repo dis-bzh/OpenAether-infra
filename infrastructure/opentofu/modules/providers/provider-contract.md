@@ -74,9 +74,9 @@ all-protocol rule between cluster members by one rule per entry of `_shared/node
 
 5. **Scale-in** — `scripts/ops/shrink-nodes.sh` reads a lowered count off the saved plan, so a node's
    resources MUST be count-indexed by node and carry `control_plane` or `worker` in their name (a data
-   volume is keyed `"w<worker>-d<disk>"`, a load balancer member is named for its pool and goes by type),
-   and its machine resource MUST be among them. A load balancer's membership MUST update in place when a
-   node leaves, never be replaced: replacing it would empty the backend list.
+   volume is keyed `"w<worker>-d<disk>"`), and its machine resource MUST be among them. A load balancer's
+   membership MUST be one resource per backend pool that updates in place when a node leaves or is
+   replaced, never a resource per member nor a replace: either would empty or churn the backend list.
 
 ## Node image drift
 

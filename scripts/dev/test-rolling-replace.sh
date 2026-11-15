@@ -1077,26 +1077,28 @@ grep -q 'saved_plan_apply "${node_name}-config" "$t" "$i" "$(( cfg_max + tainted
   || bad "the pre-flight config plan still counts a tainted server as 'more than one resource'"
 
 echo
-echo "=== a worker whose address follows its instance (OVH Octavia members, lab 27 part B, F-OVHREPL) ==="
-lm() { # <tf_t> <index> <state> — node_lb_members against a fake `tofu state list`
+echo "=== a worker whose address follows its instance (OVH Octavia member sets, F-OVHREPL, #418) ==="
+lm() { # <tf_t> <index> <state> — node_lb_members against a fake `tofu state list`; prints rc=<n> last
   (
     MOD=ovh; STATE="$3"
     tofu() { printf '%s\n' "$STATE"; }
     eval "$(extract node_lb_members)"
-    node_lb_members "$1" "$2"
+    node_lb_members "$1" "$2"; echo "rc=$?"
   )
 }
 LB_STATE="$(printf '%s\n' \
   'module.ovh[0].openstack_compute_instance_v2.worker[1]' \
-  'module.ovh[0].openstack_lb_member_v2.http[0]' 'module.ovh[0].openstack_lb_member_v2.http[1]' 'module.ovh[0].openstack_lb_member_v2.http[10]' \
-  'module.ovh[0].openstack_lb_member_v2.https[0]' 'module.ovh[0].openstack_lb_member_v2.https[1]' \
-  'module.ovh[0].openstack_lb_member_v2.k8s_api[1]' 'module.other[0].openstack_lb_member_v2.http[1]')"
-[ "$(lm worker 1 "$LB_STATE")" = "$(printf '%s\n' 'module.ovh[0].openstack_lb_member_v2.http[1]' 'module.ovh[0].openstack_lb_member_v2.https[1]')" ] \
-  && ok "worker 1's two Octavia members are found, not worker 0's or 10's, not a control plane's k8s_api member" \
+  'module.ovh[0].openstack_lb_members_v2.http[0]' 'module.ovh[0].openstack_lb_members_v2.https[0]' \
+  'module.ovh[0].openstack_lb_members_v2.k8s_api[0]' 'module.other[0].openstack_lb_members_v2.http[0]')"
+[ "$(lm worker 1 "$LB_STATE")" = "$(printf '%s\n' 'module.ovh[0].openstack_lb_members_v2.http[0]' 'module.ovh[0].openstack_lb_members_v2.https[0]' rc=0)" ] \
+  && ok "a worker's address is in the http and https sets of its module, not in the control planes' k8s_api set" \
   || bad "node_lb_members worker 1 returned '$(lm worker 1 "$LB_STATE" | tr '\n' ' ')'"
-[ -z "$(lm cp 1 "$LB_STATE")" ] && [ -z "$(lm worker 1 'module.ovh[0].openstack_compute_instance_v2.worker[1]')" ] \
+[ "$(lm cp 1 "$LB_STATE")" = rc=0 ] && [ "$(lm worker 1 'module.ovh[0].openstack_compute_instance_v2.worker[1]')" = rc=0 ] \
   && ok "a control plane has none, and a cluster without the app load balancer has none" \
   || bad "node_lb_members invented a member"
+[ "$(lm worker 1 "$(printf '%s\n' "$LB_STATE" 'module.ovh[0].openstack_lb_member_v2.http[1]')" | tail -n 1)" = rc=1 ] \
+  && ok "a state with the per-member resources of before #418 is refused: a targeted plan would not forget them" \
+  || bad "node_lb_members accepted a pre-#418 state"
 
 ia() { # <state show output> — instance_address against a fake `tofu state show`
   ( SHOWN="$1"; tofu() { printf '%b' "$SHOWN"; }; eval "$(extract instance_address)"; instance_address module.ovh[0].x.worker[1] )
@@ -1106,23 +1108,20 @@ ia() { # <state show output> — instance_address against a fake `tofu state sho
   && ok "instance_address reads access_ip_v4 from the state, and says nothing where the provider has none" \
   || bad "instance_address: '$(ia '    access_ip_v4        = "10.0.1.23"\n')'"
 
-# The plan the lab refused: the config, its port guard and the two members, 4 deletes, with the bound the members add.
+# The config plan of a replaced worker since #418: the config and its port guard replaced, the two member sets updated in place.
 OVH_CFG="$(plan_of "$(rc_ 'module.talos.talos_machine_configuration_apply.worker[1]' worker 1 '["delete","create"]')" \
   "$(rc_ 'module.talos.terraform_data.talos_port_ready_worker[1]' talos_port_ready_worker 1 '["delete","create"]')" \
-  "$(rc_ 'module.ovh[0].openstack_lb_member_v2.http[1]' http 1 '["delete","create"]')" \
-  "$(rc_ 'module.ovh[0].openstack_lb_member_v2.https[1]' https 1 '["delete","create"]')")"
-spa "$OVH_CFG" 4 worker 1 check
-[ "$RC" = 0 ] && ok "the config plan with the two members passes with the bound the members add (4), and is not seen as another node's change" \
-  || bad "the OVH config plan was refused with the members counted (rc ${RC}): ${OUT}"
+  "$(rc_ 'module.ovh[0].openstack_lb_members_v2.http[0]' http 0 '["update"]')" \
+  "$(rc_ 'module.ovh[0].openstack_lb_members_v2.https[0]' https 0 '["update"]')")"
 spa "$OVH_CFG" 2 worker 1 check
-[ "$RC" -ne 0 ] && grep -q 'destroys 4 resources (at most 2 expected)' <<<"$OUT" \
-  && ok "…and is still refused when the bound does not count them (the guard itself is untouched)" \
-  || bad "the bound was not enforced (rc ${RC}): ${OUT}"
+[ "$RC" = 0 ] && ok "the config plan with the two sets updated passes the bound of the config and its guard (2), not seen as another node's change" \
+  || bad "the OVH config plan was refused (rc ${RC}): ${OUT}"
 
 RN="$(extract replace_node)"
-grep -q 'node_lb_members "\$tf_t" "\$i"' <<<"$RN" && grep -q 'cfg_max=\$((cfg_max + 1))' <<<"$RN" \
-  && ok "replace_node names the node's members in the config targets and adds them to the bound" \
-  || bad "replace_node does not count the load balancer members"
+grep -q 'lb_sets="$(node_lb_members "\$tf_t" "\$i")" \\$' <<<"$RN" && grep -q 'cfg_targets+=(-target="\$lb_set")' <<<"$RN" \
+  && grep -A1 'lb_sets="$(node_lb_members' <<<"$RN" | grep -q '|| die' && ! grep -q 'cfg_max=\$((cfg_max + 1))' <<<"$RN" \
+  && ok "replace_node targets the node's member sets, dies on a pre-#418 state, and adds no destroy to the bound" \
+  || bad "replace_node does not target the member sets as an in-place update"
 awk '/saved_plan_apply "\$\{node_name\}-instance" .*"\$\{#infra_targets/ {a++} a==2 && /apply "\$\{infra_targets/ {i=NR}
      /instance_address "\$inst_addr"/ {n=NR} /refresh_state_outputs/ {r=NR} /talos-tunnels.sh" open/ {t=NR}
      /saved_plan_apply "\$\{node_name\}-config" "\$t" "\$i" "\$cfg_max"/ {c=NR}
