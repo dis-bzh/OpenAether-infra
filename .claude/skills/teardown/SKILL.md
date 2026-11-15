@@ -11,6 +11,7 @@ This is the OpenAether commands and the traps this project has actually met.
 ## The sequence
 
 ```
+task backup-final PROVIDER=<p> -- --execute --confirm <cluster_name>  # data to keep: writers stopped, then RESULT: COMPLETE
 task cluster-down PROVIDER=<p>                                        # computes, destroys nothing
 task cluster-down PROVIDER=<p> PLAN=destroy-<role>-<p>.tfplan APPROVE=auto   # lands exactly it
 python3 scripts/ops/purge-orphans/<p>.py
