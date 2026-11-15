@@ -927,6 +927,23 @@ OUT="$(run 2 --ensure)"
 [ "$(calls init)" -ge 1 ] && ok "tofu was invoked through the stub ($(wc -l <"$LOG") calls recorded)" \
                           || bad "ZERO tofu calls recorded — the script died before planning, and every assertion above measured nothing"
 
+echo "--- the Scaleway region follows SCW_DEFAULT_REGION: the endpoint, the state and the three zones with it ---"
+OUT="$(SCW_DEFAULT_REGION= run 2 --ensure)"
+hasvar plan 'region=fr-par' && hasvar plan 's3_endpoint=https://s3.fr-par.scw.cloud' \
+  && grep -q -- '-var zones=\["fr-par-1","fr-par-2","fr-par-3"\]' "$LOG" \
+  && ok "unset: fr-par, its endpoint and its three zones (unchanged default)" \
+  || bad "the default is no longer fr-par with fr-par-1..3: $(line plan)"
+OUT="$(SCW_DEFAULT_REGION=nl-ams run 2 --ensure)"
+hasvar plan 'region=nl-ams' && hasvar plan 's3_endpoint=https://s3.nl-ams.scw.cloud' \
+  && grep -q -- '-var zones=\["nl-ams-1","nl-ams-2","nl-ams-3"\]' "$LOG" \
+  && grep -q 'region=nl-ams' <(sed -nE 's/^init .*(-backend-config=region=[^ ]+).*/\1/p' "$LOG") \
+  && ok "nl-ams: its endpoint, its backend region and nl-ams-1..3" \
+  || bad "SCW_DEFAULT_REGION=nl-ams is not followed: $(line plan)"
+OUT="$(SCW_DEFAULT_REGION=nl-ams PROV=ovh run 2 --ensure)"
+hasvar plan 'target_provider=ovh' && ! grep -q 'zones=' "$LOG" \
+  && ok "OVH ignores SCW_DEFAULT_REGION and passes no Scaleway zones" \
+  || bad "a Scaleway region leaked into the OVH run: $(line plan)"
+
 echo "--- a caller's VERSION and RETAIN in the environment change nothing this harness asserts (#286) ---"
 if [ -z "${OA_TALOS_IMAGE_TEST_INNER:-}" ]; then
   INNER="$(VERSION=3.3.24 RETAIN=1 OA_TALOS_IMAGE_TEST_INNER=1 bash "${BASH_SOURCE[0]}" 2>&1 | sed -E 's/\x1b\[[0-9;]*m//g' | grep -E '^[0-9]+ passed, [0-9]+ failed' | tail -1)"
