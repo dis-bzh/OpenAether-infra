@@ -39,7 +39,8 @@ def get(url):
 
 
 def main():
-    event = json.load(open(os.environ["GITHUB_EVENT_PATH"]))
+    with open(os.environ["GITHUB_EVENT_PATH"]) as f:
+        event = json.load(f)
     if event.get("action") != "edited":
         print("not an edit: this event starts ci.yml on the current base itself")
         return 0
