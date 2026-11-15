@@ -80,10 +80,9 @@ TXT
   fi
 fi
 
-# Scaleway, first install with app_lb_allowed_cidrs: the app LB allow list holds the NAT gateway's public address, unknown until the
-# gateway exists, and the provider mis-plans a list with an unknown element ("Provider produced inconsistent final plan ...
-# scaleway_lb_acl ... ip_subnet was null, but now ..."). Everything else of the apply LANDED; the address is in state now, so the
-# same command converges (seen on a real fresh Scaleway account, 2026-10-16). Transcript only: the provider's words, naming the resource.
+# Scaleway, first install with app_lb_allowed_cidrs: the provider mis-plans a list with an unknown element (the NAT address;
+# "Provider produced inconsistent final plan ... scaleway_lb_acl ... ip_subnet was null"). Fixed in modules/providers/scw/lb.tf
+# (#361); kept for a module that predates the fix. The address is in state after the failed apply, so the same command converges.
 if [ -f "$LOG" ]; then
   CLEAN="$(sed -E 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null)"
   if grep -Fq 'Provider produced inconsistent final plan' <<<"$CLEAN" && grep -Eq 'scaleway_lb_acl\.app_(allow|deny)' <<<"$CLEAN"; then
