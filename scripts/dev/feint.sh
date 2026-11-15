@@ -492,7 +492,8 @@ apply_fixture() {
   cd "$root"
   local args=(-var "target_provider=$provider" -var "endpoint=$FEINT_ENDPOINT")
 
-  tofu init -no-color
+  # readonly: the committed lock pins the cluster root's provider versions, never a fresh resolve.
+  tofu init -no-color -lockfile=readonly
   tofu validate -no-color
   tofu apply -no-color -auto-approve "${args[@]}"
 

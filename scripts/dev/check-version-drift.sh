@@ -150,6 +150,27 @@ else
   bad "plumber: install-plumber.sh pins ${PLUMBER_INSTALL}, security.yml pins ${PLUMBER_CI}"
 fi
 
+# OpenTofu providers: the emulated lane must run the binaries the cluster root locks, or a
+# provider release can turn it red (or green) on a version no real deploy uses.
+lock_versions() { # <lock file> -> "<provider> <version>" per line
+  [ -f "$1" ] && awk -F'"' '/^provider /{p=$2} p && /^[[:space:]]*version[[:space:]]*=/{print p, $2; p=""}' "$1"
+}
+CLUSTER_LOCK=infrastructure/opentofu/cluster/.terraform.lock.hcl
+FEINT_LOCK=infrastructure/opentofu-feint/.terraform.lock.hcl
+FEINT_PROVIDERS="$(lock_versions "$FEINT_LOCK" || true)"
+if ! git ls-files --error-unmatch "$FEINT_LOCK" >/dev/null 2>&1 || [ -z "$FEINT_PROVIDERS" ]; then
+  bad "${FEINT_LOCK} is not committed or locks nothing — the emulated lane resolves its own provider versions"
+else
+  while read -r prov ver; do
+    want="$(lock_versions "$CLUSTER_LOCK" | awk -v p="$prov" '$1 == p {print $2}')"
+    if [ "$ver" = "$want" ]; then
+      ok "${prov##*/} ${ver}: the Feint and cluster locks agree"
+    else
+      bad "${prov}: the Feint lock holds ${ver}, the cluster lock ${want:-nothing} — run task lock-providers"
+    fi
+  done <<<"$FEINT_PROVIDERS"
+fi
+
 echo "=== the documentation states the same pins ==="
 
 # <marker> <Tool> <version>, in any tracked markdown. Both languages.

@@ -23,8 +23,9 @@ their `>=` minimums.
 - The locks hold the versions a fresh `tofu init` resolved on 2026-10-13. No file says which
   provider versions the clusters validated so far ran on: the first `tofu plan` after pulling
   this must show no change, and a diff there is the thing to read.
-- `opentofu-local/` and `opentofu-feint/` (lab lanes) and `modules/talos` (tested alone) keep
-  the old local, uncommitted lock.
+- `opentofu-feint/` commits its lock too, initialised `-lockfile=readonly`, and
+  `check-version-drift.sh` fails while it names another version than the cluster root's for a
+  shared provider. `opentofu-local/` and `modules/talos` (tested alone) keep a local, uncommitted lock.
 
 ## Talos boot images
 

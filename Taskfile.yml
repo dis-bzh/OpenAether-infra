@@ -246,21 +246,21 @@ tasks:
 
   lock-providers:
     desc: >-
-      Re-resolve the provider versions of the cluster and talos-image roots within
-      their constraints and rewrite their committed .terraform.lock.hcl for the four
-      platforms operators use. Needs the network, ~1 GB of TMPDIR; no credential.
+      Re-resolve the provider versions of the cluster, talos-image and Feint roots
+      within their constraints and rewrite their committed .terraform.lock.hcl for the
+      four platforms operators use. Needs the network, ~1 GB of TMPDIR; no credential.
     cmds:
       - |
         set -e
         # tofu unpacks every provider for every platform in TMPDIR; /tmp is a small tmpfs on some hosts.
-        for root in cluster talos-image; do
-          ( cd infrastructure/opentofu/$root
+        for root in opentofu/cluster opentofu/talos-image opentofu-feint; do
+          ( cd infrastructure/$root
             export TF_DATA_DIR=.terraform-validate
             tofu init -backend=false -upgrade >/dev/null
             tofu providers lock -platform=linux_amd64 -platform=linux_arm64 \
               -platform=darwin_arm64 -platform=darwin_amd64 )
         done
-        git diff --stat -- 'infrastructure/opentofu/*/.terraform.lock.hcl'
+        git diff --stat -- 'infrastructure/*/.terraform.lock.hcl' 'infrastructure/opentofu/*/.terraform.lock.hcl'
 
   apps-validate:
     desc: "Validate the OpenAether-apps Flux DAG, the generated pick.py profiles and the children's Cilium"

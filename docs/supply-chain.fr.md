@@ -23,8 +23,9 @@ pour ceux en 0.x) ; les modules gardent leurs minimums `>=`.
 - Les locks contiennent les versions qu'un `tofu init` neuf a résolues le 2026-10-13. Aucun
   fichier ne dit sur quelles versions de providers les clusters validés ont tourné : le
   premier `tofu plan` après ce changement ne doit rien montrer, et un écart est ce qu'il faut lire.
-- `opentofu-local/` et `opentofu-feint/` (voies de labo) et `modules/talos` (testé seul)
-  gardent l'ancien lock local non versionné.
+- `opentofu-feint/` versionne aussi son lock, initialisé en `-lockfile=readonly`, et
+  `check-version-drift.sh` échoue tant qu'il nomme une autre version que la racine cluster pour
+  un provider commun. `opentofu-local/` et `modules/talos` (testé seul) gardent un lock local non versionné.
 
 ## Images de démarrage Talos
 
