@@ -295,6 +295,16 @@ Relu ensuite : l'image de la spec ET l'imageID des pods des sept contrôleurs so
 
 **Le premier passage de Flux après le déplacement de la référence redémarre tous les Clusters PostgreSQL, et `cluster-up` ne l'attend pas.** OpenAether-apps 0.4.4 change l'image PostgreSQL (dis-bzh/OpenAether-apps#162, dis-bzh/OpenAether-apps#163) : le déplacement redémarre donc toutes les instances de base de données, les réplicas d'abord, puis une bascule de chaque Cluster. Dans les labos, `cluster-up` s'est terminé en rc 0 avec sa vérification finale prise avant le roulement, et Flux n'était pas non plus un signal fiable (l'ordre du roulement n'est pas fixe) : lisez les Clusters (`kubectl get clusters.postgresql.cnpg.io -A`, « Cluster in healthy state »), pas Flux, avant de tenir le déplacement pour fini. Les étapes du déplacement et ce que les labos ont lu sont dans `CHANGELOG.md`, `[0.4.4]`, « Upgrade from 0.4.3 » ; cette section ne porte que ces deux points.
 
+## De la 0.4.5 à la 0.5.0 (un cluster existant)
+
+Palier : **par les essais cloud écrits dans `CHANGELOG.md` `[0.5.0]`** (labs 52 et 53 : Talos v1.14.2 vers v1.14.4 et Kubernetes v1.37.1 vers v1.37.2 chronométrés sur Scaleway ; n=1 par chiffre). **Chemin supporté : la version précédente seulement.** De 0.4.5 à 0.5.0.
+
+1. Extraire le tag 0.5.0 de ce dépôt. Mettre `git_ref = "refs/tags/0.5.0"` dans le tfvars (le tag `refs/tags/0.5.0` d'OpenAether-apps doit exister). Les défauts Talos et Kubernetes sont v1.14.4 et v1.37.2 : un cluster en 0.4.5 (v1.14.4, v1.37.1) garde ses valeurs jusqu'à ce que vous les montiez, un plan de contrôle à la fois (`task cluster-roll`).
+2. `task cluster-up PROVIDER=… ROLE=…`, plan lu avant l'apply (les machine configs des plans de contrôle changent sur place car le manifeste Talos inline porte `git_ref`).
+3. Lire les Clusters CNPG puis `task cluster-verify` avant de déclarer la montée terminée. Un drain de nœud n'attend plus derrière un instance manager CNPG bloqué (`stopDelay: 300`, apps 0.5.0).
+
+Les valeurs Longhorn et OpenBao d'apps 0.5.0 (CPU des instance-managers à 5 %, demande OpenBao à 100m) s'appliquent aux installations neuves pour Longhorn ; un cluster existant garde son réglage Longhorn tant qu'il n'est pas changé.
+
 ## De la 0.4.4 à la 0.4.5 (un cluster existant)
 
 Palier : **par les essais cloud écrits dans `CHANGELOG.md` `[0.4.5]`** (Scaleway, 3 plans de contrôle + 6 workers, brique forge désactivée, une exécution par chiffre, avec Flux suivant la BRANCHE d'apps `refs/heads/lab/0.4.5-rc1`, pas le tag), l'unique endroit pour leurs chiffres et leurs étiquettes NOMINAL ou INCIDENT (cette section les cite avec leur étiquette, sur la forme ci-dessus, 3 plans de contrôle + 6 workers, sauf quand une ligne nomme l'unique enfant à 2 nœuds ; INCIDENT-by-design désigne une étape qui a tourné pendant la vague d'images Longhorn, ou la convergence de type Flux documentée d'un enfant ; lire le CHANGELOG avant de s'y fier) ; ce qu'une ligne ci-dessous dit avoir lu sans l'avoir joué reste à ce palier. **Le passage depuis `refs/tags/0.4.5` lui-même, celui que vous jouerez, n'est pas montré** : aucun essai n'a suivi le tag. Ce dépôt n'a aucun changement de code en 0.4.5 (le pin d'apps bouge et de la documentation s'ajoute) ; son code a tourné au tag 0.4.4 dans tous les essais. Pas une revendication de conformité.
