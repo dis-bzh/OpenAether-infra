@@ -866,11 +866,16 @@ checks = [
     ("a semver-shaped value at the wrong depth is not a chart version",
      got != "99.9.9"),
 ]
+# charts.jetstack.io writes its chart versions with a `v` (cert-manager): read, not "no chart version".
+clea.http_get = lambda url, *a, **k: b"entries:\n  cert-manager:\n  - version: v1.21.3\n  - version: v1.21.2\n"
+try: vgot = clea.latest_helm("cert-manager", None, registry_url="https://example.invalid")["tag"]
+except clea.CleaError as exc: vgot = str(exc)
+checks.append(("a `v`-prefixed chart version is a version", vgot == "v1.21.3"))
 for name, ok in checks:
-    print(("  \033[32m\u2713\033[0m " if ok else "  \033[31m\u2717\033[0m ") + f"{name} (got {got})")
+    print(("  \033[32m\u2713\033[0m " if ok else "  \033[31m\u2717\033[0m ") + f"{name} (got {got}, {vgot})")
 sys.exit(1 if [c for c in checks if not c[1]] else 0)
 PY
-if [ $? -eq 0 ]; then PASS=$((PASS + 5)); else FAIL=$((FAIL + 1)); fi
+if [ $? -eq 0 ]; then PASS=$((PASS + 6)); else FAIL=$((FAIL + 1)); fi
 
 echo
 echo "=== a probe that failed before it could push is named, not silent ==="
@@ -1222,6 +1227,21 @@ check("…the table shows a few ids and a count, and no id past them anywhere", 
 tmp_rep = os.path.join(tempfile.mkdtemp(), "big.md"); open(tmp_rep, "w").write(body)
 check("…and the state it carries still has what the next scan reads back (`tags`)",
       clea._load_previous(tmp_rep)["deps"][0].get("tags") == {"v2": {"commit": "c" * 40}})
+
+# Two repositories' worth of rows (#345), almost all current: the rows that are not behind give up what nothing reads back.
+URL = "https://example.invalid/" + "n" * 60
+wide = state(*[dep(f"a/c{i}", behind=False, file=f"other-repo/apps/{'x' * 40}/{i}.yaml", repo="other-repo", tag=f"v{i}.0.0",
+                   latest=f"{i}.0.0", notes_url=URL, released_at=ago(days=40), datasource="helm", form="flux-helmrelease",
+                   withdrawn=None, shape_ok=True, moved_since_last_scan=False, tags={"v1": {"commit": "c" * 40}},
+                   osv={"current": {"unknown": "no OSV mapping for datasource helm"}}) for i in range(220)],
+             dep("a/behind", tags={"v2": {"commit": "d" * 40}}))
+body = clea.render_report(wide)
+tmp_rep = os.path.join(tempfile.mkdtemp(), "wide.md"); open(tmp_rep, "w").write(body)
+back = clea._load_previous(tmp_rep)["deps"]
+check("220 current rows from another repository still fit under GitHub's issue-body cap", len(body) < 65536)
+check("…a current row keeps what the next scan reads (latest, tags, repo)",
+      {k: back[0].get(k) for k in ("latest", "tags", "repo")} == {"latest": "0.0.0", "tags": {"v1": {"commit": "c" * 40}}, "repo": "other-repo"})
+check("…and a row that is behind keeps every field the bump routine reads", back[-1] == {k: v for k, v in wide["deps"][-1].items() if k != "osv"})
 
 # --- the weekly cluster lane bumps what the report offers, and says what it holds --
 lane = clea.lane_bumps(state(dep("siderolabs/talos", latest="1.2.3"), dep("kubernetes/kubernetes", latest="1.9.9", released_at=ago(days=1)),
@@ -1797,6 +1817,83 @@ for label, body in (("without a reason", '[[not_watched]]\ndep = "registry.examp
     with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
         rc = clea.main(["--root", work3, "scan", "--state", work3 + "/x.json"])
     check(f"scan: a [[not_watched]] row {label} stops the run, naming the table", rc == 1 and "not_watched" in err.getvalue())
+
+# --- #345: another repository's pins, in the same report, never probed ----------
+import shutil
+work4 = tempfile.mkdtemp(); ext = tempfile.mkdtemp()
+def put(base, rel, text):
+    os.makedirs(os.path.dirname(os.path.join(base, rel)), exist_ok=True); open(os.path.join(base, rel), "w").write(text)
+put(work4, "install.sh", '# clea-test: datasource=acme-ds depName=acme/own\nOWN_V="1.0.0"\n')
+put(ext, "apps/mesh.yaml", "apiVersion: source.toolkit.fluxcd.io/v1\nkind: HelmRepository\nmetadata:\n  name: acme\n"
+    "spec:\n  url: https://charts.example.invalid/a\n---\napiVersion: helm.toolkit.fluxcd.io/v2\nkind: HelmRelease\n"
+    "metadata:\n  name: mesh\nspec:\n  chart:\n    spec:\n      version: \"1.0.0\"   # a comment\n      chart: mesh\n"
+    "      sourceRef:\n        kind: HelmRepository\n        name: acme\n")
+put(ext, "apps/flow.yaml", "kind: HelmRepository\nmetadata:\n  name: other\nspec:\n  url: https://charts.example.invalid/b\n---\n"
+    "kind: HelmRelease\nmetadata:\n  name: mesh-b\nspec:\n  chart:\n    spec:\n      chart: mesh\n      version: 1.0.0\n"
+    "      sourceRef: { kind: HelmRepository, name: other }\n")
+put(ext, "apps/oci.yaml", "kind: HelmRepository\nmetadata:\n  name: reg\nspec:\n  type: oci\n  url: oci://registry.example.invalid/c\n---\n"
+    "kind: HelmRelease\nspec:\n  chart:\n    spec:\n      chart: ocichart\n      version: \"2.0.0\"\n      sourceRef:\n        kind: HelmRepository\n        name: reg\n")
+put(ext, "apps/vend/dump.yaml", "labels:\n  app.kubernetes.io/version: v3.0.0\n---\nlabels:\n  app.kubernetes.io/version: v3.0.0\n")
+put(ext, "apps/img.yaml", "image: registry.example.invalid/tool:4.0.0\n")
+put(ext, "renovate.json5", json.dumps({"customManagers": [
+    {"customType": "regex", "fileMatch": ["^apps/vend/dump\\.yaml$"], "matchStrings": ["version: (?<currentValue>v[0-9.]+)"],
+     "datasourceTemplate": "acme-ds", "depNameTemplate": "acme/vend"},
+    {"customType": "regex", "fileMatch": ["^apps/img\\.yaml$"], "matchStrings": ["tool:(?<currentValue>[0-9.]+)"],
+     "datasourceTemplate": "docker", "depNameTemplate": "registry.example.invalid/tool"}]}))
+REPO_ROW = '[[repo]]\nname = "apps"\npath = "%s"\nrenovate = "renovate.json5"\n'
+def toml4(path=ext): open(work4 + "/clea.toml", "w").write(BASE_TOML + REPO_ROW % path)
+saved = dict(clea.DATASOURCES)
+clea.DATASOURCES["acme-ds"] = lambda dep, token, **_: {"tag": "v3.1.0" if dep == "acme/vend" else "1.0.0", "released_at": ago(days=30)}
+clea.DATASOURCES["helm"] = lambda dep, token, registry_url=None, **_: {
+    "tag": "1.2.0" if registry_url.endswith("/a") else "1.0.0", "released_at": ago(days=30)}
+toml4()
+rc, st, rep, probed, _, said = scan(root=work4)
+ext_rows = [d for d in st["deps"] if d.get("repo") == "apps"]
+mesh = next((d for d in ext_rows if d["file"] == "apps/apps/mesh.yaml"), {})
+check("repo: a HelmRelease chart is read with its version line and its HelmRepository url, prefixed with the repo name",
+      mesh.get("dep") == "mesh" and mesh.get("line") == 15 and mesh.get("current") == "1.0.0" and mesh.get("latest") == "1.2.0")
+check("repo: …a flow-style sourceRef too, resolved against ITS repository (same chart name, another registry)",
+      any(d["file"] == "apps/apps/flow.yaml" and d["latest"] == "1.0.0" and not d["behind"] for d in ext_rows))
+vend = [d for d in ext_rows if d["dep"] == "acme/vend"]
+check("repo: a customManagers pin is read, once per file however often the dump repeats it",
+      len(vend) == 1 and vend[0]["current"] == "v3.0.0" and vend[0]["behind"])
+decl = {d["dep"]: d for d in st["declared"]}
+check("repo: an OCI chart and a docker pin are listed as not watched, with the reason, not resolved",
+      "no `helm-oci` reader" in decl.get("ocichart", {}).get("reason", "")
+      and "no `docker` reader" in decl.get("registry.example.invalid/tool", {}).get("reason", "")
+      and not any(d["dep"] in ("ocichart", "registry.example.invalid/tool") for d in st["deps"]))
+check("repo: its pins behind upstream are in the report's Behind table…",
+      "`apps/apps/mesh.yaml:15`" in offered_part(rep) and "`apps/apps/vend/dump.yaml:2`" in offered_part(rep))
+check("repo: …but never in the probe matrix, nor in a lane bump: they are not this tree's to bump",
+      not ({"mesh", "acme/vend"} & probed) and clea.lane_bumps(st, ("mesh", "acme/vend")) == [])
+check("repo: this repository's own pin is still read, unprefixed and without `repo`",
+      any(d["dep"] == "acme/own" and d["file"] == "install.sh" and "repo" not in d for d in st["deps"]))
+check("repo: the scan says how many pins it read from each repository", "apps: 3 pin(s) read" in said)
+toml4(ext + "/nowhere")
+rc, st, *_ = scan(root=work4)
+check("repo: no checkout is an error in the report, not an empty list",
+      any("[[repo]] apps: no checkout at" in e for e in st["errors"]) and not any(d.get("repo") for d in st["deps"]))
+empty = tempfile.mkdtemp(); put(empty, "renovate.json5", json.dumps({"customManagers": [
+    {"customType": "regex", "fileMatch": ["x"], "matchStrings": ["y"]}]}))
+toml4(empty)
+rc, st, *_ = scan(root=work4)
+check("repo: a checkout where nothing is read is an error (zero floor)", any("no pin read" in e for e in st["errors"]))
+# CI checks the other repository out INSIDE this tree: its anchors must not become this tree's own.
+shutil.copytree(ext, work4 + "/nested"); os.makedirs(work4 + "/nested/.git")
+put(work4, "nested/install.sh", '# clea-test: datasource=acme-ds depName=acme/nested\nNESTED_V="1.0.0"\n')
+toml4(ext + "/nowhere")
+argv = ["--root", work4, "scan", "--state", work4 + "/s.json", "--repo", "apps=" + work4 + "/nested"]
+with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()): rc = clea.main(argv)
+st = json.load(open(work4 + "/s.json"))
+check("repo: --repo NAME=PATH overrides the path of clea.toml",
+      rc == 0 and any(d.get("repo") == "apps" and d["dep"] == "mesh" for d in st["deps"]))
+check("repo: a nested checkout is not part of this tree: its anchor is not read as this repository's own",
+      not any(d["dep"] == "acme/nested" for d in st["deps"]))
+err = io.StringIO()
+with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+    rc = clea.main(["--root", work4, "scan", "--state", work4 + "/s.json", "--repo", "nope=" + ext])
+check("repo: --repo naming no [[repo]] row stops the run", rc == 1 and "nope" in err.getvalue())
+clea.DATASOURCES.clear(); clea.DATASOURCES.update(saved)
 
 # --- Renovate and Cléa read one number ---------------------------------------
 import tomllib  # the file itself, not load_config: a deleted knob must not hide behind the default

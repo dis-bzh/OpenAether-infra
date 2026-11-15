@@ -58,6 +58,15 @@ jobs:
         with:
           persist-credentials: false
 
+      # Its pins are in the report too (#345). Public, read at main: no credential is kept,
+      # and a nested checkout is skipped by this repository's own scan.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          repository: ${{ github.repository_owner }}/OpenAether-apps
+          ref: main
+          path: OpenAether-apps
+          persist-credentials: false
+
       # The report issue is also the state store: `clea report` embeds the state
       # in an HTML comment at the end of its body. No artifact, no cache, and
       # the durable record is the thing a human already reads.
@@ -92,7 +101,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          python3 scripts/clea/clea.py scan --previous previous.md --state clea-state.json
+          python3 scripts/clea/clea.py scan --previous previous.md --state clea-state.json \
+            --repo OpenAether-apps=OpenAether-apps
           {
             echo "state<<CLEA_EOF"
             cat clea-state.json

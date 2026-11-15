@@ -536,10 +536,11 @@ tasks:
     desc: >-
       Ask upstream what it has published, offline-safe except for the calls it
       makes: writes clea-state.json and prints the report. Needs GITHUB_TOKEN —
-      unauthenticated the API allows 60 requests an hour from a shared IP.
-      Usage: task clea-scan
+      unauthenticated the API allows 60 requests an hour from a shared IP. Also
+      reads the OpenAether-apps pins, from ../OpenAether-apps by default (clea.toml [[repo]]).
+      Usage: task clea-scan [-- --repo OpenAether-apps=<path>]
     cmds:
-      - python3 scripts/clea/clea.py scan --state clea-state.json
+      - python3 scripts/clea/clea.py scan --state clea-state.json {{.CLI_ARGS}}
       - python3 scripts/clea/clea.py report --state clea-state.json
 
   cluster-security:

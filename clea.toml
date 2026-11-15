@@ -73,6 +73,14 @@ package = "github.com/cilium/cilium"
 dep = "registry.k8s.io/coredns/coredns"
 reason = "coredns_image_tag, rolled on a running cluster by task cluster-coredns-ha (it restarts the DNS pods, docs/resilience.md, infra #392); Renovate proposes it, Cléa has no docker reader (a registry tag list has no release date)."
 
+# Another repository's pins, read into the same report (#345): its Flux HelmReleases and
+# what its Renovate customManagers name. Reported only, never probed nor bumped from here:
+# that repository's own Renovate proposes them. CI checks it out (`clea scan --repo`).
+[[repo]]
+name = "OpenAether-apps"
+path = "../OpenAether-apps"
+renovate = "renovate.json5"
+
 # Inventories cross-checked against Cléa's own scan. An anchor Cléa can read and
 # an inventory here cannot see is a pin nothing is watching — `clea coverage`
 # fails on it.
