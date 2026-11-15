@@ -186,3 +186,8 @@ outscale_root_volume_size_gb = 50
 # audit_sink_prefix             = "audit"
 # audit_sink_lock_mode          = "governance"       # compliance needs audit_sink_compliance_ack = true (irreversible until the retention ends)
 # audit_sink_retention_days     = 365
+
+# Alert delivery hosts (infra #454): only when the chat webhook or the dead-man's-switch URL seeded as OA_SLACK_WEBHOOK_URL /
+# OA_DEADMANSSWITCH_URL is NOT on hooks.slack.com / hc-ping.com. The host name only; Alertmanager's egress policy allows it.
+# alert_chat_host      = "chat.example.invalid"
+# alert_heartbeat_host = "heartbeat.example.invalid"

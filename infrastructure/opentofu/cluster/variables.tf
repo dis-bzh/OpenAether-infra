@@ -174,6 +174,28 @@ variable "audit_sink_compliance_ack" {
   default     = false
 }
 
+# Alert delivery hosts (#454): the egress policy of Alertmanager (apps observability-alert-egress) reads them from the
+# cluster-identity ConfigMap. Empty (default) = key not published, the apps defaults apply; nothing changes for a deployed cluster.
+variable "alert_chat_host" {
+  description = "Host name (no scheme, no path) of the chat webhook Alertmanager posts to, published as ALERT_CHAT_HOST. Empty: the apps default (hooks.slack.com). Must be the host of the URL seeded as OA_SLACK_WEBHOOK_URL, or the notification is dropped on the wire."
+  type        = string
+  default     = ""
+  validation {
+    condition     = var.alert_chat_host == "" || can(regex("^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z][a-z0-9-]*[a-z0-9]$", var.alert_chat_host))
+    error_message = "alert_chat_host must be empty or a lowercase host name (no scheme, port or path)."
+  }
+}
+
+variable "alert_heartbeat_host" {
+  description = "Host name (no scheme, no path) of the dead-man's-switch URL, published as ALERT_HEARTBEAT_HOST. Empty: the apps default (hc-ping.com). Must be the host of the URL seeded as OA_DEADMANSSWITCH_URL, or the heartbeat is dropped and pages for an outage that is not happening."
+  type        = string
+  default     = ""
+  validation {
+    condition     = var.alert_heartbeat_host == "" || can(regex("^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z][a-z0-9-]*[a-z0-9]$", var.alert_heartbeat_host))
+    error_message = "alert_heartbeat_host must be empty or a lowercase host name (no scheme, port or path)."
+  }
+}
+
 variable "environment" {
   description = "Deployment environment (e.g., dev, prod)"
   type        = string

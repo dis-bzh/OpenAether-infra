@@ -610,6 +610,9 @@ locals {
     # Audit sink (infra #318): the host names only, for the egress policy of the opt-in component. Empty = not published.
     local.audit_sink_host != "" ? { AUDIT_SINK_HOST = local.audit_sink_host } : {},
     local.audit_sink_secondary_host != "" ? { AUDIT_SINK_SECONDARY_HOST = local.audit_sink_secondary_host } : {},
+    # Alert delivery (#454): published only when set, so the apps defaults keep applying otherwise.
+    var.alert_chat_host != "" ? { ALERT_CHAT_HOST = var.alert_chat_host } : {},
+    var.alert_heartbeat_host != "" ? { ALERT_HEARTBEAT_HOST = var.alert_heartbeat_host } : {},
   )
 
   # Emptied by the SAME switch. modules/talos:116 only tests flux_manifest, so a
@@ -637,6 +640,8 @@ locals {
     backup_replica_s3_endpoint = local.cluster_identity.BACKUP_REPLICA_S3_ENDPOINT
     audit_sink_host            = lookup(local.cluster_identity, "AUDIT_SINK_HOST", "")
     audit_sink_secondary_host  = lookup(local.cluster_identity, "AUDIT_SINK_SECONDARY_HOST", "")
+    alert_chat_host            = lookup(local.cluster_identity, "ALERT_CHAT_HOST", "")
+    alert_heartbeat_host       = lookup(local.cluster_identity, "ALERT_HEARTBEAT_HOST", "")
   })
 }
 
