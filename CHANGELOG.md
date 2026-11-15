@@ -14,6 +14,10 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ## [Unreleased]
 
+- **`coredns_image_tag` can be set from a tfvars, converges and is verified (#392).** Null keeps the module default, which stays the single Renovate anchor, so nothing changes by default (the machine-config trigger hash is identical). `task cluster-coredns-ha` (run by `cluster-up`) sets a different image with a strategic patch in the same rollout as the shape, and `cluster-verify` fails while the running CoreDNS image differs from the declared one. New behaviour to know: under `APPROVE=auto`, `cluster-up` now rolls the DNS pods after a bump of the default. Rung: mocked (stub kubectl harnesses and `tofu test`); the rollout under a DNS probe is not read on a cluster yet.
+
+- **Release notes must name the full commit SHA of both repositories (#385, part).** `check-release-tag.sh --apps-sha` refuses notes without the apps one; the release checklist runs it. The Flux commit pin itself stays open: `ref.commit` overrides `git_ref`, and the apps side re-applies the GitRepository without it.
+
 - **New clusters get a 40-character LUKS passphrase; existing clusters keep theirs with no diff (#346).** Owner decision of 2026-11-15. The length is now read at creation only (`ignore_changes`), so neither the new default nor a later change of `disk_encryption_passphrase_length` regenerates a passphrase the partitions are sealed with; rotating it on purpose takes `-replace`. In-place re-keying of existing clusters is still open. Rung: mocked (an apply at 32 then a plan under the new default keeps 32; red without the lifecycle rule). No real state of an existing cluster was planned against.
 
 - **Outscale: the worker data disks get `outscale_worker_data_volume_type` and `_iops` (#376).** Default `standard`, what the module always created, so no change for an existing cluster; io1 is opt-in with a 300 IOPS per GiB check. Rung: mocked; not planned against a real state.
