@@ -7,3 +7,4 @@ test-gates-local.sh            # needs the local Docker cluster (`task local-up`
 test-cnpg-gates-local.sh       # needs the local Docker cluster and installs CloudNativePG: `task test-cnpg-gates-local`
 test-talos-local.sh            # builds 3 control planes and 3 workers in Docker: `task local-test` (and `task local-down`)
 test-talos-rbac.sh             # asks a local Docker cluster whether Talos enforces roles: `task local-rbac` and `task local-test`
+test-scan-all-refs.sh          # needs gitleaks: `task security` and the History scan workflow

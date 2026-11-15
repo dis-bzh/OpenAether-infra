@@ -287,7 +287,9 @@ def _read_value(lines: list[str], start: int):
 
 def _walk(root: Path, include: list[str], exclude: list[str]):
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        # A nested checkout (CI puts a [[repo]] inside this tree) is another repository, not part of this one.
+        dirnames[:] = [d for d in dirnames
+                       if d not in SKIP_DIRS and not (Path(dirpath) / d / ".git").exists()]
         for name in filenames:
             full = Path(dirpath) / name
             rel = full.relative_to(root).as_posix()
@@ -361,13 +363,8 @@ def _file_matcher(pattern: str):
     return lambda rel: fnmatch.fnmatch(rel, pattern)
 
 
-def renovate_coverage(root: Path, config: str, exclude: list[str]) -> set[tuple[str, int]]:
-    """Anchor positions a Renovate config's customManagers can actually reach.
-
-    Its own `matchStrings` contain the anchor text verbatim, so the config file
-    has to be excluded from the scan or it matches itself and reports a dozen
-    anchors that do not exist.
-    """
+def _renovate_matches(root: Path, config: str, exclude: list[str]):
+    """Every (manager, file, text, match) a Renovate config's customManagers reach."""
     cfg = load_json5(root / config)
     managers = cfg.get("customManagers", [])
     if not managers:
@@ -375,7 +372,6 @@ def renovate_coverage(root: Path, config: str, exclude: list[str]) -> set[tuple[
             f"{config} declares no customManagers — either the inventory is wrong "
             "or this repository does not use Renovate; say so in clea.toml"
         )
-    covered: set[tuple[str, int]] = set()
     for manager in managers:
         # Renovate renamed fileMatch to managerFilePatterns, and the two are not
         # spelled the same: fileMatch was always a regex, while a
@@ -400,8 +396,183 @@ def renovate_coverage(root: Path, config: str, exclude: list[str]) -> set[tuple[
                 except re.error as exc:
                     raise CleaError(f"{config}: unusable matchString {match_string!r}: {exc}") from exc
                 for m in rx.finditer(text):
-                    covered.add((rel, text[: m.start()].count("\n") + 1))
-    return covered
+                    yield manager, rel, text, m
+
+
+def renovate_coverage(root: Path, config: str, exclude: list[str]) -> set[tuple[str, int]]:
+    """Anchor positions a Renovate config's customManagers can actually reach.
+
+    Its own `matchStrings` contain the anchor text verbatim, so the config file
+    has to be excluded from the scan or it matches itself and reports a dozen
+    anchors that do not exist.
+    """
+    return {(rel, text[: m.start()].count("\n") + 1)
+            for _, rel, text, m in _renovate_matches(root, config, exclude)}
+
+
+# ---------------------------------------------------------------------------
+# Another repository's pins ([[repo]], #345): read, resolved and reported, never
+# probed nor bumped from here — that repository's own Renovate proposes the bumps.
+# ---------------------------------------------------------------------------
+
+def _pin(path: str, line: int, dep: str, datasource: str, value: str, form: str,
+         **attrs: str | None) -> Anchor:
+    anchor = Anchor(path, line, {"depName": dep, "datasource": datasource,
+                                 **{k: v for k, v in attrs.items() if v}})
+    anchor.value, anchor.value_line, anchor.form = value, line, form
+    return anchor
+
+
+def renovate_pins(root: Path, config: str) -> tuple[list[Anchor], list[str]]:
+    """The pins a Renovate config's customManagers name: depName, datasource and
+    currentValue from the match, or from the manager's *Template fields."""
+    # One row per file and pin: a vendored dump repeats its version on every object (20 sites in one file).
+    pins: dict[tuple[str, str, str], Anchor] = {}
+    errors: list[str] = []
+    for manager, rel, text, m in _renovate_matches(root, config, []):
+        groups = {k: v for k, v in m.groupdict().items() if v}
+        dep = groups.get("depName") or manager.get("depNameTemplate")
+        datasource = groups.get("datasource") or manager.get("datasourceTemplate")
+        value = groups.get("currentValue")
+        line = text[: m.start("currentValue") if value else m.start()].count("\n") + 1
+        if not (dep and datasource and value) or "{{" in dep + datasource:
+            errors.append(f"{rel}:{line}: a {config} match without a plain depName, datasource and "
+                          "currentValue — not read")
+            continue
+        if not VERSION_LIKE.match(value):
+            errors.append(f"{rel}:{line}: {dep} reads {value!r}, which is not a version")
+            continue
+        pins.setdefault((rel, dep, value), _pin(
+            rel, line, dep, datasource, value, "renovate-regex",
+            extractVersion=groups.get("extractVersion") or manager.get("extractVersionTemplate"),
+            registryUrl=groups.get("registryUrl") or manager.get("registryUrlTemplate")))
+    return list(pins.values()), errors
+
+
+_YAML_KEY = re.compile(r"^(?P<ind>\s*)(?:-\s+)?(?P<key>[\w.-]+):\s*(?P<val>.*?)\s*(?:#.*)?$")
+
+
+def _yaml_docs(text: str):
+    """(first line number, lines) per YAML document of a file, split on `---`."""
+    doc: list[str] = []
+    start = 1
+    for i, line in enumerate(text.splitlines(), 1):
+        if re.match(r"^---\s*$", line):
+            yield start, doc
+            doc, start = [], i + 1
+        else:
+            doc.append(line)
+    yield start, doc
+
+
+def _unquote(value: str) -> str:
+    return value.strip().strip("\"'")
+
+
+def flux_helm_pins(root: Path) -> tuple[list[Anchor], list[str]]:
+    """Each Flux HelmRelease's chart and version, with the url of the HelmRepository it
+    names: what Renovate's native flux manager reads, by indent (no YAML parser here)."""
+    repos: dict[str, tuple[str, str]] = {}  # name: (url, type)
+    releases: list[tuple[str, int, str, str, str]] = []  # file, line, chart, version, repository
+    errors: list[str] = []
+    for rel, full in _walk(root, ["*.yaml", "*.yml"], []):
+        try:
+            text = full.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if "HelmRe" not in text:
+            continue
+        for start, lines in _yaml_docs(text):
+            kind = next((m.group(1) for m in (re.match(r"^kind:\s*(\S+)", x) for x in lines) if m), None)
+            if kind == "HelmRepository":
+                fields: dict[str, str] = {}
+                block = ""
+                for line in lines:
+                    m = _YAML_KEY.match(line)
+                    if not m:
+                        continue
+                    if not m.group("ind"):
+                        block = m.group("key")
+                    elif len(m.group("ind")) == 2 and block in ("metadata", "spec"):
+                        fields.setdefault(f"{block}.{m.group('key')}", _unquote(m.group("val")))
+                name = fields.get("metadata.name")
+                if name:
+                    got = (fields.get("spec.url", ""), fields.get("spec.type", "default"))
+                    if repos.setdefault(name, got) != got:
+                        errors.append(f"HelmRepository {name}: two different urls in {root.name}")
+            elif kind == "HelmRelease":
+                for i, line in enumerate(lines):
+                    m = _YAML_KEY.match(line)
+                    if not (m and m.group("key") == "chart" and m.group("val")):
+                        continue
+                    ind = len(m.group("ind"))
+                    version, vline, source = None, None, None
+                    # The siblings of `chart:` (the chart spec), on both sides of it.
+                    lo = i
+                    while lo > 0 and (not lines[lo - 1].strip() or len(lines[lo - 1]) - len(lines[lo - 1].lstrip()) >= ind):
+                        lo -= 1
+                    j = lo
+                    while j < len(lines):
+                        cur = lines[j]
+                        if cur.strip() and len(cur) - len(cur.lstrip()) < ind:
+                            break
+                        k = _YAML_KEY.match(cur)
+                        if k and len(k.group("ind")) == ind:
+                            if k.group("key") == "version":
+                                version, vline = _unquote(k.group("val")), start + j
+                            elif k.group("key") == "sourceRef":
+                                flow = re.search(r"\bname:\s*([\w.-]+)", k.group("val"))
+                                if flow:
+                                    source = flow.group(1)
+                                else:
+                                    for nxt in lines[j + 1:]:
+                                        n = _YAML_KEY.match(nxt)
+                                        if nxt.strip() and len(nxt) - len(nxt.lstrip()) <= ind:
+                                            break
+                                        if n and n.group("key") == "name":
+                                            source = _unquote(n.group("val"))
+                                            break
+                        j += 1
+                    chart = _unquote(m.group("val"))
+                    if not (version and source and vline):
+                        errors.append(f"{rel}:{start + i}: HelmRelease chart {chart} without a version "
+                                      "or a sourceRef — not read")
+                    elif not VERSION_LIKE.match(version):
+                        errors.append(f"{rel}:{vline}: chart {chart} reads {version!r}, which is not a version")
+                    else:
+                        releases.append((rel, vline, chart, version, source))
+    pins: list[Anchor] = []
+    for rel, line, chart, version, source in releases:
+        url, rtype = repos.get(source, ("", ""))
+        if not url:
+            errors.append(f"{rel}:{line}: chart {chart} names HelmRepository {source}, which is not in the tree")
+            continue
+        # An OCI repository has no index.yaml: kept under its own datasource, which has no reader.
+        pins.append(_pin(rel, line, chart, "helm-oci" if rtype == "oci" else "helm", version,
+                         "flux-helmrelease", registryUrl=url))
+    return pins, errors
+
+
+def repo_pins(name: str, root: Path, renovate: str | None) -> tuple[list[Anchor], list[str]]:
+    """A [[repo]]'s pins, their paths prefixed with its name. Zero floor: no checkout, or a
+    checkout where nothing is read, is an error, never an empty list."""
+    if not root.is_dir():
+        return [], [f"[[repo]] {name}: no checkout at {root} — its pins were not read"]
+    pins, errors = flux_helm_pins(root)
+    if renovate:
+        try:
+            more, errs = renovate_pins(root, renovate)
+            pins += more
+            errors += errs
+        except CleaError as exc:
+            errors.append(f"[[repo]] {name}: {exc}")
+    if not pins:
+        errors.append(f"[[repo]] {name}: no pin read under {root} — the reader is broken, not the repository")
+    for pin in pins:
+        pin.path = f"{name}/{pin.path}"
+    errors = [f"[[repo]] {name}: {e}" if not e.startswith("[[repo]]") else e for e in errors]
+    pins.sort(key=lambda a: a.key)
+    return pins, errors
 
 
 def inventory_coverage(root: Path, scan: dict,
@@ -685,7 +856,8 @@ def latest_helm(dep: str, _token: str | None, registry_url: str | None = None, *
     if not registry_url:
         raise CleaError(f"helm {dep}: no registryUrl on the anchor")
     text = http_get(registry_url.rstrip("/") + "/index.yaml").decode("utf-8", "replace")
-    semver = re.compile(r"(?:-\s+)?version:\s*[\"']?(\d+\.\d+\.\d+[0-9A-Za-z.+-]*)[\"']?$")
+    # `v` allowed: charts.jetstack.io writes cert-manager's chart versions as `v1.21.3`.
+    semver = re.compile(r"(?:-\s+)?version:\s*[\"']?(v?\d+\.\d+\.\d+[0-9A-Za-z.+-]*)[\"']?$")
     created_re = re.compile(r"(?:-\s+)?created:\s*[\"']?([^\"'\s]+)[\"']?$")
     found: list[tuple[str, str | None]] = []  # (version, created) per chart item
     version: str | None = None
@@ -956,6 +1128,7 @@ DEFAULT_CONFIG = {
     "inventory": [],
     "tool": [],
     "unpinned": [],
+    "repo": [],
     "lane": {},
 }
 
@@ -1201,6 +1374,29 @@ def cmd_scan(args) -> int:
                  "reason": not_watched[a.dep]} for a in anchors if a.dep in not_watched]
     errors += [f"clea.toml: [[not_watched]] row for {dep} matches no anchor — delete the row "
                "or fix its name" for dep in not_watched if not any(a.dep == dep for a in anchors)]
+    external: list[tuple[Anchor, str]] = []
+    overrides = {}
+    for item in args.repo or []:
+        name, sep, path = item.partition("=")
+        if not (sep and name and path):
+            raise CleaError(f"--repo {item!r}: expected NAME=PATH")
+        overrides[name] = Path(path).resolve()
+    for row in cfg["repo"]:
+        if not (row.get("name") and row.get("path")):
+            raise CleaError("clea.toml: every [[repo]] row needs a name and a path")
+        name = row["name"]
+        pins, errs = repo_pins(name, overrides.get(name) or (root / row["path"]).resolve(), row.get("renovate"))
+        errors += errs
+        for pin in pins:
+            if pin.datasource in DATASOURCES:
+                external.append((pin, name))
+            else:
+                declared.append({"dep": pin.dep, "file": pin.path, "line": pin.line, "current": pin.value,
+                                 "reason": f"read from {name}, whose Renovate proposes its bumps; "
+                                           f"Cléa has no `{pin.datasource}` reader"})
+    unknown = set(overrides) - {row["name"] for row in cfg["repo"]}
+    if unknown:
+        raise CleaError(f"--repo names no [[repo]] row of clea.toml: {sorted(unknown)}")
     if not token:
         print("⚠ no GITHUB_TOKEN: 60 requests an hour from a shared runner IP. "
               "This will rate-limit, loudly.", file=sys.stderr)
@@ -1211,13 +1407,14 @@ def cmd_scan(args) -> int:
 
     # One upstream call per (datasource, dep), not per anchor: helm is pinned in
     # two files here and the API does not need asking twice.
-    cache: dict[tuple[str, str], dict | str] = {}
+    cache: dict[tuple[str, str, str], dict | CleaError] = {}
     facts_cache: dict[tuple[str, str], dict | CleaError] = {}
     dates: dict[tuple[str, str], str | None] = {}
     deps = []
 
     def resolve(datasource: str, name: str, **kwargs) -> dict:
-        key = (datasource, name)
+        # The registry too: two Helm repositories can serve charts of one name.
+        key = (datasource, name, kwargs.get("registry_url") or "")
         if key not in cache:
             fetch = DATASOURCES.get(datasource)
             if fetch is None:
@@ -1232,8 +1429,8 @@ def cmd_scan(args) -> int:
             raise got
         return got
 
-    for anchor in anchors:
-        if anchor.dep in not_watched:
+    for anchor, repo in [(a, None) for a in anchors] + external:
+        if repo is None and anchor.dep in not_watched:
             continue
         entry = {
             "dep": anchor.dep,
@@ -1243,6 +1440,8 @@ def cmd_scan(args) -> int:
             "form": anchor.form,
             "current": anchor.value,
             "pinned": True,
+            # Another repository's pin: reported, never probed nor bumped from here.
+            **({"repo": repo} if repo else {}),
         }
         try:
             upstream = resolve(anchor.datasource, anchor.dep,
@@ -1343,7 +1542,8 @@ def cmd_scan(args) -> int:
                 for a in anchors if a.key not in covered]
             watched = {(a.path, a.line) for a in anchors if a.key in covered}
             for entry in deps:
-                entry["watched"] = (entry["file"], entry["line"]) in watched
+                # A [[repo]] pin is read from what that repository's Renovate sees.
+                entry["watched"] = "repo" in entry or (entry["file"], entry["line"]) in watched
     except CleaError as exc:
         errors.append(str(exc))
 
@@ -1373,6 +1573,8 @@ def cmd_scan(args) -> int:
     print(f"{len(deps)} dependencies, {len(behind)} behind ({len(held)} held back), "
           f"{len(state['unwatched'])} unwatched, "
           f"{len(state['errors'])} distinct error(s)")
+    for row in cfg["repo"]:
+        print(f"  {row['name']}: {sum(d.get('repo') == row['name'] for d in deps)} pin(s) read")
 
     # A datasource that answered nothing is not a dependency that is up to date.
     if state["errors"] and args.strict:
@@ -1418,8 +1620,8 @@ def cmd_matrix(args) -> int:
     now, min_days = policy_of(state)
     seen: dict[str, dict] = {}
     for dep in state.get("deps", []):
-        if not (dep.get("behind") and dep.get("pinned")):
-            continue
+        if not (dep.get("behind") and dep.get("pinned")) or dep.get("repo"):
+            continue  # another repository's pin: its bump is not this tree's to probe
         if assess(dep, now, min_days)["holds"]:
             continue  # a probe branch is an offer too: nothing is probed that is held back
         if not dep.get("shape_ok", True):
@@ -1465,7 +1667,7 @@ def lane_bumps(state: dict, wanted: tuple[str, ...]) -> list[str]:
     now, days = policy_of(state)
     out = []
     for d in state.get("deps", []):
-        if d.get("dep") not in wanted or not (d.get("behind") and d.get("pinned")):
+        if d.get("dep") not in wanted or not (d.get("behind") and d.get("pinned")) or d.get("repo"):
             continue
         holds = assess(d, now, days)["holds"]
         if holds:
@@ -1800,6 +2002,12 @@ def render_report(state: dict) -> str:
     if len(embedded) > budget:
         trimmed["deps"] = [{k: v for k, v in d.items() if k != "osv"} for d in deps]
         embedded = json.dumps(trimmed, separators=(",", ":"))
+    if len(embedded) > budget:
+        # Last, a row that is not behind keeps only what the next scan reads back (a [[repo]] doubles the rows).
+        keep = {"dep", "file", "line", "current", "latest", "pinned", "repo", "tags", "behind", "watched"}
+        trimmed["deps"] = [d if d.get("behind") else {k: v for k, v in d.items() if k in keep}
+                           for d in trimmed["deps"]]
+        embedded = json.dumps(trimmed, separators=(",", ":"))
     # Upstream text can hold `-->`; as JSON escapes it still reads back identically.
     embedded = embedded.replace("<", "\\u003c").replace(">", "\\u003e")
     lines += ["", "<!-- clea-state " + embedded + " -->"]
@@ -1998,6 +2206,8 @@ def main(argv: list[str] | None = None) -> int:
     p_scan.add_argument("--previous", help="last state file, or a report embedding one")
     p_scan.add_argument("--strict", action="store_true",
                         help="exit 1 if any datasource failed to answer")
+    p_scan.add_argument("--repo", action="append", metavar="NAME=PATH",
+                        help="where a [[repo]] of clea.toml is checked out (default: its path)")
 
     p_config = sub.add_parser("config", help="print one dotted key from clea.toml")
     p_config.add_argument("key")

@@ -66,6 +66,15 @@ The marker is configurable (`[scan] marker`), and it has to be: Cléa's own test
 fixtures carry anchors, so a hard-coded word makes the scanner report its own
 fixtures as dependencies of the repository under test.
 
+## Another repository's pins
+
+A `[[repo]]` row adds a second checkout to the report: each Flux `HelmRelease`
+chart (with its `HelmRepository` url) and each pin its Renovate `customManagers`
+name. Those rows carry `repo` in the state and are never probed nor bumped from
+here: that repository's own bot proposes them. A datasource Cléa cannot read
+(`docker`, an OCI Helm repository) is listed under "Not watched"; a missing
+checkout, or one where nothing is read, is an error in the report.
+
 ## Commands
 
 | command | needs the network | what it does |
@@ -189,6 +198,11 @@ reason = "why it is not read"   # report's "Not watched" section; a row matching
 kind = "renovate"
 config = "renovate.json5"
 exclude = ["renovate.json5"]    # its own matchStrings quote the anchor verbatim
+
+[[repo]]                        # another repository's pins, reported only
+name = "other-repo"
+path = "../other-repo"          # `clea scan --repo other-repo=<path>` overrides it
+renovate = "renovate.json5"     # optional: its customManagers name pins too
 
 [[tool]]                        # both probe lanes are derived from these three
 name = "go-task/task"           # fields; the engine needs nothing else

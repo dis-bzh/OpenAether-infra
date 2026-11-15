@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# cluster-security-tests.sh's checks on the VMAgent egress (1.6), Cilium WireGuard (1.8) and the OpenBao bootstrap (4.6
-# development share, 4.7 seal-key escrow record and its proof), run against a stub kubectl: the verdict of each line,
-# failure cases included. SUT overrides the script under test (how the mutants run).
+# cluster-security-tests.sh's checks on the Loki and VMAgent egress (1.5, 1.6), Cilium WireGuard (1.8), the Istio
+# AuthorizationPolicies (2.4, 2.7), Git-delivered Secret data (4.1) and the OpenBao bootstrap (4.6 development share, 4.7
+# seal-key escrow record and its proof), run against a stub kubectl: the verdict of each line, failure cases included. SUT overrides the script under test (how the mutants run).
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -30,6 +30,28 @@ case "$*" in
       *) echo "stub: unexpected query: $*" >&2; exit 1 ;;
     esac
     exit 0 ;;
+  *"get cnp loki -n services-observability"*)
+    case "${STUB_LOKI:-}" in
+      notfound) echo 'Error from server (NotFound): ciliumnetworkpolicies.cilium.io "loki" not found' >&2; exit 1 ;;
+      error) echo 'Unable to connect to the server: TLS handshake timeout' >&2; exit 1 ;;
+    esac
+    case "$*" in
+      *"-o name") echo ciliumnetworkpolicy.cilium.io/loki ;;
+      *"-o jsonpath={.spec.egress[*].toEntities[*]}") printf '%s' "${STUB_LOKI_ENT:-}" ;;
+      *) echo "stub: unexpected query: $*" >&2; exit 1 ;;
+    esac
+    exit 0 ;;
+  *"get helmrelease loki -n services-observability"*"-o name"*)
+    case "${STUB_LOKI_HR:-absent}" in
+      present) echo helmrelease.helm.toolkit.fluxcd.io/loki; exit 0 ;;
+      *) echo 'Error from server (NotFound): helmreleases.helm.toolkit.fluxcd.io "loki" not found' >&2; exit 1 ;;
+    esac ;;
+  "get authorizationpolicies.security.istio.io -A -o jsonpath={range .items[*]}{.metadata.namespace}{\"/\"}{.metadata.name}{\"\\t\"}{.spec.rules[*].from[*].source.principals[*]}{\"\\n\"}{end}")
+    [ "${STUB_AP:-}" = error ] && { echo 'Unable to connect to the server: TLS handshake timeout' >&2; exit 1; }
+    printf '%b' "${STUB_AP_LINES:-}"; exit 0 ;;
+  "get secrets -A --show-managed-fields -o jsonpath={range .items[*]}{.metadata.namespace}{\"/\"}{.metadata.name}{\"\\t\"}{.metadata.managedFields}{\"\\n\"}{end}")
+    [ "${STUB_SEC:-}" = error ] && { echo 'Error from server (Forbidden): secrets is forbidden' >&2; exit 1; }
+    printf '%s' "${STUB_SEC_LINES:-}"; exit 0 ;;
   *"get helmrelease victoria-metrics-operator -n services-observability"*"-o name"*)
     case "${STUB_VMA_HR:-absent}" in
       present) echo helmrelease.helm.toolkit.fluxcd.io/victoria-metrics-operator; exit 0 ;;
@@ -65,6 +87,20 @@ line() { grep -F "$1" <<<"$OUT" | head -1; }
 # <line prefix> <❌|✅|⏭️> — the verdict marker of the line that starts with that number
 verdict() { line "$1" | grep -q "$2"; }
 
+echo "=== 1.5 Loki egress has no world entity: asked of the CLUSTER ==="
+STUB_LOKI_ENT='kube-apiserver cluster' run
+verdict "1.5" "✅" && ok "a loki CNP without world passes" || bad "green case: $(line 1.5)"
+STUB_LOKI_ENT='kube-apiserver world' run
+verdict "1.5" "❌" && ok "toEntities: world on the cluster FAILS, whatever YAML style it was written in" || bad "world passed: $(line 1.5)"
+STUB_LOKI_ENT='all' run
+verdict "1.5" "❌" && ok "toEntities: all (world included) FAILS" || bad "all passed: $(line 1.5)"
+STUB_LOKI=notfound run
+verdict "1.5" "⏭" && ok "no loki CNP and no loki HelmRelease is a skip" || bad "absent: $(line 1.5)"
+STUB_LOKI=notfound STUB_LOKI_HR=present run
+verdict "1.5" "❌" && ok "no loki CNP on a cluster that runs Loki FAILS (egress unbounded)" || bad "CNP lost, Loki there: $(line 1.5)"
+STUB_LOKI=error run
+verdict "1.5" "❌" && ok "an API error is a FAIL, not a pass" || bad "API error: $(line 1.5)"
+
 echo "=== 1.6 VMAgent egress is bounded to the cluster: asked of the CLUSTER ==="
 STUB_VMA_ENT='kube-apiserver cluster host remote-node' run
 verdict "1.6" "✅" && ok "a vmagent CNP with a toEntities: cluster rule passes" || bad "green case: $(line 1.6)"
@@ -98,6 +134,15 @@ verdict "1.6" "✅" && ok "a file that lacks cluster does not fail a cluster tha
 { printf 'metadata:\n  name: vmagent\nspec:\n  egress:\n    - toEntities:\n        - cluster\n'; yes 'name: vmagent' | head -n 10000; } >"$DECOY"
 STUB_VMA_ENT='kube-apiserver cluster' decoy_run
 verdict "1.6" "✅" && ok "a long file, which made the old pipeline fail every time, changes nothing" || bad "long file: $(line 1.6)"
+# 1.5, 2.4, 2.7 and 4.1 read the same sibling tree: a decoy that fails all four must not fail a clean cluster.
+printf 'kind: CiliumNetworkPolicy\nmetadata:\n  name: loki\nspec:\n  egress:\n    - toEntities: [world]\n' >"$DECOY"
+mkdir -p "$TMP/root/OpenAether-apps/apps/base/istio/authz"
+printf 'metadata:\n  namespace: kyverno\nspec:\n  rules:\n    - from:\n        - source:\n            principals: ["openaether.local/ns/a/sa/b"]\n' \
+  | tee "$TMP/root/OpenAether-apps/apps/base/istio/authz/authorizationpolicy-explicit-allows.yaml" >"$TMP/root/OpenAether-apps/apps/base/istio/authz/authorizationpolicy-default-deny.yaml"
+printf 'kind: Secret\nmetadata:\n  name: plain\nstringData:\n  password: hunter2\n' >"$TMP/root/OpenAether-apps/apps/base/plain-secret.yaml"
+STUB_LOKI_ENT='cluster' decoy_run
+for n in 1.5 2.4 2.7 4.1; do verdict "$n" "✅" && ok "$n: the sibling checkout does not decide the verdict" || bad "$n read the file: $(line $n)"; done
+grep -q "OpenAether-apps" <<<"$OUT" && bad "the output still names the sibling checkout" || ok "…and the output names no checkout"
 
 echo "=== 1.8 Cilium WireGuard ==="
 STUB_WG_CFG=true STUB_WG_STATUS='Encryption:  Wireguard   [cilium_wg0 (Pubkey: x, Port: 51871, Peers: 2)]' run
@@ -121,6 +166,33 @@ STUB_CRB="$(crb oa-admins cluster-admin '[{"kind":"Group","name":"other:group"}]
 verdict "3.7" "❌" && ok "...nor bound to another group" || bad "oa-admins other group passed: $(line 3.7)"
 STUB_CRB="$(crb oncall-admins cluster-admin '[{"kind":"Group","name":"oa:admins"}]')" run
 verdict "3.7" "❌" && ok "another binding name to cluster-admin still FAILS" || bad "oncall-admins passed: $(line 3.7)"
+
+echo "=== 2.4 / 2.7 Istio AuthorizationPolicies: asked of the CLUSTER ==="
+STUB_AP_LINES='istio-system/default-deny-all\t\nservices-gateway/allow\tcluster.local/ns/a/sa/b\n' run
+verdict "2.4" "✅" && ok "cluster.local principals pass 2.4" || bad "green 2.4: $(line 2.4)"
+verdict "2.7" "✅" && ok "no policy in an out-of-mesh namespace passes 2.7" || bad "green 2.7: $(line 2.7)"
+STUB_AP_LINES='services-gateway/allow\tcluster.local/ns/a/sa/b openaether.local/ns/c/sa/d\n' run
+verdict "2.4" "❌" && grep -q 'services-gateway/allow' <<<"$OUT" && ok "an openaether.local principal FAILS 2.4 and names the policy" || bad "openaether.local: $(line 2.4)"
+STUB_AP_LINES='kyverno/default-deny-all\t\n' run
+verdict "2.7" "❌" && grep -q 'kyverno' <<<"$OUT" && ok "a policy in an out-of-mesh namespace FAILS 2.7 and names it" || bad "kyverno policy: $(line 2.7)"
+STUB_AP=error run
+verdict "2.4" "❌" && verdict "2.7" "❌" && ok "an API error is not read as an empty list: 2.4 and 2.7 FAIL" || bad "API error: $(line 2.4) / $(line 2.7)"
+STUB_MESH=absent run
+verdict "2.4" "⏭" && verdict "2.7" "⏭" && ok "no mesh: 2.4 and 2.7 are not applicable" || bad "no mesh: $(line 2.4) / $(line 2.7)"
+
+echo "=== 4.1 no Secret data delivered from Git: asked of the CLUSTER ==="
+mf() { printf '%s\t[{"fieldsV1":%s,"manager":"%s","operation":"%s"}]\n' "$1" "$2" "$3" "$4"; }
+STUB_SEC_LINES="$(mf a/webhook '{"f:data":{}}' kustomize-controller Apply)
+$(mf a/webhook-data '{"f:data":{"f:tls.crt":{}}}' external-secrets Update)
+$(mf b/helm '{"f:data":{"f:release":{}}}' helm-controller Update)" run
+verdict "4.1" "✅" && ok "data written by controllers, an empty data from Git: passes" || bad "green 4.1: $(line 4.1)"
+STUB_SEC_LINES="$(mf a/ok '{"f:metadata":{}}' kustomize-controller Apply)
+$(mf c/plain '{"f:data":{".":{},"f:password":{}}}' kustomize-controller Apply)" run
+verdict "4.1" "❌" && grep -q 'c/plain' <<<"$OUT" && ok "a Secret whose data Flux applied from Git FAILS and is named" || bad "plain Secret: $(line 4.1)"
+STUB_SEC_LINES="$(mf c/plain '{"f:stringData":{"f:password":{}}}' kustomize-controller Apply)" run
+verdict "4.1" "❌" && ok "…and so does stringData" || bad "stringData: $(line 4.1)"
+STUB_SEC=error run
+verdict "4.1" "❌" && ok "an API error is not read as an empty list: 4.1 FAILS" || bad "API error: $(line 4.1)"
 
 echo "=== 4.6 development bootstrap ==="
 STUB_DEV=1 OA_ENVIRONMENT=prod run
