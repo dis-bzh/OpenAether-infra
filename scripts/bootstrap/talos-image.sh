@@ -53,7 +53,10 @@ INTERNAL="$(cd "$(dirname "${BASH_SOURCE[0]}")/../internal" && pwd)"  # absolute
 RAW="${ARGS[0]:?usage: talos-image.sh <scaleway|ovh|outscale|proxmox> [talos_version] [--ensure|--list|--prune|--retain|--import-snapshot <id>]}"
 P="$(printf '%s' "$RAW" | tr '[:upper:]' '[:lower:]')"
 case "$P" in
-  scw | scaleway) P=scaleway; TGT=scaleway; SREGION=fr-par;    SEP="https://s3.fr-par.scw.cloud" ;;
+  # Scaleway: the region of the image is the region of the cluster (SCW_DEFAULT_REGION, fr-par when unset); the Object Storage
+  # endpoint and the three zones follow from it. purge-orphans, node-provider and verify-provider-clean read the same variable.
+  scw | scaleway) P=scaleway; TGT=scaleway; SREGION="${SCW_DEFAULT_REGION:-fr-par}"; SEP="https://s3.${SREGION}.scw.cloud"
+                  SCW_IMG_ZONES="${SCW_ZONES:-${SREGION}-1,${SREGION}-2,${SREGION}-3}" ;;
   ovh)            TGT=ovh;      SREGION=eu-west-par;        SEP="https://s3.eu-west-par.io.cloud.ovh.net" ;;
   outscale)       TGT=outscale; SREGION=eu-west-2; SEP="https://oos.eu-west-2.outscale.com" ;;
   proxmox)        TGT=proxmox;  SREGION="${PROXMOX_S3_REGION:-fr-par}"; SEP="${PROXMOX_S3_ENDPOINT:-https://s3.fr-par.scw.cloud}" ;;
@@ -278,6 +281,7 @@ case "$P" in
     IMPORT_BUCKET="s3-${IMG_PROJECT}-${TGT}-talos-import"
     [ "$MODE" != build ] || ensure "$IMPORT_BUCKET"  # only a build uploads to it
     APPLY_VARS+=(-var "import_bucket=$IMPORT_BUCKET" -var "region=$SREGION" -var "s3_endpoint=$SEP")
+    [ "$P" != scaleway ] || APPLY_VARS+=(-var "zones=[\"${SCW_IMG_ZONES//,/\",\"}\"]")
     ;;
   proxmox)
     # No import bucket — the download lands straight on the host's datastore.

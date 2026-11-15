@@ -14,6 +14,8 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ## [Unreleased]
 
+- **The Talos image of Scaleway follows the region of the cluster, not `fr-par` only.** `scripts/bootstrap/talos-image.sh scaleway` read `fr-par`, its Object Storage endpoint and `fr-par-1..3` as literals, so no image could be built or imported in another Scaleway region, while `purge-orphans`, `node-provider` and `verify-provider-clean` already read `SCW_DEFAULT_REGION` (and `SCW_ZONES`). The script now reads the same two variables (default `fr-par`, three zones `<region>-1..3`), so `SCW_DEFAULT_REGION=nl-ams` builds the image, its import bucket and its state in nl-ams and publishes it in nl-ams-1..3. Nothing changes when the variable is unset or `fr-par`. The cluster side is set in the tfvars (`region`, `zone`, `zones`, `s3_*`). Rung: mocked (`test-talos-image.sh`, 261 passed: fr-par default, nl-ams, OVH unaffected); a real nl-ams install is the lab that follows this change.
+
 ## [0.5.0] — 2026-11-15
 
 Performance and sizing release (paired with OpenAether-apps 0.5.0): resources used well, neither too many nor too few, without lowering security, resilience or the availability of client apps and data. Measured on real clouds (Scaleway, OVH, Outscale; labs 38 to 56, mostly n=1 or n=2, each figure with its shape and NOMINAL or INCIDENT in the owner's lab journals). Not proven: OVH write gap 71-119 s (n=2, above the 75 s node target), write gap during worker rolls, zone loss on Outscale (quota 10 instances / 20 vCPU: light profile only), CAPI child bump (#222). Upgrade supported from 0.4.5 only: see "From 0.4.5 to 0.5.0" in `docs/upgrade.md`.
