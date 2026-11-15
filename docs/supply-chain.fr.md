@@ -77,7 +77,10 @@ entre le téléchargement et la conversion dans les trois modules local-exec.
   sur un checkout du tag le reconstruit.
 - **VEX :** un constat qui ne s'applique pas est consigné comme déclaration OpenVEX dans
   `.vex/openaether-infra.openvex.json` (une purl par produit, `not_affected` avec une
-  justification) ; le scan lit le fichier dès qu'il porte une déclaration.
+  justification) ; le scan lit le fichier dès qu'il porte une déclaration. Chaque déclaration est
+  limitée à un digest d'image et porte, comme dans OpenAether-apps, un `action_statement` (ce qui la
+  retire) et une date `Expires:` à 90 jours au plus. Aucun contrôle de ce dépôt n'impose encore cette
+  date : la relire avec les scans de chaque tag de release (`release-checklist.md`, ligne SBOM).
 - **Non couvert :** ce que déploie `OpenAether-apps` (charts, autres images), les couches à
   l'intérieur des images (l'inventaire lit des références, Trivy lit les couches), et les
   signatures (aucune vérification cosign nulle part pour l'instant).

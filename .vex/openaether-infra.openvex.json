@@ -2,7 +2,35 @@
   "@context": "https://openvex.dev/ns/v0.2.0",
   "@id": "https://github.com/dis-bzh/OpenAether-infra/.vex/openaether-infra.openvex.json",
   "author": "OpenAether maintainers",
-  "timestamp": "2026-10-13T00:00:00Z",
-  "version": 1,
-  "statements": []
+  "timestamp": "2026-11-15T00:00:00Z",
+  "version": 2,
+  "statements": [
+    {
+      "vulnerability": {
+        "name": "CVE-2026-123158"
+      },
+      "timestamp": "2026-11-15T00:00:00Z",
+      "products": [
+        {
+          "@id": "pkg:oci/kustomize-controller@sha256%3A37db29b25dae35b881a5e064acedb0cc954442da453a39eaa0eab7a90dbecc4e?repository_url=ghcr.io/fluxcd/kustomize-controller",
+          "subcomponents": [
+            {
+              "@id": "pkg:apk/alpine/openssh-client-common@10.3_p1-r1"
+            },
+            {
+              "@id": "pkg:apk/alpine/openssh-client-default@10.3_p1-r1"
+            },
+            {
+              "@id": "pkg:apk/alpine/openssh-keygen@10.3_p1-r1"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "OpenSSH password authentication bypass, exploitable through sshd's password check on musl. The kustomize-controller v1.10.1 image (the digest above, the one flux-image-digests.lock pins) carries only the OpenSSH client packages (openssh-client-common, openssh-client-default, openssh-keygen 10.3_p1-r1): no openssh-server, no sshd binary, no sshd_config, no host key, no PAM, no account with a password hash. The entrypoint is tini then kustomize-controller, the pod listens on 8080 (metrics) and 9440 (health) only, and no Flux source in this repository uses an ssh:// URL (git_repo_url defaults to https://, as in every example).",
+      "action_statement": "Drop this statement when a kustomize-controller image carrying OpenSSH 10.3_p1-r2 or later is pinned in flux-image-digests.lock (a rebuilt v1.10.1 digest stops matching this product on its own). None existed on 2026-11-15: v1.10.1 is the newest tag on ghcr.io and still resolves to the digest above. Re-read at once if an sshd or an ssh:// source ever appears. Tracked in issue #455.",
+      "status_notes": "Expires: 2027-01-09. Recorded 2026-11-15 after a re-reading: in the image (docker run --network none, as root) apk lists only the three client packages, find finds no sshd, sftp-server or PAM file, /etc/shadow has no $-hash; local Trivy 0.69.3 (database of 2026-11-15) reads the three CRITICAL rows of this CVE without this file and none with it, and still three with the same statement on another digest. The binary-level reading (no client binary imports crypt) is that of 2026-11-12 in #455, not repeated. No cluster was used."
+    }
+  ]
 }

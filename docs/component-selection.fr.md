@@ -33,7 +33,7 @@ leurs dates de fin de support sont dans `OpenAether-apps/docs/eol-calendar.md` (
 
 Quand un scanner (Trivy sur les images de bootstrap, le job SBOM) signale une vulnérabilité qui **ne s'applique pas** ici, on le dit dans une déclaration lisible par machine plutôt que d'ignorer le résultat ou de baisser le scanner.
 
-- **Fichier** : `.vex/openaether-infra.openvex.json` (OpenVEX 0.2.0). Il ne contient aujourd'hui **aucune déclaration** (version 1, écrit le 2026-10-13) : rien n'en a encore demandé. Le scan hebdomadaire ne le lit que lorsqu'il a une déclaration
+- **Fichier** : `.vex/openaether-infra.openvex.json` (OpenVEX 0.2.0). Il contient une déclaration (version 2, 2026-11-15) : CVE-2026-123158 sur les paquets client OpenSSH du digest kustomize-controller épinglé, qui n'a pas de `sshd` (#455). Le scan hebdomadaire ne le lit que lorsqu'il a une déclaration
   (`.github/trivy-image-vex.yaml` est ce qu'on donne à Trivy), car un fichier vide rend le travail du scan plus difficile, pas plus facile.
 - **Une déclaration** nomme le produit (un package URL), l'id de vulnérabilité, un statut (`not_affected`, `fixed`, `affected`, `under_investigation`), et pour `not_affected` l'une des justifications d'OpenVEX
   (`component_not_present`, `vulnerable_code_not_present`, `vulnerable_code_not_in_execute_path`, `vulnerable_code_cannot_be_controlled_by_adversary`, `inline_mitigations_already_exist`) avec un énoncé d'impact qu'un lecteur peut vérifier.

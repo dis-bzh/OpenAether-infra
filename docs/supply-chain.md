@@ -75,7 +75,10 @@ between the download and the conversion in the three local-exec modules.
   rebuilds it.
 - **VEX:** a finding that does not apply is recorded as an OpenVEX statement in
   `.vex/openaether-infra.openvex.json` (a purl per product, `not_affected` with a
-  justification); the scan reads the file once it has a statement.
+  justification); the scan reads the file once it has a statement. Each statement is scoped to an
+  image digest and carries, as in OpenAether-apps, an `action_statement` (what removes it) and one
+  `Expires:` date at most 90 days out. No check in this repository enforces that date yet: read it
+  with the scans of each release tag (`release-checklist.md`, the SBOM line).
 - **Not covered:** what `OpenAether-apps` deploys (charts, the other images), the layers inside
   the images (the inventory reads references, Trivy reads the layers), and signatures (no cosign
   verification anywhere yet).
