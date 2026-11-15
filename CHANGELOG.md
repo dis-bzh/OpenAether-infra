@@ -14,6 +14,12 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ## [Unreleased]
 
+- **`task cluster-security` 1.5, 2.4, 2.7 and 4.1 ask the cluster, not a sibling OpenAether-apps checkout (#442).** 1.5 reads the `toEntities` of the Loki policy, 2.4 and 2.7 list the AuthorizationPolicies, 4.1 looks for a Secret whose data `kustomize-controller` owns; an API error is a failure, never an empty list. The old 4.1 could not see a top-level `data:`. Rung: mocked (16 cases red against the old script, 72/72 after); the managedFields of a Flux-applied Secret are not read on a cluster yet.
+
+- **The daily Cléa report also reads the OpenAether-apps pins (#345).** HelmRelease charts and the Renovate-tracked vendored dumps, reported only: never probed nor bumped from here. The Helm reader accepts `v`-prefixed chart versions, and the embedded state stays under the issue size cap. Rung: mocked (383 checks); the next daily run on GitHub shows it.
+
+- **A weekly `History scan` reads every ref the repository serves (#341).** Branches, tags and the pull-request heads GitHub keeps after a purge, with the env-data gitleaks rules; known findings are baselined by hash, listed and not triaged, and only a new one fails. Measured on the public remote on 2026-11-15: 274 refs, 298 findings, 203 of them reachable from `refs/pull/*` only (#61). Rung: mocked against a throwaway remote; the workflow has not run on GitHub yet.
+
 - **`coredns_image_tag` can be set from a tfvars, converges and is verified (#392).** Null keeps the module default, which stays the single Renovate anchor, so nothing changes by default (the machine-config trigger hash is identical). `task cluster-coredns-ha` (run by `cluster-up`) sets a different image with a strategic patch in the same rollout as the shape, and `cluster-verify` fails while the running CoreDNS image differs from the declared one. New behaviour to know: under `APPROVE=auto`, `cluster-up` now rolls the DNS pods after a bump of the default. Rung: mocked (stub kubectl harnesses and `tofu test`); the rollout under a DNS probe is not read on a cluster yet.
 
 - **Release notes must name the full commit SHA of both repositories (#385, part).** `check-release-tag.sh --apps-sha` refuses notes without the apps one; the release checklist runs it. The Flux commit pin itself stays open: `ref.commit` overrides `git_ref`, and the apps side re-applies the GitRepository without it.
