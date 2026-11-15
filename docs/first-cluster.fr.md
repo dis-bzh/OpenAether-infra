@@ -208,7 +208,9 @@ identifiants ci-dessus), construit l'image Talos et la téléverse — **mesuré
 52 s sur Scaleway le 2026-08-17**, pour deux buckets, un snapshot et une image
 par zone — applique l'infrastructure, ouvre un tunnel SSH par nœud, puis applique
 les configurations machine et amorce Talos. Il se termine par le vérificateur de
-l'étape 6 : si le cluster y échoue, `cluster-up` échoue.
+l'étape 6 : si le cluster y échoue, `cluster-up` échoue. Avec `deploy_flux = true` il se termine pourtant au vert alors que Flux reste sous
+son compte complet de Kustomizations : le DAG ne converge qu'après l'amorçage du Jour 1
+([`admin-access.fr.md`](admin-access.fr.md) § 3), ce plateau n'est donc pas un échec.
 
 **Le load balancer de l'apiserver est ce qu'il y a de plus lent dans cette
 étape, et le seul objet qui peut te laisser en rade.** Rapide chez Scaleway. Chez
@@ -281,6 +283,27 @@ le bastion est derrière la liste d'autorisation `admin_ip`. Le canal lui-même 
 c'est la façon dont Talos s'amorce. `config_delivery = "userdata"` du module Talos saute l'application en mode maintenance sur les plateformes qui peuvent injecter la configuration à la création (Docker l'utilise),
 au prix d'une configuration machine placée dans les métadonnées du provider pour ce nœud ; ce compromis n'a pas été évalué pour les trois clouds. Consigné comme écart dans
 [`key-management.fr.md`](key-management.fr.md#5-écarts-consignés-et-risques-résiduels) et [`security-architecture.fr.md`](security-architecture.fr.md).
+
+### Où va le temps (un budget, tiré des seuls runs mesurés)
+
+Le chemin critique est sériel : image (si absente) → buckets → application de l'infrastructure (le load balancer est l'objet le plus lent) → tunnels et
+amorçage Talos → `cluster-up` rc 0 → Jour 1 ([`admin-access.fr.md`](admin-access.fr.md)) → le DAG, dont la fin est les bases de données, pas le premier Ready.
+Chaque chiffre ci-dessous est un run, lu dans le fichier nommé, et aucun n'est une promesse.
+
+| Phase | Mesuré | Où |
+|---|---|---|
+| Image Talos, build et envoi | 43 s (Scaleway) ; environ 15 min sur Outscale | `CHANGELOG.md` `[0.4.5]` W6 ; `docs/status.md` (ligne Outscale, 2026-10-11) |
+| Buckets, 9 nouveaux | 55 s | `CHANGELOG.md` `[0.4.5]` W6 |
+| `cluster-up`, du début à rc 0 (Scaleway, neuf) | 13:08 avec la reprise d'ACL, dont 0:50 ; runs précédents 9:56 à 13:07 | `CHANGELOG.md` `[0.4.5]` W6 |
+| Load balancer de l'apiserver | rapide sur Scaleway ; plus de 30 min encore en attente sur OVH | § 4 ci-dessus |
+| Jour 1 après rc 0 (seed, PKI, certificats) | 2:19 | `CHANGELOG.md` `[0.4.5]` W6 |
+| DAG Flux après l'amorçage | 35 sur 35 en environ 2 min (labo management `deploy_flux`) | `docs/admin-access.fr.md` § 3 |
+| Bases entières après rc 0 | `grafana-db` 7:30, `zitadel-db` 7:36 | `CHANGELOG.md` `[0.4.5]` W6 |
+| Toutes les Kustomizations Ready après rc 0 | 11:07 avec un incident ; 9:45 et 9:52 avant | `CHANGELOG.md` `[0.4.5]` W6 |
+
+La vue par objet d'une installation est `python3 scripts/ops/flux-timeline.py` (`CHANGELOG.md` `[0.5.0]`). **Pas encore publié :** un tableau par Kustomization et
+par HelmRelease d'une installation 0.5.0, la part des pulls d'images, et les étapes manuelles classées par ce qui pourrait être automatisé : le budget ci-dessus
+est celui de l'installation 0.4.5, pas d'une 0.5.0, et aucune cible de bout en bout n'est fixée.
 
 ## 5. Joindre le cluster
 

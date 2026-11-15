@@ -184,8 +184,10 @@ ssh -i <clé bastion> -L 8443:<IP gateway>:443 bastion@<IP bastion> -N
 ```
 
 ⚠️ **Ce forward est refusé par le bastion tel que livré** : son `PermitOpen` liste 6443 et 50000 (et 8200 sur l'egress historique), pas 443 ; ssh répond
-`administratively prohibited`. Le dépôt n'offre aucun interrupteur pour ouvrir 443 ; élargir `PermitOpen` est une décision à prendre et à documenter (`hardening.fr.md`, section 2).
-Non exécuté sur un cloud depuis la rédaction de cette note : à vérifier sur le premier cluster. Ce qui passe par le tunnel 6443 :
+`administratively prohibited`. Le dépôt n'a volontairement aucun interrupteur pour des ports supplémentaires. **La voie supportée pour tout autre port du cluster** est `kubectl port-forward` par le
+tunnel de l'API existant (6443, kubeconfig comme pour tout `kubectl`) : `kubectl --kubeconfig $KC -n <namespace> port-forward svc/<service> <port local>:<port du service>`,
+puis `127.0.0.1:<port local>` dans le navigateur. Élargir `PermitOpen` reste une décision à prendre et à documenter (`hardening.fr.md`, section 2).
+Non exécuté sur un cloud : à vérifier sur le premier cluster. Ce que le dépôt script par le même tunnel :
 `./scripts/ops/local-admin-portforward.sh` (kubectl port-forward vers OpenBao, Flux et Grafana sur 127.0.0.1, sans TLS ni routage par Host).
 Si vous ouvrez 443, importer la root CA dans le navigateur.
 
@@ -492,7 +494,8 @@ dans `apps/clusters/*.yaml` et `task apps-validate` contrôle cet alignement.
 Un enfant sain sur le profil `workload` affiche **19/19 Kustomizations**. Ce
 compte bouge à chaque brique ajoutée au DAG — le vérifier avec
 `python3 scripts/pick.py vault eso certs gateway`, ne pas lire un changement
-comme une régression.
+comme une régression. Le compte du cluster de management lui-même (35 sur le labo mesuré au § 3)
+est au § 3 ; aucun des deux nombres n'est une constante.
 
 ## Checklist
 

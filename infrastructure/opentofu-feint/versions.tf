@@ -6,13 +6,13 @@ terraform {
   required_providers {
     scaleway = {
       source = "scaleway/scaleway"
-      # Tracks the real lanes. No cap: Feint serves the detach a private NIC
-      # destroy calls from 0.14.0 (#179).
+      # Same constraints as the cluster root, and the committed lock holds the same versions
+      # (check-version-drift.sh): the emulated lane exercises the binary the real one runs.
       version = "~> 2.68"
     }
     outscale = {
       source  = "outscale/outscale"
-      version = ">= 1.7.0"
+      version = "~> 1.8"
     }
   }
 }

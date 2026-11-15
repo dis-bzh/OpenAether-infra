@@ -179,8 +179,10 @@ ssh -i <bastion key> -L 8443:<gateway IP>:443 bastion@<bastion IP> -N
 ```
 
 ⚠️ **This forward is refused by the bastion as shipped**: its `PermitOpen` lists 6443 and 50000 (and 8200 on the legacy egress) and not 443, so ssh answers
-`administratively prohibited`. The repository offers no switch to open 443; widening `PermitOpen` is a deliberate decision to take and document (`hardening.md`, section 2).
-Not run on a cloud since this note was written: check it on the first cluster. What works through the 6443 tunnel: `./scripts/ops/local-admin-portforward.sh`
+`administratively prohibited`. The repository has no switch for extra ports, on purpose. **The supported way to reach any other in-cluster port** is `kubectl port-forward` through the
+existing API tunnel (6443, kubeconfig as for any `kubectl`): `kubectl --kubeconfig $KC -n <namespace> port-forward svc/<service> <local port>:<service port>`,
+then browse `127.0.0.1:<local port>`. Widening `PermitOpen` stays a deliberate decision to take and document (`hardening.md`, section 2).
+Not run on a cloud: check it on the first cluster. What the repository scripts through the same tunnel: `./scripts/ops/local-admin-portforward.sh`
 (kubectl port-forward to OpenBao, Flux and Grafana on 127.0.0.1, no TLS, no Host routing).
 If you do open 443, import the root CA into the browser.
 
@@ -471,7 +473,8 @@ faster and safer. The correct values are already in `apps/clusters/*.yaml` and
 A healthy child on the `workload` profile shows **19/19 Kustomizations**. That
 count moves with every brick added to the DAG — check it with
 `python3 scripts/pick.py vault eso certs gateway`, do not read a change as a
-regression.
+regression. The management cluster's own count (35 on the lab measured in § 3) is
+in § 3; neither number is a constant.
 
 ## Checklist
 

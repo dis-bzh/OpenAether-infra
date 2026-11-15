@@ -23,8 +23,9 @@ pour ceux en 0.x) ; les modules gardent leurs minimums `>=`.
 - Les locks contiennent les versions qu'un `tofu init` neuf a résolues le 2026-10-13. Aucun
   fichier ne dit sur quelles versions de providers les clusters validés ont tourné : le
   premier `tofu plan` après ce changement ne doit rien montrer, et un écart est ce qu'il faut lire.
-- `opentofu-local/` et `opentofu-feint/` (voies de labo) et `modules/talos` (testé seul)
-  gardent l'ancien lock local non versionné.
+- `opentofu-feint/` versionne aussi son lock, initialisé en `-lockfile=readonly`, et
+  `check-version-drift.sh` échoue tant qu'il nomme une autre version que la racine cluster pour
+  un provider commun. `opentofu-local/` et `modules/talos` (testé seul) gardent un lock local non versionné.
 
 ## Images de démarrage Talos
 
@@ -76,7 +77,10 @@ entre le téléchargement et la conversion dans les trois modules local-exec.
   sur un checkout du tag le reconstruit.
 - **VEX :** un constat qui ne s'applique pas est consigné comme déclaration OpenVEX dans
   `.vex/openaether-infra.openvex.json` (une purl par produit, `not_affected` avec une
-  justification) ; le scan lit le fichier dès qu'il porte une déclaration.
+  justification) ; le scan lit le fichier dès qu'il porte une déclaration. Chaque déclaration est
+  limitée à un digest d'image et porte, comme dans OpenAether-apps, un `action_statement` (ce qui la
+  retire) et une date `Expires:` à 90 jours au plus. Aucun contrôle de ce dépôt n'impose encore cette
+  date : la relire avec les scans de chaque tag de release (`release-checklist.md`, ligne SBOM).
 - **Non couvert :** ce que déploie `OpenAether-apps` (charts, autres images), les couches à
   l'intérieur des images (l'inventaire lit des références, Trivy lit les couches), et les
   signatures (aucune vérification cosign nulle part pour l'instant).

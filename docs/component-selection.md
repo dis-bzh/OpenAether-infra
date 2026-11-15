@@ -33,7 +33,7 @@ their end-of-support dates are in `OpenAether-apps/docs/eol-calendar.md` (apps A
 
 When a scanner (Trivy on the bootstrap images, the SBOM job) reports a vulnerability that **does not apply** here, we say so in a machine-readable statement instead of ignoring the finding or lowering the scanner.
 
-- **File**: `.vex/openaether-infra.openvex.json` (OpenVEX 0.2.0). Today it holds **no statement** (version 1, written 2026-10-13): nothing has needed one yet. The weekly scan only reads it once it has a statement
+- **File**: `.vex/openaether-infra.openvex.json` (OpenVEX 0.2.0). It holds one statement (version 2, 2026-11-15): CVE-2026-123158 on the OpenSSH client packages of the pinned kustomize-controller digest, which has no `sshd` (#455). The weekly scan only reads it once it has a statement
   (`.github/trivy-image-vex.yaml` is what Trivy is given), because an empty file makes the scan's job harder, not easier.
 - **A statement** names the product (a package URL), the vulnerability id, a status (`not_affected`, `fixed`, `affected`, `under_investigation`), and for `not_affected` one of OpenVEX's justifications
   (`component_not_present`, `vulnerable_code_not_present`, `vulnerable_code_not_in_execute_path`, `vulnerable_code_cannot_be_controlled_by_adversary`, `inline_mitigations_already_exist`) with an impact statement a reader can check.
