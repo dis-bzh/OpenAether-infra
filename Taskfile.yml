@@ -2322,6 +2322,21 @@ tasks:
     cmds:
       - ./scripts/ops/dr-restore-plan.sh {{.PROVIDER}} --role {{.ROLE}} {{.CLI_ARGS}}
 
+  backup-final:
+    desc: >-
+      The final backups before a planned destroy or a migration, verified, with a receipt: the cluster's own backup
+      CronJobs and a base backup of each CNPG Cluster, the WAL switch until archived, the copy, backup-verify's PASS
+      lines, the segment listed in both stores, task backup-state. DRY-RUN by default. Usage: task backup-final
+      PROVIDER=scaleway [ROLE=management] -- [--without step,step] [--execute --confirm <cluster_name>]
+      (scripts/ops/backup-final.sh). Stop the writers first; destroy only on RESULT: COMPLETE.
+    requires:
+      vars: [PROVIDER]
+    preconditions: *refuse-local
+    vars:
+      ROLE: '{{.ROLE | default "management"}}'
+    cmds:
+      - ./scripts/ops/backup-final.sh {{.PROVIDER}} --role {{.ROLE}} {{.CLI_ARGS}}
+
   cluster-upgrade:
     aliases: [upgrade]
     desc: >-

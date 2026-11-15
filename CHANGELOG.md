@@ -14,6 +14,8 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ## [Unreleased]
 
+- **`task backup-final` takes the final backups before a planned destroy or migration (#435).** The cluster's own backup Jobs, a base backup per CNPG Cluster, the WAL switch until archived, the copy, the PASS lines and ages of `backup-verify`, the segment listed in both stores, then `task backup-state`. Dry-run by default; it ends on a receipt that names any step that did not complete and says not to destroy. It does not stop the writers: that is a stated precondition. The receipt also prints the server-side-encryption header each store returns on that segment (`sse=`), the reading #406 still needs on OVH and Outscale. Rung: mocked (35 assertions, six mutants each red); not run on a cluster.
+
 - **`task cluster-security` 1.5, 2.4, 2.7 and 4.1 ask the cluster, not a sibling OpenAether-apps checkout (#442).** 1.5 reads the `toEntities` of the Loki policy, 2.4 and 2.7 list the AuthorizationPolicies, 4.1 looks for a Secret whose data `kustomize-controller` owns; an API error is a failure, never an empty list. The old 4.1 could not see a top-level `data:`. Rung: mocked (16 cases red against the old script, 72/72 after); the managedFields of a Flux-applied Secret are not read on a cluster yet.
 
 - **The daily Cléa report also reads the OpenAether-apps pins (#345).** HelmRelease charts and the Renovate-tracked vendored dumps, reported only: never probed nor bumped from here. The Helm reader accepts `v`-prefixed chart versions, and the embedded state stays under the issue size cap. Rung: mocked (383 checks); the next daily run on GitHub shows it.
