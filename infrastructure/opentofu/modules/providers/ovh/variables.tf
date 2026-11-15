@@ -144,7 +144,7 @@ variable "bastion_internet_egress" {
 variable "bastion_image_id" {
   description = "Image ID or name for the bastion host"
   type        = string
-  default     = "Ubuntu 22.04"
+  default     = "Ubuntu 24.04"
 }
 
 variable "look_up_flavor_disk" {

@@ -187,4 +187,10 @@ resource "scaleway_instance_server" "bastion" {
   }
 
   tags = ["bastion", var.cluster_name]
+
+  # The image is the bastion's install medium: a new default image must not replace a running bastion. Move one
+  # deliberately with `-replace` (docs/admin-access.md, patching paragraph).
+  lifecycle {
+    ignore_changes = [image]
+  }
 }

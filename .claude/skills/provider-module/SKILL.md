@@ -22,6 +22,10 @@ Implement it; do not restate it here. The rest of the stack — `modules/talos`,
 - **Ordered list attributes.** Octavia returns `allowed_cidrs` sorted; sending it
   unsorted made every plan propose the same no-op update, so OVH was never
   idempotent. When an attribute is a list, ask what order the API returns.
+- **A list with ONE unknown element in a nested block plans as null** on the
+  Scaleway (SDKv2) provider, and the apply dies on "inconsistent final plan"
+  (#361). Make the whole list unknown (`distinct()` over all of it) or known.
+  `task feint-apply-root` reproduces it; the mocked tests cannot.
 - **Quotas are a design input.** Outscale's 40 GB RAM quota does not fit 3+3, so
   the documented HA topology is unreachable there. `task preflight-quotas` exists
   to say so before the bill, not after.

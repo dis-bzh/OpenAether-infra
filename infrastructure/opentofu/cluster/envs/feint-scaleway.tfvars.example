@@ -34,6 +34,11 @@ node_distribution = {
 
 admin_ip = ["203.0.113.0/32"]
 
+# The app LB with its source filter: its allow list holds the NAT address, unknown before the first apply, so
+# `task feint-apply-root` is the fresh install that failed with "inconsistent final plan" before the fix (#361).
+deploy_app_lb        = true
+app_lb_allowed_cidrs = ["198.51.100.0/24"]
+
 bastion_ssh_keys = {
   scaleway = ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIr6pEFlAFO3YU0DNW/r8SkpjdbptN9ockkO2BtIolSD feint@emulated"]
 }

@@ -5,12 +5,12 @@
 # ==============================================================================
 
 locals {
-  # Caller list + the cluster's own egress (pods reach the Gateway through this LB's
-  # public address) + the VPC ranges, as the k8s API ACL below. Empty = no ACL.
-  app_lb_acl_sources = length(var.app_lb_allowed_cidrs) == 0 ? [] : concat(
-    distinct(concat(var.app_lb_allowed_cidrs, ["172.16.0.0/12", "10.0.0.0/8"])),
-    ["${scaleway_vpc_public_gateway_ip.this.address}/32"],
-  )
+  # Caller list + the VPC ranges, as the k8s API ACL below, + the cluster's own egress (pods reach the Gateway through
+  # this LB's public address). Empty = no ACL. The NAT address goes INSIDE distinct(): while it is unknown (first apply)
+  # the whole list is unknown, which the provider plans; one unknown element plans as null and fails the apply (#361).
+  app_lb_acl_sources = length(var.app_lb_allowed_cidrs) == 0 ? [] : distinct(concat(
+    var.app_lb_allowed_cidrs, ["172.16.0.0/12", "10.0.0.0/8", "${scaleway_vpc_public_gateway_ip.this.address}/32"],
+  ))
 }
 
 resource "scaleway_lb_ip" "app" {
