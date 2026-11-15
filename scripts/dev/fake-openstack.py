@@ -11,6 +11,7 @@
       forgotten ones leave. Folding the plans of one module until they are empty gives the state of a converged cluster.
 """
 import json
+import pathlib
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -18,7 +19,6 @@ PROVIDER = 'provider["registry.opentofu.org/terraform-provider-openstack/opensta
 
 
 def serve(port_file, log_file):
-    log = open(log_file, "a", buffering=1)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
@@ -35,7 +35,8 @@ def serve(port_file, log_file):
             self.wfile.write(data)
 
         def any(self):
-            log.write(f"{self.command} {self.path}\n")
+            with open(log_file, "a") as log:
+                log.write(f"{self.command} {self.path}\n")
             base = f"http://127.0.0.1:{self.server.server_port}"
             path = self.path.split("?")[0]
             if self.command == "POST" and path == "/v3/auth/tokens":
@@ -60,7 +61,7 @@ def serve(port_file, log_file):
                     "id": "bastion-image", "name": "Ubuntu 22.04", "status": "active", "visibility": "public",
                     "created_at": "2020-01-01T00:00:00Z", "updated_at": "2020-01-01T00:00:00Z", "tags": [],
                     "size": 1, "min_disk": 0, "min_ram": 0}]})
-            self.reply(404, {"error": "not served by the fake"})
+            return self.reply(404, {"error": "not served by the fake"})
 
         do_GET = do_POST = do_PUT = do_DELETE = do_PATCH = any
 
@@ -90,9 +91,9 @@ def dummy(kind, text):
 
 
 def fold(state_path, plan_path, seed_path, types_path):
-    plan, seed, types = (json.load(open(p)) for p in (plan_path, seed_path, types_path))
+    plan, seed, types = (json.loads(pathlib.Path(p).read_text()) for p in (plan_path, seed_path, types_path))
     try:
-        state = json.load(open(state_path))
+        state = json.loads(pathlib.Path(state_path).read_text())
     except FileNotFoundError:
         state = {"version": 4, "terraform_version": "1.13.9", "serial": 0, "lineage": "oa-test", "outputs": {},
                  "resources": []}
