@@ -354,6 +354,8 @@ tasks:
       # test fixtures use synthetic-but-routable quads. This asserts they still
       # match; two of them once matched nothing and passed.
       - ./scripts/dev/check-gitleaks-rules.sh
+      # The weekly scan of every ref (history-scan.yml) must catch a leak served only by a PR head or a tag. Offline.
+      - ./scripts/dev/test-scan-all-refs.sh
       # Last: without GH_TOKEN this legitimately exits 3 ("incomplete data" —
       # branch protection cannot be evaluated), so it must not swallow the
       # checks above it that CAN succeed offline. Set GH_TOKEN for a complete
