@@ -4,20 +4,27 @@
 # caller's. Prints the release commit SHA, which the release notes must carry so a client can compare it
 # (`git verify-tag` + `git rev-parse <tag>^{commit}`). Exit 0 ok, 1 refused, 2 usage / cannot check.
 #
-# Usage: check-release-tag.sh <tag> [--signers-dir docs/signers] [--notes <file>]
+# Usage: check-release-tag.sh <tag> [--signers-dir docs/signers] [--notes <file> [--apps-sha <sha>]]
 #   --notes: the release notes file; refused unless it names the full release commit SHA.
+#   --apps-sha: the full commit SHA of the OpenAether-apps tag that git_ref pins; the notes must name it too, so a client
+#               can check both repositories (infra #385: a tag alone can be force-replaced upstream).
 set -uo pipefail
 
 tag="${1:-}"; shift || true
-dir="docs/signers"; notes=""
+dir="docs/signers"; notes=""; apps_sha=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --signers-dir) dir="${2:-}"; shift 2 ;;
     --notes) notes="${2:-}"; shift 2 ;;
-    *) echo "usage: check-release-tag.sh <tag> [--signers-dir <dir>] [--notes <file>]" >&2; exit 2 ;;
+    --apps-sha) apps_sha="${2:-}"; shift 2 ;;
+    *) echo "usage: check-release-tag.sh <tag> [--signers-dir <dir>] [--notes <file> [--apps-sha <sha>]]" >&2; exit 2 ;;
   esac
 done
-[ -n "$tag" ] || { echo "usage: check-release-tag.sh <tag> [--signers-dir <dir>] [--notes <file>]" >&2; exit 2; }
+[ -n "$tag" ] || { echo "usage: check-release-tag.sh <tag> [--signers-dir <dir>] [--notes <file> [--apps-sha <sha>]]" >&2; exit 2; }
+if [ -n "$apps_sha" ]; then
+  [[ "$apps_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "✗ --apps-sha must be a full 40-hex commit SHA (git rev-parse <apps tag>^{commit})" >&2; exit 2; }
+  [ -n "$notes" ] || { echo "✗ --apps-sha checks the notes: give --notes too" >&2; exit 2; }
+fi
 [ -f "$dir/signers.txt" ] || { echo "✗ $dir/signers.txt not found: no signer table to check against" >&2; exit 2; }
 command -v gpg >/dev/null || { echo "✗ gpg missing: cannot verify" >&2; exit 2; }
 
@@ -58,5 +65,6 @@ sha="$(git rev-parse "refs/tags/$tag^{commit}")"
 if [ -n "$notes" ]; then
   [ -f "$notes" ] || { echo "✗ notes file $notes not found" >&2; exit 2; }
   grep -q -- "$sha" "$notes" || { echo "✗ $notes does not name the release commit $sha" >&2; exit 1; }
+  [ -z "$apps_sha" ] || grep -q -- "$apps_sha" "$notes" || { echo "✗ $notes does not name the OpenAether-apps release commit $apps_sha" >&2; exit 1; }
 fi
 echo "✓ $tag is an annotated tag signed by ${sig:0:16}... (in the signer table); release commit $sha"
