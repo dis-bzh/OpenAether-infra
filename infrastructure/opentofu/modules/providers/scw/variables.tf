@@ -153,7 +153,7 @@ variable "bastion_internet_egress" {
 variable "bastion_image_id" {
   description = "Image ID for the bastion host"
   type        = string
-  default     = "ubuntu_jammy"
+  default     = "ubuntu_noble"
 }
 
 variable "bastion_instance_type" {

@@ -219,7 +219,7 @@ run "ovh_active_junction_point" {
         image_id           = "dummy-talos-ovh-image"
         network_name       = "Ext-Net"
         availability_zones = ["eu-west-par-a"]
-        bastion_image_id   = "Ubuntu 22.04"
+        bastion_image_id   = "Ubuntu 24.04"
       }
     }
   }

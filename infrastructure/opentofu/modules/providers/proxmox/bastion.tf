@@ -63,6 +63,12 @@ resource "proxmox_virtual_environment_vm" "bastion" {
   operating_system {
     type = "l26"
   }
+
+  # The image is the bastion's install medium: a new default image must not replace a running bastion. Move one
+  # deliberately with `-replace` (docs/admin-access.md, patching paragraph).
+  lifecycle {
+    ignore_changes = [disk[0].file_id]
+  }
 }
 
 # Cloud-init user-data uploaded as a snippet (shared hardened template).

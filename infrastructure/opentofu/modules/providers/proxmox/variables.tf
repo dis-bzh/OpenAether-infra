@@ -180,7 +180,7 @@ variable "bastion_public_ip" {
 variable "bastion_image_file_id" {
   description = "Proxmox file ID of the bastion cloud image (Ubuntu cloud-init img)."
   type        = string
-  default     = "local:iso/jammy-server-cloudimg-amd64.img"
+  default     = "local:iso/noble-server-cloudimg-amd64.img"
 }
 
 variable "bastion_cpu_cores" {

@@ -44,7 +44,7 @@ All opt-in and **off by default**: with the defaults the cloud-init is byte for 
 | Host key (NT-007 R6) | Trusted at first use | `OA_BASTION_PIN_HOSTKEY` keeps and checks it | Control (opt-in); a host certificate is not done |
 | Identity and revocation (NT-007 R30, PA-022 R21) | One shared account | `bastion_admins`, SSH CA, `revoked_keys`, optional hardware-key check | Control (opt-in) |
 | Egress (PA-022 R10) | 80/443 to anywhere | `bastion_internet_egress = closed` | Control (opt-in): the bastion is patched by replacement |
-| Key exchange: post-quantum hybrid (TLS-19) | `KexAlgorithms` is an explicit classical list | not available on Ubuntu 22.04's OpenSSH 8.9 | **Deviation**: the hybrid `sntrup761x25519` comes with a bastion image on 24.04, which replaces the bastion; `key-management.md` section 5 |
+| Key exchange: post-quantum hybrid (TLS-19) | `KexAlgorithms` is an explicit classical list | not available on Ubuntu 22.04's OpenSSH 8.9 | **Deviation**: a new bastion boots Ubuntu 24.04 (the default on Scaleway, OVH and Proxmox), whose OpenSSH knows `sntrup761x25519`, but the list does not offer it yet; an existing bastion keeps 22.04 until replaced; `key-management.md` section 5 |
 
 **Tunnelling (NT-007 R5, as the audit reads it).** The recommendation is to avoid SSH forwarding unless needed. The bastion exists to forward: the nodes have no public address, and a TCP
 forward is the only path from an operator's machine to the Talos API (50000) and the Kubernetes API (6443). Compensations: `AllowTcpForwarding yes` is paired with **`PermitOpen` limited to ports 6443 and 50000** (and 8200 only
@@ -61,7 +61,7 @@ Not compensated: `PermitOpen` names ports and not hosts (`*:6443`), so a forward
 | H4 | `ip_forward=1`, `pid_max=262144`, other sysctls at Talos defaults | BP-028 R9, R12, R13 | Kubernetes and Cilium need routing and a high pid ceiling; the rest is not decided yet | none beyond Talos defaults | Reduced by `node_baseline` when switched on (`sysctls`); `ip_forward`, `pid_max` and `rp_filter` stay by design |
 | H5 | SELinux permissive, mitigation kernel arguments absent | BP-028 R8, R37, R46 | Talos defaults | none; decision recorded below | Open, see the note after this table |
 | H6 | SSH forwarding enabled on the bastion | NT-007 R5 | It is the admin path | `PermitOpen` ports, group, allowlist | Permanent while the bastion is the design (#82) |
-| H7 | Classical KEX on the bastion, no post-quantum hybrid | TLS-19 | OpenSSH 8.9 on Ubuntu 22.04 | inner TLS and mTLS of the tunnelled protocols | Bastion image move |
+| H7 | Classical KEX on the bastion, no post-quantum hybrid | TLS-19 | OpenSSH 8.9 on an Ubuntu 22.04 bastion; the list on 24.04 | inner TLS and mTLS of the tunnelled protocols | Bastion image move |
 | H8 | Machine secrets sent over the unauthenticated maintenance API | DP-17 | Talos bootstrap | private network, tunnel, bastion-only 50000 | Permanent (upstream) |
 | H9 | Node and API audit logs are not shipped by default | BP-028 R71 | The shipping is opt-in (`node_log_forwarding`, `cilium_hubble_drop_log`, the apps audit collector); each ran on a cluster once (node log forwarding to a loopback receiver on OVH, lab 15A; the Hubble drop log on OVH and Outscale, labs 15A and 15B; the audit collector to an object-store sink, lab 23, `audit-sink.md`); Talos log transport is plaintext TCP | copy by hand before replacement; the receiver lives in the cluster it protects (a second sink is not built) | Open: opt-in, each path run once, none by default |
 

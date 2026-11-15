@@ -390,7 +390,8 @@ close the tunnels (`scripts/bootstrap/talos-tunnels.sh close`), then `TF_VAR_ski
 check needs the tunnels you just closed and fails after its 15 minutes, seen on OVH 2026-10-17; the replacement itself took under a minute) with the address of the
 `…bastion` instance resource of the provider module (`module.scw[0].scaleway_instance_server.bastion`,
 `module.ovh[0].openstack_compute_instance_v2.bastion`, `module.outscale[0].outscale_vm.bastion`,
-`module.proxmox[0].proxmox_virtual_environment_vm.bastion[0]`), never during a bootstrap or upgrade (the tunnels die with it). The
+`module.proxmox[0].proxmox_virtual_environment_vm.bastion[0]`), never during a bootstrap or upgrade (the tunnels die with it). A replace is also the only way to move the bastion to a new image:
+the resources ignore an image change, so a new default (Ubuntu 24.04 since 0.5.1) reaches new bastions only. The
 public IP is its own resource and survives; the host key does not (see above). On Outscale the `outscale_public_ip_link` does not always come back in the same run (seen in lab 11, infra #360: the new bastion was unreachable until a second apply), so finish every `-replace` of the bastion with a plain `tofu plan`: it must say `No changes`, and if it shows the link to create, `tofu apply` once more before `tunnels-up`. The OVH floating-IP association and the Scaleway equivalent have not been checked for the same gap. A bake-and-replace image pipeline or an ephemeral jump
 host is not built. To open the egress again for a window, set the mode back to `legacy` and replace the bastion. `BASTION_EGRESS=closed
 scripts/ops/bastion-harden-check.sh …` asserts the result (80, 443, another public address and 8200 refused, tools absent, update timers

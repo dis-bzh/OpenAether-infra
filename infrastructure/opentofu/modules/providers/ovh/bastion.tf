@@ -214,6 +214,12 @@ resource "openstack_compute_instance_v2" "bastion" {
   })
 
   tags = ["bastion", var.cluster_name]
+
+  # The image is the bastion's install medium: a new default (or OVH's newest build under the same name) must not replace a
+  # running bastion. Move one deliberately: `-replace` (docs/admin-access.md, patching paragraph).
+  lifecycle {
+    ignore_changes = [image_id]
+  }
 }
 
 resource "openstack_networking_floatingip_v2" "bastion" {

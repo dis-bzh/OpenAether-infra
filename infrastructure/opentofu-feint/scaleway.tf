@@ -100,7 +100,7 @@ resource "scaleway_instance_server" "bastion" {
   count             = local.scaleway_active
   name              = "${var.cluster_name}-bastion"
   type              = "DEV1-S"
-  image             = "ubuntu_jammy"
+  image             = "ubuntu_noble"
   ip_id             = scaleway_instance_ip.bastion[0].id
   security_group_id = scaleway_instance_security_group.this[0].id
   tags              = ["bastion", var.cluster_name]
