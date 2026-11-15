@@ -14,6 +14,12 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ## [Unreleased]
 
+- **New clusters get a 40-character LUKS passphrase; existing clusters keep theirs with no diff (#346).** Owner decision of 2026-11-15. The length is now read at creation only (`ignore_changes`), so neither the new default nor a later change of `disk_encryption_passphrase_length` regenerates a passphrase the partitions are sealed with; rotating it on purpose takes `-replace`. In-place re-keying of existing clusters is still open. Rung: mocked (an apply at 32 then a plan under the new default keeps 32; red without the lifecycle rule). No real state of an existing cluster was planned against.
+
+- **Outscale: the worker data disks get `outscale_worker_data_volume_type` and `_iops` (#376).** Default `standard`, what the module always created, so no change for an existing cluster; io1 is opt-in with a 300 IOPS per GiB check. Rung: mocked; not planned against a real state.
+
+- **`alert_chat_host` and `alert_heartbeat_host` publish `ALERT_CHAT_HOST` and `ALERT_HEARTBEAT_HOST` in `cluster-identity` (#454).** Bootstrap, `cluster-identity-sync` and the verify check carry them as they carry every key; unset, the rendered manifest is unchanged and the apps defaults apply. Rung: mocked.
+
 - **Security: CVE-2026-123158 (OpenSSH, sshd side) on the pinned kustomize-controller v1.10.1 digest is recorded as `not_affected` (#455).** The image carries the client packages only, no `sshd`; no fixed image exists upstream on 2026-11-15. The OpenVEX statement is scoped to the digest and the three packages, expires 2027-01-09 and goes when a fixed Flux image is pinned. Rung: local Docker and Trivy 0.69.3 (red without the statement, green with it), no cluster.
 
 - **The Feint lane is locked to the cluster root's provider versions (#469).** `opentofu-feint/.terraform.lock.hcl` is committed, `feint.sh` initialises read-only, `task lock-providers` refreshes it and `check-version-drift.sh` fails when the two locks disagree (unlocked, the lane resolved scaleway 2.92.1 against 2.86.0 in the cluster lock). Rung: mocked; the emulated apply was not run.

@@ -152,3 +152,8 @@ s3_replica_region   = "fr-par"
 # --- Node system disk --------------------------------------------------------
 # root_disk_gb (node_distribution, default 50 GiB): the application stack puts ~11 GB of images on each node. With
 # deploy_flux a `check` warns below 40.
+
+# Alert delivery hosts (infra #454): only when the chat webhook or the dead-man's-switch URL seeded as OA_SLACK_WEBHOOK_URL /
+# OA_DEADMANSSWITCH_URL is NOT on hooks.slack.com / hc-ping.com. The host name only; Alertmanager's egress policy allows it.
+# alert_chat_host      = "chat.example.invalid"
+# alert_heartbeat_host = "heartbeat.example.invalid"

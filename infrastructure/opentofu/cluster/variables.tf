@@ -174,6 +174,28 @@ variable "audit_sink_compliance_ack" {
   default     = false
 }
 
+# Alert delivery hosts (#454): the egress policy of Alertmanager (apps observability-alert-egress) reads them from the
+# cluster-identity ConfigMap. Empty (default) = key not published, the apps defaults apply; nothing changes for a deployed cluster.
+variable "alert_chat_host" {
+  description = "Host name (no scheme, no path) of the chat webhook Alertmanager posts to, published as ALERT_CHAT_HOST. Empty: the apps default (hooks.slack.com). Must be the host of the URL seeded as OA_SLACK_WEBHOOK_URL, or the notification is dropped on the wire."
+  type        = string
+  default     = ""
+  validation {
+    condition     = var.alert_chat_host == "" || can(regex("^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z][a-z0-9-]*[a-z0-9]$", var.alert_chat_host))
+    error_message = "alert_chat_host must be empty or a lowercase host name (no scheme, port or path)."
+  }
+}
+
+variable "alert_heartbeat_host" {
+  description = "Host name (no scheme, no path) of the dead-man's-switch URL, published as ALERT_HEARTBEAT_HOST. Empty: the apps default (hc-ping.com). Must be the host of the URL seeded as OA_DEADMANSSWITCH_URL, or the heartbeat is dropped and pages for an outage that is not happening."
+  type        = string
+  default     = ""
+  validation {
+    condition     = var.alert_heartbeat_host == "" || can(regex("^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z][a-z0-9-]*[a-z0-9]$", var.alert_heartbeat_host))
+    error_message = "alert_heartbeat_host must be empty or a lowercase host name (no scheme, port or path)."
+  }
+}
+
 variable "environment" {
   description = "Deployment environment (e.g., dev, prod)"
   type        = string
@@ -467,6 +489,31 @@ variable "outscale_root_volume_iops" {
   validation {
     condition     = var.outscale_root_volume_iops >= 1 && var.outscale_root_volume_iops <= 13000
     error_message = "outscale_root_volume_iops must be between 1 and 13000."
+  }
+}
+
+variable "outscale_worker_data_volume_type" {
+  description = <<-EOT
+    Outscale only: BSU type of the worker data disks of `worker_storage.disks`. Default standard (magnetic), what the module has
+    always created, so an existing cluster plans no change. #376 measured a full stack saturating standard data disks; io1
+    (provisioned IOPS, see outscale_worker_data_volume_iops) cured it, billed per GiB AND per provisioned IOPS. Outscale changes
+    the type of a live volume in place (`UpdateVolume`); that path is UNPROVEN here until an Outscale lab.
+  EOT
+  type        = string
+  default     = "standard"
+  validation {
+    condition     = contains(["gp2", "io1", "standard"], var.outscale_worker_data_volume_type)
+    error_message = "outscale_worker_data_volume_type must be gp2, io1 or standard."
+  }
+}
+
+variable "outscale_worker_data_volume_iops" {
+  description = "Outscale only: provisioned IOPS of an io1 worker data disk (ignored for gp2 and standard). Same API limits as outscale_root_volume_iops: 1 to 13000, at most 300 per GiB of each disk (a `check` warns)."
+  type        = number
+  default     = 1500
+  validation {
+    condition     = var.outscale_worker_data_volume_iops >= 1 && var.outscale_worker_data_volume_iops <= 13000
+    error_message = "outscale_worker_data_volume_iops must be between 1 and 13000."
   }
 }
 
@@ -1220,17 +1267,16 @@ variable "node_firewall" {
 
 variable "disk_encryption_passphrase_length" {
   description = <<-EOT
-    Length of the generated LUKS2 passphrase (disk encryption at rest). Default 32 keeps the released
-    value (62^32, about 190 bits). 33 or more gives at least 192 bits (62^33 is about 196 bits) of entropy (ANSSI PG-083 symmetric key size).
-    FOR A NEW CLUSTER ONLY: changing it on a live cluster replaces the passphrase in the state, and the
-    nodes' STATE/EPHEMERAL partitions are sealed with the old one; Talos has no re-keying step here, so a reboot
-    would not unlock them. Raise it before the first apply, or not at all.
+    Length of the generated LUKS2 passphrase (disk encryption at rest) of a NEW cluster. Default 40 (62^40, about
+    238 bits; at least 33 reaches the 192 bits of ANSSI PG-083). Read at creation only: the resource ignores later
+    changes, because a new passphrase would leave the sealed STATE/EPHEMERAL partitions unable to unlock at the
+    next reboot. An existing cluster keeps the passphrase it was built with (32 before this default changed).
   EOT
   type        = number
-  default     = 32
+  default     = 40
 
   validation {
     condition     = var.disk_encryption_passphrase_length >= 32 && var.disk_encryption_passphrase_length <= 128 && var.disk_encryption_passphrase_length == floor(var.disk_encryption_passphrase_length)
-    error_message = "disk_encryption_passphrase_length: a whole number from 32 (the released value) to 128."
+    error_message = "disk_encryption_passphrase_length: a whole number from 32 (the length clusters were built with before the default became 40) to 128."
   }
 }

@@ -203,6 +203,35 @@ run "cluster_identity_output_matches_rendered_configmap" {
     condition     = !contains(keys(output.cluster_identity), "AUDIT_SINK_HOST") && !strcontains(local.flux_bootstrap_manifest, "AUDIT_SINK_HOST: ")
     error_message = "with the audit sink off no host key is published"
   }
+  assert {
+    condition     = length([for k in keys(output.cluster_identity) : k if startswith(k, "ALERT_")]) == 0 && !strcontains(local.flux_bootstrap_manifest, "ALERT_")
+    error_message = "with the alert hosts unset no ALERT_* key is published, so the apps defaults apply (#454)"
+  }
+}
+
+# #454: the alert delivery hosts reach the output (cluster-identity-sync, infra-verify) and the rendered ConfigMap together.
+run "alert_hosts_are_published_when_set" {
+  command = plan
+  variables {
+    alert_chat_host      = "chat.example.invalid"
+    alert_heartbeat_host = "beat.example.invalid"
+  }
+  assert {
+    condition = alltrue([
+      for k, v in { ALERT_CHAT_HOST = "chat.example.invalid", ALERT_HEARTBEAT_HOST = "beat.example.invalid" } :
+      lookup(output.cluster_identity, k, "") == v && strcontains(local.flux_bootstrap_manifest, "  ${k}: ${v}\n")
+    ])
+    error_message = "a set alert host must be in the cluster_identity output and in the rendered ConfigMap, with the same value"
+  }
+}
+
+run "an_alert_url_is_refused" {
+  command = plan
+  variables {
+    alert_chat_host      = "https://chat.example.invalid/services/x"
+    alert_heartbeat_host = "beat.example.invalid:443"
+  }
+  expect_failures = [var.alert_chat_host, var.alert_heartbeat_host]
 }
 
 run "cluster_identity_output_empty_without_flux" {

@@ -217,3 +217,47 @@ run "four_workers_of_3_vcpu_pass_on_the_arithmetic" {
   }
 
 }
+
+# #376: io1 worker data disks above 300 IOPS per GiB are refused by the API; the check warns at plan time.
+run "worker_data_io1_iops_above_ratio_warns" {
+  command = plan
+
+  variables {
+    node_distribution = {
+      outscale = {
+        control_planes     = 3
+        workers            = 4
+        region             = "eu-west-2"
+        instance_type      = "tinav5.c4r8p2"
+        image_id           = "dummy-talos-osc-image"
+        availability_zones = ["eu-west-2a", "eu-west-2b", "eu-west-2c"]
+        bastion_image_id   = "ami-ubuntu-2204-mock"
+      }
+    }
+    worker_storage                   = { disks = [{ size_gb = 100 }, { size_gb = 10 }] }
+    outscale_worker_data_volume_type = "io1"
+    outscale_worker_data_volume_iops = 3001
+  }
+  expect_failures = [check.outscale_worker_data_iops_ratio]
+}
+
+run "worker_data_io1_iops_within_ratio_passes" {
+  command = plan
+
+  variables {
+    node_distribution = {
+      outscale = {
+        control_planes     = 3
+        workers            = 4
+        region             = "eu-west-2"
+        instance_type      = "tinav5.c4r8p2"
+        image_id           = "dummy-talos-osc-image"
+        availability_zones = ["eu-west-2a", "eu-west-2b", "eu-west-2c"]
+        bastion_image_id   = "ami-ubuntu-2204-mock"
+      }
+    }
+    worker_storage                   = { disks = [{ size_gb = 100 }, { size_gb = 10 }] }
+    outscale_worker_data_volume_type = "io1"
+    outscale_worker_data_volume_iops = 3000
+  }
+}

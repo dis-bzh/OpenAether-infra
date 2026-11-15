@@ -29,7 +29,7 @@ cp "$SCRIPT" "$W/scripts/ops/"
 A="$W/scripts/ops/cluster-identity-sync.sh"
 echo "apiVersion: v1" >"$C/kubeconfig"
 
-WANT_FULL='{"CLUSTER_NAME":"c-dev-ovh","BACKUP_TARGET_URL":"s3://data-bkt@eu-west-par/","BACKUP_S3_BUCKET":"data-bkt","BACKUP_S3_ENDPOINT":"https://s3.example.invalid","BACKUP_REPLICA_S3_BUCKET":"data-bkt-backup","BACKUP_REPLICA_S3_ENDPOINT":"https://s3r.example.invalid","AUDIT_SINK_HOST":"audit.example.invalid"}'
+WANT_FULL='{"CLUSTER_NAME":"c-dev-ovh","BACKUP_TARGET_URL":"s3://data-bkt@eu-west-par/","BACKUP_S3_BUCKET":"data-bkt","BACKUP_S3_ENDPOINT":"https://s3.example.invalid","BACKUP_REPLICA_S3_BUCKET":"data-bkt-backup","BACKUP_REPLICA_S3_ENDPOINT":"https://s3r.example.invalid","AUDIT_SINK_HOST":"audit.example.invalid","ALERT_CHAT_HOST":"chat.example.invalid"}'
 OLD_CM='{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"cluster-identity","namespace":"flux-system","labels":{"openaether.io/managed":"true"}},"data":{"CLUSTER_NAME":"c-dev-ovh","BACKUP_TARGET_URL":"s3://data-bkt@eu-west-par/","BACKUP_S3_BUCKET":"data-bkt","BACKUP_S3_ENDPOINT":"https://s3.example.invalid","LOCAL_ONLY":"keep-me"}}'
 
 cat >"$W/stub" <<STUB
@@ -76,7 +76,7 @@ echo "--- --apply: only the rendered keys are patched, others kept, read back, F
 reset; run --apply; rc=$?
 [ "$rc" = 0 ] && ok "exit 0" || bad "rc $rc: $(cat "$W/err")"
 [ "$(data BACKUP_REPLICA_S3_BUCKET)" = data-bkt-backup ] && [ "$(data BACKUP_REPLICA_S3_ENDPOINT)" = https://s3r.example.invalid ] && [ "$(data AUDIT_SINK_HOST)" = audit.example.invalid ] \
-  && ok "the three keys are on the cluster" || bad "data: $(jq -c .data "$FX/cm.json")"
+  && [ "$(data ALERT_CHAT_HOST)" = chat.example.invalid ] && ok "the missing keys are on the cluster" || bad "data: $(jq -c .data "$FX/cm.json")"
 [ "$(data LOCAL_ONLY)" = keep-me ] && [ "$(jq -r '.metadata.labels["openaether.io/managed"]' "$FX/cm.json")" = true ] \
   && ok "a key and a label the map does not own are untouched" || bad "collateral change"
 [ "$(calls 'patch')" = 1 ] && [ "$(grep -c -- '--type merge' "$W/calls.log")" = 1 ] && ok "one merge patch" || bad "calls: $(tr '\n' '|' <"$W/calls.log")"

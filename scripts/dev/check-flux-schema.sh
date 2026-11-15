@@ -65,6 +65,14 @@ variable "sink2" {
   type    = string
   default = ""
 }
+variable "chat" {
+  type    = string
+  default = ""
+}
+variable "beat" {
+  type    = string
+  default = ""
+}
 output "manifest" {
   value = templatefile("$ROOT/$TEMPLATE", {
     namespace         = "flux-system"
@@ -79,6 +87,8 @@ output "manifest" {
     backup_replica_s3_endpoint = "s3.gra.example.invalid"
     audit_sink_host            = var.sink
     audit_sink_secondary_host  = var.sink2
+    alert_chat_host            = var.chat
+    alert_heartbeat_host       = var.beat
     openbao_pgp_keys  = var.keys
     openbao_threshold = 2
     flux_git_verify_enabled = var.verify
@@ -87,17 +97,20 @@ output "manifest" {
 }
 HCL
 (cd "$tmp/render" && tofu init -input=false >/dev/null 2>&1) || { echo "✗ tofu init failed in the render sandbox" >&2; exit 1; }
-render() { # <name> <keys json> [verify true|false] [sink host] [secondary sink host]
-  (cd "$tmp/render" && tofu apply -auto-approve -input=false -var "keys=$2" -var "verify=${3:-false}" -var "sink=${4:-}" -var "sink2=${5:-}" >/dev/null 2>&1 && tofu output -raw manifest) > "$tmp/$1.yaml" ||
+render() { # <name> <keys json> [verify true|false] [sink host] [secondary sink host] [chat host] [heartbeat host]
+  (cd "$tmp/render" && tofu apply -auto-approve -input=false -var "keys=$2" -var "verify=${3:-false}" -var "sink=${4:-}" -var "sink2=${5:-}" -var "chat=${6:-}" -var "beat=${7:-}" >/dev/null 2>&1 && tofu output -raw manifest) > "$tmp/$1.yaml" ||
     { echo "✗ the template does not render ($1)" >&2; exit 1; }
 }
 render rendered-dev '[]'
 render rendered-prod '["AAAA","BBBB","CCCC"]'
 render rendered-verify '[]' true # opt-in flux_git_verify: Secret + spec.verify must be schema-valid too
-render rendered-sink '[]' false s3.gra.example.invalid s3.par.example.invalid # audit sink (infra #318): two host names for the egress policy
+render rendered-sink '[]' false s3.gra.example.invalid s3.par.example.invalid chat.example.invalid beat.example.invalid # audit sink (infra #318) and alert hosts (#454)
 grep -q '^  AUDIT_SINK_HOST: s3.gra.example.invalid$' "$tmp/rendered-sink.yaml" && grep -q '^  AUDIT_SINK_SECONDARY_HOST: s3.par.example.invalid$' "$tmp/rendered-sink.yaml" &&
   ! grep -q 'AUDIT_SINK' "$tmp/rendered-dev.yaml" ||
   { echo "✗ the audit sink hosts are not rendered exactly when they are set" >&2; exit 1; }
+grep -q '^  ALERT_CHAT_HOST: chat.example.invalid$' "$tmp/rendered-sink.yaml" && grep -q '^  ALERT_HEARTBEAT_HOST: beat.example.invalid$' "$tmp/rendered-sink.yaml" &&
+  ! grep -q 'ALERT_' "$tmp/rendered-dev.yaml" ||
+  { echo "✗ the alert delivery hosts are not rendered exactly when they are set" >&2; exit 1; }
 grep -q 'name: git-signers' "$tmp/rendered-verify.yaml" && ! grep -q 'git-signers' "$tmp/rendered-dev.yaml" ||
   { echo "✗ git-signers is not rendered exactly when flux_git_verify is on" >&2; exit 1; }
 grep -q 'name: openbao-operator-keys' "$tmp/rendered-prod.yaml" && ! grep -q 'name: openbao-operator-keys' "$tmp/rendered-dev.yaml" ||

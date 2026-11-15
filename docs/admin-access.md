@@ -84,7 +84,9 @@ Runbook: `OpenAether-apps/apps/base/foundation/vault/pki-root-offline-runbook.md
 S3 keys of the primary store and, when the replica is on another cloud, of that cloud
 (`<CLOUD>_BACKUP_AWS_*`: the replica is opened with the keys of whoever holds it), and
 reads `OA_SLACK_WEBHOOK_URL` / `OA_DEADMANSSWITCH_URL` (placeholders are seeded, with a
-warning, when unset). The buckets must **pre-exist** (restic does not create them), on
+warning, when unset). A chat or heartbeat host other than `hooks.slack.com` / `hc-ping.com` must also be
+set as `alert_chat_host` / `alert_heartbeat_host` in the tfvars, or Alertmanager's egress policy drops it
+(`OpenAether-apps/docs/alert-delivery.md`). The buckets must **pre-exist** (restic does not create them), on
 different providers in production: the application backups bucket
 `s3-<project>-<provider>-backups-<env>` and its `-backup` twin; the script announces the first.
 `ensure-buckets.sh` creates that pair in every mode, `backup_immutability = off` included (with it set, it also versions or locks the buckets: `backup-policy.md`, section 3), and `task cluster-verify` fails when the `-backup` twin is missing.

@@ -107,24 +107,13 @@ run "protected_secrets_keep_the_node_version" {
   }
 }
 
-# disk_encryption_passphrase_length: the released length is the default (a different one would replace
-# the LUKS passphrase of every existing cluster); a longer one is opt-in and bounded.
-run "passphrase_length_defaults_to_the_released_value" {
+# disk_encryption_passphrase_length: a new cluster gets 40 (#346); bounded. An existing cluster keeping its
+# passphrase is disk-passphrase-existing.tftest.hcl.
+run "passphrase_length_defaults_to_40_for_a_new_cluster" {
   command = plan
-  assert {
-    condition     = random_password.disk_encryption_secret.length == 32
-    error_message = "the default LUKS passphrase length must stay 32"
-  }
-}
-
-run "passphrase_length_can_be_raised_for_a_new_cluster" {
-  command = plan
-  variables {
-    disk_encryption_passphrase_length = 40
-  }
   assert {
     condition     = random_password.disk_encryption_secret.length == 40
-    error_message = "the opted-in length must reach the generated passphrase"
+    error_message = "a new cluster must get a 40-character LUKS passphrase by default"
   }
 }
 
