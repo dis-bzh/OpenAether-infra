@@ -288,6 +288,16 @@ Read back: the spec image AND the pod imageID of the seven controllers equal `in
 
 **The first Flux sync after the ref move rolls every PostgreSQL Cluster, and `cluster-up` does not wait for it.** OpenAether-apps 0.4.4 changes the PostgreSQL image (dis-bzh/OpenAether-apps#162, dis-bzh/OpenAether-apps#163), so the move restarts every database instance, the replicas first, then a switchover of each Cluster. In the labs `cluster-up` returned rc 0 with its closing verify taken before the roll, and Flux was no reliable signal either (the roll order is not fixed): read the Clusters (`kubectl get clusters.postgresql.cnpg.io -A`, "Cluster in healthy state"), not Flux, before you call the move done. The steps of the move and what the labs read are in `CHANGELOG.md`, `[0.4.4]`, "Upgrade from 0.4.3"; this section holds only these two points.
 
+## From 0.4.5 to 0.5.0 (an existing cluster)
+
+Rung: **by the cloud runs written in `CHANGELOG.md` `[0.5.0]`** (labs 52 and 53: timed Talos v1.14.2 to v1.14.4 and Kubernetes v1.37.1 to v1.37.2 on Scaleway; n=1 per figure). **Supported path: the previous release only.** 0.4.5 to 0.5.0.
+
+1. Check out the 0.5.0 tag of this repository. Set `git_ref = "refs/tags/0.5.0"` in the tfvars (OpenAether-apps `refs/tags/0.5.0` must exist). The Talos and Kubernetes defaults are v1.14.4 and v1.37.2: a cluster on 0.4.5 pins (v1.14.4, v1.37.1) keeps its own values until you bump them, one control plane at a time (`task cluster-roll`).
+2. `task cluster-up PROVIDER=… ROLE=…`, plan read before apply (the machine configs of the control planes change in place because the Talos inline manifest carries `git_ref`).
+3. Read the CNPG Clusters and `task cluster-verify` before calling the move done. A node drain no longer waits behind a stuck CNPG instance manager (`stopDelay: 300`, apps 0.5.0).
+
+Existing Longhorn and OpenBao values (apps 0.5.0 lowered instance-manager CPU to 5 percent and the OpenBao request to 100m) apply to fresh installs for Longhorn; an existing cluster keeps its Longhorn setting until changed in the UI or settings.
+
 ## From 0.4.4 to 0.4.5 (an existing cluster)
 
 Rung: **by the cloud runs written in `CHANGELOG.md` `[0.4.5]`** (Scaleway, 3 CP + 6 W, forge OFF, one run per figure, with Flux following the apps BRANCH `refs/heads/lab/0.4.5-rc1`, not the tag), the one place for their figures and their NOMINAL or INCIDENT labels (this section quotes them with their label, on the shape above, 3 control planes + 6 workers, unless a line names the one 2-node child; INCIDENT-by-design means the step ran beside the Longhorn image wave, or is the documented Flux-style convergence of a child; read the CHANGELOG before relying on a figure); what a line below says it read and did not run stays at that rung. **The move from `refs/tags/0.4.5` itself, the one you will run, is not shown**: no run followed the tag. This repository has no code change in 0.4.5 (the apps pin moves and documentation is added); its code ran at the 0.4.4 tag in every run. Not a compliance claim.
