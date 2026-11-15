@@ -93,8 +93,9 @@ else:
         problems.append("rung.yml filters pull_request: a PR on another branch would get no `Rung receipt`")
     if len(rung["jobs"]) != 1:
         problems.append("rung.yml must hold one job: a second one is a second check to require")
-    if rung.get("permissions") != {"contents": "read"}:
-        problems.append("rung.yml must grant contents: read and nothing else")
+    # actions and pull-requests: base-tested.py reads the ci.yml runs and the retargets.
+    if rung.get("permissions") != {"contents": "read", "actions": "read", "pull-requests": "read"}:
+        problems.append("rung.yml must grant contents, actions and pull-requests: read, and nothing else")
     c = rung.get("concurrency") or {}
     if c.get("cancel-in-progress") is not True or "pull_request.number" not in str(c.get("group")):
         problems.append("rung.yml must cancel a superseded run, one group per pull request")
@@ -119,6 +120,9 @@ else:
             problems.append(f"the step passes {sorted(passed)}, rung-receipt.py reads {sorted(read)}")
         if (check[0].get("env") or {}).get("DOCS_ONLY") != "${{ steps.classify.outputs.code == 'false' }}":
             problems.append("rung.yml: DOCS_ONLY must be the verdict of the classify step, code == 'false'")
+    based = [s for s in steps if "base-tested.py" in str(s.get("run"))]
+    if len(based) != 1 or (based[0].get("env") or {}).get("GH_TOKEN") != "${{ github.token }}":
+        problems.append("rung.yml must run base-tested.py once, with GH_TOKEN: a later edit would pass a retarget")
     guard = [n for n, s in enumerate(steps) if "github.event.changes.base" in str(s.get("if"))]
     if guard != [0] or "'edited'" not in steps[0]["if"] or "exit 1" not in steps[0]["run"]:
         problems.append("rung.yml: the first step must fail on an `edited` event that changes the base branch")
@@ -133,6 +137,28 @@ if "rung-receipt.py" in raw["ci.yml"] or "rung" in wf["ci.yml"]["jobs"]:
 print("\n".join(problems) or f"{NAME!r} is one job of rung.yml (required, GitHub Actions), reads the {len(read)} variables "
       "the script reads, and no other workflow runs on `edited` or reads the body")
 sys.exit(1 if problems else 0)
+PY
+)"; then ok "$out"; else bad "$out"; fi
+
+echo "=== an edit after a retarget stays red until ci.yml runs again ==="
+if out="$(python3 -I - "$ROOT/scripts/dev/base-tested.py" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("bt", sys.argv[1])
+bt = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(bt)
+T = lambda m: f"2026-01-01T00:{m:02d}:00Z"
+cases = [  # base changes, ci.yml runs for the head, red?
+    ([], [], False, "never retargeted"),
+    ([T(5)], [T(1)], True, "retargeted after the only run"),
+    ([T(5)], [T(1), T(3)], True, "retargeted after every run (the later plain edit)"),
+    ([T(5)], [], True, "retargeted, no run at all"),
+    ([T(5)], [T(5)], True, "a run in the same second is not after"),
+    ([T(2), T(5)], [T(1), T(7)], False, "a push after the last retarget"),
+    ([T(2), T(8)], [T(1), T(7)], True, "retargeted again after that push"),
+]
+wrong = [name for b, r, red, name in cases if (bt.untested(b, r) is not None) != red]
+print("; ".join(f"wrong verdict: {w}" for w in wrong) or f"{len(cases)} retarget histories judged right")
+sys.exit(1 if wrong else 0)
 PY
 )"; then ok "$out"; else bad "$out"; fi
 

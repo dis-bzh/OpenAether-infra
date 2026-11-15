@@ -67,9 +67,9 @@ receipt: no CI job stands for them (CI never runs
 **Editing the pull request does not re-run CI.** A change of the body or the
 title re-runs only **Rung receipt**, which has its own workflow
 ([`rung.yml`](.github/workflows/rung.yml)): pasting a receipt costs seconds, not
-a new run of every job. A change of the **base branch** turns that job red, since
-no test re-runs on the new base: push a commit, or close and reopen the pull
-request.
+a new run of every job. A change of the **base branch** turns that job red, and every later edit keeps
+it red, since no test re-runs on the new base: push a commit, or close and
+reopen the pull request.
 
 Renovate, Dependabot and docs-only diffs may declare
 nothing (an empty `Rung:` line, or `Rung: none (docs-only diff)`; the reason

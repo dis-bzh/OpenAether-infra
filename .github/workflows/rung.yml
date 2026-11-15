@@ -24,6 +24,9 @@ concurrency:
 
 permissions:
   contents: read
+  # base-tested.py: the ci.yml runs of the head and the retargets of the PR.
+  actions: read
+  pull-requests: read
 
 jobs:
   rung:
@@ -46,6 +49,12 @@ jobs:
           persist-credentials: false
           # The diff against the base, for the docs-only rule.
           fetch-depth: 0
+
+      # The guard above sees only the edit that retargets; a later edit would pass again.
+      - name: The tests ran on the current base
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/dev/base-tested.py
 
       # The rule the job `changes` of ci.yml applies, from the same script:
       # a docs-only diff declares nothing.
