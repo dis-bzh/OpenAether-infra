@@ -18,10 +18,7 @@ set -euo pipefail
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Remonter de 3 niveaux: scripts/ops/ → scripts/ → OpenAether-infra/ → parent
-REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-BASE_DIR="$REPO_ROOT/OpenAether-apps/apps/base"
+# Every check asks the cluster: a checkout (of OpenAether-apps or anything else) says nothing about what Flux applied.
 
 PASS=0
 FAIL=0
@@ -67,7 +64,7 @@ header() {
   echo -e "${BOLD}── $1 ──${NC}"
 }
 
-# Used by 1.6 and by the mesh checks of section 2. Any other answer than "does not exist", an error included, is "not absent".
+# Used by 1.5, 1.6 and by the mesh checks of section 2. Any other answer than "does not exist", an error included, is "not absent".
 not_found() { # <kubectl get args…> — true when the API answers that the object or its type does not exist
   local out
   out="$(kubectl get "$@" -o name 2>&1)" && return 1
@@ -133,24 +130,24 @@ else
   skip "1.4 MinIO ingress bounded" "Namespace foundation-storage not present (cloud-only)"
 fi
 
-# 1.5 Loki egress — no toEntities:world
-LOKI_CNP="$BASE_DIR/observability/networkpolicy.yaml"
-if [ -f "$LOKI_CNP" ]; then
-  if grep -A20 "name: loki" "$LOKI_CNP" | grep -q "toEntities.*world"; then
-    fail "1.5 Loki egress pas world" "CNP Loki still has toEntities: world"
+# 1.5 Loki egress — no toEntities: world (nor all, which contains it). Asked of the cluster, as 1.6 below.
+if LOKI_ENT="$(kubectl get cnp loki -n services-observability -o jsonpath='{.spec.egress[*].toEntities[*]}' 2>/dev/null)"; then
+  case " $LOKI_ENT " in
+    *" world "* | *" all "*) fail "1.5 Loki egress not world" "CNP loki (services-observability) allows toEntities: $LOKI_ENT" ;;
+    *) pass "1.5 Loki egress not world" ;;
+  esac
+elif not_found cnp loki -n services-observability; then
+  if not_found helmrelease loki -n services-observability; then
+    skip "1.5 Loki egress not world" "no CNP loki and no HelmRelease loki in services-observability (Loki not deployed)"
   else
-    pass "1.5 Loki egress pas world"
+    fail "1.5 Loki egress not world" "CNP loki not found in services-observability, but HelmRelease loki exists or cannot be read: Loki egress is not bounded"
   fi
 else
-  skip "1.5 Loki egress pas world" "Loki CNP file not found"
+  fail "1.5 Loki egress not world" "cannot read CNP loki in services-observability"
 fi
 
 # 1.6 VMAgent scraping bounded (toEntities: cluster)
-# Asked of the CLUSTER, like 2.2: the object Flux applied. The file version read $REPO_ROOT/OpenAether-apps, whatever checkout
-# sits next to this one (apps 0.2.0 in a proof lab, not the ref Flux follows), so it judged nothing about the cluster, and its
-# `grep -A60 … | grep -q …` took SIGPIPE under pipefail when the match came early (red on a correct cluster: a race, measured at
-# 1 to 26 runs in 1,000 depending on load and file, every time on a long file). The answer is read into a variable and matched
-# with case: no pipe.
+# The answer is read into a variable and matched with case: no pipe, so no SIGPIPE under pipefail.
 if VMA_ENT="$(kubectl get cnp vmagent -n services-observability -o jsonpath='{.spec.egress[*].toEntities[*]}' 2>/dev/null)"; then
   case " $VMA_ENT " in
     *" cluster "*) pass "1.6 VMAgent scraping bounded (toEntities: cluster)" ;;
@@ -270,19 +267,25 @@ else
 fi
 fi
 
+# 2.4 / 2.7 read every AuthorizationPolicy on the cluster once. A failed read is a FAIL of both, never an empty list.
+AP_OK=0
+if [ "$MESH_ABSENT" = 0 ] && AP_LINES="$(kubectl get authorizationpolicies.security.istio.io -A \
+    -o jsonpath='{range .items[*]}{.metadata.namespace}{"/"}{.metadata.name}{"\t"}{.spec.rules[*].from[*].source.principals[*]}{"\n"}{end}' 2>/dev/null)"; then
+  AP_OK=1
+fi
+
 # 2.4 No openaether.local principal in the AuthorizationPolicies
-AUTHZ_DIR="$BASE_DIR/istio/authz"
-if [ -d "$AUTHZ_DIR" ]; then
-  # Look for openaether.local in principals (not in comments or FQDNs)
-  BAD_REFS=$(grep -r "principals" "$AUTHZ_DIR/authorizationpolicy-explicit-allows.yaml" 2>/dev/null | grep -c "openaether\.local" || true)
-  BAD_REFS=${BAD_REFS:-0}
-  if [ "$BAD_REFS" -eq 0 ]; then
+if [ "$MESH_ABSENT" = 1 ]; then
+  skip "2.4 No openaether.local principal" "$MESH_NA"
+elif [ "$AP_OK" = 0 ]; then
+  fail "2.4 No openaether.local principal" "cannot list the AuthorizationPolicies"
+else
+  BAD_AP="$(awk -F'\t' '$2 ~ /openaether\.local/ {printf " %s", $1}' <<<"$AP_LINES")"
+  if [ -z "$BAD_AP" ]; then
     pass "2.4 No openaether.local principal"
   else
-    fail "2.4 No openaether.local principal" "$BAD_REFS principals still using openaether.local"
+    fail "2.4 No openaether.local principal" "openaether.local principals in:$BAD_AP"
   fi
-else
-  skip "2.4 No openaether.local principal" "AuthZ dir not found"
 fi
 
 # 2.5 Gateway TLS : HTTPRoute redirect + certificate
@@ -313,23 +316,21 @@ else
 fi
 
 # 2.7 Outside the mesh: NO Istio AuthorizationPolicy (security = Cilium only)
-AUTHZ_DIR="$BASE_DIR/istio/authz"
-if [ -d "$AUTHZ_DIR" ]; then
-  OFF_MESH_NS=("cert-manager" "kyverno" "capi-system" "capi-operator-system" "longhorn-system" "foundation-databases" "foundation-vault")
-  UNWANTED=0
+OFF_MESH_NS=("cert-manager" "kyverno" "capi-system" "capi-operator-system" "longhorn-system" "foundation-databases" "foundation-vault")
+if [ "$MESH_ABSENT" = 1 ]; then
+  skip "2.7 Out of mesh, no Istio AuthZ" "$MESH_NA"
+elif [ "$AP_OK" = 0 ]; then
+  fail "2.7 Out of mesh, no Istio AuthZ" "cannot list the AuthorizationPolicies"
+else
+  UNWANTED=""
   for ns in "${OFF_MESH_NS[@]}"; do
-    if grep -q "namespace: $ns" "$AUTHZ_DIR/authorizationpolicy-default-deny.yaml" 2>/dev/null || \
-       grep -q "namespace: $ns" "$AUTHZ_DIR/authorizationpolicy-explicit-allows.yaml" 2>/dev/null; then
-      UNWANTED=$((UNWANTED + 1))
-    fi
+    grep -q "^$ns/" <<<"$AP_LINES" && UNWANTED="$UNWANTED $ns"
   done
-  if [ "$UNWANTED" -eq 0 ]; then
+  if [ -z "$UNWANTED" ]; then
     pass "2.7 Out of mesh: 0 inert AuthorizationPolicy (0/${#OFF_MESH_NS[@]})"
   else
-    fail "2.7 Out of mesh, no Istio AuthZ" "$UNWANTED/${#OFF_MESH_NS[@]} out-of-mesh ns still have (inert) AuthZ policies"
+    fail "2.7 Out of mesh, no Istio AuthZ" "out-of-mesh namespaces with (inert) AuthorizationPolicies:$UNWANTED"
   fi
-else
-  skip "2.7 Out of mesh, no Istio AuthZ" "AuthZ dir not found"
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -453,31 +454,29 @@ fi
 
 header "4. SECRETS"
 
-# 4.1 No plaintext secret in the deployment YAML
-SECRETS_IN_PLAIN=0
-if [ -d "$BASE_DIR" ]; then
-  while IFS= read -r f; do
-    if grep -q "kind: Secret" "$f" 2>/dev/null; then
-      # Ignore ExternalSecrets and valuesFrom references
-      if grep -q "kind: ExternalSecret" "$f" || grep -q "valuesFrom" "$f"; then
-        continue
-      fi
-      # Check whether the Secret has real data (non-empty stringData/data)
-      HAS_DATA=$(awk '/kind: Secret/{found=1} found && /^\s+(stringData|data):/{print; exit}' "$f" 2>/dev/null || true)
-      if [ -n "$HAS_DATA" ]; then
-        # Make sure it is not just an empty placeholder (stringData: {} or data: {})
-        NEXT_LINE=$(awk '/kind: Secret/{found=1} found && /^\s+(stringData|data):/{getline; print; exit}' "$f" 2>/dev/null || true)
-        if ! echo "$NEXT_LINE" | grep -qE "^\s*\{\}\s*$"; then
-          SECRETS_IN_PLAIN=$((SECRETS_IN_PLAIN + 1))
-        fi
-      fi
-    fi
-  done < <(find "$BASE_DIR" -name "*.yaml" 2>/dev/null)
-fi
-if [ "$SECRETS_IN_PLAIN" -eq 0 ]; then
-  pass "4.1 No plaintext secret in the YAML"
+# 4.1 No Secret data delivered from Git. On the cluster, a plaintext Secret in the manifests is one whose data or stringData
+# kustomize-controller (Flux) owns in managedFields; data a controller writes later (ESO, cert webhooks, Helm) is not from Git.
+# Only the managed fields are fetched, never the values.
+if SEC_LINES="$(kubectl get secrets -A --show-managed-fields \
+    -o jsonpath='{range .items[*]}{.metadata.namespace}{"/"}{.metadata.name}{"\t"}{.metadata.managedFields}{"\n"}{end}' 2>/dev/null)"; then
+  SECRETS_IN_PLAIN="$(python3 -c '
+import json, sys
+bad = []
+for line in sys.stdin:
+    name, _, mf = line.rstrip("\n").partition("\t")
+    for e in json.loads(mf or "[]") or []:
+        f = e.get("fieldsV1") or {}
+        if e.get("manager") == "kustomize-controller" and any(k.startswith("f:") for d in ("f:data", "f:stringData") for k in f.get(d, {})):
+            bad.append(name)
+            break
+print(" ".join(bad))' <<<"$SEC_LINES")" || SECRETS_IN_PLAIN="(unparsable answer)"
+  if [ -z "$SECRETS_IN_PLAIN" ]; then
+    pass "4.1 No Secret data delivered from Git"
+  else
+    fail "4.1 No Secret data delivered from Git" "Secrets whose data Flux applied from Git: $SECRETS_IN_PLAIN"
+  fi
 else
-  fail "4.1 No plaintext secret in the YAML" "$SECRETS_IN_PLAIN file(s) holding non-ExternalSecret Secrets"
+  fail "4.1 No Secret data delivered from Git" "cannot list the Secrets' managed fields"
 fi
 
 # 4.2 ExternalSecrets present
