@@ -208,7 +208,9 @@ identifiants ci-dessus), construit l'image Talos et la téléverse — **mesuré
 52 s sur Scaleway le 2026-08-17**, pour deux buckets, un snapshot et une image
 par zone — applique l'infrastructure, ouvre un tunnel SSH par nœud, puis applique
 les configurations machine et amorce Talos. Il se termine par le vérificateur de
-l'étape 6 : si le cluster y échoue, `cluster-up` échoue.
+l'étape 6 : si le cluster y échoue, `cluster-up` échoue. Avec `deploy_flux = true` il se termine pourtant au vert alors que Flux reste sous
+son compte complet de Kustomizations : le DAG ne converge qu'après l'amorçage du Jour 1
+([`admin-access.fr.md`](admin-access.fr.md) § 3), ce plateau n'est donc pas un échec.
 
 **Le load balancer de l'apiserver est ce qu'il y a de plus lent dans cette
 étape, et le seul objet qui peut te laisser en rade.** Rapide chez Scaleway. Chez

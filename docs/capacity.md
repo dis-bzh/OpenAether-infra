@@ -15,7 +15,7 @@ from a run.
 
 | Rule | Evidence |
 |---|---|
-| Workers must leave one node's worth of CPU requests free, or no drain completes and `rolling-replace --upgrade` stalls. | **Measured** 2026-08-15, application platform on: 3× Scaleway `DEV1-L` (4 vCPU / 8 GB) at 72/47/27%, every drain went through; 3× OVH `b3-8` (2 vCPU / 8 GB) at 78/99/100%, none could. [`upgrade.md`](upgrade.md) |
+| Workers must leave one node's worth of CPU requests free, or no drain completes and `rolling-replace --upgrade` stalls. | **Measured** 2026-08-15, application platform on: 3× Scaleway `DEV1-L` (4 vCPU / 8 GB) CPU requests (not usage) at 72/47/27%, every drain went through; 3× OVH `b3-8` (2 vCPU / 8 GB) at 78/99/100%, none could. [`upgrade.md`](upgrade.md) |
 | Workers ≥ 8 GB RAM. | Stated in `modules/providers/proxmox/variables.tf` (a `DEV1-M` OOM); the run behind it is not recorded. |
 | HA = 3 control planes (etcd quorum); non-HA = 1 + 1, control plane tainted `NoSchedule`. | Code. |
 

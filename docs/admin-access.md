@@ -471,7 +471,8 @@ faster and safer. The correct values are already in `apps/clusters/*.yaml` and
 A healthy child on the `workload` profile shows **19/19 Kustomizations**. That
 count moves with every brick added to the DAG — check it with
 `python3 scripts/pick.py vault eso certs gateway`, do not read a change as a
-regression.
+regression. The management cluster's own count (35 on the lab measured in § 3) is
+in § 3; neither number is a constant.
 
 ## Checklist
 

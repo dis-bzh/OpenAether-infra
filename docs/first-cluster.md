@@ -202,7 +202,9 @@ above), builds the Talos image and uploads it — **measured at 52 s on Scaleway
 2026-08-17**, for two buckets, one snapshot and one image per zone — applies the
 infrastructure, opens one SSH tunnel per node, then applies the machine configs
 and bootstraps Talos. It ends by running step 6's verifier: if the cluster fails
-it, `cluster-up` fails.
+it, `cluster-up` fails. With `deploy_flux = true` it still ends green while Flux sits below its full
+Kustomization count: the DAG does not converge until the Day-1 seeding
+([`admin-access.md`](admin-access.md) § 3), so that plateau is not a failure.
 
 **The apiserver load balancer is the slowest thing in this step, and the only
 one that can strand you.** On Scaleway it is quick. On OVH and Outscale it is a

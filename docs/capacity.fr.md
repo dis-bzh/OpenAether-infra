@@ -15,7 +15,7 @@ run.
 
 | Règle | Preuve |
 |---|---|
-| Les workers doivent laisser libre l'équivalent d'un nœud en requests CPU, sinon aucun drain n'aboutit et `rolling-replace --upgrade` bloque. | **Mesuré** le 2026-08-15, plateforme applicative en place : 3× Scaleway `DEV1-L` (4 vCPU / 8 Go) à 72/47/27 %, tous les drains sont passés ; 3× OVH `b3-8` (2 vCPU / 8 Go) à 78/99/100 %, aucun. [`upgrade.fr.md`](upgrade.fr.md) |
+| Les workers doivent laisser libre l'équivalent d'un nœud en requests CPU, sinon aucun drain n'aboutit et `rolling-replace --upgrade` bloque. | **Mesuré** le 2026-08-15, plateforme applicative en place : 3× Scaleway `DEV1-L` (4 vCPU / 8 Go) en requests CPU (pas en usage) à 72/47/27 %, tous les drains sont passés ; 3× OVH `b3-8` (2 vCPU / 8 Go) à 78/99/100 %, aucun. [`upgrade.fr.md`](upgrade.fr.md) |
 | Workers ≥ 8 Go de RAM. | Énoncé dans `modules/providers/proxmox/variables.tf` (un OOM sur `DEV1-M`) ; le run correspondant n'est pas consigné. |
 | HA = 3 control planes (quorum etcd) ; non-HA = 1 + 1, control plane taché `NoSchedule`. | Code. |
 

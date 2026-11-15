@@ -492,7 +492,8 @@ dans `apps/clusters/*.yaml` et `task apps-validate` contrôle cet alignement.
 Un enfant sain sur le profil `workload` affiche **19/19 Kustomizations**. Ce
 compte bouge à chaque brique ajoutée au DAG — le vérifier avec
 `python3 scripts/pick.py vault eso certs gateway`, ne pas lire un changement
-comme une régression.
+comme une régression. Le compte du cluster de management lui-même (35 sur le labo mesuré au § 3)
+est au § 3 ; aucun des deux nombres n'est une constante.
 
 ## Checklist
 
