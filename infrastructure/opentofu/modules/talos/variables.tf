@@ -615,17 +615,16 @@ variable "node_firewall_scope" {
 
 variable "disk_encryption_passphrase_length" {
   description = <<-EOT
-    Length of the generated LUKS2 passphrase (disk encryption at rest). Default 32 keeps the released
-    value (62^32, about 190 bits). 33 or more gives at least 192 bits (62^33 is about 196 bits) of entropy (ANSSI PG-083 symmetric key size).
-    FOR A NEW CLUSTER ONLY: changing it on a live cluster replaces the passphrase in the state, and the
-    nodes' STATE/EPHEMERAL partitions are sealed with the old one; Talos has no re-keying step here, so a reboot
-    would not unlock them. Raise it before the first apply, or not at all.
+    Length of the generated LUKS2 passphrase (disk encryption at rest) of a NEW cluster. Default 40 (62^40, about
+    238 bits; at least 33 reaches the 192 bits of ANSSI PG-083). Read at creation only: the resource ignores later
+    changes, because a new passphrase would leave the sealed STATE/EPHEMERAL partitions unable to unlock at the
+    next reboot. An existing cluster keeps the passphrase it was built with (32 before this default changed).
   EOT
   type        = number
-  default     = 32
+  default     = 40
 
   validation {
     condition     = var.disk_encryption_passphrase_length >= 32 && var.disk_encryption_passphrase_length <= 128 && var.disk_encryption_passphrase_length == floor(var.disk_encryption_passphrase_length)
-    error_message = "disk_encryption_passphrase_length: a whole number from 32 (the released value) to 128."
+    error_message = "disk_encryption_passphrase_length: a whole number from 32 (the length clusters were built with before the default became 40) to 128."
   }
 }

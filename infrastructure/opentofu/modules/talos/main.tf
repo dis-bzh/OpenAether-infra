@@ -52,7 +52,7 @@ resource "random_bytes" "etcd_encryption_secret" {
   length = 32
 }
 
-# 32-byte random passphrase for disk encryption at rest (LUKS2).
+# Random passphrase for disk encryption at rest (LUKS2).
 # Generated once, stored in tfstate — stable across applies (Talos decrypts at boot).
 # Covers: EPHEMERAL (/var — where local-path provisioner writes after remap)
 # and STATE (system state, etcd DB, PKI).
@@ -60,9 +60,13 @@ resource "random_bytes" "etcd_encryption_secret" {
 # Uses random_password (returns plain string) rather than random_bytes to avoid
 # double-encoding issues with base64encode().
 resource "random_password" "disk_encryption_secret" {
-  # 32 chars of [A-Za-z0-9] is about 190 bits; var.disk_encryption_passphrase_length (new clusters only) lifts it.
   length  = var.disk_encryption_passphrase_length
   special = false
+
+  # The partitions are sealed with the passphrase in the state: a length change must not regenerate it (no re-keying here).
+  lifecycle {
+    ignore_changes = [length]
+  }
 }
 
 # ==============================================================================
