@@ -472,7 +472,8 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       release sha and pushed before the release exists:
       ```bash
       git tag -s -u 1D5895FDC14F5BAD6D1B170B5CA26229559044A2 -m "OpenAether-infra <tag>" <tag> <release sha>
-      ./scripts/dev/check-release-tag.sh <tag> --notes notes.md    # annotated, signer in the table, notes name the sha
+      apps_sha="$(git -C ../OpenAether-apps rev-parse "<apps tag>^{commit}")"    # the apps tag that git_ref pins
+      ./scripts/dev/check-release-tag.sh <tag> --notes notes.md --apps-sha "$apps_sha"   # annotated, signer in the table, notes name both shas
       git push origin <tag>
       # the SBOM workflow starts on the tag, creates the DRAFT release and attaches the inventory to it.
       # Take ITS run by the tag commit (the newest SBOM run can be the previous release's); empty just after the push: ask again.
@@ -499,7 +500,10 @@ the GitHub release are made by hand. Name the release commit by sha, not `HEAD`.
       as above; check the asset, then publish.
       The notes carry the release commit sha in full: the squash-merge commit on `main` that the tag points at, not the
       head of the pull-request branch (`check-release-tag.sh --notes` refuses notes that do not name
-      `git rev-parse <tag>^{commit}`). A client verifies with `git verify-tag <tag>` (public key
+      `git rev-parse <tag>^{commit}`), and the full commit sha of the OpenAether-apps tag that `git_ref` pins
+      (`--apps-sha` refuses notes without it; infra #385: a tag can be force-replaced upstream, a sha cannot). The
+      `CHANGELOG.md` section names that apps sha too: apps is tagged first, so it is known before the cut, while the
+      infra release sha cannot be written inside its own commit and lives in the notes only. A client verifies with `git verify-tag <tag>` (public key
       `docs/signers/release-vps.asc`, fingerprint compared with the table) and `git rev-parse <tag>^{commit}` against the
       notes. Immutable releases are on (owner, 2026-10); `.github/workflows/release-tag.yml` repeats the check when a tag
       arrives. It is a verdict after the fact: run it before pushing.

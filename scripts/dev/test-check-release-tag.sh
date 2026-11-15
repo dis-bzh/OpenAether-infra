@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Tests of check-release-tag.sh in a throwaway repository with throwaway GPG keys (never this repo's tags, never a
 # real key): annotated + signed by a listed key passes; lightweight, annotated but unsigned, signed by an unlisted key,
-# listed but with no public key file, and a missing tag are refused; --notes must name the release SHA. Rung: mocked.
+# listed but with no public key file, and a missing tag are refused; --notes must name the release SHA, and the apps SHA
+# with --apps-sha (infra #385). Rung: mocked.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -53,6 +54,12 @@ expect "no signer table: cannot check" 2 "no signer table" -- "$CHECKER" good --
 echo "release $sha" > "$TMP/notes-ok"; echo "release" > "$TMP/notes-bad"
 expect "notes naming the SHA: ok" 0 "✓" -- "$CHECKER" good "${S[@]}" --notes "$TMP/notes-ok"
 expect "notes without the SHA: refused" 1 "does not name the release commit" -- "$CHECKER" good "${S[@]}" --notes "$TMP/notes-bad"
+apps="0123456789abcdef0123456789abcdef01234567"
+echo "infra $sha, apps $apps" > "$TMP/notes-both"
+expect "notes naming both SHAs: ok" 0 "✓" -- "$CHECKER" good "${S[@]}" --notes "$TMP/notes-both" --apps-sha "$apps"
+expect "notes without the apps SHA: refused" 1 "does not name the OpenAether-apps release commit" -- "$CHECKER" good "${S[@]}" --notes "$TMP/notes-ok" --apps-sha "$apps"
+expect "an abbreviated apps SHA: usage" 2 "40-hex" -- "$CHECKER" good "${S[@]}" --notes "$TMP/notes-both" --apps-sha "${apps:0:12}"
+expect "--apps-sha without --notes: usage" 2 "give --notes" -- "$CHECKER" good "${S[@]}" --apps-sha "$apps"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -26,6 +26,16 @@ oa_declared_git_ref() {
   if [ -n "${TF_VAR_git_ref:-}" ]; then printf '%s' "$TF_VAR_git_ref"; else oa_pinned_version "$1" "$2" git_ref; fi
 }
 
+# The declared CoreDNS image (infra #392): TF_VAR_coredns_image_tag, else the tfvars, else the root default, else the module's (the
+# root's is null). Printed as the full image the manifest renders; nothing when no tag can be read.
+# Usage: oa_declared_coredns_image <repo root> <tfvars-file>
+oa_declared_coredns_image() {
+  local o="$1/infrastructure/opentofu" v="${TF_VAR_coredns_image_tag:-}"
+  [ -n "$v" ] || v="$(oa_pinned_version "$o/cluster" "$2" coredns_image_tag)"
+  { [ -n "$v" ] && [ "$v" != null ]; } || v="$(oa_pinned_version "$o/modules/talos" /dev/null coredns_image_tag)"
+  [ -n "$v" ] && printf 'registry.k8s.io/coredns/coredns:%s' "$v"
+}
+
 # The versions the committed artifacts install. One line per component, "<kind> <name> <image tag>":
 #   flux   <deployment>  <tag>     from bootstrap-manifests/flux-install.yaml (the 7 controllers)
 #   cilium <workload>    <tag>     from the cilium manifest (agent, operator; the envoy image is not compared)

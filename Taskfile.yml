@@ -1143,7 +1143,7 @@ tasks:
               if [ "{{.APPROVE}}" = auto ]; then
                 $CD APPLY=1 || exit 1
               elif [ -t 0 ]; then
-                printf '\nPatch the CoreDNS Deployment to the declared replicas and spread'
+                printf '\nPatch the CoreDNS Deployment to the declared replicas, spread and image'
                 printf ' (a rolling restart of the DNS pods)? Only "yes" is accepted: '
                 read -r reply
                 [ "$reply" = yes ] || {
@@ -2507,6 +2507,7 @@ tasks:
       scripts/ops/cilium-operator-ha-patch.json).
       CoreDNS also gets a spread over ZONES (lab 28, I2): required (DoNotSchedule, minDomains 3) when the nodes carry
       three or more zone labels and every node has one, a preference otherwise.
+      It also sets the declared CoreDNS image (coredns_image_tag; infra #392: the inline manifest never rolls it).
     dir: infrastructure/opentofu/cluster
     requires:
       vars: [PROVIDER]

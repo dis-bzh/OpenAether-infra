@@ -14,8 +14,13 @@ command -v jq >/dev/null || { echo "✗ jq is required" >&2; exit 1; }
 
 W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
 C="$W/infrastructure/opentofu/cluster"; FX="$W/fx"
-mkdir -p "$C/envs" "$W/scripts/ops" "$W/scripts/lib" "$W/bin" "$FX"
-cp scripts/ops/cluster-coredns-ha.sh scripts/ops/coredns-ha-patch.json scripts/ops/cilium-operator-ha-patch.json "$W/scripts/ops/"; cp scripts/lib/common.sh "$W/scripts/lib/"
+mkdir -p "$C/envs" "$W/scripts/ops" "$W/scripts/lib" "$W/bin" "$FX" "$W/infrastructure/opentofu/modules/talos"
+cp scripts/ops/cluster-coredns-ha.sh scripts/ops/coredns-ha-patch.json scripts/ops/cilium-operator-ha-patch.json "$W/scripts/ops/"; cp scripts/lib/common.sh scripts/lib/pins.sh "$W/scripts/lib/"
+# The real variables files: the declared tag is the root's (null) falling back to the module's Renovate-tracked default (infra #392).
+cp infrastructure/opentofu/cluster/variables.tf "$C/"; cp infrastructure/opentofu/modules/talos/variables.tf "$W/infrastructure/opentofu/modules/talos/"
+DEFTAG="$(awk '/^variable "coredns_image_tag"/,/^}/' infrastructure/opentofu/modules/talos/variables.tf | sed -nE 's/^ *default *= *"([^"]+)".*/\1/p')"
+[ -n "$DEFTAG" ] || { echo "✗ no coredns_image_tag default in modules/talos/variables.tf" >&2; exit 1; }
+IMG="registry.k8s.io/coredns/coredns:$DEFTAG"
 echo "apiVersion: v1" >"$C/kubeconfig"
 echo 'cluster_name = "x"' >"$C/envs/management-stub.tfvars"
 S="$W/scripts/ops/cluster-coredns-ha.sh"
@@ -28,6 +33,8 @@ case "\$*" in
   "-n kube-system get deployment coredns -o json") [ -f "$FX/absent" ] && { echo 'Error from server (NotFound): deployments.apps "coredns" not found' >&2; exit 1; }; cat "$FX/dep.json" ;;
   "-n kube-system patch deployment coredns --type merge -p "*)
     jq -c --argjson p "\$9" '. * \$p' "$FX/dep.json" >"$FX/x" && mv "$FX/x" "$FX/dep.json" ;;
+  "-n kube-system patch deployment coredns --type strategic -p "*)   # the image, merged by container name
+    jq -c --argjson p "\$9" '(\$p.spec.template.spec.containers[0]) as \$c | .spec.template.spec.containers |= map(if .name == \$c.name then . * \$c else . end)' "$FX/dep.json" >"$FX/x" && mv "$FX/x" "$FX/dep.json" ;;
   "-n kube-system get deployment cilium-operator -o json") [ -f "$FX/op.absent" ] && { echo 'Error from server (NotFound): deployments.apps "cilium-operator" not found' >&2; exit 1; }; cat "$FX/op.json" ;;
   "-n kube-system get deployment cilium-operator -o jsonpath={.spec.replicas}") jq -r '.spec.replicas' "$FX/op.json" ;;
   "-n kube-system patch deployment cilium-operator --type merge -p "*)
@@ -46,7 +53,8 @@ fixture() { # <nodes> <replicas> <hard 0|1> [operator replicas, default 2]; ZONE
   for i in $(seq 1 "$1"); do
     if [ "${ZONES:-0}" -gt 0 ] && ! { [ -n "${UNLABELED:-}" ] && [ "$i" = "$1" ]; }; then echo "node-$i Ready z$(( (i - 1) % ZONES + 1 ))"; else echo "node-$i Ready"; fi
   done >"$FX/nodes"
-  jq -nc --argjson r "$2" --argjson h "$3" --arg zc "${ZC:-none}" '{spec: {replicas: $r, template: {spec: {topologySpreadConstraints:
+  jq -nc --argjson r "$2" --argjson h "$3" --arg zc "${ZC:-none}" --arg img "${RUNIMG:-$IMG}" '{spec: {replicas: $r, template: {spec: {
+    containers: [{name: "coredns", image: $img, args: ["-conf", "/etc/coredns/Corefile"]}], topologySpreadConstraints:
     ((if $h == 1 then [{maxSkew: 1, minDomains: 3, topologyKey: "kubernetes.io/hostname", whenUnsatisfiable: "DoNotSchedule"}] else [] end)
      + (if $zc == "hard" then [{maxSkew: 1, minDomains: 3, topologyKey: "topology.kubernetes.io/zone", whenUnsatisfiable: "DoNotSchedule", nodeTaintsPolicy: "Honor"}]
         elif $zc == "soft" then [{maxSkew: 1, topologyKey: "topology.kubernetes.io/zone", whenUnsatisfiable: "ScheduleAnyway"}] else [] end))}}}}' >"$FX/dep.json"
@@ -134,6 +142,32 @@ ZONES=0 ZC=none fixture 8 3 1; run; rc=$?
 ZONES=3 ZC=none fixture 3 3 1; run --apply; rc=$?
 { [ "$rc" = 0 ] && [ "$(zone_of | jq -r .minDomains)" = 3 ]; } && ok "3 nodes in 3 zones: required, minDomains 3 (one replica per node and per zone)" || bad "rc $rc: $(zone_of)"
 ZONES=0 ZC=none; unset ZONES ZC UNLABELED
+
+echo "--- the image (infra #392: a coredns_image_tag change never reached the running Deployment) ---"
+img_now() { jq -r '.spec.template.spec.containers[] | select(.name == "coredns") | .image' "$FX/dep.json"; }
+OLD="registry.k8s.io/coredns/coredns:v0.0.1"
+RUNIMG="$OLD" fixture 8 3 1; run; rc=$?
+{ [ "$rc" = 3 ] && [ "$(writes)" = 0 ] && grep -qF "running $OLD; declared $IMG" "$W/out"; } \
+  && ok "shape in sync, image behind the declared default: exit 3, nothing written, both images named" || bad "rc $rc: $(tail -3 "$W/out")"
+RUNIMG="$OLD" fixture 8 3 1; run --apply; rc=$?
+{ [ "$rc" = 0 ] && [ "$(writes)" = 1 ] && grep -q 'patch deployment coredns --type strategic' "$W/calls.log" && ! grep -q 'patch deployment coredns --type merge' "$W/calls.log" \
+  && [ "$(img_now)" = "$IMG" ] && jq -e '.spec.template.spec.containers[0].args | length == 2' "$FX/dep.json" >/dev/null && grep -q 'rollout status deployment coredns' "$W/calls.log"; } \
+  && ok "apply: ONE strategic patch of the coredns container (the rest of the container kept), rollout awaited, image read back" || bad "rc $rc, writes $(writes): $(tail -3 "$W/out")"
+run --apply; rc=$?
+{ [ "$rc" = 0 ] && [ "$(writes)" = 1 ]; } && ok "idempotent: a second apply writes nothing" || bad "second apply: rc $rc, writes $(writes)"
+fixture 8 3 1; printf 'coredns_image_tag = "v9.9.9"  # pinned\n' >"$C/envs/management-stub.tfvars"; run; rc=$?
+{ [ "$rc" = 3 ] && grep -qF "declared registry.k8s.io/coredns/coredns:v9.9.9" "$W/out"; } && ok "a tag in the tfvars is the declared one: the default image now differs" || bad "rc $rc: $(tail -3 "$W/out")"
+fixture 8 3 1; TF_VAR_coredns_image_tag=v8.8.8 run --apply; rc=$?
+{ [ "$rc" = 0 ] && [ "$(img_now)" = registry.k8s.io/coredns/coredns:v8.8.8 ]; } && ok "TF_VAR_coredns_image_tag wins over the tfvars, as in tofu" || bad "rc $rc: $(img_now)"
+RUNIMG="$OLD" fixture 8 2 0; echo 'cluster_name = "x"' >"$C/envs/management-stub.tfvars"; run --apply; rc=$?
+{ [ "$rc" = 0 ] && [ "$(writes)" = 2 ] && [ "$(img_now)" = "$IMG" ] && jq -e '.spec.replicas == 3' "$FX/dep.json" >/dev/null && [ "$(grep -c 'rollout status deployment coredns' "$W/calls.log")" = 1 ]; } \
+  && ok "shape and image both differ: both patches, one rollout wait" || bad "rc $rc, writes $(writes): $(tail -3 "$W/out")"
+fixture 8 3 1; printf 'coredns_image_tag = "v1 bad"\n' >"$C/envs/management-stub.tfvars"; run --apply; rc=$?
+{ [ "$rc" = 1 ] && [ "$(writes)" = 0 ]; } && ok "a declared tag that is not a tag: refused before any write" || bad "rc $rc, writes $(writes)"
+echo 'cluster_name = "x"' >"$C/envs/management-stub.tfvars"
+RUNIMG="$OLD" fixture 8 3 1; echo 'coredns_ha = false' >"$C/envs/management-stub.tfvars"; run --apply; rc=$?
+{ [ "$rc" = 0 ] && [ "$(img_now)" = "$OLD" ]; } && ok "coredns_ha = false: the Talos Deployment's image is Talos's, never patched" || bad "rc $rc: $(img_now)"
+echo 'cluster_name = "x"' >"$C/envs/management-stub.tfvars"
 
 echo "--- not applicable ---"
 fixture 8 2 0; touch "$FX/absent"; run; rc=$?

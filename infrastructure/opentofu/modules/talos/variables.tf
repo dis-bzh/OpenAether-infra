@@ -228,8 +228,9 @@ variable "coredns_ha" {
 }
 
 variable "coredns_image_tag" {
-  description = "CoreDNS image tag of the shipped manifest (registry.k8s.io/coredns/coredns). Changing it does NOT roll the running Deployment (docs/resilience.md, changing the CoreDNS version): roll it by hand with kubectl set image. Not settable from a tfvars."
+  description = "CoreDNS image tag of the shipped manifest (registry.k8s.io/coredns/coredns), set from the root (cluster/variables.tf; null there keeps this default). The inline manifest only creates the Deployment: on a running cluster `task cluster-coredns-ha` rolls a new tag and cluster-verify compares it (docs/resilience.md)."
   type        = string
+  nullable    = false
   # renovate: datasource=docker depName=registry.k8s.io/coredns/coredns
   default = "v1.12.4"
 }

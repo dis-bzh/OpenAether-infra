@@ -70,6 +70,8 @@ kjson() { # <jq -e predicate the document must satisfy> <kubectl args…>
 # nothing and runs nothing.
 # shellcheck source=../lib/common.sh
 source "$ROOT/scripts/lib/common.sh"
+# shellcheck source=../lib/pins.sh
+source "$ROOT/scripts/lib/pins.sh"
 
 info "The cluster answers"
 
@@ -262,6 +264,19 @@ if [ "$PROVIDER" != local ] && [ "$(cfg_value coredns_ha)" != false ]; then
   else
     unk "could not read Deployment kube-system/coredns — the replica count and spread are UNCHECKED"
   fi
+  # The tag too (infra #392): the inline manifest never updates a running Deployment, so a coredns_image_tag change shows only here.
+  info "CoreDNS runs the declared image (coredns_image_tag)"
+  dns_img_want="$(oa_declared_coredns_image "$ROOT" "$VER_TFVARS" || true)"
+  dns_img_have="$(jq -r '[.spec.template.spec.containers[]? | select(.name == "coredns") | .image] | first // empty' <<<"${dns_json:-}" 2>/dev/null)"
+  if [ -z "$dns_img_want" ]; then
+    unk "could not read the declared coredns_image_tag (TF_VAR_coredns_image_tag, ${VER_TFVARS##*/}, variables.tf) — the CoreDNS image is UNCHECKED"
+  elif [ -z "$dns_img_have" ]; then
+    unk "could not read the image of the coredns container of Deployment kube-system/coredns — the CoreDNS image is UNCHECKED"
+  elif [ "$dns_img_have" != "$dns_img_want" ]; then
+    bad "CoreDNS runs ${dns_img_have}, the config declares ${dns_img_want}. Roll it: task cluster-coredns-ha PROVIDER=${PROVIDER} ROLE=${ROLE} APPLY=1 (a rolling restart of the DNS pods)"
+  else
+    ok "CoreDNS runs the declared image ${dns_img_want}"
+  fi
 fi
 # The Cilium operator runs 2 replicas since 0.4.0 (critical-path audit: it ran 1). Same trap as CoreDNS above: the Cilium manifest is
 # an inline manifest, Talos creates its objects only when absent, so a cluster built by an older release keeps ONE operator replica
@@ -421,8 +436,6 @@ version_check "Kubernetes" '.status.nodeInfo.kubeletVersion' kubernetes_version
 # pin (render-bootstrap-manifests.sh) never reaches a running cluster by itself. Compared in BOTH directions, per workload:
 # behind and ahead are both a difference. The pin is what the committed artifact installs (scripts/lib/pins.sh), the running
 # version is the image tag of the workload spec. The local Docker cluster is rebuilt, not upgraded, and renders its own Cilium.
-# shellcheck source=../lib/pins.sh
-source "$ROOT/scripts/lib/pins.sh"
 pins_check() { # <label> <artifact file> <kind> <fix-when-behind> <fix-when-ahead> [ns]
   local label="$1" file="$2" kind="$3" behind="$4" ahead="$5" want have diff line
   if [ ! -f "$file" ]; then unk "${label}: the pinned artifact ${file##*/} is not readable here — the running version is UNCHECKED"; return; fi

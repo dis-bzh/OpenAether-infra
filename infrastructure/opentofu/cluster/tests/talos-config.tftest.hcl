@@ -460,6 +460,40 @@ run "node_nameservers_alone_get_the_default_boot_wait" {
   }
 }
 
+# CoreDNS tag (infra #392): null at the root is the module default (no diff on any cluster), a value reaches the manifest,
+# and a value that could split the YAML image field or the kubectl patch is refused at plan.
+run "coredns_image_tag_defaults_to_the_module" {
+  command = plan
+
+  assert {
+    condition     = module.talos.coredns_image == "registry.k8s.io/coredns/coredns:${regex("variable \"coredns_image_tag\" \\{[^}]*default = \"([^\"]+)\"", file("../modules/talos/variables.tf"))[0]}"
+    error_message = "coredns_image_tag = null must keep the module default, so no existing cluster gets a config change."
+  }
+}
+
+run "coredns_image_tag_reaches_the_talos_module" {
+  command = plan
+
+  variables {
+    coredns_image_tag = "v9.9.9"
+  }
+
+  assert {
+    condition     = module.talos.coredns_image == "registry.k8s.io/coredns/coredns:v9.9.9"
+    error_message = "coredns_image_tag must be passed to the talos module."
+  }
+}
+
+run "coredns_image_tag_refuses_what_is_not_a_tag" {
+  command = plan
+
+  variables {
+    coredns_image_tag = "v1.12.4\"\n  command: [sh]"
+  }
+
+  expect_failures = [var.coredns_image_tag]
+}
+
 # --- node and flow logs (batch B22), mocked ------------------------------------
 
 run "node_logs_and_hubble_are_off_by_default" {

@@ -621,6 +621,17 @@ variable "coredns_ha" {
   default     = true
 }
 
+variable "coredns_image_tag" {
+  description = "CoreDNS image tag (registry.k8s.io/coredns/coredns) of OpenAether's CoreDNS (coredns_ha). null = the default of modules/talos, tracked by Renovate. A change reaches a running cluster through `task cluster-coredns-ha … APPLY=1` (cluster-up runs it), not through the apply alone; cluster-verify fails while the running image differs (docs/resilience.md)."
+  type        = string
+  default     = null
+  validation {
+    # The tag lands in a YAML image field and a kubectl patch: the registry's tag grammar, nothing that quotes or splits.
+    condition     = var.coredns_image_tag == null || can(regex("^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$", var.coredns_image_tag))
+    error_message = "coredns_image_tag must be an image tag such as v1.12.4 (letters, digits, . _ -; at most 128 characters), or null for the module default."
+  }
+}
+
 variable "node_monitor_grace_period_seconds" {
   description = <<-EOT
     Seconds the kube-controller-manager waits for a node's heartbeat before marking it NotReady (Kubernetes default 50).
