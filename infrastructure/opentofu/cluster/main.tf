@@ -769,6 +769,7 @@ module "talos" {
   node_time_servers     = var.node_time_servers
   node_baseline         = var.node_baseline
   coredns_ha            = var.coredns_ha
+  coredns_image_tag     = var.coredns_image_tag
 
   node_monitor_grace_period_seconds = var.node_monitor_grace_period_seconds
 

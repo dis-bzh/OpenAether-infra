@@ -183,3 +183,27 @@ run "no_zone_information_keeps_it_a_preference" {
     error_message = "no node_zones (local Docker, Proxmox): the zone term is a preference"
   }
 }
+
+# The tag (infra #392): the output the root tests and scripts/lib/pins.sh rely on is the image the manifest renders, and a null
+# from the root keeps the default instead of rendering an empty tag.
+run "the_image_output_is_the_rendered_image" {
+  command = apply
+  variables {
+    coredns_image_tag = "v9.9.9"
+  }
+  assert {
+    condition     = output.coredns_image == "registry.k8s.io/coredns/coredns:v9.9.9" && strcontains(local.coredns_manifests[0].contents, "image: ${output.coredns_image}\n")
+    error_message = "the coredns_image output must be the image the manifest renders"
+  }
+}
+
+run "a_null_tag_keeps_the_module_default" {
+  command = apply
+  variables {
+    coredns_image_tag = null
+  }
+  assert {
+    condition     = output.coredns_image == "registry.k8s.io/coredns/coredns:${regex("variable \"coredns_image_tag\" \\{[^}]*default = \"([^\"]+)\"", file("${path.module}/variables.tf"))[0]}"
+    error_message = "null from the root must render the module default, byte for byte"
+  }
+}

@@ -142,6 +142,8 @@ locals {
     [for i in range(var.worker_count) : try(var.node_zones.worker[i], "")],
   )
   coredns_zone_hard = length(distinct(compact(local.coredns_node_zones))) >= 3 && !contains(local.coredns_node_zones, "")
+  # Output for the tests; scripts/lib/pins.sh builds the same string for cluster-coredns-ha and cluster-verify (infra #392).
+  coredns_image = "registry.k8s.io/coredns/coredns:${var.coredns_image_tag}"
   coredns_manifests = var.coredns_ha ? [{
     name = "coredns"
     contents = templatefile("${path.module}/coredns.yaml.tftpl", {

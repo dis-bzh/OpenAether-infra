@@ -5,7 +5,8 @@
 # nodes carry three or more zones and EVERY node has its zone label, a preference otherwise (lab 28, I2: all three replicas sat in
 # one zone after an install; a node without the label could never take a pod under a required rule). It does the same, in the same step, for the
 # CILIUM OPERATOR (0.4.0 critical-path audit): the Cilium manifest is an inline manifest too, so a cluster built by an older release
-# keeps its ONE operator replica; the declared shape is min(2, nodes) replicas (scripts/ops/cilium-operator-ha-patch.json). The name
+# keeps its ONE operator replica; the declared shape is min(2, nodes) replicas (scripts/ops/cilium-operator-ha-patch.json). It also
+# rolls the declared CoreDNS IMAGE (coredns_image_tag, infra #392): the inline manifest never updates the running tag. The name
 # stays "coredns" because `cluster-up` and the docs call it by that name; both are the objects Talos never rewrites.
 #
 # WHY IT EXISTS. The 0.4.0 CoreDNS HA is a Talos inline manifest. Talos creates an inline manifest's objects only when they are
@@ -18,7 +19,8 @@
 # the declaration, writes nothing. --apply: merge-patches the Deployment with scripts/ops/coredns-ha-patch.json (replicas and the
 # hostname minDomains lowered to the node count when there are fewer than 3 nodes; the zone term made a preference, without its
 # minDomains, when the zone rule above is not met: the file is the 3-node, 3-zone shape), then waits for the rollout and reads the
-# Deployment back. Idempotent: in sync, it does nothing. A rolling restart of the DNS pods happens only when the spec
+# Deployment back; a different image is set with a strategic patch of the coredns container, in the same rollout.
+# Idempotent: in sync, it does nothing. A rolling restart of the DNS pods happens only when the spec
 # differs (maxUnavailable of the Deployment and the budget keep two answering; lab 27: 6 s, 0 failed lookups at 1 Hz). The new pods
 # can land unbalanced over the zones (the old ones are still counted while they are scheduled; lab 28B: 2, 3, 2), so after a patch it
 # names `task cluster-rebalance … APPLY=1`; inside `cluster-up` that runs right after this step.
@@ -41,13 +43,15 @@ OP_PATCH_FILE="${OA_CILIUM_OPERATOR_PATCH_FILE:-$ROOT/scripts/ops/cilium-operato
 TIMEOUT="${OA_COREDNS_TIMEOUT:-300}"
 # shellcheck source=../lib/common.sh
 source "$ROOT/scripts/lib/common.sh"
+# shellcheck source=../lib/pins.sh
+source "$ROOT/scripts/lib/pins.sh"
 
 APPLY=0; TFVARS=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --apply) APPLY=1 ;;
     --tfvars) shift; TFVARS="${1:-}" ;;
-    -h|--help) sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,35p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "✗ unknown argument: $1 (usage: cluster-coredns-ha.sh [--tfvars FILE] [--apply])" >&2; exit 1 ;;
   esac
   shift
@@ -58,11 +62,17 @@ case "$TIMEOUT" in *[!0-9]*|"") fail "OA_COREDNS_TIMEOUT must be whole seconds" 
 [ -s "$PATCH_FILE" ] || fail "the patch file $PATCH_FILE is missing"
 [ -s "$OP_PATCH_FILE" ] || fail "the patch file $OP_PATCH_FILE is missing"
 
-COREDNS_ON=1
+COREDNS_ON=1; tf=""
 if [ -n "$TFVARS" ]; then
   tf="$TFVARS"; [ -f "$tf" ] || tf="$CLUSTER_DIR/$TFVARS"
   ha="${TF_VAR_coredns_ha:-}"; [ -n "$ha" ] || { [ -f "$tf" ] && ha="$(tfv "$tf" coredns_ha)"; }
   if [ "$ha" = false ]; then echo "~ coredns_ha = false: Talos owns the CoreDNS Deployment, nothing to converge for it."; COREDNS_ON=0; fi
+fi
+WANT_IMG=""
+if [ "$COREDNS_ON" -eq 1 ]; then
+  WANT_IMG="$(oa_declared_coredns_image "$ROOT" "$tf" || true)"
+  [[ "$WANT_IMG" =~ ^registry\.k8s\.io/coredns/coredns:[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$ ]] \
+    || fail "cannot read a valid declared coredns_image_tag (TF_VAR_coredns_image_tag, the tfvars, the defaults of variables.tf): '${WANT_IMG}'"
 fi
 export KUBECONFIG="$CLUSTER_DIR/kubeconfig"
 [ -s "$KUBECONFIG" ] || fail "no kubeconfig at infrastructure/opentofu/cluster/kubeconfig (task kubeconfig PROVIDER=… ROLE=…)"
@@ -90,34 +100,46 @@ read_dep() {
   hard="$(jq -r '[.spec.template.spec.topologySpreadConstraints[]? | select(.topologyKey == "kubernetes.io/hostname" and .whenUnsatisfiable == "DoNotSchedule")] | length' <<<"$DEP")"
   [[ "$have" =~ ^[0-9]+$ ]] && [[ "$hard" =~ ^[0-9]+$ ]] || fail "cannot read the replica count or the spread of kube-system/coredns"
   zone_have="$(jq -r '[.spec.template.spec.topologySpreadConstraints[]? | select(.topologyKey == "topology.kubernetes.io/zone")] | first | .whenUnsatisfiable // "none"' <<<"$DEP")"
+  img_have="$(jq -r '[.spec.template.spec.containers[]? | select(.name == "coredns") | .image] | first // ""' <<<"$DEP")"
 }
 # A required zone term that the topology does not ask for is left alone (a cluster that lost a zone for good is not churned); a
 # zone term that the topology asks to be required but is not, is a difference.
-in_sync() { [ "$have" -eq "$want" ] && [ "$hard" -gt 0 ] && { [ "$zone_hard" -eq 0 ] || [ "$zone_have" = DoNotSchedule ]; }; }
+shape_ok() { [ "$have" -eq "$want" ] && [ "$hard" -gt 0 ] && { [ "$zone_hard" -eq 0 ] || [ "$zone_have" = DoNotSchedule ]; }; }
+img_ok() { [ "$img_have" = "$WANT_IMG" ]; }
+in_sync() { shape_ok && img_ok; }
 
 DIFF=0
 converge_coredns() {
   read_dep || return 0
   echo "CoreDNS (kube-system/coredns): $have replica(s), $hard hard hostname spread constraint(s), zone spread: $zone_have; declared: $want replica(s) (min(3, $nodes node(s))) with a hard spread over nodes and a zone spread that is $zone_decl ($zones zone(s), $unlabeled node(s) without a zone label)."
-  if in_sync; then echo "✓ CoreDNS already is the declared shape: nothing to do."; return 0; fi
+  echo "CoreDNS image: running ${img_have:-(none)}; declared $WANT_IMG (coredns_image_tag)."
+  if in_sync; then echo "✓ CoreDNS already is the declared shape and image: nothing to do."; return 0; fi
   if [ "$APPLY" -ne 1 ]; then
     echo "✗ CoreDNS differs from the declaration. NOTHING was written (dry run)." >&2
     echo "  Converge it (a rolling restart of the DNS pods): task cluster-coredns-ha PROVIDER=… ROLE=… APPLY=1" >&2
     DIFF=1; return 0
   fi
-  patch="$(jq -c --argjson n "$want" --argjson z "$zone_hard" '
-      .spec.replicas = $n
-      | (.spec.template.spec.topologySpreadConstraints[] | select(.topologyKey == "kubernetes.io/hostname")).minDomains = $n
-      | if $z == 1 then .
-        else (.spec.template.spec.topologySpreadConstraints[] | select(.topologyKey == "topology.kubernetes.io/zone")) |= (.whenUnsatisfiable = "ScheduleAnyway" | del(.minDomains))
-        end' "$PATCH_FILE")" || fail "the patch file is not what this script can adjust"
-  kubectl -n kube-system patch deployment coredns --type merge -p "$patch" >/dev/null 2>"$ERR" || fail "patch of kube-system/coredns refused: $(head -c 300 "$ERR")"
-  echo "▶ kube-system/coredns patched (replicas $want, hard spread over nodes, zone spread $zone_decl, 30 s tolerations)."
+  if ! shape_ok; then
+    patch="$(jq -c --argjson n "$want" --argjson z "$zone_hard" '
+        .spec.replicas = $n
+        | (.spec.template.spec.topologySpreadConstraints[] | select(.topologyKey == "kubernetes.io/hostname")).minDomains = $n
+        | if $z == 1 then .
+          else (.spec.template.spec.topologySpreadConstraints[] | select(.topologyKey == "topology.kubernetes.io/zone")) |= (.whenUnsatisfiable = "ScheduleAnyway" | del(.minDomains))
+          end' "$PATCH_FILE")" || fail "the patch file is not what this script can adjust"
+    kubectl -n kube-system patch deployment coredns --type merge -p "$patch" >/dev/null 2>"$ERR" || fail "patch of kube-system/coredns refused: $(head -c 300 "$ERR")"
+    echo "▶ kube-system/coredns patched (replicas $want, hard spread over nodes, zone spread $zone_decl, 30 s tolerations)."
+  fi
+  # Strategic, keyed on the container name: a merge patch would replace the whole containers list.
+  if ! img_ok; then
+    patch="$(jq -nc --arg i "$WANT_IMG" '{spec: {template: {spec: {containers: [{name: "coredns", image: $i}]}}}}')"
+    kubectl -n kube-system patch deployment coredns --type strategic -p "$patch" >/dev/null 2>"$ERR" || fail "image patch of kube-system/coredns refused: $(head -c 300 "$ERR")"
+    echo "▶ kube-system/coredns image set to $WANT_IMG (was ${img_have:-none})."
+  fi
   kubectl -n kube-system rollout status deployment coredns --timeout="${TIMEOUT}s" >/dev/null 2>"$ERR" \
     || fail "the CoreDNS rollout did not finish within ${TIMEOUT} s: $(head -c 300 "$ERR")"
   read_dep || fail "kube-system/coredns disappeared during the patch"
-  in_sync || fail "after the patch CoreDNS has $have replica(s) and $hard hard spread constraint(s); declared $want"
-  echo "✓ CoreDNS converged: $have replica(s), hard spread over nodes, zone spread $zone_decl."
+  in_sync || fail "after the patch CoreDNS has $have replica(s), $hard hard spread constraint(s) and image ${img_have:-none}; declared $want and $WANT_IMG"
+  echo "✓ CoreDNS converged: $have replica(s), hard spread over nodes, zone spread $zone_decl, image $WANT_IMG."
   # The scheduler counted the old pods while it placed the new ones, so the zones can end unbalanced (lab 28B: 2, 3, 2; infra #423).
   echo "~ Pod placement can be unbalanced right after this rolling restart (old pods were still counted while the new ones were scheduled)."
   echo "  Put it right: task cluster-rebalance PROVIDER=… ROLE=… APPLY=1   (cluster-up runs it right after this step)."

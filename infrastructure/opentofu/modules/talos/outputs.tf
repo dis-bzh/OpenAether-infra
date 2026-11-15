@@ -97,6 +97,11 @@ output "inline_manifest_names" {
   value       = [for m in local.inline_manifests : m.name]
 }
 
+output "coredns_image" {
+  description = "The CoreDNS image the shipped manifest declares, null when coredns_ha is off (Talos owns the Deployment then)."
+  value       = var.coredns_ha ? local.coredns_image : null
+}
+
 output "appended_documents" {
   description = "The documents appended to every node's config (KmsgLogConfig first when node_log_forwarding is set, then the node firewall documents when node_firewall_mode is not off, then ResolverConfig and TimeSyncConfig), empty when neither node_log_forwarding nor node_nameservers is. Exposed because the rendered configs are unknown at plan."
   value       = local.appended_documents

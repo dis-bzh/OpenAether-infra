@@ -71,7 +71,7 @@ package = "github.com/cilium/cilium"
 # anchor (`clea coverage` checks it), and the bump is a cluster-side change (infra #392).
 [[not_watched]]
 dep = "registry.k8s.io/coredns/coredns"
-reason = "coredns_image_tag, bumped by hand on a running cluster (it rolls DNS, docs/resilience.md, infra #392); Renovate proposes it, Cléa has no docker reader (a registry tag list has no release date)."
+reason = "coredns_image_tag, rolled on a running cluster by task cluster-coredns-ha (it restarts the DNS pods, docs/resilience.md, infra #392); Renovate proposes it, Cléa has no docker reader (a registry tag list has no release date)."
 
 # Inventories cross-checked against Cléa's own scan. An anchor Cléa can read and
 # an inventory here cannot see is a pin nothing is watching — `clea coverage`

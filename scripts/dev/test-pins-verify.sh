@@ -27,6 +27,9 @@ C="$W/infrastructure/opentofu/cluster"; FX="$W/fx"; M="$C/bootstrap-manifests"
 mkdir -p "$C/envs" "$M" "$W/scripts/dev" "$W/scripts/lib" "$W/scripts/internal" "$W/bin" "$FX"
 cp scripts/dev/infra-verify.sh "$W/scripts/dev/"; cp scripts/lib/common.sh scripts/lib/pins.sh "$W/scripts/lib/"
 cp "$REAL_M"/{cilium.yaml,cilium-hubble-drops.yaml,flux-install.yaml} "$M/"
+# The declared CoreDNS image falls back to the module's Renovate-tracked default (infra #392): the real file.
+mkdir -p "$W/infrastructure/opentofu/modules/talos"; cp infrastructure/opentofu/modules/talos/variables.tf "$W/infrastructure/opentofu/modules/talos/"
+DNSIMG="$(oa_declared_coredns_image "$PWD" /dev/null)"; [ -n "$DNSIMG" ] || { echo "✗ no coredns_image_tag default in modules/talos/variables.tf" >&2; exit 1; }
 printf 'variable "git_ref" {\n  default = "refs/tags/0.0.1"\n}\nvariable "talos_version" {\n  default = "v1.14.4"\n}\nvariable "kubernetes_version" {\n  default = "v1.37.1"\n}\n' >"$C/variables.tf"
 TFV="$C/envs/management-stub.tfvars"
 oa_artifact_pins flux "$M/flux-install.yaml" >"$W/flux.target"
@@ -112,8 +115,8 @@ esac
 STUB
 chmod +x "$W/stub"; for t in kubectl sleep tofu aws; do ln -s "$W/stub" "$W/bin/$t"; done
 
-mkdns() { # <replicas> <hard hostname spread: true|false> — the Deployment kube-system/coredns as the apiserver returns it
-  jq -nc --argjson r "$1" --argjson h "$2" '{spec:{replicas:$r,template:{spec:(if $h then {topologySpreadConstraints:[{topologyKey:"kubernetes.io/hostname",whenUnsatisfiable:"DoNotSchedule",maxSkew:1}]} else {} end)}}}' >"$FX/coredns.json"; }
+mkdns() { # <replicas> <hard hostname spread: true|false> [image] — the Deployment kube-system/coredns as the apiserver returns it
+  jq -nc --argjson r "$1" --argjson h "$2" --arg i "${3:-$DNSIMG}" '{spec:{replicas:$r,template:{spec:({containers:[{name:"coredns",image:$i}]} + (if $h then {topologySpreadConstraints:[{topologyKey:"kubernetes.io/hostname",whenUnsatisfiable:"DoNotSchedule",maxSkew:1}]} else {} end))}}}' >"$FX/coredns.json"; }
 mkop() { jq -nc --argjson r "$1" '{spec:{replicas:$r}}' >"$FX/operator.json"; }
 mkgr() { jq -nc --arg r "$1" '{spec:{ref:{name:$r}}}' >"$FX/gr.json"; }
 mkks() { jq -nc --arg r "$1" '{spec:{postBuild:{substitute:{GIT_REF:$r}}}}' >"$FX/ks.json"; }
@@ -367,6 +370,20 @@ reset; mkdns 2 false; printf 'coredns_ha = false\n' >>"$TFV"; run
 ! has "✓ CoreDNS runs the declared" && [ -z "$(badline 'CoreDNS has')" ] && ok "coredns_ha = false: the Talos Deployment is what is declared, nothing to compare" || bad "$(grep -i coredns "$W/out")"
 reset; mkdns 2 false; run local
 ! has "✓ CoreDNS runs the declared" && ok "provider local: not judged" || bad "local judged"
+echo "--- infra #392: CoreDNS runs the declared image ---"
+reset; run
+has "✓ CoreDNS runs the declared image $DNSIMG" && ok "the module default runs: passes" || bad "$(grep -i 'coredns' "$W/out")"
+reset; mkdns 3 true registry.k8s.io/coredns/coredns:v0.0.1; run
+{ [ -n "$(badline "CoreDNS runs registry.k8s.io/coredns/coredns:v0.0.1, the config declares $DNSIMG")" ] && has "task cluster-coredns-ha PROVIDER=stub ROLE=management APPLY=1" && [ "$rc" -ne 0 ]; } \
+  && ok "an older running tag (a Renovate bump of the default): BAD with the converge command, run fails" || bad "$(grep -i coredns "$W/out")"
+reset; printf 'coredns_image_tag = "v9.9.9"\n' >>"$TFV"; run
+[ -n "$(badline "the config declares registry.k8s.io/coredns/coredns:v9.9.9")" ] && ok "a tag set in the tfvars is the declared one" || bad "$(grep -i coredns "$W/out")"
+reset; EXTRA="TF_VAR_coredns_image_tag=v8.8.8" run
+[ -n "$(badline "the config declares registry.k8s.io/coredns/coredns:v8.8.8")" ] && ok "TF_VAR_coredns_image_tag wins over the tfvars" || bad "$(grep -i coredns "$W/out")"
+reset; jq -c '.spec.template.spec.containers = []' "$FX/coredns.json" >"$FX/x" && mv "$FX/x" "$FX/coredns.json"; run
+{ [ -n "$(unkline 'could not read the image of the coredns container')" ] && ! has "✓ CoreDNS runs the declared image"; } && ok "no coredns container: UNKNOWN, not a pass" || bad "$(grep -i coredns "$W/out")"
+reset; mkdns 3 true registry.k8s.io/coredns/coredns:v0.0.1; printf 'coredns_ha = false\n' >>"$TFV"; run
+[ -z "$(badline 'CoreDNS runs registry')" ] && ok "coredns_ha = false: the Talos image is not compared" || bad "$(grep -i coredns "$W/out")"
 # the one-time patch must say what the manifest says (drift guard)
 # (the patch is the 3-zone shape: the template rendered with zone_hard = true; cluster-coredns-ha.sh softens the zone term below 3 zones)
 python3 -I - "$PWD/scripts/ops/coredns-ha-patch.json" "$PWD/infrastructure/opentofu/modules/talos/coredns.yaml.tftpl" <<'PY' && ok "scripts/ops/coredns-ha-patch.json equals the manifest's replicas, tolerations and spread (3 replicas, 3 zones: the zone term required)" || bad "the patch file drifted from coredns.yaml.tftpl"
