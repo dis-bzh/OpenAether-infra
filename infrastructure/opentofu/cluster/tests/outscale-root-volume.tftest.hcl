@@ -66,3 +66,39 @@ run "gp2_without_a_size_sends_no_mapping" {
     error_message = "gp2 and no size is the OMI's own root: no block device mapping, exactly as before this variable."
   }
 }
+
+# #376: the worker data disks have their own type, default standard (what the module always created: no diff on a running cluster).
+# iops is Optional+Computed, so a plan shows it unknown when not sent: only the io1 case can assert it.
+run "data_disks_default_to_standard" {
+  command = plan
+  module { source = "../modules/providers/outscale" }
+  providers = { outscale = outscale }
+  plan_options { target = [outscale_volume.worker_data] }
+
+  variables {
+    worker_storage = { disks = [{ size_gb = 50 }] }
+  }
+
+  assert {
+    condition     = length(outscale_volume.worker_data) == 3 && alltrue([for v in values(outscale_volume.worker_data) : v.volume_type == "standard"])
+    error_message = "By default every worker data disk must be standard, the type it always got."
+  }
+}
+
+run "data_disks_io1_send_the_iops" {
+  command = plan
+  module { source = "../modules/providers/outscale" }
+  providers = { outscale = outscale }
+  plan_options { target = [outscale_volume.worker_data] }
+
+  variables {
+    worker_storage          = { disks = [{ size_gb = 50 }] }
+    worker_data_volume_type = "io1"
+    worker_data_volume_iops = 3000
+  }
+
+  assert {
+    condition     = alltrue([for v in values(outscale_volume.worker_data) : v.volume_type == "io1" && v.iops == 3000])
+    error_message = "io1 data disks must carry the requested IOPS."
+  }
+}

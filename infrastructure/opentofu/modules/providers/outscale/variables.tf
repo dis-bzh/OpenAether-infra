@@ -39,6 +39,18 @@ variable "root_volume_iops" {
   default     = 1500
 }
 
+variable "worker_data_volume_type" {
+  description = "BSU type of the worker data disks: gp2, io1 (worker_data_volume_iops) or standard. See the root variable outscale_worker_data_volume_type."
+  type        = string
+  default     = "standard"
+}
+
+variable "worker_data_volume_iops" {
+  description = "Provisioned IOPS of an io1 worker data disk; ignored for other types. See the root variable outscale_worker_data_volume_iops."
+  type        = number
+  default     = 1500
+}
+
 variable "worker_storage" {
   description = <<-EOT
     Dedicated data disks per worker. Each `disks` entry creates one BSU volume

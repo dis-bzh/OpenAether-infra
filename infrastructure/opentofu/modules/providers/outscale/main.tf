@@ -156,6 +156,8 @@ resource "outscale_volume" "worker_data" {
   # creation, like the VM's subnet: a different subregion would replace the volume and its data.
   subregion_name = outscale_subnet.private[local.worker_zone_index[each.value.worker]].subregion_name
   size           = each.value.size_gb
+  volume_type    = var.worker_data_volume_type
+  iops           = var.worker_data_volume_type == "io1" ? var.worker_data_volume_iops : null
 
   lifecycle {
     ignore_changes = [subregion_name]

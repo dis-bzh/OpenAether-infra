@@ -264,6 +264,14 @@ check "outscale_root_iops_ratio" {
   }
 }
 
+# Same API ratio for the io1 worker data disks, each of which gets the same IOPS.
+check "outscale_worker_data_iops_ratio" {
+  assert {
+    condition     = var.outscale_worker_data_volume_type != "io1" || local.osc_dist.workers == 0 || alltrue([for d in var.worker_storage.disks : var.outscale_worker_data_volume_iops <= 300 * d.size_gb])
+    error_message = "outscale_worker_data_volume_iops (${var.outscale_worker_data_volume_iops}) is above 300 IOPS per GiB of a worker_storage disk: the API refuses it. Lower the IOPS or raise the disk size."
+  }
+}
+
 # A warning, not a failure: the platform asks about 9 vCPU of requests (lab 27 part C: 8.7 vCPU on a 3 CP + 3 W cluster of
 # 3 vCPU nodes, workers at 97-99 % of their allocatable CPU), and the workers MINUS ONE must hold it or a drain, a roll or a node
 # loss leaves pods Pending (12 did) and the failover targets with them. The vCPU count is read from the Outscale type name
@@ -396,6 +404,9 @@ module "outscale" {
   k8s_lb_mode         = local.osc_dist.k8s_lb_mode
   deploy_app_lb       = var.deploy_app_lb
   restrict_inter_node = var.restrict_inter_node
+
+  worker_data_volume_type = var.outscale_worker_data_volume_type
+  worker_data_volume_iops = var.outscale_worker_data_volume_iops
 
   app_lb_allowed_cidrs = var.app_lb_allowed_cidrs
 

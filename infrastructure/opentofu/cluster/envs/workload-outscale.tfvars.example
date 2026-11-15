@@ -92,3 +92,7 @@ s3_replica_region   = "fr-par"
 # gp2, whose IOPS grow with its size (150 IOPS measured at 50 GB, saturated by the full stack in lab 16, #376); a larger
 # size gives more IOPS, but that was NOT shown to prevent the cascade, and changing the type to io1 did not.
 outscale_root_volume_size_gb = 50
+# Worker data disks of worker_storage (#376): standard (magnetic) by default, which the full stack saturated; io1 cured it.
+# Uncomment for io1 (billed per provisioned IOPS; at most 300 IOPS per GiB of each disk). docs/capacity.md.
+# outscale_worker_data_volume_type = "io1"
+# outscale_worker_data_volume_iops = 1500

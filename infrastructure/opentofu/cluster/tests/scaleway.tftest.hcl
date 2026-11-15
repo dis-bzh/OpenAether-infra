@@ -664,6 +664,23 @@ run "root_iops_range" {
   expect_failures = [var.outscale_root_volume_iops]
 }
 
+# #376: the worker data disk type and IOPS, same validation as the root ones.
+run "worker_data_type_must_be_known" {
+  command = plan
+  variables {
+    outscale_worker_data_volume_type = "io2"
+  }
+  expect_failures = [var.outscale_worker_data_volume_type]
+}
+
+run "worker_data_iops_range" {
+  command = plan
+  variables {
+    outscale_worker_data_volume_iops = 20000
+  }
+  expect_failures = [var.outscale_worker_data_volume_iops]
+}
+
 run "verify_outscale_root_volume_range" {
   command = plan
 

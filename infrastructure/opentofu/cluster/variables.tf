@@ -470,6 +470,31 @@ variable "outscale_root_volume_iops" {
   }
 }
 
+variable "outscale_worker_data_volume_type" {
+  description = <<-EOT
+    Outscale only: BSU type of the worker data disks of `worker_storage.disks`. Default standard (magnetic), what the module has
+    always created, so an existing cluster plans no change. #376 measured a full stack saturating standard data disks; io1
+    (provisioned IOPS, see outscale_worker_data_volume_iops) cured it, billed per GiB AND per provisioned IOPS. Outscale changes
+    the type of a live volume in place (`UpdateVolume`); that path is UNPROVEN here until an Outscale lab.
+  EOT
+  type        = string
+  default     = "standard"
+  validation {
+    condition     = contains(["gp2", "io1", "standard"], var.outscale_worker_data_volume_type)
+    error_message = "outscale_worker_data_volume_type must be gp2, io1 or standard."
+  }
+}
+
+variable "outscale_worker_data_volume_iops" {
+  description = "Outscale only: provisioned IOPS of an io1 worker data disk (ignored for gp2 and standard). Same API limits as outscale_root_volume_iops: 1 to 13000, at most 300 per GiB of each disk (a `check` warns)."
+  type        = number
+  default     = 1500
+  validation {
+    condition     = var.outscale_worker_data_volume_iops >= 1 && var.outscale_worker_data_volume_iops <= 13000
+    error_message = "outscale_worker_data_volume_iops must be between 1 and 13000."
+  }
+}
+
 variable "worker_storage" {
   description = <<-EOT
     Dedicated data storage for worker nodes (the active provider only — one
