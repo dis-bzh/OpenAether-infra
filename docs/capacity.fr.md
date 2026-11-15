@@ -54,8 +54,8 @@ script ne vérifie IP, LB ni security groups.
 
 | Exemple | Nœuds × type (vCPU / RAM) | Inst. | vCPU | RAM | Au plancher ? | `task preflight-quotas PROVIDER=… --` |
 |---|---|---|---|---|---|---|
-| `management-`, `failover-scaleway` | 3+4 × `POP2-4C-16G` (4 / 16 Go) | 8 | 30 | 114 Go | Oui ; déroulable, voir le calcul plus bas | pas de backend Scaleway : la commande le dit et ne vérifie rien (code 2) |
-| `workload-scaleway` | 3+4 × `POP2-4C-16G` | 8 | 30 | 114 Go | Oui | pas de backend Scaleway : la commande le dit et ne vérifie rien (code 2) |
+| `management-`, `failover-scaleway` | 3+3 × `POP2-4C-16G` (4 / 16 Go) | 7 | 26 | 98 Go | Oui ; déroulable, voir le calcul plus bas | pas de backend Scaleway : la commande le dit et ne vérifie rien (code 2) |
+| `workload-scaleway` | 3+3 × `POP2-4C-16G` | 7 | 26 | 98 Go | Oui | pas de backend Scaleway : la commande le dit et ne vérifie rien (code 2) |
 | `management-`, `failover-ovh` | 3+3 × `b3-16` (4 / 15 Go) | 7 | 26 | 97 Go | Oui ; déroulable, voir le calcul plus bas | `--add-vms 7 --add-cores 26 --add-ram-gb 97` |
 | `workload-ovh` | 3+3 × `b3-16` | 7 | 26 | 97 Go | Oui | `--add-vms 7 --add-cores 26 --add-ram-gb 97` |
 | `management-`, `failover-outscale` | 3+2 × `tinav5.c2r4p1` (2 / 4 Go) | 6 | 12 | 22 Go | **Non, volontairement** — voir plus bas | `--add-vms 6 --add-cores 12 --add-ram-gb 22` |
@@ -167,7 +167,7 @@ La plateforme (le dépôt apps à son défaut) demande environ **9 vCPU de reque
 
 | Provider | Forme supportée avec la plateforme | vCPU avec le bastion | Note |
 |---|---|---|---|
-| Scaleway | 3 CP + 4 W de `POP2-4C-16G` (les exemples) | 30 | déroulable, voir l'arithmétique ci-dessus |
+| Scaleway | 3 CP + 3 W de `POP2-4C-16G` (les exemples) | 26 | déroulable, voir l'arithmétique ci-dessus |
 | OVH | 3 CP + 3 W de `b3-16` (4 vCPU / 15 Go) (les exemples) | 26 | déroulable, voir l'arithmétique ci-dessus |
 | Outscale | 3 CP + 4 W de `tinav5.c4r8p2` (4 vCPU / 8 Go) | 30 | **demande d'abord une hausse de quota** (30 vCPU / 64 Go, 8 VM) |
 | Proxmox | 3 CP + 4 W, 4 vCPU / 8 Go au moins | à vous | |
