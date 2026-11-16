@@ -456,7 +456,7 @@ header "4. SECRETS"
 
 # 4.1 No Secret data delivered from Git. On the cluster, a plaintext Secret in the manifests is one whose data or stringData
 # kustomize-controller (Flux) owns in managedFields; data a controller writes later (ESO, cert webhooks, Helm) is not from Git.
-# Only the managed fields are fetched, never the values.
+# Only the managed fields are fetched, never the values. One named exception, by namespace, name and key (lab 0.5.1 L1).
 if SEC_LINES="$(kubectl get secrets -A --show-managed-fields \
     -o jsonpath='{range .items[*]}{.metadata.namespace}{"/"}{.metadata.name}{"\t"}{.metadata.managedFields}{"\n"}{end}' 2>/dev/null)"; then
   SECRETS_IN_PLAIN="$(python3 -c '
@@ -466,7 +466,10 @@ for line in sys.stdin:
     name, _, mf = line.rstrip("\n").partition("\t")
     for e in json.loads(mf or "[]") or []:
         f = e.get("fieldsV1") or {}
-        if e.get("manager") == "kustomize-controller" and any(k.startswith("f:") for d in ("f:data", "f:stringData") for k in f.get(d, {})):
+        keys = {k for d in ("f:data", "f:stringData") for k in f.get(d, {}) if k.startswith("f:")}
+        # The barman-cloud plugin release ships its sidecar image reference in a generated Secret: not a credential.
+        if e.get("manager") == "kustomize-controller" and keys and not (
+                name.startswith("cnpg-system/plugin-barman-cloud-") and keys == {"f:SIDECAR_IMAGE"}):
             bad.append(name)
             break
 print(" ".join(bad))' <<<"$SEC_LINES")" || SECRETS_IN_PLAIN="(unparsable answer)"
