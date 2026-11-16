@@ -186,6 +186,19 @@ Ce que cette voie ne sait pas encore porter : voir « Manques connus » dans
    clouds le 2026-10-03, pas sur un rôle workload.
 6. **`OP-failover`** — seule la paire OVH vers Scaleway a tourné ; les autres ne sont pas prouvées.
 
+## Labs 0.5.1 (2026-11-15 et 16)
+
+Trois séances sur cloud réel, chacune une fois, 3 plans de contrôle + 3 workers avec Flux sauf mention ; ce que chacune a lu ou non est dans `CHANGELOG.md` `[0.5.1]`, les lignes dans `docs/status.md`.
+
+| Cas | Résultat |
+|---|---|
+| Installation neuve, un seul `cluster-up`, Scaleway / OVH / Outscale | ✅ / ✅ / ⚠ (rc 0, puis expiration du seed et un worker dégradé, #376) |
+| `OP-grow-nodes`, le plan ne touche aucun nœud existant (Scaleway, 1 plan de contrôle + 3 workers, #420) | ✅ plan seulement ; l'apply est passé par `infra-apply` et a échoué (#490), `cluster-up` n'a pas été utilisé |
+| Migration des ensembles de membres OVH et remplacement d'un worker (#418) | ✅ |
+| `OP-shrink` sur OVH et Outscale | non joué : la garde refuse un worker qui porte des volumes local-path |
+| `task backup-final` (#435) | ✅ Scaleway et OVH ; INCOMPLETE sur le cluster Outscale dégradé |
+| Montée d'un cluster 0.5.0 en service vers la 0.5.1 | non jouée |
+
 ## D) Constats — apply réel `SCW-vip` (2026-07-15)
 
 3 CP (fr-par-1 + fr-par-2) + 1 worker, `k8s_lb_mode=vip`.
