@@ -12,7 +12,7 @@ this contract to be consumed by the Talos module and the root `main.tf`.
 | `k8s_lb_ip` | `string` | Public IP of the Kubernetes API Load Balancer (port 6443) |
 | `bastion_ip` | `string` | Public IP of the bastion host (SSH jump server) |
 | `worker_zones` | `list(string)` | Failure domain of each worker, one per node, in the order of `worker_private_ips`, same rule as `control_plane_zones`. Read by `task failure-domain-check` and, as the `topology.kubernetes.io/zone` label of the node, by the zone alert. |
-| `control_plane_zones` | `list(string)` | Failure domain of each control plane (zone, AZ, subregion or hypervisor host), one per node, in the order of `control_plane_private_ips`. A module that cannot spread reports the one domain it uses, never a list built from an input it ignores. Known at plan time wherever placement follows the inputs (scw, ovh, proxmox compute it from them): a zone read from a node being created is unknown, and one unknown zone re-applies every node's machine config on a grow (infra #420). Outscale still reads the VM, because existing nodes keep the subnet they were built in. |
+| `control_plane_zones` | `list(string)` | Failure domain of each control plane (zone, AZ, subregion or hypervisor host), one per node, in the order of `control_plane_private_ips`. A module that cannot spread reports the one domain it uses, never a list built from an input it ignores. Known at plan time wherever placement follows the inputs (scw, ovh, proxmox compute it from them; Outscale reads it through the VM's subnet, because existing nodes keep the subnet they were built in): a zone read from a node being created is unknown, and one unknown zone re-applies every node's machine config on a grow (infra #420). |
 
 ## Optional Outputs
 
