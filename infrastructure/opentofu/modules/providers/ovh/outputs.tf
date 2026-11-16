@@ -80,7 +80,7 @@ output "lb_member_sets" {
   description = "member resources and member ports of the k8s_api, http and https pools, for tests"
   value = {
     for k, s in { k8s_api = openstack_lb_members_v2.k8s_api, http = openstack_lb_members_v2.http, https = openstack_lb_members_v2.https } :
-    k => length(s) == 0 ? null : { resources = length(s), members = length(s[0].member), ports = distinct([for m in s[0].member : m.protocol_port]) }
+    k => length(s) == 0 ? null : { ports = distinct([for m in s[0].member : m.protocol_port]), resources = length(s) }
   }
 }
 
