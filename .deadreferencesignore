@@ -34,3 +34,7 @@ docs/resilience.md:docs/runbooks.md
 docs/resilience.fr.md:scripts/check-ha.py
 docs/resilience.fr.md:scripts/ha-allowlist.yaml
 docs/resilience.fr.md:docs/runbooks.md
+
+# check-language.sh is the byte-identical copy of the OpenAether-apps file (check-skill-parity.sh); its comment names a
+# script that lives in that repository only.
+scripts/dev/check-language.sh:scripts/dev/check-vendored-lock.sh
