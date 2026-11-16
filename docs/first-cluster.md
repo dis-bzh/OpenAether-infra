@@ -292,10 +292,12 @@ Every figure below is one run, read in the file named, and none is a promise.
 | Flux DAG after the seeding | 35 of 35 within about 2 min (`deploy_flux` management lab) | `docs/admin-access.md` § 3 |
 | Databases whole after rc 0 | `grafana-db` 7:30, `zitadel-db` 7:36 | `CHANGELOG.md` `[0.4.5]` W6 |
 | Every Kustomization Ready after rc 0 | 11:07 with an incident; 9:45 and 9:52 earlier | `CHANGELOG.md` `[0.4.5]` W6 |
+| 0.5.x, `cluster-up` start to rc 0, 3 CP + 3 W, one attempt each | Scaleway 11:55 (no ACL retry any more); OVH 11:46; Outscale 27:33, image build included | labs 0.5.1 L1 to L3 (2026-11-15 and 16), infra #374 |
+| 0.5.x, every Kustomization Ready after rc 0 (43 of 43) | Scaleway 5:08; OVH 8:21; Outscale 46:57 with an incident (the first seed timed out, re-run by hand) | same labs; infra #376 for Outscale |
 
 The per-object view of an install is `python3 scripts/ops/flux-timeline.py` (`CHANGELOG.md` `[0.5.0]`). **Not published yet:** a per-Kustomization and
 per-HelmRelease table of a 0.5.0 install, the image-pull share, and the manual steps ranked by what could be automated: the budget above
-is the 0.4.5 install, not a 0.5.0 one, and no end-to-end target is set.
+has two rows from 0.5.x installs and is otherwise the 0.4.5 install, and no end-to-end target is set.
 
 ## 5. Talk to it
 

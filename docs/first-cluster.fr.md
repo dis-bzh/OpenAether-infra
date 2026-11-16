@@ -300,10 +300,12 @@ Chaque chiffre ci-dessous est un run, lu dans le fichier nommé, et aucun n'est 
 | DAG Flux après l'amorçage | 35 sur 35 en environ 2 min (labo management `deploy_flux`) | `docs/admin-access.fr.md` § 3 |
 | Bases entières après rc 0 | `grafana-db` 7:30, `zitadel-db` 7:36 | `CHANGELOG.md` `[0.4.5]` W6 |
 | Toutes les Kustomizations Ready après rc 0 | 11:07 avec un incident ; 9:45 et 9:52 avant | `CHANGELOG.md` `[0.4.5]` W6 |
+| 0.5.x, `cluster-up` du début à rc 0, 3 CP + 3 W, une tentative chacun | Scaleway 11:55 (plus de reprise d'ACL) ; OVH 11:46 ; Outscale 27:33, build d'image inclus | labs 0.5.1 L1 à L3 (2026-11-15 et 16), infra #374 |
+| 0.5.x, toutes les Kustomizations Ready après rc 0 (43 sur 43) | Scaleway 5:08 ; OVH 8:21 ; Outscale 46:57 avec un incident (le premier seed a expiré, relancé à la main) | mêmes labs ; infra #376 pour Outscale |
 
 La vue par objet d'une installation est `python3 scripts/ops/flux-timeline.py` (`CHANGELOG.md` `[0.5.0]`). **Pas encore publié :** un tableau par Kustomization et
 par HelmRelease d'une installation 0.5.0, la part des pulls d'images, et les étapes manuelles classées par ce qui pourrait être automatisé : le budget ci-dessus
-est celui de l'installation 0.4.5, pas d'une 0.5.0, et aucune cible de bout en bout n'est fixée.
+a deux lignes tirées d'installations 0.5.x et reste sinon celui de l'installation 0.4.5, et aucune cible de bout en bout n'est fixée.
 
 ## 5. Joindre le cluster
 
