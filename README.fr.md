@@ -27,7 +27,9 @@ fermer sans compte cloud.
 
 ## Version
 
-**Version courante : 0.5.0**, une version de performance et de dimensionnement (associée à OpenAether-apps 0.5.0) : 3 workers (un par zone) d'un type plus gros au lieu de 4, nouvel essai borné d'une rupture de stock du fournisseur, correctifs de verify OVH, Kubernetes v1.37.2. Voir `[0.5.0]` dans `CHANGELOG.md` pour ce qui est prouvé ou non. Mise à jour depuis la 0.4.5 seulement.
+**Version courante : 0.5.1**, un correctif de la 0.5.0 (associée à OpenAether-apps 0.5.1) : un ajout de nœud ne touche plus les nœuds existants, la liste d'autorisation du répartiteur applicatif Scaleway s'installe en une passe, les nouveaux bastions sont en Ubuntu 24.04, les membres des répartiteurs OVH forment un ensemble par pool, `task backup-final`, et `cluster-security` interroge le cluster. Aucun pin Talos, Kubernetes, Cilium ou Flux ne bouge. Voir `[0.5.1]` dans `CHANGELOG.md` pour ce qui est prouvé et ce qui ne l'est pas. Mise à jour depuis la 0.5.0 seulement.
+
+**0.5.0** (publiée le 2026-11-15 ; `CHANGELOG.md`, `[0.5.0]`) : une version de performance et de dimensionnement, 3 workers (un par zone) d'un type plus gros au lieu de 4, nouvel essai borné d'une rupture de stock chez le fournisseur, correctifs de vérification OVH, Kubernetes v1.37.2.
 
 **0.3.0** (publiée le 2026-10-19 ; `CHANGELOG.md`, `[0.3.0]`) — une vague de durcissement, chaque option désactivée par défaut, et un disque système de 50 Go par défaut sur Scaleway. C'est la moitié infra du couple avec OpenAether-apps 0.3.0 (les mises à jour de composants sont dans le dépôt apps). Elle suit les recommandations de l'ANSSI autant que possible et ne revendique aucune conformité à un document de l'ANSSI. Exécutée sur de vrais clouds une fois, à la main ou par script, sur Scaleway, OVH et Outscale (labs 11 à 15c) ; l'historique n'est pas signé pour l'instant. Le CHANGELOG liste les limites connues et ce qui n'a pas été exécuté.
 

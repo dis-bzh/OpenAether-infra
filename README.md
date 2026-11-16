@@ -28,7 +28,9 @@ account.
 
 ## Version
 
-**Current release: 0.5.0**, a performance and sizing release (pairs with OpenAether-apps 0.5.0): 3 workers (one per zone) of a bigger type instead of 4, bounded retry of a provider "out of stock", OVH verify fixes, Kubernetes v1.37.2. See `[0.5.0]` in `CHANGELOG.md` for what was and was not proven. Upgrade from 0.4.5 only.
+**Current release: 0.5.1**, a fix release of 0.5.0 (pairs with OpenAether-apps 0.5.1): a grow no longer touches the nodes that stay, the Scaleway app load balancer allow list installs in one pass, new bastions run Ubuntu 24.04, OVH load balancer members are one set per pool, `task backup-final`, and `cluster-security` asks the cluster. No Talos, Kubernetes, Cilium or Flux pin moves. See `[0.5.1]` in `CHANGELOG.md` for what was and was not proven. Upgrade from 0.5.0 only.
+
+**0.5.0** (released 2026-11-15; `CHANGELOG.md`, `[0.5.0]`): a performance and sizing release, 3 workers (one per zone) of a bigger type instead of 4, bounded retry of a provider "out of stock", OVH verify fixes, Kubernetes v1.37.2.
 
 **0.3.0** (released 2026-10-19; `CHANGELOG.md`, `[0.3.0]`) — a security hardening wave, every option off by default, and a 50 GB default system disk on Scaleway. It is the infra half of the pair with OpenAether-apps 0.3.0 (the component upgrades are in the apps repository). It follows ANSSI recommendations as far as possible and claims no compliance with any ANSSI document. Run on real clouds once by hand or script on Scaleway, OVH and Outscale (labs 11 to 15c); the history is unsigned for now. The CHANGELOG lists the known limitations and what was not run.
 

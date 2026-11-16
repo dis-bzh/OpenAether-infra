@@ -298,9 +298,19 @@ Rung: **by the cloud runs written in `CHANGELOG.md` `[0.5.0]`** (labs 52 and 53:
 
 Existing Longhorn and OpenBao values (apps 0.5.0 lowered instance-manager CPU to 5 percent and the OpenBao request to 100m) apply to fresh installs for Longhorn; an existing cluster keeps its Longhorn setting until changed in the UI or settings.
 
+## From 0.5.0 to 0.5.1 (an existing cluster)
+
+Rung: **by the cloud runs written in `CHANGELOG.md` `[0.5.1]`** (labs 0.5.1 L1 and L2, n=1 each), which moved a cluster built on `main` to the fix branch. **The move of a 0.5.0 install to the tags, the one you will run, is not shown.** **Supported path: the previous release only.** 0.5.0 to 0.5.1.
+
+1. Check out the 0.5.1 tag of this repository. Set `git_ref = "refs/tags/0.5.1"` in the tfvars (OpenAether-apps `refs/tags/0.5.1` must exist). No Talos, Kubernetes, Cilium or Flux pin moves: no node rolls.
+2. `task cluster-up PROVIDER=… ROLE=…`, plan read before apply. **Expect every node's machine config "updated in-place" or re-applied once**: the workers' certSANs lose the other workers' addresses, and the inline manifest carries `git_ref`. Lab L1 (Scaleway, 6 nodes): no reboot, 0 NotReady of 33 probes, boot ids unchanged. On OVH read the load balancer lines as the next section says.
+3. Read the CNPG Clusters and `task cluster-verify` before calling the move done. The apps side re-runs the two vault Jobs once and restarts kube-state-metrics.
+
+An existing bastion keeps its image (24.04 is for new ones), an existing cluster keeps its LUKS passphrase, and the Outscale data disks stay `standard` unless you opt in.
+
 ## From 0.5.0 to 0.5.1, OVH: the load balancer members (#418)
 
-Each Octavia pool (`k8s_api`, `http`, `https`) now holds its members in ONE `openstack_lb_members_v2`, sent in one batch call, instead of one `openstack_lb_member_v2` per member. **The first `task cluster-up` of 0.5.1 on an OVH cluster must read `3 to add, 0 to destroy, N to forget`** (N = control planes, plus twice the workers with `deploy_app_lb`; fewer pools in `vip` mode or without the app LB): the `removed` blocks in `modules/providers/ovh/lb.tf` drop the per-member resources from the state without an API call, and each set's batch call lists the members already in its pool, which Octavia keeps (it matches a member by address and port). **A plan that destroys an `openstack_lb_member_v2` is not this migration: stop.** Until that apply, an OVH worker replacement and `task cluster-shrink` refuse the state and say to run `cluster-up` first. A set owns its pool's whole member list: a member added by hand is removed at the next apply. Rung: mocked (`scripts/dev/test-ovh-lb-members.sh`, a real plan against a fake OpenStack); **not run on OVH**.
+Each Octavia pool (`k8s_api`, `http`, `https`) now holds its members in ONE `openstack_lb_members_v2`, sent in one batch call, instead of one `openstack_lb_member_v2` per member. **The first `task cluster-up` of 0.5.1 on an OVH cluster must read `3 to add, 0 to destroy, N to forget`** (N = control planes, plus twice the workers with `deploy_app_lb`; fewer pools in `vip` mode or without the app LB): the `removed` blocks in `modules/providers/ovh/lb.tf` drop the per-member resources from the state without an API call, and each set's batch call lists the members already in its pool, which Octavia keeps (it matches a member by address and port). **A plan that destroys an `openstack_lb_member_v2` is not this migration: stop.** Until that apply, an OVH worker replacement and `task cluster-shrink` refuse the state and say to run `cluster-up` first. A set owns its pool's whole member list: a member added by hand is removed at the next apply. Rung: real cloud, once (lab 0.5.1 L2, OVH, 3 CP + 3 W with the app LB): the plan read `3 to add, 0 to destroy, 9 to forget`, the apply took 177 s with 0 failed probe sample on the API and on the app, the 9 member ids were the same afterwards and the next plan was empty; a worker replacement then updated the sets in place. `cluster-shrink` and the teardown of a state that was never migrated were not run.
 
 ## From 0.4.4 to 0.4.5 (an existing cluster)
 
