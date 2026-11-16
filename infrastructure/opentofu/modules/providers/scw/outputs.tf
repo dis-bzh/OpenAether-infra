@@ -11,12 +11,14 @@ output "worker_private_ips" {
 
 output "control_plane_zones" {
   description = "Zone of each control plane, in control_plane_private_ips order"
-  value       = scaleway_instance_server.control_plane[*].zone
+  # One entry per node, valued from the input that places it, not from the node's attribute: that one is unknown
+  # while a node is being created, and one unknown zone re-applied every node's machine config on a grow (infra #420).
+  value = [for i, _ in scaleway_instance_server.control_plane : element(var.additional_zones, i)]
 }
 
 output "worker_zones" {
   description = "Zone of each worker, in worker_private_ips order"
-  value       = scaleway_instance_server.worker[*].zone
+  value       = [for i, _ in scaleway_instance_server.worker : element(var.additional_zones, i)]
 }
 
 # Load Balancer IPs

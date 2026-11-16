@@ -345,23 +345,23 @@ run "ovh_each_pool_is_one_member_set" {
 
   # Distinct addresses: the mock gives every port the same one, and a set holds it once.
   override_resource {
-    target = module.ovh[0].openstack_networking_port_v2.control_plane[0]
+    target = module.ovh.openstack_networking_port_v2.control_plane[0]
     values = { all_fixed_ips = ["10.0.0.10"] }
   }
   override_resource {
-    target = module.ovh[0].openstack_networking_port_v2.control_plane[1]
+    target = module.ovh.openstack_networking_port_v2.control_plane[1]
     values = { all_fixed_ips = ["10.0.0.11"] }
   }
   override_resource {
-    target = module.ovh[0].openstack_networking_port_v2.control_plane[2]
+    target = module.ovh.openstack_networking_port_v2.control_plane[2]
     values = { all_fixed_ips = ["10.0.0.12"] }
   }
   override_resource {
-    target = module.ovh[0].openstack_compute_instance_v2.worker[0]
+    target = module.ovh.openstack_compute_instance_v2.worker[0]
     values = { access_ip_v4 = "10.0.0.20" }
   }
   override_resource {
-    target = module.ovh[0].openstack_compute_instance_v2.worker[1]
+    target = module.ovh.openstack_compute_instance_v2.worker[1]
     values = { access_ip_v4 = "10.0.0.21" }
   }
 

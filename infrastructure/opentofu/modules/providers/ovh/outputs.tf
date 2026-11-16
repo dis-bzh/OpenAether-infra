@@ -13,12 +13,14 @@ output "worker_private_ips" {
 
 output "control_plane_zones" {
   description = "Availability zone of each control plane, in control_plane_private_ips order"
-  value       = openstack_compute_instance_v2.control_plane[*].availability_zone
+  # One entry per node, valued from the input that places it, not from the node's attribute: that one is unknown
+  # while a node is being created, and one unknown zone re-applied every node's machine config on a grow (infra #420).
+  value = [for i, _ in openstack_compute_instance_v2.control_plane : element(var.availability_zones, i)]
 }
 
 output "worker_zones" {
   description = "Availability zone of each worker, in worker_private_ips order"
-  value       = openstack_compute_instance_v2.worker[*].availability_zone
+  value       = [for i, _ in openstack_compute_instance_v2.worker : element(var.availability_zones, i)]
 }
 
 # Load Balancer IPs (floating IPs)
