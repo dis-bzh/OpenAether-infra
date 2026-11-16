@@ -337,6 +337,66 @@ run "ovh_no_app_lb_no_monitor" {
   }
 }
 
+# --- OVH pool members (infra #418): one batch resource per pool, one LB update instead of one per member ---
+# The adoption of an existing cluster's members is scripts/dev/test-ovh-lb-members.sh: a test cannot start from a state.
+
+run "ovh_each_pool_is_one_member_set" {
+  command = plan
+
+  # No member count here: the mock gives every node the same address and a set holds it once (and an override
+  # per instance needs OpenTofu 1.13). test-ovh-lb-members.sh counts the members against distinct addresses.
+  variables {
+    node_distribution = {
+      ovh = {
+        control_planes     = 3
+        workers            = 2
+        region             = "EU-WEST-PAR"
+        flavor_name        = "b3-8"
+        image_id           = "dummy-talos-ovh-image"
+        network_name       = "Ext-Net"
+        availability_zones = ["eu-west-par-a"]
+        k8s_lb_mode        = "managed"
+      }
+    }
+  }
+
+  assert {
+    condition     = jsonencode(module.ovh[0].lb_member_sets.k8s_api) == jsonencode({ ports = [6443], resources = 1 })
+    error_message = "OVH: the k8s_api pool must be ONE member resource, its members on 6443, got ${jsonencode(module.ovh[0].lb_member_sets.k8s_api)}."
+  }
+
+  assert {
+    condition = (jsonencode(module.ovh[0].lb_member_sets.http) == jsonencode({ ports = [30080], resources = 1 })
+    && jsonencode(module.ovh[0].lb_member_sets.https) == jsonencode({ ports = [30443], resources = 1 }))
+    error_message = "OVH: the http and https pools must each be ONE member resource, its members on the Gateway NodePort, got ${jsonencode(module.ovh[0].lb_member_sets)}."
+  }
+}
+
+run "ovh_no_pool_no_member_set" {
+  command = plan
+
+  variables {
+    deploy_app_lb = false
+    node_distribution = {
+      ovh = {
+        control_planes     = 3
+        workers            = 2
+        region             = "EU-WEST-PAR"
+        flavor_name        = "b3-8"
+        image_id           = "dummy-talos-ovh-image"
+        network_name       = "Ext-Net"
+        availability_zones = ["eu-west-par-a"]
+        k8s_lb_mode        = "vip"
+      }
+    }
+  }
+
+  assert {
+    condition     = alltrue([for k, v in module.ovh[0].lb_member_sets : v == null])
+    error_message = "OVH: vip mode and deploy_app_lb = false build no pool, hence no member resource."
+  }
+}
+
 # --- Outscale ---
 
 # Lab 27 part C, E1: deploy_app_lb = true with the default EMPTY list left the LB closed to everyone (a security group

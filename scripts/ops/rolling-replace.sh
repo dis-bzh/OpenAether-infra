@@ -113,10 +113,10 @@ esac
 # is actually unproven, not about the whole script — the blanket warning
 # contradicted this file's own header and taught readers to ignore it.
 if [[ "$PROVIDER" == "ovh" && "$UPGRADE" -eq 0 ]]; then
-  # --cp-only was exercised live on OVH (2026-10-17, three control planes in 12 min); a worker replacement stopped at its destroy
-  # guard in lab 27 part B (F-OVHREPL: the Octavia members follow the new address) and was finished by hand; the fix is offline.
-  echo "⚠ ovh: the control-plane REPLACEMENT has been exercised on a live cluster; the worker replacement stopped at" >&2
-  echo "  its destroy guard in lab 27 and has not run since the fix (docs/resilience.md) — run --dry-run first and review the targets." >&2
+  # --cp-only was exercised live on OVH (2026-10-17); a worker replacement ran in lab 28 (O11) with one Octavia member per worker,
+  # and has not run since the members became one set per pool (#418).
+  echo "⚠ ovh: the control-plane REPLACEMENT has been exercised on a live cluster; the worker replacement has not run since" >&2
+  echo "  the pool members became one set per pool (#418, docs/resilience.md) — run --dry-run first and review the targets." >&2
 elif [[ "$PROVIDER" != "scaleway" && "$UPGRADE" -eq 0 ]]; then
   echo "⚠ ${PROVIDER}: the node-REPLACEMENT path has never been exercised on a live" >&2
   echo "  cluster (only --upgrade has) — run --dry-run first and review the targets." >&2
@@ -353,13 +353,14 @@ replace_node() { # <type: cp|worker> <index>
   if [[ -n "$guard_addr" ]]; then
     cfg_targets+=(-target="$guard_addr" -replace="$guard_addr"); cfg_max=2
   fi
-  # OVH: the load balancer members of a worker follow its new address, so the config plan replaces them too (F-OVHREPL). Named in the
-  # targets so the apply does it deterministically, and counted in the destroy bound as exactly what they are.
-  local lb_member
-  while IFS= read -r lb_member; do
-    [[ -n "$lb_member" ]] || continue
-    cfg_targets+=(-target="$lb_member"); cfg_max=$((cfg_max + 1))
-  done < <(node_lb_members "$tf_t" "$i")
+  # OVH: the pool member sets follow a worker's new address (F-OVHREPL), in place. Named in the targets so the config apply does
+  # it; no destroy to add to the bound.
+  local lb_sets lb_set
+  lb_sets="$(node_lb_members "$tf_t" "$i")" \
+    || die "the state still holds the per-member Octavia resources of before #418 — run task cluster-up once (it adopts them, removing no member), then roll"
+  while IFS= read -r lb_set; do
+    [[ -n "$lb_set" ]] && cfg_targets+=(-target="$lb_set")
+  done <<<"$lb_sets"
 
   hr
   info "Node ${node_name}  (ip ${node_ip}, talos ${ep})"

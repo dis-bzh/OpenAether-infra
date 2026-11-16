@@ -13,12 +13,14 @@ output "worker_private_ips" {
 
 output "control_plane_zones" {
   description = "Availability zone of each control plane, in control_plane_private_ips order"
-  value       = openstack_compute_instance_v2.control_plane[*].availability_zone
+  # One entry per node, valued from the input that places it, not from the node's attribute: that one is unknown
+  # while a node is being created, and one unknown zone re-applied every node's machine config on a grow (infra #420).
+  value = [for i, _ in openstack_compute_instance_v2.control_plane : element(var.availability_zones, i)]
 }
 
 output "worker_zones" {
   description = "Availability zone of each worker, in worker_private_ips order"
-  value       = openstack_compute_instance_v2.worker[*].availability_zone
+  value       = [for i, _ in openstack_compute_instance_v2.worker : element(var.availability_zones, i)]
 }
 
 # Load Balancer IPs (floating IPs)
@@ -70,6 +72,15 @@ output "app_lb_monitors" {
   value = {
     for k, m in { http = openstack_lb_monitor_v2.http, https = openstack_lb_monitor_v2.https } :
     k => one([for x in m : { type = x.type, delay = x.delay, timeout = x.timeout, max_retries = x.max_retries, max_retries_down = x.max_retries_down }])
+  }
+}
+
+# Test-only: how many resources hold each pool's members (one, infra #418) and their port; null = no such pool.
+output "lb_member_sets" {
+  description = "member resources and member ports of the k8s_api, http and https pools, for tests"
+  value = {
+    for k, s in { k8s_api = openstack_lb_members_v2.k8s_api, http = openstack_lb_members_v2.http, https = openstack_lb_members_v2.https } :
+    k => length(s) == 0 ? null : { ports = distinct([for m in s[0].member : m.protocol_port]), resources = length(s) }
   }
 }
 

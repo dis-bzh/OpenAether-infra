@@ -60,12 +60,52 @@ resource "openstack_lb_monitor_v2" "k8s_api" {
   max_retries = 5
 }
 
-resource "openstack_lb_member_v2" "k8s_api" {
-  count         = var.k8s_lb_mode == "managed" ? var.control_plane_count : 0
-  pool_id       = openstack_lb_pool_v2.k8s_api[0].id
-  address       = try(openstack_networking_port_v2.control_plane[count.index].all_fixed_ips[0], "0.0.0.0")
-  protocol_port = 6443
-  subnet_id     = openstack_networking_subnet_v2.private.id
+# One resource per pool, not one per member (infra #418): the provider sends the whole list in one batch call, so the LB
+# goes through one update instead of one per member. Octavia keys a member by address and port: a listed member that
+# already exists is kept as it is, and a member missing from the list is deleted, so nothing else may manage this pool.
+resource "openstack_lb_members_v2" "k8s_api" {
+  count   = var.k8s_lb_mode == "managed" ? 1 : 0
+  pool_id = openstack_lb_pool_v2.k8s_api[0].id
+
+  dynamic "member" {
+    for_each = openstack_networking_port_v2.control_plane
+    content {
+      address       = try(member.value.all_fixed_ips[0], "0.0.0.0")
+      protocol_port = 6443
+      subnet_id     = openstack_networking_subnet_v2.private.id
+    }
+  }
+
+  # Waits on the pool, hence on the LB: the same patience as the load balancer above. A set tainted by a timeout is
+  # destroyed on the next apply, which EMPTIES the pool: untaint it instead (task infra-apply prints the command).
+  timeouts {
+    create = "30m"
+    update = "30m"
+    delete = "30m"
+  }
+}
+
+# The per-member resources the sets replaced leave the state without an API call; the first apply's set adopts their
+# members (same address and port), so no member is ever removed from a live pool.
+removed {
+  from = openstack_lb_member_v2.k8s_api
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = openstack_lb_member_v2.http
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = openstack_lb_member_v2.https
+  lifecycle {
+    destroy = false
+  }
 }
 
 resource "openstack_networking_floatingip_v2" "k8s" {
@@ -181,13 +221,25 @@ resource "openstack_lb_monitor_v2" "http" {
   max_retries_down = 2
 }
 
-resource "openstack_lb_member_v2" "http" {
-  count   = var.deploy_app_lb ? var.worker_count : 0
+resource "openstack_lb_members_v2" "http" {
+  count   = var.deploy_app_lb ? 1 : 0
   pool_id = openstack_lb_pool_v2.http[0].id
-  address = openstack_compute_instance_v2.worker[count.index].access_ip_v4
-  # The Gateway's fixed NodePort; the public listener stays on 80.
-  protocol_port = var.app_lb_node_ports.http
-  subnet_id     = openstack_networking_subnet_v2.private.id
+
+  dynamic "member" {
+    for_each = openstack_compute_instance_v2.worker
+    content {
+      address = member.value.access_ip_v4
+      # The Gateway's fixed NodePort; the public listener stays on 80.
+      protocol_port = var.app_lb_node_ports.http
+      subnet_id     = openstack_networking_subnet_v2.private.id
+    }
+  }
+
+  timeouts {
+    create = "30m"
+    update = "30m"
+    delete = "30m"
+  }
 }
 
 resource "openstack_lb_listener_v2" "https" {
@@ -225,12 +277,25 @@ resource "openstack_lb_monitor_v2" "https" {
   max_retries_down = 2
 }
 
-resource "openstack_lb_member_v2" "https" {
-  count         = var.deploy_app_lb ? var.worker_count : 0
-  pool_id       = openstack_lb_pool_v2.https[0].id
-  address       = openstack_compute_instance_v2.worker[count.index].access_ip_v4
-  protocol_port = var.app_lb_node_ports.https
-  subnet_id     = openstack_networking_subnet_v2.private.id
+resource "openstack_lb_members_v2" "https" {
+  count   = var.deploy_app_lb ? 1 : 0
+  pool_id = openstack_lb_pool_v2.https[0].id
+
+  dynamic "member" {
+    for_each = openstack_compute_instance_v2.worker
+    content {
+      address = member.value.access_ip_v4
+      # The Gateway's fixed NodePort; the public listener stays on 443.
+      protocol_port = var.app_lb_node_ports.https
+      subnet_id     = openstack_networking_subnet_v2.private.id
+    }
+  }
+
+  timeouts {
+    create = "30m"
+    update = "30m"
+    delete = "30m"
+  }
 }
 
 resource "openstack_networking_floatingip_v2" "app" {

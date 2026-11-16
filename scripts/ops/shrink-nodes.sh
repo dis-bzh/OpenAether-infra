@@ -72,13 +72,11 @@ VARS=(-input=false -no-color -var-file="$TFVARS" -var talos_bootstrap=true)
 
 # --- reading a plan ----------------------------------------------------------------
 # A node's own resources carry cp/control_plane/worker in their name (data volumes are keyed
-# "w<worker>-d<disk>"); OVH's load balancer members are named for the pool, so they go by type.
+# "w<worker>-d<disk>"). A load balancer's membership is one resource per pool on every provider: updated, never deleted.
 MACHINE_TYPES='scaleway_instance_server|openstack_compute_instance_v2|outscale_vm|proxmox_virtual_environment_vm'
 JQ_DEFS='
   def cls: if (.name | test("(^|_)(cp|control_plane)(_|$)")) then "cp"
            elif (.name | test("(^|_)worker(_|$)")) then "worker"
-           elif .type == "openstack_lb_member_v2" and .name == "k8s_api" then "cp"
-           elif .type == "openstack_lb_member_v2" and (.name == "http" or .name == "https") then "worker"
            else null end;
   def node: if (.index | type) == "string"
             then ((.index | capture("^w(?<n>[0-9]+)-d[0-9]+$").n | tonumber)? // null) else .index end;
@@ -86,7 +84,7 @@ JQ_DEFS='
   # load balancer drops the member, and the talosconfig and the state backup are rewritten.
   def allowed: (.actions | join(",")) as $a
     | ($a == "update" and ((.address | startswith("module.talos.talos_machine_configuration_apply."))
-                           or (.type | IN("scaleway_lb_backend", "outscale_load_balancer_vms", "openstack_lb_member_v2"))))
+                           or (.type | IN("scaleway_lb_backend", "outscale_load_balancer_vms", "openstack_lb_members_v2"))))
       or (.address == "local_file.talosconfig" and ($a == "delete,create" or $a == "update"))
       or ((.address | startswith("terraform_data.backup")) and ($a == "delete,create" or $a == "update"));
   # tofu says WHY it deletes; absent on an older tofu, in which case only the shape above decides.
@@ -374,7 +372,7 @@ assert_bundle() { # <planfile>
   dels="$(jq -r '[.[] | select(.actions == ["delete"]) | .address] | sort | .[]' <<<"$ch" | LC_ALL=C sort)"
   want="$(printf '%s\n' "${BUNDLE[@]}" | LC_ALL=C sort)"
   [[ "$dels" == "$want" ]] || { warn "the destroy plan deletes a different set than the one read:"; diff <(echo "$want") <(echo "$dels") >&2 || true; return 1; }
-  extra="$(jq -r '.[] | select(.actions != ["delete"] and (.actions != ["update"] or (.type | IN("scaleway_lb_backend", "outscale_load_balancer_vms", "openstack_lb_member_v2") | not))) | "\(.actions | join(",")) \(.address)"' <<<"$ch")"
+  extra="$(jq -r '.[] | select(.actions != ["delete"] and (.actions != ["update"] or (.type | IN("scaleway_lb_backend", "outscale_load_balancer_vms", "openstack_lb_members_v2") | not))) | "\(.actions | join(",")) \(.address)"' <<<"$ch")"
   [[ -z "$extra" ]] || { warn "the destroy plan also changes:"; sed 's/^/    /' <<<"$extra" >&2; return 1; }
 }
 

@@ -1574,16 +1574,17 @@ node_targets() { # <tf_t> <index>
   '
 }
 
-# The load balancer members that carry a worker's ADDRESS, for the providers that build them from the instance (OVH: the
-# Octavia members http[i] and https[i], address = the instance's access_ip_v4). A replaced instance gets a new private address
-# there, and a member's address cannot change in place, so the members are replaced with the node: two more resources in the
-# config plan (lab 27 part B, F-OVHREPL: "destroys 4 resources (at most 2 expected)"). Other providers attach by instance id or
-# keep the address, and have none. A control plane's members hang on its port, which a replacement keeps.
+# The load balancer member sets that carry a worker's ADDRESS, for the providers that build them from the instance (OVH: one
+# openstack_lb_members_v2 per pool, http and https, address = the instance's access_ip_v4, #418). A replaced instance gets a new
+# private address there, so the config plan updates both sets IN PLACE (one batch call swaps the address): targeted, not counted
+# in the destroy bound. Other providers attach by instance id or keep the address; a control plane's member follows its port.
+# Fails on a state that still holds the per-member resources of before #418: a targeted plan would not forget them.
 node_lb_members() { # <tf_t> <index>
   [[ "$1" == worker ]] || return 0
-  tofu state list 2>/dev/null | grep -F "module.${MOD}[0]." | awk -v i="$2" '
-    $0 ~ ("\\.openstack_lb_member_v2\\.(http|https)\\[" i "\\]$") { print }
-  '
+  local st
+  st="$(tofu state list 2>/dev/null | grep -F "module.${MOD}[0].")" || true
+  if grep -q '\.openstack_lb_member_v2\.' <<<"$st"; then return 1; fi
+  awk '/\.openstack_lb_members_v2\.(http|https)\[0\]$/' <<<"$st"
 }
 
 # The address the state holds for a node's instance after an apply of it; empty when that provider's instance resource has no

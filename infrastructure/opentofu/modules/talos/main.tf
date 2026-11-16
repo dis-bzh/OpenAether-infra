@@ -584,16 +584,6 @@ data "talos_machine_configuration" "control_plane" {
       hostname   = "${var.cluster_name}-cp-${count.index}"
     })
   ]
-
-  lifecycle {
-    precondition {
-      # Match a distinctive sentinel rather than the generic word "Placeholder",
-      # so a real manifest that happens to contain that word in a comment can't
-      # falsely trip the guard.
-      condition     = var.control_plane_count == 0 || !strcontains(var.cilium_manifest, "CILIUM-MANIFEST-PLACEHOLDER")
-      error_message = "Cilium manifest is an unrendered placeholder. Run ./scripts/bootstrap/render-bootstrap-manifests.sh (add --local for the Docker cluster) before bootstrapping."
-    }
-  }
 }
 
 # ==============================================================================
@@ -619,10 +609,8 @@ data "talos_machine_configuration" "worker" {
           # 127.0.0.1 because Phase 2 reaches every node through an SSH tunnel on
           # localhost. Without this the tunneled apply fails TLS verification
           # ("certificate is valid for <node IP>, not 127.0.0.1").
-          certSANs = concat(
-            ["127.0.0.1", "localhost"],
-            var.worker_ips
-          )
+          # Its own address only: listing every worker changed each worker's config on every grow (infra #420).
+          certSANs = ["127.0.0.1", "localhost", var.worker_ips[count.index]]
           features = merge({
             diskQuotaSupport = true
             kubePrism = {
@@ -718,6 +706,8 @@ data "talos_machine_configuration" "worker" {
 # ==============================================================================
 
 resource "terraform_data" "talos_port_ready_cp" {
+  depends_on = [var.tunnels_ready]
+
   count = local.do_apply && !var.skip_port_ready_wait ? var.control_plane_count : 0
 
   # Re-run when the endpoint changes (e.g. node replacement).
@@ -742,6 +732,8 @@ resource "terraform_data" "talos_port_ready_cp" {
 }
 
 resource "terraform_data" "talos_port_ready_worker" {
+  depends_on = [var.tunnels_ready]
+
   count = local.do_apply && !var.skip_port_ready_wait ? var.worker_count : 0
 
   triggers_replace = [local.worker_endpoints[count.index]]
@@ -797,7 +789,7 @@ resource "talos_machine_configuration_apply" "control_plane" {
     replace_triggered_by = [terraform_data.machine_config_version[0]]
   }
 
-  depends_on = [terraform_data.talos_port_ready_cp]
+  depends_on = [terraform_data.talos_port_ready_cp, var.tunnels_ready]
 }
 
 resource "talos_machine_configuration_apply" "worker" {
@@ -817,7 +809,7 @@ resource "talos_machine_configuration_apply" "worker" {
     replace_triggered_by = [terraform_data.machine_config_version[0]]
   }
 
-  depends_on = [terraform_data.talos_port_ready_worker]
+  depends_on = [terraform_data.talos_port_ready_worker, var.tunnels_ready]
 }
 
 # ==============================================================================

@@ -12,7 +12,7 @@ this contract to be consumed by the Talos module and the root `main.tf`.
 | `k8s_lb_ip` | `string` | Public IP of the Kubernetes API Load Balancer (port 6443) |
 | `bastion_ip` | `string` | Public IP of the bastion host (SSH jump server) |
 | `worker_zones` | `list(string)` | Failure domain of each worker, one per node, in the order of `worker_private_ips`, same rule as `control_plane_zones`. Read by `task failure-domain-check` and, as the `topology.kubernetes.io/zone` label of the node, by the zone alert. |
-| `control_plane_zones` | `list(string)` | Failure domain of each control plane (zone, AZ, subregion or hypervisor host), one per node, in the order of `control_plane_private_ips`. A module that cannot spread reports the one domain it uses, never a list built from an input it ignores. |
+| `control_plane_zones` | `list(string)` | Failure domain of each control plane (zone, AZ, subregion or hypervisor host), one per node, in the order of `control_plane_private_ips`. A module that cannot spread reports the one domain it uses, never a list built from an input it ignores. Known at plan time wherever placement follows the inputs (scw, ovh, proxmox compute it from them): a zone read from a node being created is unknown, and one unknown zone re-applies every node's machine config on a grow (infra #420). Outscale still reads the VM, because existing nodes keep the subnet they were built in. |
 
 ## Optional Outputs
 
@@ -74,9 +74,9 @@ all-protocol rule between cluster members by one rule per entry of `_shared/node
 
 5. **Scale-in** — `scripts/ops/shrink-nodes.sh` reads a lowered count off the saved plan, so a node's
    resources MUST be count-indexed by node and carry `control_plane` or `worker` in their name (a data
-   volume is keyed `"w<worker>-d<disk>"`, a load balancer member is named for its pool and goes by type),
-   and its machine resource MUST be among them. A load balancer's membership MUST update in place when a
-   node leaves, never be replaced: replacing it would empty the backend list.
+   volume is keyed `"w<worker>-d<disk>"`), and its machine resource MUST be among them. A load balancer's
+   membership MUST be one resource per backend pool that updates in place when a node leaves or is
+   replaced, never a resource per member nor a replace: either would empty or churn the backend list.
 
 ## Node image drift
 

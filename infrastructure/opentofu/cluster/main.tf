@@ -652,8 +652,8 @@ locals {
 # the SAME apply, instead of the operator running `task bootstrap-phase2`
 # separately between two `tofu apply`s. Ordering falls out of the reference
 # graph: local.bastion_ip/control_plane_ips/worker_ips are unknown until the
-# provider module's VMs exist, so this resource (and, via depends_on,
-# module.talos after it) can't evaluate/run until they do.
+# provider module's VMs exist, so this resource (and, via tunnels_ready, the
+# node-reaching resources of module.talos after it) can't run until they do.
 #
 # Default off (var.auto_tunnels = false) — the documented two-phase flow
 # remains the supported path; this is not exercised against a real host yet.
@@ -783,21 +783,13 @@ module "talos" {
   node_firewall_ports = module.node_ports.talos_ports
   node_firewall_scope = module.node_ports.talos_scope
 
-  # The provider modules are DELIBERATELY not listed here. A module-level
-  # depends_on makes every resource in this module depend on every resource in
-  # those — which made per-node targeting impossible: `rolling-replace` could not
-  # re-apply one node's machine config without dragging the whole provider module
-  # into the plan, and with a Talos version bump leaving every instance ForceNew
-  # that is a parallel replacement of all three control planes. Measured
-  # 2026-08-12: it took a healthy cluster's etcd down.
-  #
-  # Ordering does not depend on it. The supported flow is two phases — `task
-  # infra` builds the VMs with talos_bootstrap=false, which counts these
-  # resources out entirely — and modules/talos then waits on its own
-  # talos_port_ready_* guards before touching a node. terraform_data.talos_tunnels
-  # stays, and only exists when auto_tunnels=true, so it orders the experimental
-  # single-apply path and is a no-op otherwise.
-  depends_on = [terraform_data.talos_tunnels]
+  # No module-level depends_on, on the provider modules or on anything that reads them. It makes every
+  # resource here depend on all of theirs (per-node targeting impossible: a rolling-replace once dragged
+  # three control planes into one parallel replacement), and it defers every data source here whenever a
+  # provider resource changes, so a grow re-applied the machine config of the existing nodes (#420).
+  # Ordering comes from the two-phase flow and the talos_port_ready_* guards; the experimental single-apply
+  # path is ordered by this value, which only the resources that reach a node wait on.
+  tunnels_ready = one(terraform_data.talos_tunnels[*].id)
 }
 
 # ==============================================================================

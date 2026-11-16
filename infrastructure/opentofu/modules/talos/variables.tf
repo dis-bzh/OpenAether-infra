@@ -110,6 +110,12 @@ variable "port_ready_recovery" {
   }
 }
 
+variable "tunnels_ready" {
+  description = "Id of the resource that opened the SSH tunnels (auto_tunnels), null otherwise. The resources that reach a node wait on it; nothing reads its value."
+  type        = string
+  default     = null
+}
+
 variable "skip_port_ready_wait" {
   description = <<-EOT
     Skip terraform_data.talos_port_ready_* (the local-exec that waits for
@@ -212,6 +218,14 @@ variable "bootstrap_manifests_enabled" {
 variable "cilium_manifest" {
   description = "Cilium CNI manifest YAML content (from bootstrap-manifests/cilium.yaml). Always injected when bootstrap_manifests_enabled=true (CNI is required for networking)."
   type        = string
+
+  # A validation, not a precondition on the machine-config data source: a data source that carries a
+  # condition is read at apply whenever anything it references changes, and every grow then re-applied
+  # the control planes' config (#420). The sentinel is distinctive so a real manifest cannot trip it.
+  validation {
+    condition     = var.control_plane_count == 0 || !strcontains(var.cilium_manifest, "CILIUM-MANIFEST-PLACEHOLDER")
+    error_message = "Cilium manifest is an unrendered placeholder. Run ./scripts/bootstrap/render-bootstrap-manifests.sh (add --local for the Docker cluster) before bootstrapping."
+  }
 }
 
 variable "coredns_ha" {

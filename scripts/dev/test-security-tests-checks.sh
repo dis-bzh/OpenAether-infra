@@ -191,6 +191,12 @@ $(mf c/plain '{"f:data":{".":{},"f:password":{}}}' kustomize-controller Apply)" 
 verdict "4.1" "❌" && grep -q 'c/plain' <<<"$OUT" && ok "a Secret whose data Flux applied from Git FAILS and is named" || bad "plain Secret: $(line 4.1)"
 STUB_SEC_LINES="$(mf c/plain '{"f:stringData":{"f:password":{}}}' kustomize-controller Apply)" run
 verdict "4.1" "❌" && ok "…and so does stringData" || bad "stringData: $(line 4.1)"
+STUB_SEC_LINES="$(mf cnpg-system/plugin-barman-cloud-5kkd8f288d '{"f:data":{".":{},"f:SIDECAR_IMAGE":{}}}' kustomize-controller Apply)" run
+verdict "4.1" "✅" && ok "the barman-cloud plugin's image-reference Secret is not a credential: passes" || bad "plugin Secret: $(line 4.1)"
+STUB_SEC_LINES="$(mf cnpg-system/plugin-barman-cloud-5kkd8f288d '{"f:data":{".":{},"f:SIDECAR_IMAGE":{},"f:password":{}}}' kustomize-controller Apply)" run
+verdict "4.1" "❌" && ok "…but any other key in it FAILS" || bad "plugin Secret with another key: $(line 4.1)"
+STUB_SEC_LINES="$(mf other/plugin-barman-cloud-x '{"f:data":{"f:SIDECAR_IMAGE":{}}}' kustomize-controller Apply)" run
+verdict "4.1" "❌" && ok "…and the same key in another namespace FAILS" || bad "other namespace: $(line 4.1)"
 STUB_SEC=error run
 verdict "4.1" "❌" && ok "an API error is not read as an empty list: 4.1 FAILS" || bad "API error: $(line 4.1)"
 

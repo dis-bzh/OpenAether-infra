@@ -12,12 +12,14 @@ output "worker_private_ips" {
 
 output "control_plane_zones" {
   description = "Hypervisor host each control plane runs on, in control_plane_private_ips order"
-  value       = proxmox_virtual_environment_vm.control_plane[*].node_name
+  # One entry per node, valued from the input that places it, not from the node's attribute: that one is unknown
+  # while a node is being created, and one unknown zone re-applied every node's machine config on a grow (infra #420).
+  value = [for i, _ in proxmox_virtual_environment_vm.control_plane : element(var.node_names, i)]
 }
 
 output "worker_zones" {
   description = "Hypervisor host each worker runs on, in worker_private_ips order"
-  value       = proxmox_virtual_environment_vm.worker[*].node_name
+  value       = [for i, _ in proxmox_virtual_environment_vm.worker : element(var.node_names, i)]
 }
 
 # No cloud LB on a single Proxmox host: the Kubernetes API is fronted by the
