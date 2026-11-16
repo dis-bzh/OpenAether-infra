@@ -7,7 +7,7 @@ to pick up.
 Open work is **not** here — it is in the GitHub issues, each naming what closes it
 and the rung it needs. This file answers "what is true today", not "what is left".
 
-**The current release is 0.5.0, a performance and sizing release (pairs with OpenAether-apps 0.5.0): see `[0.5.0]` in `CHANGELOG.md` for what was and was not run. Upgrade supported from 0.4.5 only.**
+**The current release is 0.5.1, a fix release of 0.5.0 (pairs with OpenAether-apps 0.5.1): see `[0.5.1]` in `CHANGELOG.md` for what was and was not run. Labs 0.5.1 L1 (Scaleway), L2 (OVH) and L3 (Outscale, then Scaleway) ran on 2026-11-15 and 16, each once, on commits before the release commit; Outscale ended with a degraded worker (#376). Upgrade supported from 0.5.0 only.**
 
 **0.3.0 (released 2026-10-19) is described by its `[0.3.0]` section of `CHANGELOG.md`: hardening options (all off by default), a 50 GB default system disk, and labs 11 to 15c on Scaleway, OVH and Outscale (2026-10-16 to 2026-10-18), each once. The table below is the older 0.2.0 measurement and is not re-measured by those labs.**
 
