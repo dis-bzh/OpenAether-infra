@@ -70,27 +70,28 @@ run "ovh_reports_the_availability_zone" {
   }
 }
 
-# Outscale places a node by its subnet, and the module builds one subnet in
-# availability_zones[0] (#58). The override stands for what the API reads back:
-# an output built from the variable would say a/b/c and fail the equality.
-run "outscale_reports_the_vm_placement_not_the_variable" {
+# Outscale places a node by its subnet. The zone is read through that subnet, known at plan, and not from the
+# VM's placement_subregion_name, unknown while a node is created (infra #420): no override on the VM here, so an
+# output read from the VM would be unknown and fail the assertion. One zone only: the mock gives every subnet
+# the same id.
+run "outscale_reports_the_subnet_zone_known_at_plan" {
   command = plan
   module { source = "../modules/providers/outscale" }
   providers = { outscale = outscale }
   plan_options { target = [outscale_vm.control_plane] }
 
   variables {
-    availability_zones = ["eu-west-2a", "eu-west-2b", "eu-west-2c"]
+    availability_zones = ["eu-west-2b"]
     image_id           = "ami-11111111"
   }
   override_resource {
-    target = outscale_vm.control_plane
-    values = { placement_subregion_name = "eu-west-2a" }
+    target = outscale_subnet.private
+    values = { subnet_id = "subnet-11111111" }
   }
 
   assert {
-    condition     = output.control_plane_zones == ["eu-west-2a", "eu-west-2a", "eu-west-2a"]
-    error_message = "outscale must report the subregion the VMs were placed in, not var.availability_zones (only [0] is used, #58)."
+    condition     = output.control_plane_zones == ["eu-west-2b", "eu-west-2b", "eu-west-2b"]
+    error_message = "outscale must report the subregion of each control plane's subnet, known at plan."
   }
 }
 
@@ -152,7 +153,7 @@ run "ovh_workers_report_the_availability_zone" {
   }
 }
 
-run "outscale_workers_report_the_vm_placement" {
+run "outscale_workers_report_the_subnet_zone_known_at_plan" {
   command = plan
   module { source = "../modules/providers/outscale" }
   providers = { outscale = outscale }
@@ -160,17 +161,17 @@ run "outscale_workers_report_the_vm_placement" {
 
   variables {
     worker_count       = 3
-    availability_zones = ["eu-west-2a", "eu-west-2b", "eu-west-2c"]
+    availability_zones = ["eu-west-2b"]
     image_id           = "ami-11111111"
   }
   override_resource {
-    target = outscale_vm.worker
-    values = { placement_subregion_name = "eu-west-2b" }
+    target = outscale_subnet.private
+    values = { subnet_id = "subnet-11111111" }
   }
 
   assert {
     condition     = output.worker_zones == ["eu-west-2b", "eu-west-2b", "eu-west-2b"]
-    error_message = "outscale must report the subregion the worker VMs were placed in, not var.availability_zones."
+    error_message = "outscale must report the subregion of each worker's subnet, known at plan."
   }
 }
 

@@ -11,16 +11,17 @@ output "worker_private_ips" {
   value       = outscale_vm.worker[*].private_ip
 }
 
-# Read from the VM, not var.availability_zones: where a VM actually landed is the fact,
-# and the variable is only what was asked for.
+# Where a VM actually landed, not what var.availability_zones asks for: an existing node keeps its subnet.
+# Read through the VM's subnet, known at plan, and not placement_subregion_name, unknown while a node is
+# created: one unknown zone re-applied every existing node's machine config on a grow (#420).
 output "control_plane_zones" {
   description = "Subregion of each control plane VM, in control_plane_private_ips order"
-  value       = outscale_vm.control_plane[*].placement_subregion_name
+  value       = [for vm in outscale_vm.control_plane : [for s in outscale_subnet.private : s.subregion_name if s.subnet_id == vm.subnet_id][0]]
 }
 
 output "worker_zones" {
   description = "Subregion of each worker VM, in worker_private_ips order"
-  value       = outscale_vm.worker[*].placement_subregion_name
+  value       = [for vm in outscale_vm.worker : [for s in outscale_subnet.private : s.subregion_name if s.subnet_id == vm.subnet_id][0]]
 }
 
 # Load Balancer DNS names (Outscale LBs expose a DNS name, not a raw IP)
