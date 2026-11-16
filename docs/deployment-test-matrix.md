@@ -183,6 +183,19 @@ What this lane still cannot carry: see "Known gaps" in
    clouds on 2026-10-03, not on a workload one.
 6. **`OP-failover`** — only OVH to Scaleway has run; other pairs are unproven.
 
+## Labs 0.5.1 (2026-11-15 and 16)
+
+Three real-cloud sittings, each once, 3 CP + 3 W with Flux unless said; what each read and did not is in `CHANGELOG.md` `[0.5.1]`, the rows in `docs/status.md`.
+
+| Case | Result |
+|---|---|
+| Fresh install, one `cluster-up`, Scaleway / OVH / Outscale | ✅ / ✅ / ⚠ (rc 0, then a seed timeout and a degraded worker, #376) |
+| `OP-grow-nodes`, the plan touches no existing node (Scaleway, 1 CP + 3 W, #420) | ✅ plan only; the apply went through `infra-apply` and failed (#490), `cluster-up` was not used |
+| OVH member-set migration and a worker replacement (#418) | ✅ |
+| `OP-shrink` on OVH and Outscale | not run: the guard refuses a worker holding local-path volumes |
+| `task backup-final` (#435) | ✅ Scaleway and OVH; INCOMPLETE on the degraded Outscale cluster |
+| Move of a running 0.5.0 cluster to 0.5.1 | not run |
+
 ## D) Findings — `SCW-vip` real apply (2026-07-15)
 
 3 CP (fr-par-1 + fr-par-2) + 1 worker, `k8s_lb_mode=vip`.
