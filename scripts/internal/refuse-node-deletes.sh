@@ -11,12 +11,19 @@
 # --creates-only: also refuse any change to a node's own resources that is not a create (a resize
 # riding along a growth, the #222 class). For grow-nodes, whose plan is applied whole.
 #
-# Usage, from the cluster dir with the backend inited: refuse-node-deletes.sh [--creates-only] <planfile>
+# --no-creates: also refuse a plan that creates a node (infra #490). `infra-apply` opens no Talos tunnel
+# for a node it creates, so the apply waits 900 s on a closed port; a grow goes through `task cluster-up`.
+#
+# Usage, from the cluster dir with the backend inited:
+#   refuse-node-deletes.sh [--creates-only | --no-creates] <planfile>
 set -euo pipefail
 
-ONLY=0
-if [ "${1:-}" = --creates-only ]; then ONLY=1; shift; fi
-PLAN="${1:?usage: refuse-node-deletes.sh [--creates-only] <planfile>}"
+ONLY=0; NOCREATE=0
+case "${1:-}" in
+  --creates-only) ONLY=1; shift ;;
+  --no-creates) NOCREATE=1; shift ;;
+esac
+PLAN="${1:?usage: refuse-node-deletes.sh [--creates-only | --no-creates] <planfile>}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [ -f "$PLAN" ] || { echo "✗ no plan file $PLAN" >&2; exit 2; }
 
@@ -52,6 +59,21 @@ if [ "$ONLY" = 1 ]; then
       echo "✗ this plan also changes nodes that already exist, nothing was applied:"
       sed 's/^/    /' <<<"$CHG"
       echo "  Growing a cluster only creates nodes. Resize one at a time with task cluster-roll, then grow."
+    } >&2
+    exit 1
+  fi
+fi
+
+if [ "$NOCREATE" = 1 ]; then
+  NEW="$(jq -r "$NODE_JQ"'
+    .resource_changes[]? | select(.mode == "managed" and .change.actions == ["create"])
+    | select((.name // "") | cls) | .address' <<<"$JSON")" || { echo "✗ could not read the plan $PLAN" >&2; exit 1; }
+  if [ -n "$NEW" ]; then
+    {
+      echo "✗ this plan creates nodes on a bootstrapped cluster, nothing was applied:"
+      sed 's/^/    /' <<<"$NEW"
+      echo "  infra-apply opens no Talos tunnel for a new node: the apply would wait 900 s on a closed port."
+      echo "  Grow with: task cluster-up (it creates the machine, opens its tunnel, then configures it)."
     } >&2
     exit 1
   fi

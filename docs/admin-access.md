@@ -235,6 +235,14 @@ with it, while `talosctl get machineconfig` is refused. Mint one and reuse it un
 expires rather than one per run: minting is a write against the Talos API, and a read
 should not need one.
 
+**Break-glass custody (owner decision, 2026-11-17; #331).** The admin kubeconfig and talosconfig are kept as gpg-encrypted copies in both
+artifact stores (`task restore-artifacts … --from replica` reads the other provider's copy). What opens them is the artifact passphrase
+(`TF_VAR_artifact_passphrase`, K6), and its custody depends on the mode:
+- **Lab:** the assistant runs everything; the passphrase lives in the owner's password manager (personal or work, as the use dictates).
+- **Production:** the owner, or another named operator, runs the commands and stores the keys, the passphrase going to that person's password manager.
+- **Holder and rotation:** one holder today (the owner). Re-issue the kubeconfig yearly (`task kubeconfig`), before the 365 days run out;
+  add a second holder when a second operator exists.
+
 **Named, short-lived identities (`task kubeconfig-new`).** For day-to-day work, do not carry the shared file: with the tunnels open,
 `task kubeconfig-new PROVIDER=… NAME=alice` files a CertificateSigningRequest (signer `kubernetes.io/kube-apiserver-client`,
 `expirationSeconds`, default 8 h, accepted 10 min to 24 h) for `CN=alice`, `O=oa:readers`, and writes a 0600 kubeconfig outside the repository

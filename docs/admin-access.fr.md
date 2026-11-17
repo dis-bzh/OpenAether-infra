@@ -243,6 +243,14 @@ avec lui, alors que `talosctl get machineconfig` est refusé. En émettre un et 
 réutiliser jusqu'à son expiration plutôt qu'un par exécution : émettre est une
 écriture sur l'API Talos, et une lecture ne devrait pas en demander.
 
+
+**Garde de l'accès de secours (décision du propriétaire, 2026-11-17 ; #331).** Le kubeconfig et le talosconfig admin sont gardés en copies chiffrées gpg dans
+les deux stores d'artefacts (`task restore-artifacts … --from replica` lit la copie de l'autre fournisseur). Ce qui les ouvre est la phrase de passe
+des artefacts (`TF_VAR_artifact_passphrase`, K6), et sa garde dépend du mode :
+- **Lab :** l'assistant exécute tout ; la phrase de passe est dans le gestionnaire de mots de passe du propriétaire (perso ou pro selon l'usage).
+- **Production :** le propriétaire, ou un autre opérateur nommé, lance les commandes et stocke les clés, la phrase de passe allant dans le gestionnaire de cette personne.
+- **Détenteur et rotation :** un seul détenteur aujourd'hui (le propriétaire). Réémettre le kubeconfig chaque année (`task kubeconfig`), avant les 365 jours ; ajouter un second détenteur quand un second opérateur existe.
+
 **Identités nommées et de courte durée (`task kubeconfig-new`).** Pour le travail courant, ne pas porter le fichier partagé : tunnels ouverts,
 `task kubeconfig-new PROVIDER=… NAME=alice` dépose une CertificateSigningRequest (signataire `kubernetes.io/kube-apiserver-client`,
 `expirationSeconds`, 8 h par défaut, de 10 min à 24 h acceptés) pour `CN=alice`, `O=oa:readers`, et écrit un kubeconfig en 0600 hors du dépôt
@@ -426,6 +434,7 @@ journaux : la ligne de connexion porte l'empreinte de la clé, la table dit à q
 Audit Trail, OVH Activity logs, journaux d'API d'Outscale) et le syslog d'un hôte Proxmox ne sont exportés par rien ici : tant que
 personne n'en est responsable, les exporter à la main pour la durée de conservation voulue et les ranger chiffrés à côté des journaux
 du bastion ; qui peut modifier l'IAM et les security groups fait partie de la même question.
+
 
 ## 7. SSO Grafana via Zitadel (OIDC)
 

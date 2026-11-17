@@ -141,14 +141,14 @@ grep -q 'cluster-up complete' "$O" \
 # Without this, a journey that died on an earlier step would pass both above.
 # A plan that deletes a node is refused before the question and before any apply (the stub answers 0 here,
 # the real script's verdicts are test-refuse-node-deletes.sh's).
-r1="$(grep -n '^refuse-node-deletes.sh up-' "$W/calls.log" | head -1 | cut -d: -f1)"
+r1="$(grep -n '^refuse-node-deletes.sh \(--no-creates \)\?up-' "$W/calls.log" | head -1 | cut -d: -f1)"
 pl="$(grep -n '^tofu plan -out=up-' "$W/calls.log" | head -1 | cut -d: -f1)"
 ap="$(grep -n '^tofu apply up-' "$W/calls.log" | head -1 | cut -d: -f1)"
 { [ -n "$r1" ] && [ -n "$pl" ] && [ -n "$ap" ] && [ "$pl" -lt "$r1" ] && [ "$r1" -lt "$ap" ]; } \
   && ok "the node-delete guard runs after the plan is written and before anything is applied" \
   || bad "the node-delete guard is misplaced: plan at ${pl:-none}, guard at ${r1:-none}, apply at ${ap:-none}"
 # Three places, none redundant: cluster-up before its question, infra-apply before its apply, phase 2 before its question.
-{ [ "$(calls '^refuse-node-deletes.sh up-')" = 2 ] && [ "$(calls '^refuse-node-deletes.sh phase2-')" = 1 ]; } \
+{ [ "$(calls '^refuse-node-deletes.sh \(--no-creates \)\?up-')" = 2 ] && [ "$(calls '^refuse-node-deletes.sh phase2-')" = 1 ]; } \
   && ok "the guard is called by cluster-up and infra-apply on the phase-1 plan, and by phase 2 on its own" \
   || bad "the guard was called: $(grep '^refuse-node-deletes' "$W/calls.log" | tr '\n' '|')"
 # Without a terminal the phase-1 checkpoint is the end of the road for cluster-up (infra #381): its stop message must name the
@@ -600,7 +600,7 @@ BANNER="$(grep -v 'echo "' "$O")"
   && ok "the image is PLANNED (--ensure --plan-only), once: a missing one is reported, not built" || bad "image calls: $(grep '^talos-image' "$W/calls.log" | tr '\n' '|')"
 { grep -qx 'grow-nodes.sh management scaleway --plan-only' "$W/calls.log" && [ "$(calls '^grow-nodes.sh')" = 1 ]; } \
   && ok "the grow step only says what it would create (--plan-only), once" || bad "grow calls: $(grep '^grow-nodes' "$W/calls.log" | tr '\n' '|')"
-{ [ "$(calls '^tofu plan -out=up-')" = 1 ] && [ "$(calls '^refuse-node-deletes.sh up-')" = 1 ]; } \
+{ [ "$(calls '^tofu plan -out=up-')" = 1 ] && [ "$(calls '^refuse-node-deletes.sh \(--no-creates \)\?up-')" = 1 ]; } \
   && ok "the phase-1 plan is made and shown, and the node-delete guard judges it, as before the question" || bad "plan/guard: $(grep -E '^(tofu plan|refuse)' "$W/calls.log" | tr '\n' '|')"
 { [ "$(calls "$PO_LATE")" = 0 ] && [ "$(calls '^tofu plan -out=phase2-')" = 0 ] && [ "$(calls '^talos-image.sh .*--retain')" = 0 ]; } \
   && ok "no apply, no tunnel, no phase 2, no roll, no presync, no verify, no retention" || bad "something past the plan ran: $(grep -E "$PO_LATE|phase2-|--retain" "$W/calls.log" | tr '\n' '|')"
