@@ -29,7 +29,7 @@ chmod +x "$W"/scripts/internal/*.sh "$W/bin/tofu"
 
 run() { # <creates-only|-> <env assignments…> ; sets OUT, RC
   local flag="$1"; shift
-  [ "$flag" = creates-only ] && flag=--creates-only || flag=
+  case "$flag" in creates-only) flag=--creates-only ;; no-creates) flag=--no-creates ;; *) flag= ;; esac
   OUT="$(env PATH="$W/bin:$PATH" "$@" "$W/scripts/internal/refuse-node-deletes.sh" $flag "${PLANFILE:-$W/plan.tfplan}" 2>&1)"; RC=$?
 }
 change() { # <address> <name> <actions-json> [reason]
@@ -100,6 +100,16 @@ run creates-only STUB_PLAN="$(plan_of "$WNEW" "$WREP")"
 [ "$RC" = 1 ] && ok "a replace of an existing node riding along is refused too" || bad "a replace rode along (rc ${RC}): ${OUT}"
 run - STUB_PLAN="$(plan_of "$WNEW" "$WUPD")"
 [ "$RC" = 0 ] && ok "without the flag an update of a node is not this guard's concern" || bad "the default mode refused an update (rc ${RC}): ${OUT}"
+
+echo "=== --no-creates (infra-apply, infra #490: it opens no tunnel for a node it creates) ==="
+run no-creates STUB_PLAN="$(plan_of "$WNEW" "$LBUPD")"
+{ [ "$RC" = 1 ] && grep -q 'worker\[3\]' <<<"$OUT" && grep -q 'task cluster-up' <<<"$OUT"; } \
+  && ok "a plan that creates a node is refused, the address named, with cluster-up as the way" \
+  || bad "a node create was let through (rc ${RC}): ${OUT}"
+run no-creates STUB_PLAN="$(plan_of "$WUPD" "$WREP" "$NOOP")"
+[ "$RC" = 0 ] && ok "an update and a replace of existing nodes are not creates" || bad "a non-create was refused (rc ${RC}): ${OUT}"
+run no-creates STUB_TB=false STUB_PLAN="$(plan_of "$WNEW")"
+[ "$RC" = 0 ] && ok "a cluster not bootstrapped yet creates its nodes freely" || bad "a fresh cluster was refused (rc ${RC}): ${OUT}"
 
 echo "=== infra-apply asks it on both of its paths ==="
 # The saved-plan path is exercised through cluster-up (test-cluster-up.sh); the APPROVE=auto path with no PLAN is not,

@@ -14,6 +14,10 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ## [Unreleased]
 
+### Fixed
+
+- `task infra-apply` refuses a plan that creates a node on a bootstrapped cluster and names `task cluster-up` (#490, first half). Rung: mocked (`test-refuse-node-deletes.sh`). Not done: the plan that hangs on the health of a node that never joined; that half needs a cluster.
+
 ## [0.5.1] — 2026-11-16
 
 Fix release of 0.5.0 (paired with OpenAether-apps 0.5.1): the open issues selected for fixing, then read on real clouds where a cluster could show them. No Talos, Kubernetes, Cilium, Flux or provider pin moves; the `git_ref` default and the examples follow OpenAether-apps `refs/tags/0.5.1` (commit `6d03ebe0282a1501d6a03eca7738748cd4121947`). Read in three labs (0.5.1 L1 Scaleway, L2 OVH, L3 Outscale then Scaleway; 2026-11-15 and 16; 3 CP + 3 W unless said; n=1 per figure; Flux following the apps `main` branch, not the tag): an install in one `cluster-up` on the three clouds, the Scaleway ACL fix (#361), the Ubuntu 24.04 bastion on Scaleway and OVH (#344), the OVH member-set migration and a worker replacement with 0 failed API probe (#418), `backup-final` on Scaleway and OVH (#435), check 4.1 (#442), `coredns_image_tag` (#392), the alert hosts (#454), the 40-character passphrase (#346), the io1 data volumes of Outscale with an empty plan (#376, volumes only), and a grow whose plan touches no existing node (#420, Scaleway, 1 CP + 3 W).

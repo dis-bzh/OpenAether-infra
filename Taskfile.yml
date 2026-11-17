@@ -1341,7 +1341,7 @@ tasks:
             exit 1
           }
           # A lowered count plans the deletion of a node and its data volumes: removal is its own command.
-          ../../../scripts/internal/refuse-node-deletes.sh "{{.PLAN}}" || exit 1
+          ../../../scripts/internal/refuse-node-deletes.sh --no-creates "{{.PLAN}}" || exit 1
           tofu apply "{{.PLAN}}" 2>&1 | tee -a .tofu-run.log
           rm -f "{{.PLAN}}"
         else
@@ -1354,7 +1354,7 @@ tasks:
           P="auto-{{.ROLE}}-{{.PROVIDER}}.tfplan"
           tofu plan -out="$P" -var-file="envs/{{.ROLE}}-{{.PROVIDER}}.tfvars" \
             -var talos_bootstrap=$TB 2>&1 | tee -a .tofu-run.log
-          ../../../scripts/internal/refuse-node-deletes.sh "$P" || exit 1
+          ../../../scripts/internal/refuse-node-deletes.sh --no-creates "$P" || exit 1
           tofu apply "$P" 2>&1 | tee -a .tofu-run.log
           rm -f "$P"
         fi
