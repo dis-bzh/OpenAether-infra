@@ -164,6 +164,31 @@ run "enabled_renders_secret_before_gitrepository_and_verify" {
   }
 }
 
+# Commit pin (infra #385): empty renders nothing (the default test above already pins the exact bytes); set, it reaches the
+# GitRepository AND the substitute the apps side reads, so the apps-side GitRepository does not drop it at its first reconcile.
+run "a_commit_pin_reaches_the_gitrepository_and_the_substitute" {
+  command = plan
+  variables {
+    git_commit = "0123456789abcdef0123456789abcdef01234567"
+  }
+  assert {
+    condition     = strcontains(local.flux_bootstrap_manifest, "    name: refs/tags/0.5.1\n    commit: 0123456789abcdef0123456789abcdef01234567\n  timeout: 60s\n")
+    error_message = "the GitRepository must carry ref.commit next to ref.name"
+  }
+  assert {
+    condition     = strcontains(local.flux_bootstrap_manifest, "      GIT_REF: refs/tags/0.5.1\n      GIT_COMMIT: 0123456789abcdef0123456789abcdef01234567\n")
+    error_message = "the Kustomization must substitute GIT_COMMIT"
+  }
+}
+
+run "a_malformed_commit_is_refused" {
+  command = plan
+  variables {
+    git_commit = "0123456"
+  }
+  expect_failures = [var.git_commit]
+}
+
 run "enabled_without_keys_is_refused" {
   command = plan
   variables {

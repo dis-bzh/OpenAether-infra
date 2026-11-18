@@ -78,6 +78,7 @@ output "manifest" {
     namespace         = "flux-system"
     git_repo_url      = "https://example.invalid/openaether.git"
     git_ref           = "refs/heads/main"
+    git_commit        = ""
     cluster_role      = "management"
     cluster_id        = "openaether-check-flux-schema"
     backup_target_url = "s3://openaether-check@fr-par/"

@@ -14,6 +14,10 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ## [Unreleased]
 
+### Added
+
+- `git_commit` pins OpenAether-apps by commit at bootstrap (#385, infra half; apps half in OpenAether-apps). Rung: mocked. Not done: moving a running cluster (`cluster-apps-ref`) and a cluster reading.
+
 ### Fixed
 
 - `task infra-apply` refuses a plan that creates a node on a bootstrapped cluster and names `task cluster-up` (#490, first half). Rung: mocked (`test-refuse-node-deletes.sh`). Not done: the plan that hangs on the health of a node that never joined; that half needs a cluster.

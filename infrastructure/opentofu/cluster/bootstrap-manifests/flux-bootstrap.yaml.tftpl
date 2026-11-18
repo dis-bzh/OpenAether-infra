@@ -5,6 +5,7 @@
 # OpenTofu variables:
 #   ${git_repo_url}   — e.g. https://github.com/dis-bzh/OpenAether.git
 #   ${git_ref}        — e.g. refs/tags/0.3.1, or refs/heads/main
+#   ${git_commit}     — empty, or the 40-hex commit Flux must check out (takes precedence over git_ref; infra #385)
 #   ${cluster_role}   — e.g. management (→ apps/flux/management)
 #   ${cluster_id}     — e.g. openaether-dev-ovh (the cluster's UNIQUE identity)
 #   ${backup_target_url} — e.g. s3://s3-openaether-ovh-backups-dev@eu-west-par/
@@ -120,6 +121,9 @@ spec:
   url: ${git_repo_url}
   ref:
     name: ${git_ref}
+%{ if git_commit != "" ~}
+    commit: ${git_commit}
+%{ endif ~}
   timeout: 60s
 %{ if flux_git_verify_enabled ~}
   verify:
@@ -149,3 +153,6 @@ spec:
   postBuild:
     substitute:
       GIT_REF: ${git_ref}
+%{ if git_commit != "" ~}
+      GIT_COMMIT: ${git_commit}
+%{ endif ~}
