@@ -623,6 +623,7 @@ locals {
     namespace    = var.flux_namespace
     git_repo_url = var.git_repo_url
     git_ref      = var.git_ref
+    git_commit   = var.git_commit
     cluster_role = var.cluster_role
     cluster_id   = local.cluster_id
     # Opt-in commit-signature verification (default off: the rendered manifest is then unchanged).

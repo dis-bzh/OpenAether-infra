@@ -27,6 +27,14 @@ pour ceux en 0.x) ; les modules gardent leurs minimums `>=`.
   `check-version-drift.sh` échoue tant qu'il nomme une autre version que la racine cluster pour
   un provider commun. `opentofu-local/` et `modules/talos` (testé seul) gardent un lock local non versionné.
 
+## Épingler OpenAether-apps par commit
+
+Un tag de release peut être déplacé, pas un commit. `git_commit` (40 hex, vide par défaut) fait porter `ref.commit` au GitRepository de
+bootstrap, que Flux récupère à la place de `git_ref` (le CRD : il « prend le pas sur tous les champs de référence »), et publie `GIT_COMMIT`
+pour que le GitRepository côté apps le garde à sa première réconciliation. Vaut pour le manifeste de bootstrap d'un NOUVEAU cluster ;
+`cluster-apps-ref` ne déplace pas encore un cluster en marche. Preuve : mockée (`flux-git-verify.tftest.hcl`) ; l'acceptation par
+source-controller est une question de lab (#385).
+
 ## Images de démarrage Talos
 
 L'identifiant de schematic de l'Image Factory fixe ce qu'on demande, pas les octets reçus.

@@ -958,6 +958,21 @@ variable "git_ref" {
   }
 }
 
+# Supply-chain pin (infra #385): a tag can be force-moved, a commit cannot. Empty = Flux follows git_ref only.
+# When set, Flux checks out exactly this commit and IGNORES git_ref for the checkout (the CRD says `ref.commit` takes
+# precedence over every other ref field); git_ref then only names what the commit was taken from. Applies when the
+# bootstrap manifest is first created: moving a running cluster is not wired (cluster-apps-ref ignores it).
+variable "git_commit" {
+  description = "Full 40-character commit SHA of OpenAether-apps Flux must check out, or empty to follow git_ref only"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = can(regex("^([0-9a-f]{40})?$", var.git_commit))
+    error_message = "git_commit must be empty or a full 40-character lowercase hex commit SHA."
+  }
+}
+
 # Opt-in verification of the commit Flux applies (ANSSI SSDLC-CICD-AIP-03, SSDLC-CONT-REC06). Off = the bootstrap manifest
 # is byte-identical to the one before this variable existed. This repository wires OpenPGP keys only; the vendored Flux would also take SSH keys (.sshpub), not wired here.
 variable "flux_git_verify" {

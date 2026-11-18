@@ -59,6 +59,14 @@ between the download and the conversion in the three local-exec modules.
 - The installer reference in the machine config (`factory.talos.dev/installer/<schematic>:<version>`)
   is still a tag, not a digest.
 
+## Pinning OpenAether-apps by commit
+
+A release tag can be moved, a commit cannot. `git_commit` (40 hex, default empty) makes the bootstrap GitRepository carry `ref.commit`,
+which Flux checks out in place of `git_ref` (the CRD: it "takes precedence over all reference fields"), and publishes `GIT_COMMIT` so the
+apps-side GitRepository keeps it at its first reconcile. Applies to the bootstrap manifest of a NEW cluster; `cluster-apps-ref` does not move
+a running one yet. Rung: mocked (`flux-git-verify.tftest.hcl`); whether source-controller accepts an empty or set commit through the apps
+substitution is a lab question (#385).
+
 ## Images, tools and the inventory
 
 - `task lint` fails on an `image:` in a tracked manifest with neither `@sha256` nor a digest
