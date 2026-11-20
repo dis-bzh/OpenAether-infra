@@ -83,6 +83,12 @@ resource "scaleway_block_snapshot" "talos" {
     key    = local.object_key
   }
 
+  # The import copies the whole image; the provider default timeout is too short
+  # and a timed-out snapshot is left tainted (recreated on the next apply).
+  timeouts = {
+    create = "30m"
+  }
+
   depends_on = [terraform_data.build_and_upload]
 }
 

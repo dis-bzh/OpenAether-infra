@@ -17,6 +17,7 @@ in git. 0.1.0 is the first entry describing something proven.
 ### Added
 
 - `git_commit` pins OpenAether-apps by commit at bootstrap (#385, infra half; apps half in OpenAether-apps). Rung: mocked. Not done: moving a running cluster (`cluster-apps-ref`) and a cluster reading.
+- `OA_PLAN_HEALTH_TIMEOUT` (default `5m`) bounds the cluster-health read in plans of a bootstrapped cluster (#490, second half): a grow interrupted before the node joined no longer holds `infra-plan` for 15 minutes. Rung: mocked; a real cluster must still show the bound.
 
 ### Fixed
 

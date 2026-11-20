@@ -208,7 +208,8 @@ at its tunnel check: the tunnels cannot be rebuilt until the apply lands. Put th
 `admin_ip` and run it with the check off and the health read skipped:
 `OA_SKIP_TUNNEL_GUARD=1 TF_VAR_skip_health_check=true task infra-apply PROVIDER=… APPROVE=auto`. Measured on
 Scaleway, 2026-10-04: the bastion's security group and the load balancer's ACL were updated, the apply took
-under four minutes, SSH to the bastion worked again and `cluster-verify` passed 13/13. `admin_ip` refuses an
+under four minutes, SSH to the bastion worked again and `cluster-verify` passed 13/13. A plan of a bootstrapped cluster gives the health read 5 minutes (`OA_PLAN_HEALTH_TIMEOUT`, default `5m`), so a node that never joined fails the plan fast instead of after 15 minutes. A Scaleway image snapshot that times out is left tainted: re-running the apply recreates it.
+`admin_ip` refuses an
 empty list, a bare address and a `/0` since it validates — it is the allowlist in front of both bastion sshd and 6443.
 
 **The bastion stays, hardened in place (decision, #82, 2026-10-03).** An OIDC issuer
