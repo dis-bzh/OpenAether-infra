@@ -745,6 +745,7 @@ module "talos" {
   # rationale as local Docker (see the module's skip_kubernetes_health_checks).
   skip_kubernetes_health_checks = local.apiserver_vip != null
   skip_health_check             = var.skip_health_check
+  health_check_timeout          = var.health_check_timeout
 
   # Phase 2 reaches the private nodes through per-node SSH tunnels on localhost
   # (see the `instructions` output). `endpoint` is where the provider connects;

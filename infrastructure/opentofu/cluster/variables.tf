@@ -215,6 +215,17 @@ variable "cluster_role" {
   }
 }
 
+variable "health_check_timeout" {
+  description = "Max time `talos_cluster_health` waits for the cluster to report healthy. The plan and apply targets lower it on a bootstrapped cluster (OA_PLAN_HEALTH_TIMEOUT, default 5m): a node that never joined must not hold a plan for 15 minutes (#490)."
+  type        = string
+  default     = "15m"
+
+  validation {
+    condition     = can(regex("^[0-9]+(s|m|h)$", var.health_check_timeout))
+    error_message = "health_check_timeout must be a whole duration such as 90s, 5m or 1h."
+  }
+}
+
 variable "skip_health_check" {
   description = <<-EOT
     Skip the post-bootstrap `talos_cluster_health` data source.

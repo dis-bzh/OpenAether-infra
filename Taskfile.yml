@@ -1352,8 +1352,9 @@ tasks:
           # a plan whose state has moved. The saved-plan path gives all three,
           # and `tofu apply <file>` never prompts, so the only yes is ours.
           P="auto-{{.ROLE}}-{{.PROVIDER}}.tfplan"
+          HT=(); [ "$TB" = true ] && HT=(-var "health_check_timeout=${OA_PLAN_HEALTH_TIMEOUT:-5m}")
           tofu plan -out="$P" -var-file="envs/{{.ROLE}}-{{.PROVIDER}}.tfvars" \
-            -var talos_bootstrap=$TB 2>&1 | tee -a .tofu-run.log
+            -var talos_bootstrap=$TB "${HT[@]}" 2>&1 | tee -a .tofu-run.log
           ../../../scripts/internal/refuse-node-deletes.sh --no-creates "$P" || exit 1
           tofu apply "$P" 2>&1 | tee -a .tofu-run.log
           rm -f "$P"
@@ -1423,8 +1424,12 @@ tasks:
         # own words, and pipefail keeps -detailed-exitcode's 0/1/2 intact
         # through the pipe (measured on Task 3.52, including the 2).
         set -o pipefail
+        # A node that never joined (an interrupted grow) held the health read for 931 s (#490):
+        # a bootstrapped plan waits OA_PLAN_HEALTH_TIMEOUT (5m) instead.
+        HT=(); [ "$TB" = true ] && HT=(-var "health_check_timeout=${OA_PLAN_HEALTH_TIMEOUT:-5m}")
         tofu plan {{if eq .STRICT "1"}}-detailed-exitcode{{end}} {{if .OUT}}-out="{{.OUT}}"{{end}} \
-          -var-file="envs/{{.ROLE}}-{{.PROVIDER}}.tfvars" -var talos_bootstrap=$TB 2>&1 | tee -a .tofu-run.log
+          -var-file="envs/{{.ROLE}}-{{.PROVIDER}}.tfvars" -var talos_bootstrap=$TB \
+          "${HT[@]}" 2>&1 | tee -a .tofu-run.log
 
   tunnels-up:
     aliases: [tunnels]
