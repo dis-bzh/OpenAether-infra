@@ -331,6 +331,7 @@ task security            # contrôles de durcissement
 | [docs/upgrade.fr.md](docs/upgrade.fr.md) | Faire bouger Kubernetes et Talos sur un cluster qui doit rester debout |
 | [docs/supply-chain.fr.md](docs/supply-chain.fr.md) | Providers et images de démarrage verrouillés, le SBOM, qui peut lancer le workflow cloud, rulesets en code |
 | [docs/patching.fr.md](docs/patching.fr.md) | Le délai des correctifs, ce qui est épinglé, et les signaux qui disent qu'un correctif existe |
+| [docs/support.fr.md](docs/support.fr.md) | Aucune garantie par défaut ; politique conditionnelle N et N-1, niveaux par provider, limite du séquestre à un détenteur, ce qu'une release publie, processus CVE/VEX |
 | [docs/key-management.fr.md](docs/key-management.fr.md) | Chaque clé : période, impact si perdue ou fuitée, remplacement, effacement, écarts consignés (TLS-12, TLS-19) |
 | [docs/incident-response.fr.md](docs/incident-response.fr.md) | Compromission suspectée, dans l'ordre : preuves, sauvegardes, confinement, tableau de rotation, point de restauration, registre |
 | [docs/backup-policy.fr.md](docs/backup-policy.fr.md) | Par jeu de données : mécanisme, objectif RPO/RTO, rétention, destination, détenteur de clé, test de restauration, destruction ; ce qui n'est pas sauvegardé |

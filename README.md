@@ -324,6 +324,7 @@ task security            # hardening checks
 | [docs/upgrade.md](docs/upgrade.md) | Moving Kubernetes and Talos on a cluster that has to stay up |
 | [docs/supply-chain.md](docs/supply-chain.md) | Locked providers and boot images, the SBOM, who may run the cloud workflow, rulesets as code |
 | [docs/patching.md](docs/patching.md) | The patch deadline, what is pinned, and the signals that say a fix exists |
+| [docs/support.md](docs/support.md) | No guarantee by default; conditional N and N-1 policy, provider tiers, the one-holder escrow limit, what a release publishes, the CVE/VEX process |
 | [docs/key-management.md](docs/key-management.md) | Every key: period, impact if lost or leaked, replacement, erasure, recorded deviations (TLS-12, TLS-19) |
 | [docs/incident-response.md](docs/incident-response.md) | Suspected compromise, in order: evidence, backups, containment, rotation table, restore point, register |
 | [docs/backup-policy.md](docs/backup-policy.md) | Per dataset: mechanism, RPO/RTO target, retention, destination, key holder, restore test, destruction; what is not backed up |

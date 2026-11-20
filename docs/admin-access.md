@@ -249,7 +249,7 @@ artifact stores (`task restore-artifacts … --from replica` reads the other pro
 `expirationSeconds`, default 8 h, accepted 10 min to 24 h) for `CN=alice`, `O=oa:readers`, and writes a 0600 kubeconfig outside the repository
 (`~/.kube/oa-alice-reader.kubeconfig`; a path inside the repository is refused). `ACCESS=admin` asks for `O=oa:admins` instead (cluster-admin through the
 group). The private key is generated on your machine; the `system:masters` file only files and approves the request, and stays the escrowed break-glass
-credential, not the routine one. Who holds that credential, where it is escrowed and when it is re-issued is not recorded yet: the owner names them (infra #331, open). What each group may do is the apps `platform-rbac` brick (`oa-admins` to `cluster-admin`, `oa-readers` to `view`): a certificate
+credential, not the routine one. Who holds that credential and when it is re-issued is the break-glass custody paragraph above (infra #331, decided: one holder today); the limit is in [`support.md`](support.md). What each group may do is the apps `platform-rbac` brick (`oa-admins` to `cluster-admin`, `oa-readers` to `view`): a certificate
 carrying a group no binding names can do nothing. Revoking one person before the certificate expires means deleting or narrowing the binding of their
 group (it takes effect at once, the certificate stays valid but is refused); a group binding cannot single out one holder, so for per-person revocation
 bind the user by name instead (`rbac-review` flags it for you to record). `rbac-review` and `cluster-security` 3.7 allow exactly these two bindings and nothing else under those names.
