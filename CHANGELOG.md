@@ -16,7 +16,7 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Added
 
-- `docs/support.md` (+ French twin): N and N-1 version policy, provider tiers (Scaleway and OVH supported, Outscale constrained, Proxmox unsupported), the one-holder escrow limit (#331), what a release publishes and the CVE/VEX process (#385 release half, #455). Rung: documents; each claim names its own.
+- `docs/support.md` (+ French twin): no-guarantee default, conditional N and N-1 version policy, provider tiers (Scaleway and OVH supported, Outscale constrained, Proxmox unsupported), the one-holder escrow limit (#331), what a release publishes and the CVE/VEX process (#385 release half, #455). Rung: documents; each claim names its own.
 - `git_commit` pins OpenAether-apps by commit at bootstrap (#385, infra half; apps half in OpenAether-apps). Rung: mocked. Not done: moving a running cluster (`cluster-apps-ref`) and a cluster reading.
 
 ### Fixed

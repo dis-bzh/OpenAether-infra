@@ -2,13 +2,19 @@
 
 🇫🇷 [Version française](support.fr.md)
 
-> Written for 0.6.0 (owner decisions of 2026-11-20). It says what is supported and what is not, and for each claim the rung it
-> reached (mocked, emulated, local Docker, real cloud). It is not a service level: there is one maintainer, and
-> a limit written here is a limit, not a roadmap. Figures and dates live in [`status.md`](status.md), not here.
+> Written for 0.6.0 (owner decisions of 2026-11-20). For each claim, the rung it reached (mocked, emulated, local Docker, real
+> cloud). There is one maintainer, and a limit written here is a limit, not a roadmap. Figures and dates live in [`status.md`](status.md), not here.
 
-## 1. Versions: N and N-1 only
+## 0. Default: no guarantee, no support
 
-Before 1.0.0 a "version" is a release tag, not a minor. N is the latest tag, N-1 the one before it (with 0.5.1 out, N-1 is 0.5.0).
+OpenAether is an open-source project. **By default the maintainer guarantees nothing and provides no support**: no response time, no fix
+commitment, no backport. Issues and pull requests are welcome and read when time allows. Sections 1 and 2 are the policy
+that **applies only if a paying customer or user exists**; until then they describe what the project does and measures, not what it owes anyone.
+The licence ([`LICENSE`](../LICENSE)) says the rest.
+
+## 1. Versions: N and N-1 only (conditional policy)
+
+If a paying customer or user appears, support is limited to N and N-1. Before 1.0.0 a "version" is a release tag, not a minor. N is the latest tag, N-1 the one before it (with 0.5.1 out, N-1 is 0.5.0).
 
 | | What you can expect |
 |---|---|
@@ -22,9 +28,9 @@ Before 1.0.0 a "version" is a release tag, not a minor. N is the latest tag, N-1
 - **Rung of the paths.** Each "From x to y" section of `upgrade.md` says its own. The last one, 0.5.0 to 0.5.1, was read on a cluster built on `main`
   and moved to the fix branch, **not** a 0.5.0 install moved to the tags (`CHANGELOG.md` `[0.5.1]`). Real cloud, n=1.
 
-## 2. Providers: tiers
+## 2. Providers: tiers (what has been measured; a promise only under section 0's condition)
 
-- **Supported**: built from an empty account on real hardware, `cluster-verify` green, a roll or upgrade read. A bug that reproduces is fixed.
+- **Supported**: built from an empty account on real hardware, `cluster-verify` green, a roll or upgrade read. Under section 0's condition, a bug that reproduces is fixed.
 - **Constrained**: it runs, with a written limit that stops it carrying the full platform. Issues are read; no promise on the full platform.
 - **Unsupported**: the code exists, nothing real has run. Reports are welcome, not fixed on a schedule.
 
@@ -39,6 +45,8 @@ Not covered by any tier: the `workload` role on any cloud, `deploy_flux = true` 
 is optional and its child-cluster lifecycle has never run (apps #222). Not proven: an unattended run of any lane.
 
 ## 3. Escrow: one holder, for now
+
+No customer is served today, so this is a limit of the project, not a breach of any commitment.
 
 - **Break-glass** (`system:masters` kubeconfig, talosconfig, artifact passphrase, K6): one holder, the owner. Decision of 2026-11-17 (#331), recorded in [`admin-access.md`](admin-access.md).
 - **Seal-key escrow** (`task escrow`) is designed for two custodians and says so when it has one ([`key-management.md`](key-management.md), "Escrow: how many custodians").
