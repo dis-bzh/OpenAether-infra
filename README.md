@@ -328,6 +328,8 @@ task security            # hardening checks
 | [docs/incident-response.md](docs/incident-response.md) | Suspected compromise, in order: evidence, backups, containment, rotation table, restore point, register |
 | [docs/backup-policy.md](docs/backup-policy.md) | Per dataset: mechanism, RPO/RTO target, retention, destination, key holder, restore test, destruction; what is not backed up |
 | [docs/audit-sink.md](docs/audit-sink.md) | The second, out-of-cluster, object-locked and encrypted copy of the audit log (class A): placement choices and their guarantees, data path, keys, failure behaviour, limits, lab pass criteria |
+| [docs/availability-contract.md](docs/availability-contract.md) | What is promised, what was measured per provider, and how many times (a figure seen once is not an SLO); the toleration to give client RWO apps |
+| [docs/drill-plan.md](docs/drill-plan.md) | Plan of the first disaster-recovery drill and the first incident drill (criteria written before the lab) |
 | [docs/disaster-recovery.md](docs/disaster-recovery.md) | The one ordered recovery chain (OpenBao before Zitadel's database), prerequisites, time targets, the yearly drill |
 | [docs/security-architecture.md](docs/security-architecture.md) | Assets, administration paths and how each is authenticated, privileged accounts, accepted deviations |
 | [docs/network.md](docs/network.md) | Trust zones, CIDR plan, the two enforcement layers, the flow matrix (generated from the Terraform), known gaps |

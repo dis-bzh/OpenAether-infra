@@ -194,3 +194,42 @@ ni changer le versionnement d'un seau verrouillé.
 
 Non prouvé : `same_provider_other_region` et `both` ; COMPLIANCE sur le puits ; un puits chez Outscale ; la fenêtre de rotation d'un cluster au repos ;
 les journaux des nœuds et de flux (section 8).
+
+## 11. Ce que la 0.6.0 ferme, et comment (conception seule : rien ci-dessous n'a tourné)
+
+**Périmètre.** #318 nomme trois flux ; seul le journal d'audit de l'API Kubernetes est expédié (section 8). L'issue se ferme sur ce flux dès que 11.5 est
+tenu ; les journaux des nœuds et de flux passent dans leur propre issue au lieu de garder #318 ouverte des mois. `same_provider_other_region`, `both`,
+COMPLIANCE et un puits Outscale restent listés comme non prouvés.
+
+**11.1 L'alarme vit dans le cluster qu'elle surveille.** `AuditSinkDown`, `AuditSinkStale` et le Deployment de contrôle sont des objets du cluster : un
+cluster-admin, l'attaquant même pour qui le puits existe, peut supprimer la règle et rien ne sonne (la section 5 ne couvre que la panne de tous les
+plans de contrôle). L'alarme qui compte tourne donc **hors du cluster** : `audit-sink-check.sh` sur un minuteur de l'hôte opérateur ou bastion, toutes les
+10 minutes, avec une **paire de clés « guetteur » qui peut lister et lire les versions mais ne rien écrire**, détenue là seulement (jamais dans OpenBao,
+jamais la paire de l'expéditeur). Il faut un mode `--no-decrypt` (verrou, marqueurs de suppression, âge du plus récent objet par nœud, sans mot de passe :
+à écrire ; aujourd'hui chaque exécution exige le mot de passe du dépôt). L'exécution hebdomadaire complète avec le mot de passe en séquestre reste à l'opérateur.
+Le canal de notification doit aussi être hors du cluster (un courriel ou un message de cet hôte) ; la sortie fermée du bastion doit autoriser l'hôte du puits et ce point d'arrivée.
+
+**11.2 #393, en quatre couches.**
+
+| Couche | Quoi | État |
+|---|---|---|
+| Prévenir | un puits OVH seulement dans **son propre projet et utilisateur OVH** ; la recette sort en 2 sans `OVH_SINK_PROJECT_ID` | fait (attestation, pas un contrôle) |
+| Réduire | apparier un cluster avec un puits chez un fournisseur dont le S3 accepte les politiques de seau (Scaleway : NON VÉRIFIÉ ici), une politique refusant à la paire tout `Delete*`, le versionnement, le verrou, la rétention et tout autre seau ; les clusters OVH utilisent alors Scaleway, l'inverse du lab 23 | conception ; un lab doit montrer les refus |
+| Détecter | le guetteur de 11.1 sonne sur un marqueur de suppression courant et sur une rétention par défaut différente du tfvars (ce que la paire peut encore faire sur OVH) | contrôle existant (2b, verrou) ; ni planifié, ni hors cluster |
+| Dire | la paire OVH partagée avec d'autres seaux, ou sans projet propre, est documentée comme pouvant les lire et aveugler un lecteur | fait (section 4) |
+
+**11.3 Dépôt de garde, une ligne chacun.** Paire d'écriture : l'expéditeur, dans OpenBao `secret/audit/sink`. Paire guetteur : l'hôte opérateur seulement, liste et lecture.
+Mot de passe du dépôt : OpenBao et le séquestre (`audit-sink-password.gpg`). Droit de contournement GOVERNANCE : **personne** ; retirer une version verrouillée exige les
+identifiants du propriétaire du compte, gardés hors ligne. Rétention 365 jours et GOVERNANCE restent les défauts ; en changer est la décision du mainteneur.
+
+**11.4 Coût et latence ne sont pas mesurés.** Le lab doit relever les octets stockés par nœud et par jour, les requêtes par jour et le retard de l'expéditeur
+(première ligne d'un nœud jusqu'à son snapshot) ; les prix se lisent dans les grilles des fournisseurs le jour même, ils ne se supposent pas.
+
+**11.5 Ce qui les ferme, au lab Scaleway de la 0.6.0 (cloud réel, puits OVH dans son propre projet) :**
+
+1. Les critères 1 à 6 de la section 9 passent de nouveau sur les têtes 0.6.0, guetteur en marche.
+2. **Alarme hors cluster :** règles du cluster supprimées (`kubectl delete vmrule`), une coupure de 20 minutes du puits fait sonner le guetteur en moins de 15 minutes.
+3. **#393 :** avec la paire d'un projet OVH dédié, `aws s3 ls` ne liste que le seau du puits ; un `delete-object` simple et un `put-object-lock-configuration` faits avec elle sont signalés par l'exécution suivante du guetteur.
+4. **Drill d'incident :** les actions d'un cluster-admin sont reconstituées depuis le puits seul après suppression de l'audit du cluster ([`drill-plan.fr.md`](drill-plan.fr.md), I1).
+
+Si 3 échoue (le projet n'est pas isolé), #393 reste ouverte avec le constat ; #318 se ferme sur 1, 2 et 4.

@@ -185,3 +185,39 @@ probe (no completed cycle in 45 minutes) killed it. A cycle now ships what the f
 
 Not proven: `same_provider_other_region` and `both`; COMPLIANCE on the sink; a sink on Outscale; the apiserver rotation window on an idle
 cluster; node and flow logs (section 8).
+
+## 11. What 0.6.0 closes, and how (design only: nothing below ran)
+
+**Scope.** #318 names three streams; only the Kubernetes API audit log is shipped (section 8). It is closed on that stream once 11.5 holds; node and flow
+logs move to their own issue instead of keeping #318 open for months. `same_provider_other_region`, `both`, COMPLIANCE and an Outscale sink stay listed as not proven.
+
+**11.1 The alarm lives in the cluster it watches.** `AuditSinkDown`, `AuditSinkStale` and the check Deployment are cluster objects: a cluster-admin, the very
+attacker the sink exists for, can delete the rule and nothing fires (section 5 only covers all control planes being down). So the alarm that matters runs
+**off the cluster**: `audit-sink-check.sh` on a timer on the operator or bastion host, every 10 minutes, with a **watcher key pair that can list and read
+versions but write nothing**, held only there (never in OpenBao, never the shipper's pair). It needs a `--no-decrypt` mode (lock, delete markers, newest
+object age per node, no password: to write; today every run needs the repository password). The weekly full run with the escrowed password stays with the operator.
+The notification path must also be off the cluster (a mail or a message from that host); the bastion's closed egress needs the sink host and that endpoint.
+
+**11.2 #393, in four layers.**
+
+| Layer | What | State |
+|---|---|---|
+| Prevent | an OVH sink only in its **own OVH project and user**; the recipe exits 2 without `OVH_SINK_PROJECT_ID` | done (attestation, not a check) |
+| Reduce | pair a cluster with a sink on a provider whose S3 takes bucket policies (Scaleway: UNVERIFIED here), a policy denying the pair every `Delete*`, versioning, lock and retention call and every other bucket; OVH clusters then use Scaleway, the reverse of lab 23 | design; a lab must show the denials |
+| Detect | the watcher of 11.1 raises on a current delete marker and on a default retention that differs from the tfvars (what the pair on OVH can still do) | check exists (2b, lock); not scheduled, not off-cluster |
+| State | the pair on OVH shared with other buckets, or without a project of its own, is documented as able to read them and to blind a reader | done (section 4) |
+
+**11.3 Custody, one line each.** Write pair: the shipper, in OpenBao `secret/audit/sink`. Watcher pair: the operator host only, list and read. Repository password: OpenBao
+and the escrow (`audit-sink-password.gpg`). Bypass-governance right: **nobody**; removing a locked version needs the account owner's credentials, kept offline.
+Retention 365 days and GOVERNANCE stay the defaults; changing either is the maintainer's decision.
+
+**11.4 Cost and latency are unmeasured.** The lab must record bytes stored per node per day, requests per day and the shipper lag (first line on a node to its snapshot); prices are read from the providers' lists on the day, not assumed.
+
+**11.5 What closes them, in the 0.6.0 Scaleway lab (cloud real, OVH sink in its own project):**
+
+1. Criteria 1 to 6 of section 9 pass again on the 0.6.0 heads, with the watcher running.
+2. **Out-of-cluster alarm:** with the in-cluster rules deleted (`kubectl delete vmrule`), a 20 minute cut of the sink raises the watcher's alarm within 15 minutes.
+3. **#393:** with the pair of a dedicated OVH project, `aws s3 ls` lists the sink bucket only; a plain `delete-object` and a `put-object-lock-configuration` made with it are raised by the next watcher run.
+4. **Incident drill:** the evidence of a cluster-admin's actions is rebuilt from the sink alone after the in-cluster audit has been deleted ([`drill-plan.md`](drill-plan.md), I1).
+
+If 3 fails (the project is not isolated), #393 stays open with the finding; #318 closes on 1, 2 and 4.
