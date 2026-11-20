@@ -85,7 +85,7 @@ resource "scaleway_block_snapshot" "talos" {
 
   # The import copies the whole image; the provider default timeout is too short
   # and a timed-out snapshot is left tainted (recreated on the next apply).
-  timeouts = {
+  timeouts {
     create = "30m"
   }
 
