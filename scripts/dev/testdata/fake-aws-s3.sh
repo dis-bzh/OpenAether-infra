@@ -4,6 +4,7 @@
 #   buckets/<name>/{lock_enabled,versioning,lifecycle.json,lock.json}   the bucket and what was set on it
 #   buckets/<name>/versions.json   what list-object-versions answers: {"DeleteMarkers": [{Key, IsLatest, LastModified}]}, filtered by --prefix;
 #                                  with --delimiter / it answers the CommonPrefixes of those keys instead
+#   buckets/<name>/objects.json    what list-objects-v2 answers: {"Contents": [{Key, LastModified}]}, filtered by --prefix
 #   id/<ACCESS_KEY>   no file = full access; else lines: "bucket <name>" (the only buckets it may touch),
 #                     "no-version-delete" (DeleteObjectVersion refused), "invalid" (the store does not know the key)
 #   refuse/<op> or refuse/<op>.<bucket>   the error text this call answers with (the provider "not supporting" it)
@@ -79,7 +80,8 @@ case "$op" in
     [ -f "$B/lock_enabled" ] || fail ObjectLockConfigurationNotFoundError "Object Lock configuration does not exist for this bucket"
     if [ -s "$B/lock.json" ]; then jq -c '{ObjectLockConfiguration: .}' "$B/lock.json"
     else echo '{"ObjectLockConfiguration":{"ObjectLockEnabled":"Enabled"}}'; fi ;;
-  list-objects-v2) echo '{}' ;;
+  list-objects-v2) # objects.json: {"Contents": [{Key, LastModified}]}, filtered by --prefix
+    if [ -s "$B/objects.json" ]; then jq -c --arg p "$prefix" '{Contents: [.Contents[]? | select(.Key | startswith($p))]}' "$B/objects.json"; else echo '{}'; fi ;;
   list-object-versions)
     if [ ! -s "$B/versions.json" ]; then echo '{}'
     elif [ -n "$delim" ]; then jq -c --arg p "$prefix" '{CommonPrefixes: ([.DeleteMarkers[]? | .Key | select(startswith($p)) | ltrimstr($p) | select(contains("/")) | split("/")[0] | $p + . + "/"] | unique | map({Prefix: .}))}' "$B/versions.json"

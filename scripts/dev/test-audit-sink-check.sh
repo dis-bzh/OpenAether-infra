@@ -159,6 +159,34 @@ reset; printf '%s\n' 'audit_sink_lock_mode = "compliance"' 'audit_sink_complianc
 OUT="$(check)"; RC=$?
 is "COMPLIANCE asked and found: exit 0" 0 "$RC"
 
+echo "--- the watcher (--no-decrypt): no password, no restic; lock, markers and freshness only ---"
+sed -i '/^audit_sink_lock_mode\|^audit_sink_compliance_ack/d' "$SB/t.tfvars"   # back to GOVERNANCE (the COMPLIANCE case above appended them)
+objs() { # <node> <seconds old> — the store's newest object of that node today
+  jq -nc --arg k "audit/$1/$TODAY/snapshots/aa" --arg t "$(date -u -d "-$2 sec" +%FT%T.000Z)" '{Contents: [{Key: $k, LastModified: $t}]}' >>"$FAKE_S3/buckets/$AUD/objs.$1"
+  jq -s '{Contents: [.[].Contents[]]}' "$FAKE_S3"/buckets/$AUD/objs.* >"$FAKE_S3/buckets/$AUD/objects.json"; }
+reset; chunk cp-1 "$TODAY" 101 0 300; chunk cp-2 "$TODAY" 202 0 300; objs cp-1 120; objs cp-2 300
+OUT="$(PWFILE=/nonexistent check --no-decrypt)"; RC=$?
+is "no password given, fresh nodes: exit 0" 0 "$RC"
+grep -q "cp-1: newest object 1[0-9][0-9] s old" <<<"$OUT" && ok "the age of each node is read from the store" || bad "$OUT"
+grep -q "skipped (--no-decrypt)" <<<"$OUT" && ! grep -q "all JSON audit events" <<<"$OUT" && ok "nothing was decrypted" || bad "$OUT"
+reset; chunk cp-1 "$TODAY" 101 0 300; chunk cp-2 "$TODAY" 202 0 300; objs cp-1 120; objs cp-2 5000
+OUT="$(check --no-decrypt)"; RC=$?
+is "one node silent for 5000 s: exit 1" 1 "$RC"
+grep -q "cp-2: newest object is 5000 s old" <<<"$OUT" && ok "named, with its age" || bad "$OUT"
+reset; chunk cp-1 "$TODAY" 101 0 300; objs cp-1 5000
+OUT="$(check --no-decrypt --max-age 9000)"; RC=$?
+is "--max-age widens the limit: exit 0" 0 "$RC"
+reset; chunk cp-1 "$TODAY" 101 0 300
+OUT="$(check --no-decrypt)"; RC=$?
+is "a node with no object in the window: exit 1" 1 "$RC"
+reset; chunk cp-1 "$TODAY" 101 0 300; objs cp-1 60; lock GOVERNANCE 30
+OUT="$(check --no-decrypt)"; RC=$?
+is "a different retention is still caught by the watcher: exit 1" 1 "$RC"
+reset; chunk cp-1 "$TODAY" 101 0 300; objs cp-1 60; marker "audit/cp-1/$TODAY/snapshots/aa11" true
+OUT="$(check --no-decrypt)"; RC=$?
+is "a current delete marker is still caught by the watcher: exit 1" 1 "$RC"
+is "a --max-age under a minute: exit 2" 2 "$(check --no-decrypt --max-age 5 >/dev/null; echo $?)"
+
 echo "--- nothing in the sink, a sink that is off, scratch cleaned ---"
 reset
 OUT="$(check)"; RC=$?

@@ -205,8 +205,8 @@ COMPLIANCE et un puits Outscale restent listés comme non prouvés.
 cluster-admin, l'attaquant même pour qui le puits existe, peut supprimer la règle et rien ne sonne (la section 5 ne couvre que la panne de tous les
 plans de contrôle). L'alarme qui compte tourne donc **hors du cluster** : `audit-sink-check.sh` sur un minuteur de l'hôte opérateur ou bastion, toutes les
 10 minutes, avec une **paire de clés « guetteur » qui peut lister et lire les versions mais ne rien écrire**, détenue là seulement (jamais dans OpenBao,
-jamais la paire de l'expéditeur). Il faut un mode `--no-decrypt` (verrou, marqueurs de suppression, âge du plus récent objet par nœud, sans mot de passe :
-à écrire ; aujourd'hui chaque exécution exige le mot de passe du dépôt). L'exécution hebdomadaire complète avec le mot de passe en séquestre reste à l'opérateur.
+jamais la paire de l'expéditeur). `audit-sink-check.sh --no-decrypt` est ce mode (verrou, marqueurs de suppression,
+âge du plus récent objet par nœud face à `--max-age`, sans mot de passe ; testé sur maquette seulement : minuteur, notification et vrai store restent à faire). L'exécution hebdomadaire complète avec le mot de passe en séquestre reste à l'opérateur.
 Le canal de notification doit aussi être hors du cluster (un courriel ou un message de cet hôte) ; la sortie fermée du bastion doit autoriser l'hôte du puits et ce point d'arrivée.
 
 **11.2 #393, en quatre couches.**
