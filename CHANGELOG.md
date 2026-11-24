@@ -20,6 +20,10 @@ in git. 0.1.0 is the first entry describing something proven.
 - `git_commit` pins OpenAether-apps by commit at bootstrap (#385, infra half; apps half in OpenAether-apps). Rung: mocked. Not done: moving a running cluster (`cluster-apps-ref`) and a cluster reading.
 - `OA_PLAN_HEALTH_TIMEOUT` (default `5m`) bounds the cluster-health read in plans of a bootstrapped cluster (#490, second half): a grow interrupted before the node joined no longer holds `infra-plan` for 15 minutes. Rung: mocked; a real cluster must still show the bound.
 
+### Changed
+
+- **helm 4.3.1 → 4.3.2** (Cléa #91, probed green in a bare container, released 2026-11-13): `HELM_VERSION` in `ci.yml` and `scripts/setup.sh`; `render-check` shows the bootstrap artifacts unchanged. Rung: mocked. Left out of this cycle: plumber (deferred, #478), talos (probe failed).
+
 ### Fixed
 
 - `task infra-apply` refuses a plan that creates a node on a bootstrapped cluster and names `task cluster-up` (#490, first half). Rung: mocked (`test-refuse-node-deletes.sh`). Not done: the plan that hangs on the health of a node that never joined; that half needs a cluster.
