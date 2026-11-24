@@ -13,8 +13,10 @@
 #                  lock does not stop it. Only the window is listed (a marker on an older day is not looked at), as for every other check.
 #   3. READABLE    the newest chunks (--sample, default 3) are decrypted with the password and every line must be a JSON audit Event.
 #
-# Usage: audit-sink-check.sh <cluster.tfvars> [--sink primary|secondary] [--days N] [--sample N]
+# Usage: audit-sink-check.sh <cluster.tfvars> [--sink primary|secondary] [--days N] [--sample N] [--no-decrypt [--max-age SECONDS]]
 #   --days N     UTC days to read, today included (default 2: the last 24 hours always fall in them)
+#   --no-decrypt the off-cluster WATCHER (docs/audit-sink.md 11.1): no password, no restic; only checks 1 (lock), 2b (markers) and 2c (a node's
+#                newest object is younger than --max-age, default 1200 s as AuditSinkStale). It needs a key that can list and read, nothing else.
 # Environment:
 #   OA_AUDIT_SINK_PASSWORD_FILE   file holding the repository password (decrypt audit-sink-password.gpg of the escrow into it, mode 0600)
 #   OA_AUDIT_SINK_PASSWORD        the password itself (a file is preferred: an environment is visible to the machine's other users)
@@ -29,21 +31,25 @@ source "$ROOT/scripts/lib/bucket-protection.sh"
 source "$ROOT/scripts/lib/audit-sink.sh"
 
 die() { echo "✗ $*" >&2; exit 2; }
-USAGE="usage: audit-sink-check.sh <cluster.tfvars> [--sink primary|secondary] [--days N] [--sample N]"
+USAGE="usage: audit-sink-check.sh <cluster.tfvars> [--sink primary|secondary] [--days N] [--sample N] [--no-decrypt [--max-age SECONDS]]"
 TFVARS="${1:-}"; [ -n "$TFVARS" ] && [ -f "$TFVARS" ] || die "$USAGE"; shift
-SINK=primary; DAYS=2; SAMPLE=3
+SINK=primary; DAYS=2; SAMPLE=3; NODECRYPT=0; MAXAGE=1200
 while [ $# -gt 0 ]; do
   case "$1" in
     --sink) SINK="${2:-}"; shift 2 ;;
     --days) DAYS="${2:-}"; shift 2 ;;
     --sample) SAMPLE="${2:-}"; shift 2 ;;
+    --no-decrypt) NODECRYPT=1; shift ;;
+    --max-age) MAXAGE="${2:-}"; shift 2 ;;
     *) die "$USAGE" ;;
   esac
 done
 case "$SINK" in primary | secondary) ;; *) die "--sink must be primary or secondary" ;; esac
 [[ "$DAYS" =~ ^[0-9]+$ ]] && [ "$DAYS" -ge 1 ] && [ "$DAYS" -le 60 ] || die "--days must be 1 to 60"
 [[ "$SAMPLE" =~ ^[0-9]+$ ]] || die "--sample must be a number"
-for t in restic jq; do command -v "$t" >/dev/null 2>&1 || die "$t is required"; done
+[[ "$MAXAGE" =~ ^[0-9]+$ ]] && [ "$MAXAGE" -ge 60 ] || die "--max-age must be a number of seconds, at least 60"
+command -v jq >/dev/null 2>&1 || die "jq is required"
+[ "$NODECRYPT" = 1 ] || command -v restic >/dev/null 2>&1 || die "restic is required (or --no-decrypt)"
 command -v aws >/dev/null 2>&1 || die "aws CLI is required (the lock check reads the bucket)"
 
 oa_audit_sink_load "$TFVARS" || exit 2
@@ -52,7 +58,8 @@ if [ "$SINK" = primary ]; then EP="$AS_EP1"; RG="$AS_RG1"; PRE=OA_AUDIT_SINK_S3;
 [ -n "$EP" ] || die "this tfvars has no $SINK sink (audit_sink_placement = $AS_PLACEMENT)"
 
 PW_FILE="${OA_AUDIT_SINK_PASSWORD_FILE:-}"
-if [ -n "$PW_FILE" ]; then [ -s "$PW_FILE" ] || die "OA_AUDIT_SINK_PASSWORD_FILE is empty or missing"
+if [ "$NODECRYPT" = 1 ]; then PW_FILE=""   # the watcher holds no password, and must not be given one by an inherited environment
+elif [ -n "$PW_FILE" ]; then [ -s "$PW_FILE" ] || die "OA_AUDIT_SINK_PASSWORD_FILE is empty or missing"
 elif [ -z "${OA_AUDIT_SINK_PASSWORD:-}" ]; then die "give the repository password: OA_AUDIT_SINK_PASSWORD_FILE (decrypt the escrow's audit-sink-password.gpg into a 0600 file)"; fi
 
 PROVIDER="$(tfv_provider "$TFVARS")"
@@ -67,7 +74,8 @@ FAIL=0; NOTE=()
 bad() { echo "  ✗ $*"; FAIL=$((FAIL + 1)); }
 ok() { echo "  ✓ $*"; }
 export AWS_ACCESS_KEY_ID="$AK" AWS_SECRET_ACCESS_KEY="$SK" AWS_DEFAULT_REGION="$RG"
-if [ -n "$PW_FILE" ]; then export RESTIC_PASSWORD_FILE="$PW_FILE"; else export RESTIC_PASSWORD="$OA_AUDIT_SINK_PASSWORD"; fi
+if [ "$NODECRYPT" = 1 ]; then :
+elif [ -n "$PW_FILE" ]; then export RESTIC_PASSWORD_FILE="$PW_FILE"; else export RESTIC_PASSWORD="$OA_AUDIT_SINK_PASSWORD"; fi
 export RESTIC_CACHE_DIR="$SCRATCH/cache"
 
 echo "▶ Audit sink (${SINK}): ${EP} bucket ${BUCKET}, prefix ${AS_PREFIX}, window ${DAYS} UTC day(s)"
@@ -96,10 +104,10 @@ list_children() { # <relative prefix under AS_PREFIX, "" or "<node>"> -> names
 }
 echo "▶ 2. Sequence of the ranges, per node and inode"
 NODES="$(list_children "")"
-[ -n "$NODES" ] || bad "the sink holds no node under ${AS_PREFIX}/ (nothing has ever been delivered, or the prefix is wrong)"
 WANT_DAYS=""; for i in $(seq 0 $((DAYS - 1))); do WANT_DAYS+="$(date -u -d "-$i day" +%F) "; done
+[ -n "$NODES" ] || bad "the sink holds no node under ${AS_PREFIX}/ (nothing has ever been delivered, or the prefix is wrong)"
 GAPS=0; DUPS=0; LOSSES=0; CHUNKS=0; FAIL_BEFORE_SEQ="$FAIL"
-for node in $NODES; do
+for node in $([ "$NODECRYPT" = 1 ] || echo "$NODES"); do
   : >"$SCRATCH/snaps.$node"
   for day in $(list_children "$node"); do
     case " $WANT_DAYS" in *" $day "*) ;; *) continue ;; esac
@@ -139,7 +147,8 @@ for node in $NODES; do
     esac
   done <<<"$res"
 done
-[ "$GAPS$LOSSES" = 00 ] && [ -n "$NODES" ] && [ "$FAIL" = "$FAIL_BEFORE_SEQ" ] && ok "no gap in the sequence over ${CHUNKS} chunk(s); ${DUPS} repeated range(s) (a lost acknowledgement, harmless)"
+[ "$NODECRYPT" = 1 ] && echo "  ~ skipped (--no-decrypt)"
+[ "$NODECRYPT" = 0 ] && [ "$GAPS$LOSSES" = 00 ] && [ -n "$NODES" ] && [ "$FAIL" = "$FAIL_BEFORE_SEQ" ] && ok "no gap in the sequence over ${CHUNKS} chunk(s); ${DUPS} repeated range(s) (a lost acknowledgement, harmless)"
 for n in "${NOTE[@]+"${NOTE[@]}"}"; do echo "  ~ $n"; done
 
 # --- 2b. delete markers -----------------------------------------------------------------------------------------------
@@ -174,10 +183,29 @@ else
   esac
 fi
 
+# --- 2c. freshness (--no-decrypt) ---------------------------------------------------------------------------------------------
+# Same rule as AuditSinkStale, but run where a cluster-admin cannot delete it: the newest object of each node, from the store's LastModified.
+if [ "$NODECRYPT" = 1 ]; then
+  echo "▶ 2c. Each node's newest object is younger than ${MAXAGE} s"
+  NOW="$(date -u +%s)"
+  for node in $NODES; do
+    NEWEST=""
+    for day in $WANT_DAYS; do
+      aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "$AS_PREFIX/$node/$day/" --endpoint-url "$EP" --output json >"$SCRATCH/o" 2>"$SCRATCH/err" ||
+        { bad "$node $day: cannot list the objects ($(tail -n 1 "$SCRATCH/err" | cut -c1-160))"; continue 2; }
+      NEWEST="$(jq -r '[.Contents[]?.LastModified] | max // empty' "$SCRATCH/o")"
+      [ -z "$NEWEST" ] || break   # days run newest first
+    done
+    [ -n "$NEWEST" ] || { bad "$node: no object in the window"; continue; }
+    AGE=$((NOW - $(date -u -d "$NEWEST" +%s)))
+    if [ "$AGE" -le "$MAXAGE" ]; then ok "$node: newest object ${AGE} s old"; else bad "$node: newest object is ${AGE} s old (limit ${MAXAGE}): the shipper is not delivering"; fi
+  done
+fi
+
 # --- 3. readable ------------------------------------------------------------------------------------------------------
 echo "▶ 3. The newest chunks decrypt and are audit events"
 READ=0
-for node in $NODES; do
+for node in $([ "$NODECRYPT" = 1 ] || echo "$NODES"); do
   [ -s "$SCRATCH/snaps.$node" ] || continue
   NREAD=0   # --sample is per node: a silent node must not hide behind a talkative one
   while IFS=$'\t' read -r _ id day tags; do
@@ -192,9 +220,11 @@ for node in $NODES; do
     READ=$((READ + 1)); NREAD=$((NREAD + 1)); rm -f "$SCRATCH/chunk"
   done < <(sort -r "$SCRATCH/snaps.$node")
 done
-[ "$READ" -gt 0 ] || [ -z "$NODES" ] || bad "no chunk could be sampled"
+[ "$NODECRYPT" = 1 ] && echo "  ~ skipped (--no-decrypt)"
+[ "$NODECRYPT" = 1 ] || [ "$READ" -gt 0 ] || [ -z "$NODES" ] || bad "no chunk could be sampled"
 
 echo
+if [ "$FAIL" -eq 0 ] && [ "$NODECRYPT" = 1 ]; then echo "✓ the sink is locked as asked, holds no current delete marker and every node delivered within ${MAXAGE} s (nothing was decrypted)"; exit 0; fi
 if [ "$FAIL" -eq 0 ]; then echo "✓ the audit sink is unbroken, readable and locked as asked (this is a proof about the window read, not about earlier days)"; exit 0; fi
 echo "✗ ${FAIL} defect(s). A gap or a loss means audit lines are NOT in the sink: keep the node's rotated files, read docs/audit-sink.md, section 5." >&2
 exit 1

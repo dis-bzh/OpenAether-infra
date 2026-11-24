@@ -194,8 +194,8 @@ logs move to their own issue instead of keeping #318 open for months. `same_prov
 **11.1 The alarm lives in the cluster it watches.** `AuditSinkDown`, `AuditSinkStale` and the check Deployment are cluster objects: a cluster-admin, the very
 attacker the sink exists for, can delete the rule and nothing fires (section 5 only covers all control planes being down). So the alarm that matters runs
 **off the cluster**: `audit-sink-check.sh` on a timer on the operator or bastion host, every 10 minutes, with a **watcher key pair that can list and read
-versions but write nothing**, held only there (never in OpenBao, never the shipper's pair). It needs a `--no-decrypt` mode (lock, delete markers, newest
-object age per node, no password: to write; today every run needs the repository password). The weekly full run with the escrowed password stays with the operator.
+versions but write nothing**, held only there (never in OpenBao, never the shipper's pair). `audit-sink-check.sh --no-decrypt` is that mode (lock, delete markers,
+newest object age per node against `--max-age`, no password; mocked only: the timer, the notification and a real store are not done). The weekly full run with the escrowed password stays with the operator.
 The notification path must also be off the cluster (a mail or a message from that host); the bastion's closed egress needs the sink host and that endpoint.
 
 **11.2 #393, in four layers.**
