@@ -460,11 +460,21 @@ print(sum(1 for v in json.load(sys.stdin).get("Vms", []) if v.get("State") not i
 # fatal as `declined`, since an unmeasured type is what a green lane would
 # otherwise be vouching for. Only the fixture — the real roots declare OVH and
 # Proxmox types no pack serves, so they are never `compatible`.
+# An unreadable answer is retried once and its stderr kept: CI saw `unreadable` on
+# one run, then COMPATIBLE from the very next call (#376 follow-up). A real
+# verdict (unknown, declined) is deterministic, so it is never retried.
 preflight_stack() {
-  local dir="$1" verdict
-  verdict="$(feint doctor --stack "$dir" --engine opentofu --stack-json 2>/dev/null | jq -rn 'input.verdict')" || verdict=unreadable
-  [ "$verdict" = compatible ] && return 0
+  local dir="$1" verdict=unreadable err attempt
+  err="$(mktemp)"
+  for attempt in 1 2; do
+    verdict="$(feint doctor --stack "$dir" --engine opentofu --stack-json 2>"$err" | jq -rn 'input.verdict' 2>/dev/null)" || verdict=unreadable
+    [ "$verdict" = compatible ] && { rm -f "$err"; return 0; }
+    [ "$verdict" = unreadable ] || break
+    [ "$attempt" = 1 ] && sleep 2
+  done
   echo "✗ preflight of ${dir#"$REPO_ROOT"/}: ${verdict}, not compatible" >&2
+  [ "$verdict" = unreadable ] && sed 's/^/  doctor: /' "$err" >&2
+  rm -f "$err"
   feint doctor --stack "$dir" --engine opentofu 2>&1 | sed -n '/^Feint preflight/,/^Result/p' >&2
   exit 1
 }
