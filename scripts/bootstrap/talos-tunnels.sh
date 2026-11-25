@@ -56,6 +56,7 @@ spawn_tunnel() { # <pidfile> <local-port> <host:port behind the bastion>
     -i "$KEY" -N -L "$2:$3" "${BUSER}@${BASTION}" >>"$log" 2>&1 &
   TUN_TARGET[$2]="$3"; TUN_PID[$2]=$!
   echo $! >>"$1"
+  sleep "${OA_TUNNEL_SPAWN_GAP:-0.3}" # keeps the bastion's unauthenticated sessions under sshd's MaxStartups (10)
 }
 
 # Counts which of "$@" answer: fills ok and down.
@@ -70,6 +71,12 @@ bind_clashed() { # <local-port>
   awk '/ spawn :[0-9]+$/ { hit = 0 } /Address already in use/ { hit = 1 } END { exit !hit }' "${LOG_PREFIX}${1}.log" 2>/dev/null
 }
 
+# Did the LAST ssh of this port get dropped by the bastion's sshd (MaxStartups) before it authenticated? 11+ parallel sessions
+# lose one at random (measured 4 times in 5 with 11 nodes), so a respawn alone, once the others have settled, is the fix.
+reset_dropped() { # <local-port>
+  awk '/ spawn :[0-9]+$/ { hit = 0 } /kex_exchange_identification|Connection reset by/ { hit = 1 } END { exit !hit }' "${LOG_PREFIX}${1}.log" 2>/dev/null
+}
+
 # #422: respawn, alone, each tunnel of `down` whose ssh just died on "Address already in use". The port was held for a moment by
 # someone's outgoing connection (it listens nowhere, so the free-port wait before the spawns cannot see it); a pause lets it go.
 # Needs `down` and the ports (as "$@") from count_up, and refreshes them; nothing else is touched, so any other failure still
@@ -79,9 +86,9 @@ retry_bind_clash() { # <pidfile> <port>...
   shift
   for ((round = 1; round <= retries; round++)); do
     clashed=()
-    for p in "${down[@]}"; do bind_clashed "$p" && clashed+=("$p"); done
+    for p in "${down[@]}"; do bind_clashed "$p" || reset_dropped "$p" && clashed+=("$p"); done
     [[ ${#clashed[@]} -gt 0 ]] || return 0
-    echo "▶ :${clashed[*]} could not be bound (\"Address already in use\", nothing listens there: held as the source port of another connection) — retry ${round}/${retries} in ${pause}s"
+    echo "▶ :${clashed[*]} did not come up (a busy source port, or the bastion's sshd dropped the session) — retry ${round}/${retries} in ${pause}s"
     sleep "$pause"
     for p in "${clashed[@]}"; do
       [[ -z "${TUN_PID[$p]:-}" ]] || kill "${TUN_PID[$p]}" 2>/dev/null || true
