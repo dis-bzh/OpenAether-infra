@@ -74,6 +74,10 @@ if "true" in a:
     sys.exit(0)
 port = int(a[a.index("-L") + 1].split(":")[0])
 signal.alarm(180)
+if str(port) in os.environ.get("STUB_RESET_ONCE", "").split():
+    mk = os.environ["IDENT"] + f".reset{port}"
+    if not os.path.exists(mk):
+        open(mk, "w").close(); say("kex_exchange_identification: read: Connection reset by peer"); sys.exit(255)
 if str(port) in os.environ.get("STUB_FAIL_PORT", "").split():
     say("ops@203.0.113.10: Permission denied (publickey)."); sys.exit(255)
 if "LogLevel=VERBOSE" in a:
@@ -339,6 +343,13 @@ case_open_released() { # a busy port lets go after two refusals: ONE invocation 
     && ok "open: :${P0} lost its bind twice, was respawned alone until the port was free, and ONE invocation ends rc 0 with 4/4 up" \
     || bad "open with a busy port (rc ${rc:-none}, up=$(up), spawns $(spawns "$(log "$P0")")/$(spawns "$(log "$P1")"), pids ok=${pids_ok}): $(cat "$CLD/out")"
 }
+case_open_reset() { # the bastion drops one session once (sshd MaxStartups): respawned alone, ONE invocation ends rc 0
+  local out rc
+  out="$(cd "$CLD" && STUB_RESET_ONCE="$P1" tun open . 2>&1)"; rc=$?
+  { [ "$rc" = 0 ] && grep -q '4/4 tunnels up' <<<"$out" && [ "$(spawns "$(log "$P1")")" = 2 ] && [ "$(spawns "$(log "$P0")")" = 1 ]; } \
+    && ok "open: a session dropped by the bastion's sshd is respawned alone and the invocation ends rc 0 with 4/4 up" \
+    || bad "open with a dropped session (rc ${rc}, spawns $(spawns "$(log "$P1")")/$(spawns "$(log "$P0")")): ${out}"
+}
 case_open_held() { # a port that never frees: the retries stop at OA_TUNNEL_BIND_RETRIES and the way out is printed
   hold "$P0" || return
   local out rc want
@@ -381,6 +392,11 @@ for n in open_released open_held direct_released; do
   while IFS= read -r l; do if [[ "$l" == "ok "* ]]; then ok "${l#ok }"; else bad "${l#bad }"; fi; done <"$W/res.$n" 2>/dev/null
 done
 unset OA_TUNNEL_BIND_PAUSE
+next_block; B4=$OFF
+start_case open_reset case_open_reset "$B4"; wait "$!"
+{ [ -s "$W/res.open_reset" ] || bad "the case open_reset gave no verdict"; }
+while IFS= read -r l; do if [[ "$l" == "ok "* ]]; then ok "${l#ok }"; else bad "${l#bad }"; fi; done <"$W/res.open_reset" 2>/dev/null
+(cd "$W/cl-open_reset" && "$TUN" close . >/dev/null 2>&1)
 for n in open_released open_held direct_released; do (cd "$W/cl-$n" && "$TUN" close . >/dev/null 2>&1); done
 
 # clash_hint on its own, for the file it cannot read (the real flow above covers a readable list): its text is cut out of the
