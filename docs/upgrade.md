@@ -743,6 +743,9 @@ partition, and `task cluster-upgrade` rolls it forward the usual way. It is vali
 while the node's previous partition still holds the version you want: a further
 upgrade overwrites it.
 
+A second run, at patch level (Talos 1.14.5 back to 1.14.4, Scaleway, lab 66, 2026-11-24): about 64 s, 0 failed
+API requests, and `cluster-verify` back to 31 of 31 once the node was on the old version again.
+
 ### A control plane: not across a minor that bumps etcd
 
 ⚠️ **`talosctl rollback` on a control plane from Talos 1.14 to 1.13 breaks etcd.**
