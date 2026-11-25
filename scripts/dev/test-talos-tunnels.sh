@@ -382,18 +382,22 @@ case_direct_released() { # open-direct takes the same retry
     || bad "open-direct with a busy port (rc $(cat "$CLD/rc")): $(cat "$CLD/out")"
 }
 rm -f "$W/holders"; CASE_PIDS=()
-next_block; B1=$OFF; next_block; B2=$OFF; next_block; B3=$OFF; next_block; B4=$OFF
+next_block; B1=$OFF; next_block; B2=$OFF; next_block; B3=$OFF
 start_case open_released case_open_released "$B1"
 start_case open_held case_open_held "$B2"
 start_case direct_released case_direct_released "$B3"
-start_case open_reset case_open_reset "$B4"
 wait "${CASE_PIDS[@]}"
-for n in open_released open_held direct_released open_reset; do
+for n in open_released open_held direct_released; do
   [ -s "$W/res.$n" ] || bad "the case $n gave no verdict"
   while IFS= read -r l; do if [[ "$l" == "ok "* ]]; then ok "${l#ok }"; else bad "${l#bad }"; fi; done <"$W/res.$n" 2>/dev/null
 done
 unset OA_TUNNEL_BIND_PAUSE
-for n in open_released open_held direct_released open_reset; do (cd "$W/cl-$n" && "$TUN" close . >/dev/null 2>&1); done
+next_block; B4=$OFF
+start_case open_reset case_open_reset "$B4"; wait "$!"
+{ [ -s "$W/res.open_reset" ] || bad "the case open_reset gave no verdict"; }
+while IFS= read -r l; do if [[ "$l" == "ok "* ]]; then ok "${l#ok }"; else bad "${l#bad }"; fi; done <"$W/res.open_reset" 2>/dev/null
+(cd "$W/cl-open_reset" && "$TUN" close . >/dev/null 2>&1)
+for n in open_released open_held direct_released; do (cd "$W/cl-$n" && "$TUN" close . >/dev/null 2>&1); done
 
 # clash_hint on its own, for the file it cannot read (the real flow above covers a readable list): its text is cut out of the
 # script under test and called with the bind check stubbed, so it costs nothing.
