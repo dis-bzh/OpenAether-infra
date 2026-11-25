@@ -22,6 +22,7 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Changed
 
+- **kubectl-cnpg 1.30.1 → 1.30.2** (Cléa #91, probed green in a bare container, released 2026-11-17): `CNPG_VERSION` in `scripts/internal/install-kubectl-cnpg.sh` (plugin only; the operator stays 1.30.1 in OpenAether-apps, same minor). Rung: mocked. Left out of this cycle: plumber (deferred, #478), cilium (probe failed).
 - **helm 4.3.1 → 4.3.2** (Cléa #91, probed green in a bare container, released 2026-11-13): `HELM_VERSION` in `ci.yml` and `scripts/setup.sh`; `render-check` shows the bootstrap artifacts unchanged. Rung: mocked. Left out of this cycle: plumber (deferred, #478), talos (probe failed).
 
 ### Fixed
