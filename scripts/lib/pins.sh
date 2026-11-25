@@ -26,6 +26,12 @@ oa_declared_git_ref() {
   if [ -n "${TF_VAR_git_ref:-}" ]; then printf '%s' "$TF_VAR_git_ref"; else oa_pinned_version "$1" "$2" git_ref; fi
 }
 
+# The declared apps commit pin (infra #385): TF_VAR_git_commit, else the tfvars, else the default of variables.tf (empty = no pin).
+# Usage: oa_declared_git_commit <cluster-dir> <tfvars-file>
+oa_declared_git_commit() {
+  if [ -n "${TF_VAR_git_commit:-}" ]; then printf '%s' "$TF_VAR_git_commit"; else oa_pinned_version "$1" "$2" git_commit; fi
+}
+
 # The declared CoreDNS image (infra #392): TF_VAR_coredns_image_tag, else the tfvars, else the root default, else the module's (the
 # root's is null). Printed as the full image the manifest renders; nothing when no tag can be read.
 # Usage: oa_declared_coredns_image <repo root> <tfvars-file>

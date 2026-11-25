@@ -50,8 +50,8 @@ case "\$3" in
     [ -f "$FX/noop-patch" ] && exit 0
     jq -c --argjson p "\$p" '. * \$p' "\$f" >"\$f.new" && mv "\$f.new" "\$f"
     if [ "\$f" = "$FX/gr.json" ] && [ ! -f "$FX/never-ready" ]; then
-      n="\$(jq -r .spec.ref.name "\$f")"
-      jq -c --arg r "\$n@sha1:bbb" '.metadata.generation += 1 | .status.observedGeneration = .metadata.generation | .status.artifact.revision = \$r' "\$f" >"\$f.new" && mv "\$f.new" "\$f"
+      n="\$(jq -r .spec.ref.name "\$f")"; c="\$(jq -r '.spec.ref.commit // "bbb"' "\$f")"
+      jq -c --arg r "\$n@sha1:\$c" '.metadata.generation += 1 | .status.observedGeneration = .metadata.generation | .status.artifact.revision = \$r' "\$f" >"\$f.new" && mv "\$f.new" "\$f"
     fi ;;
   annotate) exit 0 ;;
   *) echo "UNEXPECTED \$*" >>"$W/calls.log"; exit 99 ;;
@@ -154,6 +154,20 @@ reset; run --bogus; rc=$?
 [ "$rc" = 1 ] && ok "unknown argument: exit 1" || bad "rc $rc"
 reset; ( cd "$C" && env -i PATH="$W/bin:$PATH" HOME="$W" "$BASH_BIN" "$A" ) </dev/null >"$W/out" 2>"$W/err"; rc=$?
 [ "$rc" = 1 ] && said "--tfvars" && ok "no --tfvars: exit 1" || bad "rc $rc"
+
+echo "--- the commit pin (#385): git_commit moves the cluster like the ref does, and a stale pin is not 'in sync' ---"
+C1=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; C2=cccccccccccccccccccccccccccccccccccccccc
+reset; printf 'git_commit = "%s"\n' "$C1" >>"$TFV"; run; rc=$?
+[ "$rc" = 3 ] && said "pins commit '(none)', wanted '$C1'" && nowrites && ok "a declared pin the cluster does not have: exit 3, nothing written (was a false 'in sync')" || bad "rc $rc: $(cat "$W/out")"
+run --apply; rc=$?
+[ "$rc" = 0 ] && [ "$(jq -r .spec.ref.commit "$FX/gr.json")" = "$C1" ] && [ "$(jq -r .spec.postBuild.substitute.GIT_COMMIT "$FX/ks.json")" = "$C1" ] \
+  && [ "$(jq -r .spec.postBuild.substitute.OTHER "$FX/ks.json")" = keep ] && ok "apply sets spec.ref.commit and GIT_COMMIT, the other substitutions stay" || bad "rc $rc: gr $(cat "$FX/gr.json") ks $(cat "$FX/ks.json") err $(cat "$W/err")"
+run; rc=$?
+[ "$rc" = 0 ] && said "commit pin $C1" && ok "after the move the dry run is in sync" || bad "rc $rc"
+reset; jq -c --arg c "$C2" '.spec.ref.commit = $c' "$FX/gr.json" >"$FX/x" && mv "$FX/x" "$FX/gr.json"
+jq -c --arg c "$C2" '.spec.postBuild.substitute.GIT_COMMIT = $c' "$FX/ks.json" >"$FX/x" && mv "$FX/x" "$FX/ks.json"; run; rc=$?
+[ "$rc" = 3 ] && said "wanted '(none)'" && run --apply && [ "$(jq -r '.spec.ref.commit // ""' "$FX/gr.json")" = "" ] \
+  && [ "$(jq -r '.spec.postBuild.substitute.GIT_COMMIT // ""' "$FX/ks.json")" = "" ] && ok "a live pin the tfvars no longer declares is removed" || bad "rc $rc: $(cat "$FX/gr.json")"
 
 echo
 echo "cluster-apps-ref: $PASS passed, $FAIL failed"

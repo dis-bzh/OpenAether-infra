@@ -26,6 +26,7 @@ in git. 0.1.0 is the first entry describing something proven.
 
 ### Fixed
 
+- `cluster-apps-ref` also converges the commit pin (#385): the GitRepository `spec.ref.commit` and the Kustomization `GIT_COMMIT` follow `git_commit` (a pin the tfvars no longer declares is removed). Before, changing `git_commit` on a running cluster changed nothing and the command printed a false "in sync" (lab 66). Rung: mocked (stub kubectl, 4 new cases). Not done: whether Flux then follows the new commit on a real cluster, and the plan that still wants 3 control-plane changes after a `git_commit` edit.
 - Talos tunnels no longer fail at random above 10 nodes: spawns are spaced (`OA_TUNNEL_SPAWN_GAP`, 0.3 s) and a session dropped by the bastion's sshd (`MaxStartups`) is respawned alone, like a busy port. Lab 66 measured 4 failures in 5 with 11 nodes. Rung: mocked (stub ssh that drops a session once); a real bastion with 11+ nodes must still show it.
 - `task infra-apply` refuses a plan that creates a node on a bootstrapped cluster and names `task cluster-up` (#490, first half). Rung: mocked (`test-refuse-node-deletes.sh`). Not done: the plan that hangs on the health of a node that never joined; that half needs a cluster.
 

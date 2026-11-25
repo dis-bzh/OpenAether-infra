@@ -15,6 +15,8 @@
 #   2. merge-patches ONLY spec.ref.name of the GitRepository and ONLY postBuild.substitute.GIT_REF of the Kustomization
 #      (spec.verify, the signature settings, and everything else are never written),
 #   3. asks Flux to reconcile both and waits (timeout) for the GitRepository to report the revision of that ref.
+# The commit pin (git_commit, #385) is moved the same way: the GitRepository spec.ref.commit and the Kustomization GIT_COMMIT follow
+# the declared one (empty = no pin; Flux gives a commit precedence over the ref name, so a stale pin silently holds a cluster back).
 # The wanted ref is --ref (task: REF=refs/tags/X), else the declared one. The ref must be refs/(heads|tags)/<name> as in
 # variables.tf. A branch is a MOVING ref (Flux applies whatever lands on it, with cluster-admin): it is warned about loudly,
 # and a branch given with --ref is refused unless --allow-branch.
@@ -62,6 +64,7 @@ export KUBECONFIG="$CLUSTER_DIR/kubeconfig"
 [ -s "$KUBECONFIG" ] || fail "no kubeconfig at infrastructure/opentofu/cluster/kubeconfig (task kubeconfig PROVIDER=… ROLE=…)"
 
 DECLARED="$(oa_declared_git_ref "$CLUSTER_DIR" "$TFVARS")"
+DECLARED_COMMIT="$(oa_declared_git_commit "$CLUSTER_DIR" "$TFVARS")"
 if [ -z "$WANT_REF" ]; then WANT_REF="$DECLARED"; FROM_TFVARS=1; else FROM_TFVARS=0; fi
 [ -n "$WANT_REF" ] || fail "no git_ref is declared (TF_VAR_git_ref, $TFVARS, variables.tf) and none was given with --ref"
 oa_ref_valid "$WANT_REF" || refuse "'$WANT_REF' is not a ref this repository accepts: it must be refs/tags/<name> or refs/heads/<name> (variables.tf), with letters, digits and . _ / + - only."
@@ -99,21 +102,27 @@ describe_gr() {
 }
 LIVE_GR="$(describe_gr "$GR")"
 LIVE_KS="$(jq -r '.spec.postBuild.substitute.GIT_REF // ""' <<<"$KS")"
+LIVE_GC="$(jq -r '.spec.ref.commit // ""' <<<"$GR")"
+LIVE_KC="$(jq -r '.spec.postBuild.substitute.GIT_COMMIT // ""' <<<"$KS")"
+WANT_COMMIT="$DECLARED_COMMIT"
 
 echo "Apps ref (git_ref) of $NS:"
 echo "  tfvars / declared     : ${DECLARED:-(none)}"
 echo "  GitRepository openaether      spec.ref.name : ${LIVE_GR:-(empty)}"
 echo "  Kustomization openaether-platform GIT_REF   : ${LIVE_KS:-(empty)}"
+echo "  commit pin: declared ${WANT_COMMIT:-(none)}, GitRepository spec.ref.commit ${LIVE_GC:-(none)}, GIT_COMMIT ${LIVE_KC:-(none)}"
 [ "$FROM_TFVARS" = 1 ] || echo "  wanted (--ref)        : $WANT_REF"
 
 DIFFS=0
 [ "$LIVE_GR" = "$WANT_REF" ] || { echo "  ~ the GitRepository follows '${LIVE_GR:-(empty)}', wanted '$WANT_REF'"; DIFFS=$((DIFFS + 1)); }
 [ "$LIVE_KS" = "$WANT_REF" ] || { echo "  ~ GIT_REF is '${LIVE_KS:-(empty)}', wanted '$WANT_REF'"; DIFFS=$((DIFFS + 1)); }
+[ "$LIVE_GC" = "$WANT_COMMIT" ] || { echo "  ~ the GitRepository pins commit '${LIVE_GC:-(none)}', wanted '${WANT_COMMIT:-(none)}'"; DIFFS=$((DIFFS + 1)); }
+[ "$LIVE_KC" = "$WANT_COMMIT" ] || { echo "  ~ GIT_COMMIT is '${LIVE_KC:-(none)}', wanted '${WANT_COMMIT:-(none)}'"; DIFFS=$((DIFFS + 1)); }
 TFDIFF=0
 [ "$DECLARED" = "$WANT_REF" ] || { echo "  ~ the tfvars declares '${DECLARED:-(none)}', wanted '$WANT_REF'"; TFDIFF=1; DIFFS=$((DIFFS + 1)); }
 
 if [ "$DIFFS" -eq 0 ]; then
-  echo "✓ in sync: the tfvars, the GitRepository and GIT_REF all say $WANT_REF."
+  echo "✓ in sync: the tfvars, the GitRepository and GIT_REF all say $WANT_REF, commit pin ${WANT_COMMIT:-none}."
   exit 0
 fi
 
@@ -159,18 +168,19 @@ fi
 
 # 2. The two live objects. Only the field each one owns; a merge patch leaves every other field (spec.verify included) alone.
 restore_tfvars() { [ "$TFDIFF" = 1 ] && [ -f "${TFVARS}.apps-ref-bak" ] && cp -p "${TFVARS}.apps-ref-bak" "$TFVARS" && echo "  the tfvars was restored from ${TFVARS}.apps-ref-bak" >&2 || true; }
-if [ "$LIVE_KS" != "$WANT_REF" ]; then
-  P="$(jq -nc --arg r "$WANT_REF" '{spec: {postBuild: {substitute: {GIT_REF: $r}}}}')"
+if [ "$LIVE_KS" != "$WANT_REF" ] || [ "$LIVE_KC" != "$WANT_COMMIT" ]; then
+  P="$(jq -nc --arg r "$WANT_REF" --arg c "$WANT_COMMIT" '{spec: {postBuild: {substitute: {GIT_REF: $r, GIT_COMMIT: $c}}}}')"
   kubectl -n "$NS" patch "$KS_KIND" openaether-platform --type merge -p "$P" >/dev/null 2>"$ERR" || { m="$(head -c 300 "$ERR")"; restore_tfvars; fail "patch of the Kustomization refused: $m"; }
 fi
-if [ "$LIVE_GR" != "$WANT_REF" ]; then
-  P="$(jq -nc --arg r "$WANT_REF" '{spec: {ref: {name: $r}}}')"
+if [ "$LIVE_GR" != "$WANT_REF" ] || [ "$LIVE_GC" != "$WANT_COMMIT" ]; then
+  P="$(jq -nc --arg r "$WANT_REF" --arg c "$WANT_COMMIT" '{spec: {ref: ({name: $r} + (if $c == "" then {commit: null} else {commit: $c} end))}}')"
   kubectl -n "$NS" patch "$GR_KIND" openaether --type merge -p "$P" >/dev/null 2>"$ERR" || { m="$(head -c 300 "$ERR")"; fail "patch of the GitRepository refused: $m (the Kustomization may already carry the new GIT_REF; run again or: task cluster-apps-ref … REF=<previous ref> APPLY=1)"; }
 fi
 
 # 3. Read back: applied means the cluster holds the values.
 GR="$(read_obj "$GR_KIND" openaether)"; KS="$(read_obj "$KS_KIND" openaether-platform)"
 [ "$(describe_gr "$GR")" = "$WANT_REF" ] && [ "$(jq -r '.spec.postBuild.substitute.GIT_REF // ""' <<<"$KS")" = "$WANT_REF" ] \
+  && [ "$(jq -r '.spec.ref.commit // ""' <<<"$GR")" = "$WANT_COMMIT" ] && [ "$(jq -r '.spec.postBuild.substitute.GIT_COMMIT // ""' <<<"$KS")" = "$WANT_COMMIT" ] \
   || fail "the live objects still differ from $WANT_REF after the patch (something else rewrites them?). Read: kubectl -n $NS get gitrepository,kustomization"
 echo "✓ GitRepository openaether and Kustomization openaether-platform now say $WANT_REF (read back)."
 
@@ -194,7 +204,8 @@ while :; do
     ready="$(jq -r '[.status.conditions[]? | select(.type == "Ready")][0] | "\(.status // "?") \(.message // "")"' <<<"$GRJ")"
     seen="$(jq -r '(.status.observedGeneration // -1) == (.metadata.generation // 0)' <<<"$GRJ")"
     last="revision '${rev:-none}', Ready: ${ready}"
-    if [ "$seen" = true ] && [[ "$ready" == True* ]] && { [[ "$rev" == "$WANT_REF@"* ]] || [[ "$rev" == "$SHORT@"* ]]; }; then
+    if [ "$seen" = true ] && [[ "$ready" == True* ]] && { [[ "$rev" == "$WANT_REF@"* ]] || [[ "$rev" == "$SHORT@"* ]]; } \
+       && { [ -z "$WANT_COMMIT" ] || [[ "$rev" == *"$WANT_COMMIT"* ]]; }; then
       echo "✓ Flux reports the revision of $WANT_REF: $rev"
       exit 0
     fi
